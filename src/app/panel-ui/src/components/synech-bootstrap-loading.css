@@ -1,0 +1,120 @@
+.synech-bootstrap-loading {
+  display: grid;
+  min-height: 180px;
+  flex: 1;
+  place-items: center;
+}
+
+.synech-bootstrap-loading__visual {
+  display: grid;
+  place-items: center;
+  gap: 14px;
+  animation: synech-bootstrap-reveal 160ms ease-out 100ms both;
+}
+
+.synech-bootstrap-loading__frame {
+  display: grid;
+  width: 48px;
+  height: 38px;
+  grid-template-columns: 10px 1fr;
+  grid-template-rows: 9px 1fr;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--foreground) 18%, var(--border));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--card) 96%, var(--background));
+  box-shadow: 0 5px 14px color-mix(in srgb, var(--foreground) 7%, transparent);
+}
+
+.synech-bootstrap-loading__header {
+  position: relative;
+  grid-column: 1 / -1;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--muted) 48%, var(--card));
+}
+
+.synech-bootstrap-loading__header::before {
+  position: absolute;
+  top: 3px;
+  left: 4px;
+  width: 9px;
+  height: 2px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted-foreground) 42%, transparent);
+  content: "";
+}
+
+.synech-bootstrap-loading__rail {
+  grid-row: 2;
+  border-right: 1px solid var(--border);
+  background: color-mix(in srgb, var(--muted) 34%, var(--card));
+}
+
+.synech-bootstrap-loading__canvas {
+  display: grid;
+  grid-row: 2;
+  align-content: center;
+  gap: 5px;
+  padding-inline: 6px;
+}
+
+.synech-bootstrap-loading__canvas > span {
+  height: 2px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted-foreground) 24%, transparent);
+}
+
+.synech-bootstrap-loading__canvas > span:last-child {
+  width: 68%;
+}
+
+.synech-bootstrap-loading__progress {
+  position: relative;
+  width: 84px;
+  height: 2px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+}
+
+.synech-bootstrap-loading__progress > span {
+  position: absolute;
+  inset-block: 0;
+  left: -30px;
+  width: 30px;
+  border-radius: inherit;
+  background: var(--aa-accent, var(--accent-foreground));
+  animation: synech-bootstrap-progress 1.2s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+}
+
+@keyframes synech-bootstrap-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes synech-bootstrap-progress {
+  from {
+    transform: translateX(0);
+  }
+
+  to {
+    transform: translateX(114px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .synech-bootstrap-loading__visual {
+    animation: none;
+  }
+
+  .synech-bootstrap-loading__progress > span {
+    left: 27px;
+    animation: none;
+  }
+}

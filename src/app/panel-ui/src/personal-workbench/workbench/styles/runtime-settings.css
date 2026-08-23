@@ -1,0 +1,319 @@
+/*
+ * Scoped settings bridge for the Personal Workspace shell.
+ * The production settings components still use the shared panel class names,
+ * so this layer maps those tokens to the workbench paper palette and keeps
+ * layout refinements local to .aa-workbench-root.
+ */
+.aa-workbench-root .settings-overlay {
+  --fg: var(--aa-text-1);
+  --muted: var(--aa-text-2);
+  --placeholder: var(--aa-text-3);
+  --surface: var(--aa-surface);
+  --surface-panel: var(--aa-surface);
+  --surface-muted: var(--aa-surface-hover);
+  --surface-subtle: color-mix(in oklch, var(--aa-surface) 60%, var(--aa-canvas));
+  --surface-highlight: var(--aa-accent-bg);
+  --content-surface: var(--aa-surface);
+  --content-surface-muted: var(--aa-surface-hover);
+  --content-border: var(--aa-border);
+  --content-highlight: var(--aa-accent-bg);
+  --border: var(--aa-border);
+  --accent: var(--aa-accent);
+  --accent-strong: var(--aa-accent);
+  --accent-active: color-mix(in oklch, var(--aa-accent) 82%, black);
+  --accent-border: color-mix(in oklch, var(--aa-accent) 40%, var(--aa-border));
+  --accent-border-soft: color-mix(in oklch, var(--aa-accent) 18%, var(--aa-border));
+  --accent-soft: var(--aa-accent-bg);
+  --preview-accent: var(--aa-accent);
+  --secondary: var(--aa-text-2);
+  --primary-foreground: var(--aa-surface);
+  --status-success: var(--aa-status-done);
+  --status-warning: var(--aa-status-wait);
+  --status-danger: var(--aa-status-error);
+  --danger-soft: color-mix(in oklch, var(--aa-status-error) 10%, transparent);
+  --danger-border: color-mix(in oklch, var(--aa-status-error) 30%, var(--aa-border));
+  --amber-soft: color-mix(in oklch, var(--aa-status-wait) 12%, transparent);
+  --amber-text: color-mix(in oklch, var(--aa-status-wait) 72%, black);
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 8px;
+  --radius-xl: 10px;
+  --radius-2xl: 12px;
+  --radius-pill: 999px;
+  --border-width-thin: 1px;
+  --border-width-md: 1px;
+  --weight-body: 400;
+  --weight-label: 500;
+  --weight-heading: 600;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --list-pane-bg: var(--aa-surface);
+  --detail-pane-bg: var(--aa-canvas);
+  --row-bg: var(--aa-surface);
+  --row-border: var(--aa-border);
+  --row-hover-bg: var(--aa-surface-hover);
+  --row-hover-border: var(--aa-border);
+  --row-hover-shadow: none;
+  --row-active-bg: var(--aa-accent-bg);
+  --row-active-border: color-mix(in oklch, var(--aa-accent) 30%, var(--aa-border));
+  --row-active-shadow: none;
+  --list-row-border: transparent;
+  --list-row-radius: 8px;
+  --list-row-marker-width: 2px;
+  --list-row-active-border: color-mix(in oklch, var(--aa-accent) 24%, var(--aa-border));
+  --list-row-active-marker: var(--aa-accent);
+  --list-row-active-shadow: none;
+  --list-row-hover-border: var(--aa-border);
+  --list-row-hover-marker: transparent;
+  --list-row-hover-shadow: none;
+  --field-bg: var(--aa-surface);
+  --field-border: var(--aa-border);
+  --field-hover-bg: var(--aa-surface-hover);
+  --field-hover-border: var(--aa-border);
+  --field-focus-border: var(--aa-accent);
+  --field-focus-ring: 0 0 0 3px color-mix(in oklch, var(--aa-accent) 18%, transparent);
+  --floating-panel-bg: var(--aa-surface);
+  --floating-panel-border: var(--aa-border);
+  --floating-panel-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.5) inset,
+    0 18px 48px -20px rgba(45, 40, 34, 0.24),
+    0 2px 10px rgba(45, 40, 34, 0.05);
+  --floating-panel-backdrop-filter: none;
+  --overlay-ink: rgba(38, 33, 28, 1);
+  --app-backdrop-blur: 4px;
+  --settings-dialog-max-width: 920px;
+  --settings-dialog-max-height: 680px;
+  --settings-sidebar-width: 200px;
+  --settings-sidebar-compact-width: 168px;
+  --motion-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --motion-interaction-duration: 140ms;
+  --motion-fast-duration: 100ms;
+  --motion-panel-duration: 220ms;
+  --motion-dialog-duration: 240ms;
+  --scrollbar-pane-thumb: rgba(45, 40, 34, 0.18);
+  --scrollbar-pane-thumb-hover: rgba(45, 40, 34, 0.28);
+  --panel-card-bg: var(--aa-surface);
+  --panel-card-border: var(--aa-border);
+  --panel-card-shadow: none;
+  --panel-card-backdrop-filter: none;
+  --subpanel-bg: var(--aa-surface);
+  --subpanel-border: var(--aa-border);
+  --subpanel-footer-bg: var(--aa-surface-hover);
+  --subpanel-shadow: 0 10px 28px -14px rgba(45, 40, 34, 0.18);
+  --subpanel-backdrop-filter: none;
+  --popover-bg: var(--aa-surface);
+  --popover-fg: var(--aa-text-1);
+  --popover-border: var(--aa-border);
+  --popover-shadow: 0 12px 30px -12px rgba(45, 40, 34, 0.2);
+  --popover-backdrop-filter: none;
+  --empty-state-bg: color-mix(in oklch, var(--aa-surface) 70%, var(--aa-canvas));
+  --empty-state-border: var(--aa-border);
+  --empty-state-shadow: none;
+  --shadow-ink: rgba(45, 40, 34, 0.1);
+  --shadow-soft: 0 6px 18px -8px rgba(45, 40, 34, 0.14);
+  --preview-bg: var(--aa-canvas);
+  --preview-fg: var(--aa-text-1);
+  --preview-secondary: var(--aa-text-2);
+  --preview-surface: var(--aa-surface);
+  --preview-border: var(--aa-border);
+  --preview-sidebar: var(--aa-surface);
+  --preview-sidebar-bg: var(--aa-surface);
+  --preview-sidebar-divider: var(--aa-border);
+  --preview-sidebar-divider-width: 1px;
+  --preview-content-bg: var(--aa-canvas);
+  --preview-card-bg: var(--aa-surface);
+  --preview-card-radius: 8px;
+  --preview-composer-bg: var(--aa-surface);
+  --preview-composer-border: var(--aa-border);
+  --preview-composer-radius: 10px;
+  --preview-frame-bg: var(--aa-canvas);
+  --preview-frame-border: var(--aa-border);
+  --preview-radius-sm: 6px;
+  --palette-preview-border: var(--aa-border);
+  --palette-preview-ink: var(--aa-text-1);
+  --palette-preview-surface: var(--aa-surface);
+  --theme-preview-frame-radius: 12px;
+  z-index: 50;
+}
+
+.aa-workbench-root .settings-backdrop {
+  border: 0;
+}
+
+/* 深色下修正设置桥接 token：强调/琥珀文本改为向白混合，浮层阴影去掉浅色内高光。 */
+html[data-style="default"][data-color="dark"] .aa-workbench-root .settings-overlay {
+  --accent-active: color-mix(in oklch, var(--aa-accent) 82%, white);
+  --amber-text: color-mix(in oklch, var(--aa-status-wait) 78%, white);
+  --floating-panel-shadow:
+    0 1px 0 color-mix(in oklch, var(--aa-surface-hover) 60%, transparent) inset,
+    0 18px 48px -20px rgba(5, 5, 7, 0.45),
+    0 2px 10px rgba(5, 5, 7, 0.22);
+}
+
+.aa-workbench-root .settings-dialog {
+  z-index: 1;
+  color: var(--fg);
+}
+
+.aa-workbench-root .settings-sidebar {
+  min-width: 0;
+  padding: 14px 8px;
+}
+
+.aa-workbench-root .settings-close-button {
+  width: 28px;
+  height: 28px;
+  margin: 0 4px 12px auto;
+  border-radius: 6px;
+}
+
+.aa-workbench-root .settings-sidebar nav {
+  gap: 2px;
+  overflow-y: auto;
+  padding: 0 2px;
+}
+
+.aa-workbench-root .settings-sidebar nav button {
+  min-width: 0;
+  height: 36px;
+  padding: 0 10px;
+  font-size: 13px;
+}
+
+.aa-workbench-root .settings-main > header {
+  height: 52px;
+  min-height: 52px;
+  background: color-mix(in oklch, var(--aa-surface) 80%, var(--aa-canvas));
+  padding: 0 24px;
+}
+
+.aa-workbench-root .settings-main h2 {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.aa-workbench-root .settings-content {
+  padding: 20px 24px 28px;
+}
+
+.aa-workbench-root .settings-content.model-settings-content {
+  padding: 0;
+}
+
+.aa-workbench-root .settings-content > * {
+  min-width: 0;
+}
+
+.aa-workbench-root :is(.settings-card, .service-settings-card, .mcp-service-card, .provider-row, .model-catalog-panel, .settings-runtime-card) {
+  border-radius: 8px;
+}
+
+.aa-workbench-root .settings-content a {
+  color: var(--aa-accent);
+}
+
+.aa-workbench-root .settings-content :is(input, select, textarea, button):focus-visible,
+.aa-workbench-root .settings-close-button:focus-visible,
+.aa-workbench-root .settings-sidebar nav button:focus-visible {
+  outline: 2px solid color-mix(in oklch, var(--aa-accent) 58%, transparent);
+  outline-offset: 2px;
+}
+
+/* Nested field inputs use the surrounding field as the focus target. */
+.aa-workbench-root .settings-content .provider-search input:focus-visible,
+.aa-workbench-root .settings-content .model-search-field input:focus-visible,
+.aa-workbench-root .settings-content .api-key-field input:focus-visible,
+.aa-workbench-root .settings-content .provider-base-url-field input:focus-visible {
+  border: 0;
+  box-shadow: none;
+  outline: none;
+  outline-offset: 0;
+}
+
+/* Search is a passive filter; keep its field boundary stable without a focus halo. */
+.aa-workbench-root .settings-content .provider-search:focus-within,
+.aa-workbench-root .settings-content .model-search-field:focus-within {
+  border-color: var(--field-border);
+  background: var(--field-bg);
+  box-shadow: none;
+}
+
+@keyframes modal-card-enter {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 8px, 0) scale(0.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@media (max-width: 620px) {
+  .aa-workbench-root .settings-overlay {
+    padding: 10px;
+  }
+
+  .aa-workbench-root .settings-dialog {
+    width: calc(100vw - 20px);
+    height: calc(100vh - 20px);
+    grid-template-columns: minmax(148px, 38vw) minmax(0, 1fr);
+  }
+
+  .aa-workbench-root .settings-sidebar {
+    padding: 10px 6px;
+  }
+
+  .aa-workbench-root .settings-sidebar nav button {
+    grid-template-columns: auto minmax(0, 1fr);
+    justify-items: stretch;
+    padding: 0 10px;
+  }
+
+  .aa-workbench-root .settings-sidebar nav button span {
+    display: inline;
+  }
+
+  .aa-workbench-root .settings-content {
+    padding: 16px;
+  }
+
+  .aa-workbench-root .settings-content.model-settings-content {
+    padding: 0;
+  }
+}
+
+@media (max-width: 420px) {
+  .aa-workbench-root .settings-overlay {
+    padding: 0;
+  }
+
+  .aa-workbench-root .settings-dialog {
+    width: 100vw;
+    height: 100vh;
+    grid-template-columns: 54px minmax(0, 1fr);
+    border-right: 0;
+    border-left: 0;
+  }
+
+  .aa-workbench-root .settings-sidebar {
+    padding: 8px 0;
+  }
+
+  .aa-workbench-root .settings-sidebar nav button {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    padding: 0;
+  }
+
+  .aa-workbench-root .settings-sidebar nav button span {
+    display: none;
+  }
+}

@@ -1,0 +1,30 @@
+# Dependencies and package-manager state
+node_modules/
+.pnpm-store/
+
+# Generated output
+dist/
+build/
+release/
+coverage/
+output/
+.turbo/
+
+# Local configuration and runtime data
+.env
+.env.*
+!.env.example
+*.log
+*.sqlite
+*.sqlite3
+*.db
+
+# Local development state
+.tmp/
+tmp-*
+.codex/
+.opencode/
+.claude/
+.agents/
+.playwright-mcp/
+.playwright-cli/

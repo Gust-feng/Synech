@@ -1,0 +1,302 @@
+.topbar-shell {
+  position: relative;
+  isolation: isolate;
+  border-bottom: 1px solid color-mix(in srgb, var(--aa-border) 58%, transparent);
+}
+
+.topbar-shell[data-desktop-shell='true'] {
+  padding-right: 8px;
+  /* 标准无边框窗口模式：整条标题栏可拖动，交互元素单独声明 no-drag。
+     不能让 drag 命中区域与窗口控制按钮矩形存在任何相邻/重叠可能，
+     否则不同 Electron 版本的原生命中测试会把按钮点击吞进拖拽区。 */
+  app-region: drag;
+  -webkit-app-region: drag;
+}
+
+.topbar-shell[data-desktop-shell='true'] button,
+.topbar-shell[data-desktop-shell='true'] a,
+.topbar-shell[data-desktop-shell='true'] input,
+.topbar-shell[data-desktop-shell='true'] select,
+.topbar-shell[data-desktop-shell='true'] textarea,
+.topbar-shell[data-desktop-shell='true'] [role='button'],
+.topbar-shell[data-desktop-shell='true'] .topbar-window-controls {
+  app-region: no-drag;
+  -webkit-app-region: no-drag;
+}
+
+.topbar-shell[data-desktop-shell='true'] .topbar-drag-region {
+  min-width: 24px;
+}
+
+.topbar-nav-button {
+  display: inline-flex;
+  min-width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--aa-text-3);
+  cursor: pointer;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease;
+}
+
+.topbar-nav-button:hover {
+  background: color-mix(in srgb, var(--aa-text-1) 5%, transparent);
+  color: var(--aa-text-2);
+}
+
+.topbar-nav-button:focus-visible {
+  border-color: color-mix(in srgb, var(--aa-accent) 36%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--aa-accent) 10%, transparent);
+  outline: none;
+}
+
+.topbar-back-button {
+  padding-right: 7px;
+  padding-left: 5px;
+}
+
+.topbar-search-trigger {
+  display: flex;
+  width: 34px;
+  height: 32px;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    width 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    background-color 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    color 160ms ease;
+}
+
+.topbar-search-trigger:hover,
+.topbar-search-trigger:focus-visible {
+  width: 176px;
+  background: color-mix(in srgb, var(--aa-text-1) 5%, transparent);
+  color: var(--aa-text-2) !important;
+}
+
+.topbar-search-trigger:focus-visible {
+  border-color: color-mix(in srgb, var(--aa-accent) 36%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--aa-accent) 10%, transparent);
+  outline: none;
+}
+
+.topbar-search-icon {
+  flex: 0 0 14px;
+}
+
+.topbar-search-details {
+  display: flex;
+  min-width: 135px;
+  align-items: center;
+  gap: 8px;
+  opacity: 0;
+  transform: translateX(4px);
+  transition:
+    opacity 120ms ease,
+    transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.topbar-search-trigger:hover .topbar-search-details,
+.topbar-search-trigger:focus-visible .topbar-search-details {
+  opacity: 1;
+  transform: translateX(0);
+  transition-delay: 55ms;
+}
+
+.topbar-search-label {
+  flex: 1;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.topbar-search-shortcut {
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--aa-text-1) 7%, transparent);
+  color: var(--aa-text-3);
+  font-family: system-ui, sans-serif;
+  font-size: 10px;
+  line-height: 14px;
+}
+
+.topbar-surface-context {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  margin-left: -4px;
+}
+
+.topbar-surface-title {
+  max-width: 240px;
+  overflow: hidden;
+  color: var(--aa-text-2);
+  font-size: 12px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbar-conversation-status {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  color: var(--aa-accent);
+  font-size: 11px;
+  line-height: 18px;
+}
+
+.topbar-conversation-status[data-state='attention'] {
+  color: var(--aa-status-wait);
+}
+
+.topbar-conversation-status__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.topbar-conversation-status[data-state='working'] .topbar-conversation-status__dot {
+  animation: pulse 1.5s infinite;
+}
+
+.topbar-focus-button {
+  display: inline-flex;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--aa-text-3);
+  cursor: pointer;
+  transition: background-color 150ms ease, color 150ms ease;
+}
+
+.topbar-focus-button:hover {
+  background: color-mix(in srgb, var(--aa-text-1) 5%, transparent);
+  color: var(--aa-text-2);
+}
+
+.topbar-focus-button:focus-visible {
+  border-color: color-mix(in srgb, var(--aa-accent) 36%, transparent);
+  outline: none;
+}
+
+.topbar-window-controls {
+  display: inline-flex;
+  position: relative;
+  height: 100%;
+  align-self: stretch;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 2px;
+  margin-left: auto;
+  padding-left: 10px;
+  pointer-events: auto;
+  z-index: 2;
+  app-region: no-drag;
+  -webkit-app-region: no-drag;
+}
+
+.topbar-window-controls::before {
+  width: 1px;
+  height: 16px;
+  margin-right: 6px;
+  background: color-mix(in srgb, var(--aa-border) 72%, transparent);
+  content: '';
+}
+
+.topbar-window-control {
+  display: inline-flex;
+  position: relative;
+  width: 30px;
+  min-width: 30px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--aa-text-3);
+  cursor: pointer;
+  app-region: no-drag;
+  transition:
+    background-color 150ms ease,
+    color 150ms ease;
+}
+
+.topbar-window-control:hover {
+  background: color-mix(in srgb, var(--aa-text-1) 6%, transparent);
+  color: var(--aa-text-1);
+}
+
+.topbar-window-control:focus-visible {
+  border-color: color-mix(in srgb, var(--aa-accent) 34%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--aa-accent) 9%, transparent);
+  outline: none;
+}
+
+.topbar-window-control:active svg {
+  transform: scale(0.88);
+}
+
+.topbar-window-control svg {
+  transition: transform 120ms ease;
+}
+
+.topbar-window-control-close:hover {
+  background: color-mix(in srgb, var(--aa-status-error) 14%, transparent);
+  color: var(--aa-status-error);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .topbar-search-trigger,
+  .topbar-search-details,
+  .topbar-nav-button,
+  .topbar-focus-button,
+  .topbar-window-control,
+  .topbar-window-control svg {
+    transition-duration: 0ms;
+    transition-delay: 0ms;
+  }
+
+  .topbar-conversation-status__dot {
+    animation: none !important;
+  }
+}
+
+.topbar-surface-owner {
+  flex-shrink: 0;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--aa-text-3);
+  background: var(--aa-accent-bg);
+}

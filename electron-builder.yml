@@ -1,0 +1,37 @@
+appId: com.synech.app
+productName: Synech
+directories:
+  output: release
+files:
+  - package.json
+  - from: dist
+    to: dist
+    filter:
+      - "**/*"
+      - "!**/*.test.js"
+      - "!**/*.test.d.ts"
+      - "!**/*.test.js.map"
+      - "!**/*.test.ts"
+      - "!**/*.map"
+extraMetadata:
+  main: dist/app/panel-desktop.js
+  productName: Synech
+asar: true
+compression: normal
+win:
+  icon: build/icons/favicon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: "${productName}-Setup-${version}-${arch}.${ext}"
+nsis:
+  installerIcon: build/icons/favicon.ico
+  uninstallerIcon: build/icons/favicon.ico
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Synech

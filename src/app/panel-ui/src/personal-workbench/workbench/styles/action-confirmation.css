@@ -1,0 +1,248 @@
+.aa-action-confirmation-layer {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  isolation: isolate;
+  animation: aa-action-confirmation-fade-in 160ms ease-out;
+}
+
+.aa-action-confirmation-backdrop {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  border: 0;
+  background: color-mix(in srgb, var(--aa-text-1) 18%, transparent);
+  cursor: default;
+  backdrop-filter: blur(5px);
+}
+
+.aa-action-confirmation-dialog {
+  position: relative;
+  display: grid;
+  width: min(480px, 100%);
+  gap: 20px;
+  border: 1px solid color-mix(in srgb, var(--aa-border) 92%, var(--aa-text-1));
+  border-radius: 18px;
+  background: var(--aa-surface);
+  box-shadow: 0 24px 80px color-mix(in srgb, var(--aa-text-1) 22%, transparent);
+  padding: 22px;
+  color: var(--aa-text-1);
+  animation: aa-action-confirmation-rise 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.aa-action-confirmation-header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 11px;
+}
+
+.aa-action-confirmation-icon {
+  display: inline-flex;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--aa-status-error) 25%, var(--aa-border));
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--aa-status-error) 10%, var(--aa-surface));
+  color: var(--aa-status-error);
+}
+
+.aa-action-confirmation-dialog[data-tone="standard"] .aa-action-confirmation-icon {
+  border-color: color-mix(in srgb, var(--aa-accent) 24%, var(--aa-border));
+  background: color-mix(in srgb, var(--aa-accent) 9%, var(--aa-surface));
+  color: var(--aa-accent);
+}
+
+.aa-action-confirmation-eyebrow {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  color: var(--aa-text-1);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  line-height: 1.35;
+}
+
+.aa-action-confirmation-eyebrow small {
+  color: var(--aa-text-3);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.aa-action-confirmation-close {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--aa-text-3);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.aa-action-confirmation-close:hover {
+  background: var(--aa-surface-hover);
+  color: var(--aa-text-1);
+}
+
+.aa-action-confirmation-copy {
+  display: grid;
+  gap: 8px;
+}
+
+.aa-action-confirmation-copy h2 {
+  margin: 0;
+  color: var(--aa-text-1);
+  font-size: 19px;
+  font-weight: 650;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.aa-action-confirmation-copy p {
+  margin: 0;
+  color: var(--aa-text-2);
+  font-size: 13px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.aa-action-confirmation-consequence {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 9px;
+  border: 1px solid color-mix(in srgb, var(--aa-status-error) 20%, var(--aa-border));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--aa-status-error) 6%, var(--aa-surface));
+  padding: 11px 12px;
+  color: color-mix(in srgb, var(--aa-status-error) 74%, var(--aa-text-1));
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.aa-action-confirmation-dialog[data-tone="standard"] .aa-action-confirmation-consequence {
+  border-color: color-mix(in srgb, var(--aa-accent) 18%, var(--aa-border));
+  background: color-mix(in srgb, var(--aa-accent) 6%, var(--aa-surface));
+  color: color-mix(in srgb, var(--aa-accent) 74%, var(--aa-text-1));
+}
+
+.aa-action-confirmation-consequence svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.aa-action-confirmation-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+  padding-top: 2px;
+}
+
+.aa-action-confirmation-cancel,
+.aa-action-confirmation-confirm {
+  display: inline-flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border-radius: 10px;
+  padding: 0 14px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease, opacity 120ms ease;
+}
+
+.aa-action-confirmation-cancel {
+  border: 1px solid var(--aa-border);
+  background: transparent;
+  color: var(--aa-text-2);
+}
+
+.aa-action-confirmation-cancel:hover {
+  border-color: color-mix(in srgb, var(--aa-border) 70%, var(--aa-text-1));
+  background: var(--aa-surface-hover);
+  color: var(--aa-text-1);
+}
+
+.aa-action-confirmation-confirm {
+  border: 1px solid transparent;
+  background: var(--aa-status-error);
+  color: #fff;
+}
+
+.aa-action-confirmation-confirm[data-tone="standard"] {
+  background: var(--aa-accent);
+}
+
+.aa-action-confirmation-confirm:hover {
+  filter: brightness(0.94);
+}
+
+.aa-action-confirmation-cancel:focus-visible,
+.aa-action-confirmation-confirm:focus-visible,
+.aa-action-confirmation-close:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--aa-accent) 28%, transparent);
+  outline-offset: 2px;
+}
+
+.aa-action-confirmation-cancel:disabled,
+.aa-action-confirmation-confirm:disabled,
+.aa-action-confirmation-close:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+@keyframes aa-action-confirmation-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes aa-action-confirmation-rise {
+  from { opacity: 0; transform: translateY(8px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (max-width: 560px) {
+  .aa-action-confirmation-layer {
+    align-items: end;
+    padding: 12px;
+  }
+
+  .aa-action-confirmation-dialog {
+    width: 100%;
+    border-radius: 16px;
+    padding: 18px;
+  }
+
+  .aa-action-confirmation-actions {
+    flex-direction: column-reverse;
+  }
+
+  .aa-action-confirmation-cancel,
+  .aa-action-confirmation-confirm {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aa-action-confirmation-layer,
+  .aa-action-confirmation-dialog {
+    animation: none;
+  }
+}

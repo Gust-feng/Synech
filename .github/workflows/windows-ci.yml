@@ -1,0 +1,72 @@
+name: Windows CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build application
+        run: pnpm build
+
+      - name: Check changed-file whitespace
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          CURRENT_SHA: ${{ github.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ($env:EVENT_NAME -eq "pull_request") {
+            git diff --check "$env:PR_BASE_SHA...$env:PR_HEAD_SHA"
+          } else {
+            $before = $env:BEFORE_SHA
+            $beforeIsReachable = -not [string]::IsNullOrWhiteSpace($before) -and $before -notmatch '^0+$'
+            if ($beforeIsReachable) {
+              git cat-file -e "$before^{commit}" 2>$null
+              $beforeIsReachable = $LASTEXITCODE -eq 0
+            }
+            if ($beforeIsReachable) {
+              git diff --check "$before" "$env:CURRENT_SHA"
+            } else {
+              git diff-tree --check --root --no-commit-id -r "$env:CURRENT_SHA"
+            }
+          }
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }

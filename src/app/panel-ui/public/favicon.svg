@@ -1,0 +1,30 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="1024"
+  height="1024"
+  viewBox="0 0 1024 1024"
+  role="img"
+  aria-labelledby="title"
+>
+  <title id="title">Synech</title>
+  <g id="base">
+    <rect x="64" y="64" width="896" height="896" rx="208" fill="#ffffff" />
+    <rect
+      x="72"
+      y="72"
+      width="880"
+      height="880"
+      rx="200"
+      fill="none"
+      stroke="#d9dce1"
+      stroke-width="16"
+    />
+  </g>
+  <g id="mark" fill="#000000" transform="translate(51.2 51.2) scale(.9)">
+    <path d="M383 258h44l243 487h-42L405 303 181 745h-45z" />
+    <path d="M602 258h48l245 487h-43L626 303l-70 133-23-46z" />
+    <path d="m413 437 78 157H323l18-34h94l-43-84z" />
+    <path d="M402 625h44l-62 120h-45z" />
+    <path d="m636 457 146 288h-41L613 487z" />
+  </g>
+</svg>

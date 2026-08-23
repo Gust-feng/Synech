@@ -1,0 +1,14 @@
+.responsiveness-diagnostics { display: flex; flex-direction: column; gap: 12px; margin-bottom: 18px; border: 1px solid var(--panel-card-border); border-radius: 8px; background: var(--surface); padding: 16px; box-shadow: var(--panel-card-shadow); }
+.responsiveness-diagnostics > header, .responsiveness-diagnostics > header > div, .responsiveness-diagnostics__summary { display: flex; align-items: center; }
+.responsiveness-diagnostics > header { justify-content: space-between; gap: 12px; }
+.responsiveness-diagnostics > header > div { gap: 8px; color: var(--accent-strong); }
+.responsiveness-diagnostics h3 { margin: 0; color: var(--fg); font-size: 14px; }
+.responsiveness-diagnostics > header button { display: inline-flex; width: 30px; height: 30px; align-items: center; justify-content: center; border: 1px solid var(--border); border-radius: 5px; color: var(--muted); }
+.responsiveness-diagnostics__summary { gap: 18px; color: var(--muted); font-size: 12px; }
+.responsiveness-diagnostics__summary strong { margin-right: 4px; color: var(--fg); font-size: 15px; }
+.responsiveness-diagnostics__empty { margin: 0; color: var(--muted); font-size: 12px; }
+.responsiveness-diagnostics ol { display: grid; gap: 1px; margin: 0; padding: 0; list-style: none; }
+.responsiveness-diagnostics li { display: grid; min-height: 34px; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 12px; border-top: 1px solid var(--border); color: var(--muted); font-size: 11px; }
+.responsiveness-diagnostics li > span { overflow: hidden; color: var(--fg); text-overflow: ellipsis; white-space: nowrap; }
+.responsiveness-diagnostics li > strong { color: var(--status-warning, #9a6a1f); font-variant-numeric: tabular-nums; }
+.responsiveness-diagnostics time { font-variant-numeric: tabular-nums; }

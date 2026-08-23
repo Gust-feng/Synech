@@ -1,0 +1,188 @@
+.aa-sidebar-footer {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  border-top: 1px solid var(--aa-border);
+  padding: 8px 8px 10px;
+}
+
+/* 与侧栏导航共享同一几何语法，避免底部形成独立账户卡。 */
+.aa-sidebar-footer__trigger {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  grid-template-columns: 20px minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--aa-text-2);
+  cursor: pointer;
+  padding: 0 9px;
+  text-align: left;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease;
+}
+
+.aa-sidebar-footer__trigger:hover {
+  background: color-mix(in srgb, var(--aa-text-1) 4%, transparent);
+  color: var(--aa-text-1);
+}
+
+.aa-sidebar-footer__trigger[aria-expanded='true'] {
+  background: var(--aa-accent-bg);
+  color: var(--aa-accent);
+}
+
+.aa-sidebar-footer__icon {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+}
+
+.aa-sidebar-footer__label {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--aa-font-ui);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aa-sidebar-footer__chevron {
+  color: var(--aa-text-3);
+  transition: transform 140ms ease, color 140ms ease;
+}
+
+.aa-sidebar-footer__chevron.open {
+  color: currentColor;
+  transform: rotate(180deg);
+}
+
+.aa-sidebar-footer__trigger:focus-visible,
+.aa-sidebar-footer-menu__option:focus-visible,
+.aa-sidebar-footer-menu__item:focus-visible {
+  border-color: color-mix(in srgb, var(--aa-accent) 46%, var(--aa-border));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--aa-accent) 14%, transparent);
+  outline: none;
+}
+
+.aa-sidebar-footer-menu {
+  position: relative;
+  width: 100%;
+}
+
+.aa-sidebar-footer-menu__popover {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  z-index: 80;
+  display: grid;
+  width: 100%;
+  gap: 2px;
+  border: 1px solid var(--aa-border);
+  border-radius: 8px;
+  background: var(--aa-surface);
+  padding: 6px;
+  box-shadow: 0 10px 24px rgba(5, 5, 7, 0.14);
+  animation: aa-sidebar-footer-menu-enter 140ms ease both;
+}
+
+.aa-sidebar-footer-menu__heading {
+  padding: 5px 8px 6px;
+  color: var(--aa-text-3);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.aa-sidebar-footer-menu__option {
+  display: grid;
+  min-width: 0;
+  min-height: 34px;
+  grid-template-columns: 18px minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  padding: 0 8px;
+  color: var(--aa-text-2);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease;
+}
+
+.aa-sidebar-footer-menu__option:hover,
+.aa-sidebar-footer-menu__item:hover {
+  background: var(--aa-surface-hover);
+  color: var(--aa-text-1);
+}
+
+.aa-sidebar-footer-menu__option.active {
+  background: var(--aa-accent-bg);
+  color: var(--aa-accent);
+}
+
+.aa-sidebar-footer-menu__copy {
+  min-width: 0;
+  overflow: hidden;
+  color: inherit;
+  font-size: 12px;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aa-sidebar-footer-menu__separator {
+  height: 1px;
+  margin: 6px 4px;
+  background: var(--aa-border);
+}
+
+.aa-sidebar-footer-menu__item {
+  display: grid;
+  min-width: 0;
+  min-height: 34px;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  padding: 0 8px;
+  color: var(--aa-text-2);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease;
+}
+
+@keyframes aa-sidebar-footer-menu-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aa-sidebar-footer-menu__popover {
+    animation: none;
+  }
+}

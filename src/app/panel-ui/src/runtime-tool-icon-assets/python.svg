@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 255">
+  <defs>
+    <linearGradient id="pythonBlue" x1="45.9" y1="47.5" x2="148.1" y2="145.4" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#5A9FD4"/>
+      <stop offset="1" stop-color="#306998"/>
+    </linearGradient>
+    <linearGradient id="pythonYellow" x1="108.1" y1="109.7" x2="219.3" y2="214.5" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFD43B"/>
+      <stop offset="1" stop-color="#FFE873"/>
+    </linearGradient>
+  </defs>
+  <path fill="url(#pythonBlue)" d="M126.9.4c-10.4.1-20.3.9-29 2.3C72 6.9 67.3 15.8 67.3 32v23.1h61.2v7.7H44.3c-17.8 0-33.4 10.7-38.3 31-5.6 23.3-5.9 37.8 0 62.1 4.4 18.1 14.9 31 32.7 31h21.1v-28c0-20.2 17.5-38.1 38.3-38.1h61.1c17 0 30.6-14 30.6-30.8V32C189.8 15.6 176 3.4 159.2.7 148.6-.9 137.2.3 126.9.4ZM93.8 19a11.5 11.5 0 1 1 0 23 11.5 11.5 0 0 1 0-23Z"/>
+  <path fill="url(#pythonYellow)" d="M197.5 62.8V90c0 21.1-17.9 38.9-38.3 38.9H98.1c-16.8 0-30.6 14.4-30.6 30.9v58c0 16.4 14.3 26.1 30.6 30.9 19.5 5.7 38.2 6.7 61.1 0 15.5-4.5 30.6-13.7 30.6-30.9v-23.1H128.6V187h91.8c17.8 0 24.5-12.4 30.6-31 6.3-19.1 6-37.5 0-62.1-4.3-17.7-12.6-31-30.6-31h-22.9Zm-34.5 147.3a11.5 11.5 0 1 1 0 23 11.5 11.5 0 0 1 0-23Z"/>
+</svg>

@@ -1,0 +1,13 @@
+allowBuilds:
+  # Pi installs optional provider SDKs that do not run install-time builds here.
+  '@google/genai': false
+  electron: true
+  electron-winstaller: false
+  protobufjs: false
+
+overrides:
+  hono: 4.12.30
+  qs: 6.15.3
+
+patchedDependencies:
+  '@earendil-works/pi-ai@0.80.10': patches/@earendil-works__pi-ai@0.80.10.patch

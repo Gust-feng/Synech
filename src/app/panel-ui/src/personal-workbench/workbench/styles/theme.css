@@ -1,0 +1,389 @@
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --font-size: 16px;
+
+  /* Workbench workspace tokens (exact source alignment) */
+  --personal-paper: #f4f2ef;
+  --personal-panel: #faf9f7;
+  --personal-ink: #292722;
+  --personal-muted: #87827c;
+  --personal-line: rgba(45, 40, 34, 0.09);
+  --personal-accent: #6865a7;
+
+  --aa-canvas: #f4f2ef;
+  --aa-surface: #faf9f7;
+  --aa-surface-hover: #eeebe6;
+  --aa-surface-active: #e5e1db;
+  --aa-panel: #faf9f7;
+  --aa-composer: #ffffff;
+  --aa-composer-shadow: 0 1px 3px rgba(45, 40, 34, 0.03);
+  --aa-composer-shadow-focus: 0 2px 12px rgba(45, 40, 34, 0.05);
+  --aa-border: rgba(45, 40, 34, 0.09);
+  --aa-text-1: #292722;
+  --aa-text-2: #87827c;
+  --aa-text-3: #aba39b;
+  --aa-accent: #6865a7;
+  --aa-accent-bg: rgba(104, 101, 167, 0.08);
+  --aa-accent-fg: #ffffff;
+  --aa-hover-tint: rgba(45, 40, 34, 0.05);
+  --aa-lavender: #ece9f5;
+  --aa-lavender-mid: #6865a7;
+  --aa-sage: #E8F0E4;
+  --aa-sky: #E0EBF4;
+  --aa-amber: #FAF0E0;
+  --aa-status-active: #6865a7;
+  --aa-status-wait: #D49020;
+  --aa-status-error: #C84040;
+  --aa-status-done: #48A870;
+
+  /* 文档/材料语义色：与 --aa-* 一样在深色下整体替换，组件不得硬编码浅色。 */
+  --aa-paper: #ffffff;
+  --aa-warn-text: #8b611d;
+  --aa-warn-text-strong: #765116;
+  --aa-warn-hover: rgba(128, 88, 23, 0.09);
+  --aa-danger-text: #a5483b;
+  --aa-teal-text: #4f7e79;
+  --aa-verify-text: #6f9279;
+  --aa-diff-added: #315f42;
+  --aa-diff-removed: #934439;
+
+  /* 阅读偏好由共享设置入口写入，被对话流、专注模式和材料视图消费。 */
+  --reading-sans: "Noto Sans SC", Inter, system-ui, -apple-system, sans-serif;
+  --reading-serif: "Noto Serif SC", Georgia, "Songti SC", serif;
+  --reading-font: var(--reading-sans);
+  --reading-width: 680px;
+  --reading-body-size: 16px;
+
+  /* Stable workbench type roles. Reading content scales independently. */
+  --aa-font-ui: 14px;
+  --aa-font-meta: 12px;
+  --aa-font-caption: 11px;
+
+  --background: #f4f2ef;
+  --foreground: #292722;
+  --card: #faf9f7;
+  --card-foreground: #292722;
+  --popover: #faf9f7;
+  --popover-foreground: #292722;
+  --primary: #292722;
+  --primary-foreground: #faf9f7;
+  --secondary: #eeebe6;
+  --secondary-foreground: #292722;
+  --muted: #eeebe6;
+  --muted-foreground: #87827c;
+  --accent: #ece9f5;
+  --accent-foreground: #6865a7;
+  --destructive: #d4183d;
+  --destructive-foreground: #ffffff;
+  --border: rgba(45, 40, 34, 0.09);
+  --input: transparent;
+  --input-background: #f3f3f5;
+  --switch-background: #cbced4;
+  --font-weight-medium: 500;
+  --font-weight-normal: 400;
+  --ring: #6865a7;
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+  --radius: 0.625rem;
+  --sidebar: #faf9f7;
+  --sidebar-foreground: #292722;
+  --sidebar-primary: #292722;
+  --sidebar-primary-foreground: #faf9f7;
+  --sidebar-accent: #eeebe6;
+  --sidebar-accent-foreground: #292722;
+  --sidebar-border: rgba(45, 40, 34, 0.09);
+  --sidebar-ring: #6865a7;
+}
+
+html[data-style="default"][data-color="dark"] {
+  color-scheme: dark;
+
+  --personal-paper: #1c1b20;
+  --personal-panel: #232227;
+  --personal-ink: #e8e5e2;
+  --personal-muted: #aaa6a6;
+  --personal-line: rgba(232, 229, 226, 0.1);
+  --personal-accent: #9892b0;
+
+  --aa-canvas: #1b1b20;
+  --aa-surface: #232227;
+  --aa-surface-hover: #2b2a31;
+  --aa-surface-active: #33323a;
+  --aa-panel: #232227;
+  --aa-composer: #29282e;
+  --aa-composer-shadow: 0 12px 32px rgba(5, 5, 7, 0.2);
+  --aa-composer-shadow-focus:
+    0 0 0 3px rgba(152, 146, 176, 0.11),
+    0 16px 38px rgba(5, 5, 7, 0.26);
+  --aa-border: rgba(232, 229, 226, 0.1);
+  --aa-text-1: #e8e5e2;
+  --aa-text-2: #aaa6a6;
+  --aa-text-3: #7e7b7c;
+  --aa-accent: #9892b0;
+  --aa-accent-bg: rgba(152, 146, 176, 0.13);
+  --aa-accent-fg: #1b1b20;
+  --aa-hover-tint: rgba(232, 229, 226, 0.06);
+  --aa-lavender: #302d38;
+  --aa-lavender-mid: #b5aec6;
+  --aa-sage: #2b302d;
+  --aa-sky: #2a2a30;
+  --aa-amber: #35302a;
+  --aa-status-active: #9892b0;
+  --aa-status-wait: #b99a6d;
+  --aa-status-error: #d97782;
+  --aa-status-done: #8db599;
+
+  /* 深色下的文档/材料语义色（对应 :root 中的浅色默认值）。 */
+  --aa-paper: #2b2a31;
+  --aa-warn-text: #c9a25f;
+  --aa-warn-text-strong: #d9b877;
+  --aa-warn-hover: rgba(201, 162, 95, 0.14);
+  --aa-danger-text: #d97782;
+  --aa-teal-text: #8fb3a9;
+  --aa-verify-text: #8db599;
+  --aa-diff-added: #8db599;
+  --aa-diff-removed: #d97782;
+
+  --background: #1b1b20;
+  --foreground: #e8e5e2;
+  --card: #232227;
+  --card-foreground: #e8e5e2;
+  --popover: #29282e;
+  --popover-foreground: #e8e5e2;
+  --primary: #e8e5e2;
+  --primary-foreground: #1b1b20;
+  --secondary: #2b2a31;
+  --secondary-foreground: #e8e5e2;
+  --muted: #2b2a31;
+  --muted-foreground: #aaa6a6;
+  --accent: #33303a;
+  --accent-foreground: #c2bdd0;
+  --destructive: #7f3547;
+  --destructive-foreground: #ffeef1;
+  --border: rgba(232, 229, 226, 0.1);
+  --input: rgba(232, 229, 226, 0.12);
+  --input-background: #1d1c21;
+  --switch-background: #3b3a3f;
+  --ring: #9892b0;
+  --sidebar: #1a191e;
+  --sidebar-foreground: #e8e5e2;
+  --sidebar-primary: #9892b0;
+  --sidebar-primary-foreground: #1b1b20;
+  --sidebar-accent: #2b2a31;
+  --sidebar-accent-foreground: #e8e5e2;
+  --sidebar-border: rgba(232, 229, 226, 0.1);
+  --sidebar-ring: #9892b0;
+}
+
+.aa-sidebar-animation__scene--dark {
+  display: none;
+}
+
+html[data-style="default"][data-color="dark"] .aa-sidebar-animation__scene--light {
+  display: none;
+}
+
+html[data-style="default"][data-color="dark"] .aa-sidebar-animation__scene--dark {
+  display: block;
+}
+
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.145 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.145 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.985 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.396 0.141 25.723);
+  --destructive-foreground: oklch(0.637 0.237 25.331);
+  --border: oklch(0.269 0 0);
+  --input: oklch(0.269 0 0);
+  --ring: oklch(0.439 0 0);
+  --font-weight-medium: 500;
+  --font-weight-normal: 400;
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(0.269 0 0);
+  --sidebar-ring: oklch(0.439 0 0);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-input-background: var(--input-background);
+  --color-switch-background: var(--switch-background);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+
+  html {
+    font-size: var(--font-size);
+  }
+
+  h1 {
+    font-size: var(--text-2xl);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  h2 {
+    font-size: var(--text-xl);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  h3 {
+    font-size: var(--text-lg);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  h4 {
+    font-size: var(--text-base);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  label {
+    font-size: var(--text-base);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  button {
+    font-size: var(--text-base);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  input {
+    font-size: var(--text-base);
+    font-weight: var(--font-weight-normal);
+    line-height: 1.5;
+  }
+}
+
+/* 文本选中高亮：改用主题薰衣草色,不再是原生纯蓝(太跳)。 */
+::selection {
+  background: rgba(104, 101, 167, 0.22);
+  color: inherit;
+}
+
+/* 选中行为:界面 chrome(导航、按钮、标签)默认不可选中 —— 这些是操作元素,
+   被拖蓝选中既无意义又难看。只有真正的内容/输入区才放开选中。 */
+body {
+  -webkit-user-select: none;
+  user-select: none;
+}
+/* 阅读正文、可编辑区域重新允许选中(书写、复制引用是刚需)。 */
+.reading-prose,
+input,
+textarea,
+[contenteditable="true"] {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* 阅读界面容器：正文字体跟随阅读偏好。宽度用 max-width，由各处套 style 消费 --reading-width。 */
+.reading-prose {
+  font-family: var(--reading-font);
+}
+
+/* 细而克制的滚动条：默认极淡,悬停/滚动时才略明显。覆盖全站可滚动区域。 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(45, 40, 34, 0.16) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: rgba(45, 40, 34, 0.16);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(45, 40, 34, 0.3);
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+html[data-style="default"][data-color="dark"] * {
+  scrollbar-color: rgba(232, 229, 226, 0.16) transparent;
+}
+
+html[data-style="default"][data-color="dark"] *::-webkit-scrollbar-thumb {
+  background-color: rgba(232, 229, 226, 0.16);
+}
+
+html[data-style="default"][data-color="dark"] *::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(232, 229, 226, 0.28);
+}

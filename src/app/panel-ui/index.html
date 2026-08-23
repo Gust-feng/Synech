@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>Synech</title>
+    <script>
+      (() => {
+        const styles = new Set(["default", "classic", "glass"]);
+        const colorsByStyle = {
+          default: new Set(["system", "light", "dark"]),
+          classic: new Set(["warm", "forest", "slate"]),
+          glass: new Set(["aurora", "sunset", "ocean"]),
+        };
+        const defaults = { default: "light", classic: "warm", glass: "aurora" };
+        const motions = new Set(["system", "standard", "reduced"]);
+        const systemColor = () =>
+          window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        const systemReducedMotion = () =>
+          window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        try {
+          const preferenceKey = (name) => "synech/v1:" + name;
+          const readPreference = (name) => {
+            const key = preferenceKey(name);
+            return window.synechHost?.getLocalPreference?.(key) ?? localStorage.getItem(key);
+          };
+          const savedStyle = readPreference("theme.style");
+          const style = styles.has(savedStyle) ? savedStyle : "default";
+          const savedColor = readPreference("theme.color");
+          const colorPreference = colorsByStyle[style].has(savedColor) ? savedColor : defaults[style];
+          const color = style === "default" && colorPreference === "system" ? systemColor() : colorPreference;
+          const savedMotion = readPreference("theme.motion");
+          const motion = motions.has(savedMotion) ? savedMotion : "system";
+          const motionEffective = motion === "reduced" || (motion === "system" && systemReducedMotion())
+            ? "reduced"
+            : "standard";
+          document.documentElement.dataset.style = style;
+          document.documentElement.dataset.color = color;
+          document.documentElement.dataset.colorPreference = colorPreference;
+          document.documentElement.dataset.motion = motion;
+          document.documentElement.dataset.motionEffective = motionEffective;
+        } catch {
+          document.documentElement.dataset.style = "default";
+          document.documentElement.dataset.color = "light";
+          document.documentElement.dataset.colorPreference = "light";
+          document.documentElement.dataset.motion = "system";
+          document.documentElement.dataset.motionEffective = systemReducedMotion() ? "reduced" : "standard";
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root">
+      <!-- ordinary-screen-start -->
+      <style>
+        html,
+        body,
+        #root {
+          height: 100%;
+          margin: 0;
+        }
+
+        body {
+          background: #f4f2ef;
+          color: #292722;
+          font-family: "Noto Sans SC", Inter, system-ui, -apple-system, sans-serif;
+        }
+
+        .synech-bootstrap {
+          display: flex;
+          height: 100%;
+          overflow: hidden;
+          background: #f4f2ef;
+        }
+
+        .synech-bootstrap__sidebar {
+          width: 236px;
+          flex: 0 0 236px;
+          box-sizing: border-box;
+          border-right: 1px solid rgba(45, 40, 34, 0.09);
+          background: #faf9f7;
+          padding: 138px 20px 16px;
+        }
+
+        .synech-bootstrap__content {
+          display: flex;
+          min-width: 0;
+          flex: 1;
+          flex-direction: column;
+        }
+
+        .synech-bootstrap__topbar {
+          height: 44px;
+          flex: 0 0 44px;
+          border-bottom: 1px solid rgba(45, 40, 34, 0.09);
+          background: #faf9f7;
+        }
+
+        .synech-bootstrap__canvas {
+          display: grid;
+          min-height: 0;
+          flex: 1;
+          place-items: center;
+        }
+
+        .synech-bootstrap__line {
+          display: block;
+          border-radius: 999px;
+          background: #eeebe6;
+        }
+
+        .synech-bootstrap__line {
+          width: 118px;
+          height: 10px;
+          margin-bottom: 18px;
+        }
+
+        .synech-bootstrap__line--short {
+          width: 76px;
+        }
+
+        html[data-style="default"][data-color="dark"] body,
+        html[data-style="default"][data-color="dark"] .synech-bootstrap {
+          background: #1b1b20;
+          color: #e8e5e2;
+        }
+
+        html[data-style="default"][data-color="dark"] .synech-bootstrap__sidebar,
+        html[data-style="default"][data-color="dark"] .synech-bootstrap__topbar {
+          border-color: rgba(232, 229, 226, 0.1);
+          background: #232227;
+        }
+
+        html[data-style="default"][data-color="dark"] .synech-bootstrap__line {
+          background: #33323a;
+        }
+
+      </style>
+      <div class="synech-bootstrap" aria-label="正在加载 Synech">
+        <aside class="synech-bootstrap__sidebar" aria-hidden="true">
+          <span class="synech-bootstrap__line"></span>
+          <span class="synech-bootstrap__line synech-bootstrap__line--short"></span>
+        </aside>
+        <main class="synech-bootstrap__content">
+          <div class="synech-bootstrap__topbar" aria-hidden="true"></div>
+          <div class="synech-bootstrap__canvas"></div>
+        </main>
+      </div>
+      <!-- ordinary-screen-end -->
+    </div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
