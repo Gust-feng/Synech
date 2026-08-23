@@ -71,13 +71,16 @@ main().catch((error: unknown) => {
 
 async function main(): Promise<void> {
   const args = parsePanelDesktopArgs(process.argv.slice(2));
-  configureDesktopAppIdentity(resolveProductPaths({ productHome: args.productHome }));
+  configureDesktopAppIdentity();
   installDesktopLocalPreferenceBridge();
   installDesktopWindowControlBridge();
   let sessionRef: PanelDesktopSession | undefined;
   try {
     const session = await startPanelDesktopSession(args, {
       startPanelServer: startLocalPanelServer,
+      configureAppStoragePaths: (productHome) => {
+        configureDesktopAppStoragePaths(resolveProductPaths({ productHome }));
+      },
       createWindow: (options) => createElectronPanelWindow(options),
       selectDirectory: selectDirectory,
       selectContextAttachment: selectContextAttachment,
@@ -153,17 +156,16 @@ function exitDesktopAfterCleanup(exitCode: number): void {
   })();
 }
 
-function configureDesktopAppIdentity(productPaths: ProductPaths): void {
+function configureDesktopAppIdentity(): void {
   app.setName(DESKTOP_APP_NAME);
   if (process.platform === "win32") {
     app.setAppUserModelId(desktopAppUserModelId(app.isPackaged));
   }
-  try {
-    app.setPath("userData", productPaths.state.electron);
-    app.setPath("sessionData", productPaths.cache.electron);
-  } catch {
-    // Electron may reject path changes in unusual embed contexts; app identity still remains set.
-  }
+}
+
+function configureDesktopAppStoragePaths(productPaths: ProductPaths): void {
+  app.setPath("userData", productPaths.state.electron);
+  app.setPath("sessionData", productPaths.cache.electron);
 }
 
 async function selectDirectory(): Promise<string | undefined> {

@@ -45,6 +45,7 @@ export type PanelDesktopSession = {
 
 export type PanelDesktopDependencies = {
   readonly startPanelServer: (options: PanelServerOptions) => Promise<StartedPanelServer>;
+  readonly configureAppStoragePaths?: (productHome: string) => void | Promise<void>;
   readonly createWindow: (options: PanelDesktopWindowOptions) => PanelDesktopWindowHandle;
   readonly selectDirectory?: () => Promise<string | undefined>;
   readonly selectContextAttachment?: () => Promise<PanelContextAttachmentSelection | undefined>;
@@ -70,7 +71,6 @@ export async function startPanelDesktopSession(
     synechRestorePicker: args.smoke ? undefined : dependencies.selectSynechRestore,
     externalResourceOpener: args.smoke ? undefined : dependencies.openExternalResource,
   });
-  const panelUrl = args.devUrl ?? server.url;
   let closePromise: Promise<void> | undefined;
 
   const closeServer = (): Promise<void> => {
@@ -80,6 +80,15 @@ export async function startPanelDesktopSession(
     })();
     return closePromise;
   };
+
+  try {
+    await dependencies.configureAppStoragePaths?.(server.productHome);
+  } catch (error) {
+    await closeServer();
+    throw error;
+  }
+
+  const panelUrl = args.devUrl ?? server.url;
 
   dependencies.onBeforeQuit(closeServer);
   dependencies.onWindowAllClosed(() => {

@@ -218,7 +218,7 @@ type PanelSubAgentRootsInput = {
   readonly executionRoot?: string;
 };
 
-export type PanelHostOptions = Omit<PanelServerOptions, "host" | "port" | "productHome" | "productPaths"> & {
+export type PanelHostOptions = Omit<PanelServerOptions, "host" | "port" | "productHome"> & {
   readonly productPaths: ProductPaths;
 };
 

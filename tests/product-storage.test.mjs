@@ -5,9 +5,13 @@ import path from "node:path";
 import test from "node:test";
 
 import { mcpManagedRuntimeDirectories } from "../dist/adapters/mcp/mcp-local-runtime.js";
+import { startPanelDesktopSession } from "../dist/app/desktop/panel-desktop-launcher.js";
+import { createLeaseBoundClose } from "../dist/app/panel-server/panel-server-lifecycle.js";
 import { startLocalPanelServer } from "../dist/app/panel-server/request-handler.js";
+import * as panelServerPublic from "../dist/app/panel-server.js";
 import {
   PRODUCT_HOME_LEASE_FILENAME,
+  PRODUCT_HOME_LEASE_RECOVERY_DIRECTORY,
   STORAGE_LAYOUT_MANIFEST,
   acquireProductHomeLease,
   initializeProductStorage,
@@ -181,6 +185,67 @@ test("initialization creates the strict v1 layout and is idempotent", async () =
   });
 });
 
+test("manifest durability syncs file content before rename and then syncs the parent directory", async () => {
+  await withTemporaryDirectory(async (temporaryDirectory) => {
+    const paths = resolveProductPaths({ productHome: path.join(temporaryDirectory, "product") });
+    const events = [];
+    const originalOpen = fs.open;
+    const originalRename = fs.rename;
+    fs.open = async (...args) => {
+      const candidate = String(args[0]);
+      const handle = await originalOpen(...args);
+      if (candidate === paths.productHome) {
+        return wrapFileHandle(handle, () => events.push("directory-sync"));
+      }
+      if (path.dirname(candidate) === paths.productHome && path.basename(candidate).startsWith(".storage-layout.")) {
+        return wrapFileHandle(handle, () => events.push("file-sync"));
+      }
+      return handle;
+    };
+    fs.rename = async (...args) => {
+      if (String(args[1]) === paths.layoutManifest) events.push("rename");
+      return originalRename(...args);
+    };
+    try {
+      await initializeProductStorage(paths);
+    } finally {
+      fs.open = originalOpen;
+      fs.rename = originalRename;
+    }
+
+    assert.deepEqual(events, ["file-sync", "rename", "directory-sync"]);
+  });
+});
+
+test("initialization recovers only regular interrupted manifest writes", async (t) => {
+  await t.test("a stale reserved temp file is removed before the empty-root check", async () => {
+    await withTemporaryDirectory(async (temporaryDirectory) => {
+      const paths = resolveProductPaths({ productHome: path.join(temporaryDirectory, "product") });
+      await fs.mkdir(paths.productHome, { recursive: true });
+      const staleTemp = path.join(paths.productHome, ".storage-layout.123.interrupted.tmp");
+      await fs.writeFile(staleTemp, "partial", "utf8");
+
+      await initializeProductStorage(paths);
+
+      await assert.rejects(fs.access(staleTemp), { code: "ENOENT" });
+      assert.deepEqual(JSON.parse(await fs.readFile(paths.layoutManifest, "utf8")), STORAGE_LAYOUT_MANIFEST);
+    });
+  });
+
+  await t.test("a reserved-looking directory remains unknown content and fails closed", async () => {
+    await withTemporaryDirectory(async (temporaryDirectory) => {
+      const paths = resolveProductPaths({ productHome: path.join(temporaryDirectory, "product") });
+      const unknownDirectory = path.join(paths.productHome, ".storage-layout.123.interrupted.tmp");
+      await fs.mkdir(unknownDirectory, { recursive: true });
+
+      await assertLayoutError(() => initializeProductStorage(paths));
+
+      assert.equal((await fs.stat(unknownDirectory)).isDirectory(), true);
+      await assert.rejects(fs.access(paths.layoutManifest), { code: "ENOENT" });
+    });
+  });
+});
+
 test("initialization fails closed for invalid or conflicting layouts", async (t) => {
   const invalidManifestCases = [
     { name: "invalid JSON", source: "{not-json" },
@@ -251,6 +316,154 @@ test("Product Home lease rejects a second owner and can be reacquired after rele
   });
 });
 
+test("stale Product Home takeover admits exactly one contender at a deterministic barrier", async () => {
+  await withTemporaryDirectory(async (temporaryDirectory) => {
+    const productHome = path.join(temporaryDirectory, "product");
+    const leasePath = path.join(productHome, PRODUCT_HOME_LEASE_FILENAME);
+    const recoveryRoot = path.join(productHome, PRODUCT_HOME_LEASE_RECOVERY_DIRECTORY);
+    await fs.mkdir(productHome, { recursive: true });
+    await fs.writeFile(leasePath, JSON.stringify({
+      version: 1,
+      instanceId: "dead-owner",
+      pid: 2_147_483_647,
+      startedAt: "2000-01-01T00:00:00.000Z",
+    }), "utf8");
+
+    const originalMkdir = fs.mkdir;
+    let gateArrivals = 0;
+    let openBarrier;
+    const barrier = new Promise((resolve) => {
+      openBarrier = resolve;
+    });
+    fs.mkdir = async (candidate, options) => {
+      if (path.dirname(String(candidate)) === recoveryRoot && options === undefined) {
+        gateArrivals += 1;
+        if (gateArrivals === 2) openBarrier();
+        await barrier;
+      }
+      return originalMkdir(candidate, options);
+    };
+
+    let results;
+    try {
+      results = await Promise.allSettled([
+        acquireProductHomeLease(productHome),
+        acquireProductHomeLease(productHome),
+      ]);
+    } finally {
+      fs.mkdir = originalMkdir;
+    }
+
+    const acquired = results.filter((result) => result.status === "fulfilled");
+    const rejected = results.filter((result) => result.status === "rejected");
+    assert.ok(gateArrivals >= 2);
+    const recoveryEntries = await fs.readdir(recoveryRoot);
+    assert.equal(acquired.length, 1, JSON.stringify({ gateArrivals, recoveryEntries }));
+    assert.equal(rejected.length, 1);
+    assert.equal(rejected[0].reason?.code, "product_home_in_use");
+    assert.equal(recoveryEntries.length, 1);
+    await acquired[0].value.release();
+  });
+});
+
+test("lease release retries transient Windows errors and remains retryable after exhaustion", async () => {
+  await withTemporaryDirectory(async (temporaryDirectory) => {
+    const productHome = path.join(temporaryDirectory, "product");
+    const leasePath = path.join(productHome, PRODUCT_HOME_LEASE_FILENAME);
+    const lease = await acquireProductHomeLease(productHome);
+    const originalUnlink = fs.unlink;
+    let attempts = 0;
+    fs.unlink = async (candidate) => {
+      if (String(candidate) === leasePath) {
+        attempts += 1;
+        if (attempts <= 2) throw nodeError("EPERM");
+      }
+      return originalUnlink(candidate);
+    };
+    try {
+      await lease.release();
+    } finally {
+      fs.unlink = originalUnlink;
+    }
+    assert.equal(attempts, 3);
+    await assert.rejects(fs.access(leasePath), { code: "ENOENT" });
+
+    const retryableLease = await acquireProductHomeLease(productHome);
+    fs.unlink = async (candidate) => {
+      if (String(candidate) === leasePath) throw nodeError("EBUSY");
+      return originalUnlink(candidate);
+    };
+    try {
+      await assert.rejects(() => retryableLease.release(), { code: "EBUSY" });
+    } finally {
+      fs.unlink = originalUnlink;
+    }
+    assert.equal((await fs.stat(leasePath)).isFile(), true);
+    await retryableLease.release();
+    await assert.rejects(fs.access(leasePath), { code: "ENOENT" });
+  });
+});
+
+test("desktop storage paths are configured after server startup and before Electron readiness", async (t) => {
+  const args = { host: "127.0.0.1", port: 0, productHome: "chosen-home", smoke: false };
+
+  await t.test("the configured path belongs to the already-started server", async () => {
+    const events = [];
+    const session = await startPanelDesktopSession(args, desktopDependencies({
+      events,
+      configureAppStoragePaths(productHome) {
+        assert.equal(productHome, path.resolve("canonical-home"));
+        events.push("configure-paths");
+      },
+    }));
+    assert.deepEqual(events.slice(0, 5), ["server-started", "configure-paths", "ready", "window-created", "url-loaded"]);
+    await session.close();
+  });
+
+  await t.test("configuration failure closes the initialized server before readiness", async () => {
+    const events = [];
+    const failure = new Error("setPath rejected");
+    await assert.rejects(
+      () => startPanelDesktopSession(args, desktopDependencies({
+        events,
+        configureAppStoragePaths() {
+          events.push("configure-paths");
+          throw failure;
+        },
+      })),
+      failure,
+    );
+    assert.deepEqual(events, ["server-started", "configure-paths", "server-closed"]);
+  });
+});
+
+test("a caller-visible shutdown timeout keeps the lease until cleanup really settles", async () => {
+  let finishCleanup;
+  const cleanupSettled = new Promise((resolve) => {
+    finishCleanup = resolve;
+  });
+  let releases = 0;
+  const close = createLeaseBoundClose(
+    () => ({
+      completion: Promise.reject(Object.assign(new Error("timed out"), { code: "panel_shutdown_timeout" })),
+      cleanupSettled,
+    }),
+    async () => {
+      releases += 1;
+    },
+  );
+
+  await assert.rejects(() => close(), { code: "panel_shutdown_timeout" });
+  assert.equal(releases, 0);
+  finishCleanup();
+  await waitFor(() => releases === 1);
+});
+
+test("the public panel barrel exposes startup but not internal request construction", () => {
+  assert.equal(typeof panelServerPublic.startLocalPanelServer, "function");
+  assert.equal("createPanelRequestHandler" in panelServerPublic, false);
+});
+
 test("local panel startup owns the canonical layout and releases its lease", async () => {
   await withTemporaryDirectory(async (temporaryDirectory) => {
     const productHome = path.join(temporaryDirectory, "product");
@@ -304,6 +517,66 @@ function collectStringValues(value) {
   if (typeof value === "string") return [value];
   if (value === null || typeof value !== "object") return [];
   return Object.values(value).flatMap(collectStringValues);
+}
+
+function nodeError(code) {
+  return Object.assign(new Error(`simulated ${code}`), { code });
+}
+
+function desktopDependencies({ events, configureAppStoragePaths }) {
+  return {
+    async startPanelServer() {
+      events.push("server-started");
+      return {
+        url: "http://127.0.0.1:12345/",
+        productHome: path.resolve("canonical-home"),
+        configDirectory: path.resolve("canonical-home", "config"),
+        async close() {
+          events.push("server-closed");
+        },
+      };
+    },
+    configureAppStoragePaths,
+    async whenReady() {
+      events.push("ready");
+    },
+    createWindow() {
+      events.push("window-created");
+      return {
+        async loadUrl() {
+          events.push("url-loaded");
+        },
+        onReadyToShow() {},
+        show() {},
+        isVisible() { return false; },
+        isDestroyed() { return false; },
+      };
+    },
+    onWindowAllClosed() {},
+    onBeforeQuit() {},
+    quit() {},
+  };
+}
+
+function wrapFileHandle(handle, beforeSync) {
+  return {
+    writeFile: (...args) => handle.writeFile(...args),
+    stat: (...args) => handle.stat(...args),
+    readFile: (...args) => handle.readFile(...args),
+    async sync() {
+      beforeSync();
+      return handle.sync();
+    },
+    close: () => handle.close(),
+  };
+}
+
+async function waitFor(predicate) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.fail("condition did not become true");
 }
 
 async function withTemporaryDirectory(operation) {

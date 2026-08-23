@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { renameWithRetry } from "../../kernel/fs/atomic-write.js";
-import { PRODUCT_HOME_LEASE_FILENAME } from "./product-home-lease.js";
+import {
+  PRODUCT_HOME_LEASE_FILENAME,
+  PRODUCT_HOME_LEASE_RECOVERY_DIRECTORY,
+} from "./product-home-lease.js";
 import { productStorageDirectories, type ProductPaths } from "./product-paths.js";
 
 export const STORAGE_LAYOUT_VERSION = 1 as const;
@@ -25,8 +28,10 @@ export async function initializeProductStorage(paths: ProductPaths): Promise<voi
   await fs.mkdir(paths.productHome, { recursive: true });
   const manifest = await readManifest(paths);
   if (manifest === undefined) {
+    await removeInterruptedManifestWrites(paths);
     const entries = (await fs.readdir(paths.productHome)).filter(
-      (entry) => entry !== PRODUCT_HOME_LEASE_FILENAME,
+      (entry) => entry !== PRODUCT_HOME_LEASE_FILENAME &&
+        entry !== PRODUCT_HOME_LEASE_RECOVERY_DIRECTORY,
     );
     if (entries.length > 0) {
       throw new ProductStorageLayoutError(
@@ -93,17 +98,53 @@ async function writeManifestAtomically(paths: ProductPaths): Promise<void> {
     paths.productHome,
     `.storage-layout.${process.pid}.${randomUUID()}.tmp`,
   );
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
   try {
-    await fs.writeFile(
-      temporaryPath,
-      `${JSON.stringify(STORAGE_LAYOUT_MANIFEST, null, 2)}\n`,
-      { encoding: "utf8", flag: "wx" },
-    );
+    handle = await fs.open(temporaryPath, "wx");
+    await handle.writeFile(`${JSON.stringify(STORAGE_LAYOUT_MANIFEST, null, 2)}\n`, "utf8");
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
     await renameWithRetry(temporaryPath, paths.layoutManifest);
+    await fsyncDirectory(paths.productHome);
   } catch (error) {
+    await handle?.close().catch(() => undefined);
     await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
     throw error;
   }
+}
+
+async function removeInterruptedManifestWrites(paths: ProductPaths): Promise<void> {
+  const entries = await fs.readdir(paths.productHome, { withFileTypes: true });
+  await Promise.all(entries.map(async (entry) => {
+    if (!entry.isFile() || !/^\.storage-layout\..+\.tmp$/u.test(entry.name)) return;
+    await fs.unlink(path.join(paths.productHome, entry.name));
+  }));
+}
+
+async function fsyncDirectory(directoryPath: string): Promise<void> {
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
+  let primaryFailure: unknown;
+  try {
+    handle = await fs.open(directoryPath, "r");
+    await handle.sync();
+  } catch (error) {
+    if (!isUnsupportedWindowsDirectoryFsync(error)) {
+      primaryFailure = error;
+      throw error;
+    }
+  } finally {
+    try {
+      await handle?.close();
+    } catch (error) {
+      if (primaryFailure === undefined) throw error;
+    }
+  }
+}
+
+function isUnsupportedWindowsDirectoryFsync(error: unknown): boolean {
+  return process.platform === "win32" &&
+    ["EINVAL", "EPERM", "ENOTSUP", "EISDIR"].some((code) => isNodeError(error, code));
 }
 
 function isFileMissing(error: unknown): boolean {
@@ -113,4 +154,8 @@ function isFileMissing(error: unknown): boolean {
 function isPathTypeConflict(error: unknown): boolean {
   return error instanceof Error && "code" in error &&
     (error.code === "EEXIST" || error.code === "ENOTDIR");
+}
+
+function isNodeError(error: unknown, code: string): boolean {
+  return error instanceof Error && "code" in error && error.code === code;
 }

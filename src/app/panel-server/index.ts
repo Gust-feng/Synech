@@ -1,5 +1,4 @@
 export {
-  createPanelRequestHandler,
   startLocalPanelServer,
 } from "./request-handler.js";
 

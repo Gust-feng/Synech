@@ -1,15 +1,24 @@
-import { randomUUID } from "node:crypto";
-import { promises as fs } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { promises as fs, type Stats } from "node:fs";
 import path from "node:path";
+import { renameWithRetry } from "../../kernel/fs/atomic-write.js";
 
 export const PRODUCT_HOME_LEASE_FILENAME = ".synech-product-home-owner.json";
+export const PRODUCT_HOME_LEASE_RECOVERY_DIRECTORY = ".synech-product-home-lease-recovery";
 const INCOMPLETE_LEASE_STALE_AFTER_MS = 30_000;
+const RELEASE_MAX_ATTEMPTS = 4;
 
 type ProductHomeOwner = {
   readonly version: 1;
   readonly instanceId: string;
   readonly pid: number;
   readonly startedAt: string;
+};
+
+type LeaseSnapshot = {
+  readonly owner?: ProductHomeOwner;
+  readonly fingerprint: string;
+  readonly modifiedAtMs: number;
 };
 
 export class ProductHomeInUseError extends Error {
@@ -38,42 +47,99 @@ export async function acquireProductHomeLease(productHome: string): Promise<Prod
     startedAt: new Date().toISOString(),
   };
 
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
     try {
       await fs.writeFile(leasePath, `${JSON.stringify(owner)}\n`, { encoding: "utf8", flag: "wx" });
-      let released = false;
-      return {
-        productHome,
-        async release() {
-          if (released) return;
-          released = true;
-          const current = await readOwner(leasePath);
-          if (current?.instanceId !== owner.instanceId) return;
-          await fs.unlink(leasePath).catch((error: unknown) => {
-            if (!isFileMissing(error)) throw error;
-          });
-        },
-      };
+      return createLease(productHome, leasePath, owner);
     } catch (error) {
-      if (!isAlreadyExists(error)) throw error;
-      const existing = await readOwner(leasePath);
-      if (existing !== undefined && processIsAlive(existing.pid)) {
-        throw new ProductHomeInUseError(productHome, existing.pid);
-      }
-      if (existing === undefined && await leaseIsRecent(leasePath)) {
-        throw new ProductHomeInUseError(productHome);
-      }
-      await fs.unlink(leasePath).catch((unlinkError: unknown) => {
-        if (!isFileMissing(unlinkError)) throw unlinkError;
-      });
+      if (!isNodeError(error, "EEXIST")) throw error;
     }
+
+    const existing = await readLeaseSnapshot(leasePath);
+    if (existing === undefined) continue;
+    if (existing.owner !== undefined && processIsAlive(existing.owner.pid)) {
+      throw new ProductHomeInUseError(productHome, existing.owner.pid);
+    }
+    if (existing.owner === undefined && Date.now() - existing.modifiedAtMs < INCOMPLETE_LEASE_STALE_AFTER_MS) {
+      throw new ProductHomeInUseError(productHome);
+    }
+    await claimStaleLease(productHome, leasePath, existing);
   }
   throw new ProductHomeInUseError(productHome);
 }
 
-async function readOwner(leasePath: string): Promise<ProductHomeOwner | undefined> {
+function createLease(
+  productHome: string,
+  leasePath: string,
+  owner: ProductHomeOwner,
+): ProductHomeLease {
+  let released = false;
+  return {
+    productHome,
+    async release() {
+      if (released) return;
+      const current = await readLeaseSnapshot(leasePath);
+      if (current?.owner?.instanceId !== owner.instanceId) {
+        released = true;
+        return;
+      }
+      const removed = await unlinkOwnedLeaseWithRetry(leasePath, owner.instanceId);
+      if (removed) released = true;
+    },
+  };
+}
+
+/**
+ * Serializes takeover for one observed lease generation without deleting a fixed
+ * path blindly. The identity-specific gate is intentionally retained: a paused
+ * contender that observed the old generation can never move a newer owner.
+ */
+async function claimStaleLease(
+  productHome: string,
+  leasePath: string,
+  existing: LeaseSnapshot,
+): Promise<void> {
+  const recoveryRoot = path.join(productHome, PRODUCT_HOME_LEASE_RECOVERY_DIRECTORY);
+  await fs.mkdir(recoveryRoot, { recursive: true });
+  const recoveryDirectory = path.join(recoveryRoot, existing.fingerprint);
   try {
-    const value = JSON.parse(await fs.readFile(leasePath, "utf8")) as unknown;
+    await fs.mkdir(recoveryDirectory);
+  } catch (error) {
+    if (isNodeError(error, "EEXIST")) return;
+    throw error;
+  }
+
+  try {
+    await renameWithRetry(leasePath, path.join(recoveryDirectory, "owner.json"));
+  } catch (error) {
+    if (isNodeError(error, "ENOENT")) return;
+    await fs.rmdir(recoveryDirectory).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function readLeaseSnapshot(leasePath: string): Promise<LeaseSnapshot | undefined> {
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
+  try {
+    handle = await fs.open(leasePath, "r");
+    const [source, stat] = await Promise.all([handle.readFile("utf8"), handle.stat()]);
+    const owner = parseOwner(source);
+    return {
+      owner,
+      fingerprint: leaseFingerprint(source, stat, owner?.instanceId),
+      modifiedAtMs: stat.mtimeMs,
+    };
+  } catch (error) {
+    if (isNodeError(error, "ENOENT")) return undefined;
+    throw error;
+  } finally {
+    await handle?.close();
+  }
+}
+
+function parseOwner(source: string): ProductHomeOwner | undefined {
+  try {
+    const value = JSON.parse(source) as unknown;
     if (typeof value !== "object" || value === null) return undefined;
     const owner = value as Partial<ProductHomeOwner>;
     return owner.version === 1 && typeof owner.instanceId === "string" &&
@@ -82,19 +148,34 @@ async function readOwner(leasePath: string): Promise<ProductHomeOwner | undefine
       ? owner as ProductHomeOwner
       : undefined;
   } catch (error) {
-    if (isFileMissing(error) || error instanceof SyntaxError) return undefined;
+    if (error instanceof SyntaxError) return undefined;
     throw error;
   }
 }
 
-async function leaseIsRecent(leasePath: string): Promise<boolean> {
-  try {
-    const stat = await fs.stat(leasePath);
-    return Date.now() - stat.mtimeMs < INCOMPLETE_LEASE_STALE_AFTER_MS;
-  } catch (error) {
-    if (isFileMissing(error)) return false;
-    throw error;
+function leaseFingerprint(source: string, stat: Stats, instanceId: string | undefined): string {
+  return createHash("sha256")
+    .update(instanceId === undefined
+      ? `${stat.dev}:${stat.ino}:${stat.birthtimeMs}:${stat.mtimeMs}:${stat.size}\n`
+      : `owner:${instanceId}\n`)
+    .update(source)
+    .digest("hex");
+}
+
+async function unlinkOwnedLeaseWithRetry(leasePath: string, instanceId: string): Promise<boolean> {
+  for (let attempt = 1; attempt <= RELEASE_MAX_ATTEMPTS; attempt += 1) {
+    const current = await readLeaseSnapshot(leasePath);
+    if (current?.owner?.instanceId !== instanceId) return true;
+    try {
+      await fs.unlink(leasePath);
+      return true;
+    } catch (error) {
+      if (isNodeError(error, "ENOENT")) return true;
+      if (attempt >= RELEASE_MAX_ATTEMPTS || !isTransientReleaseError(error)) throw error;
+      await delay(10 * attempt);
+    }
   }
+  return false;
 }
 
 function processIsAlive(pid: number): boolean {
@@ -102,18 +183,18 @@ function processIsAlive(pid: number): boolean {
     process.kill(pid, 0);
     return true;
   } catch (error) {
-    return isPermissionDenied(error);
+    return isNodeError(error, "EPERM");
   }
 }
 
-function isAlreadyExists(error: unknown): boolean {
-  return error instanceof Error && "code" in error && error.code === "EEXIST";
+function isTransientReleaseError(error: unknown): boolean {
+  return isNodeError(error, "EPERM") || isNodeError(error, "EACCES") || isNodeError(error, "EBUSY");
 }
 
-function isFileMissing(error: unknown): boolean {
-  return error instanceof Error && "code" in error && error.code === "ENOENT";
+function isNodeError(error: unknown, code: string): boolean {
+  return error instanceof Error && "code" in error && error.code === code;
 }
 
-function isPermissionDenied(error: unknown): boolean {
-  return error instanceof Error && "code" in error && error.code === "EPERM";
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }

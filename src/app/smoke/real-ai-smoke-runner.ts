@@ -5,7 +5,6 @@ import { z } from "zod";
 import type { LocalDevSecretStore, LocalSettings, SecretMetadata, SettingsStore } from "../../domain/config/index.js";
 import type { ModelUsage } from "../../domain/intelligence/index.js";
 import type { ToolCallResult } from "../../domain/tools/index.js";
-import { resolveProductPaths } from "../../platform/storage/index.js";
 import { ConfigCenter } from "../config-center/index.js";
 import { startLocalPanelServer } from "../panel-server.js";
 import type { PanelProviderFetch } from "../panel-server/types.js";
@@ -87,7 +86,6 @@ export async function runRealAiSmoke(
 
   const ownsDirectory = options.productHome === undefined;
   const productHome = options.productHome ?? await fs.mkdtemp(path.join(os.tmpdir(), "synech-real-ai-smoke-"));
-  const productPaths = resolveProductPaths({ productHome });
   // Smoke configuration stays in memory so Product Home remains empty until the
   // server owns the startup lease and initializes storage-layout.json.
   const configCenter = new ConfigCenter({
@@ -111,7 +109,7 @@ export async function runRealAiSmoke(
     await configCenter.activateModelProviderProfile(smokeProfileId);
     server = await startLocalPanelServer({
       port: 0,
-      productPaths,
+      productHome,
       configCenter,
       providerFetch: options.providerFetch,
     });
