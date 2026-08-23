@@ -48,7 +48,6 @@ export type ProductCachePaths = {
 
 export type ProductPaths = {
   readonly productHome: string;
-  readonly layoutManifest: string;
   readonly configDirectory: string;
   readonly data: ProductDataPaths;
   readonly state: ProductStatePaths;
@@ -67,7 +66,6 @@ export function resolveProductPaths(options: ResolveProductHomeOptions = {}): Pr
   const cacheRoot = path.join(productHome, "cache");
   return {
     productHome,
-    layoutManifest: path.join(productHome, "storage-layout.json"),
     configDirectory: path.join(productHome, "config"),
     data: {
       root: dataRoot,

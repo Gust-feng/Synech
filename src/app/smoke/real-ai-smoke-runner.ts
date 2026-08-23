@@ -86,8 +86,7 @@ export async function runRealAiSmoke(
 
   const ownsDirectory = options.productHome === undefined;
   const productHome = options.productHome ?? await fs.mkdtemp(path.join(os.tmpdir(), "synech-real-ai-smoke-"));
-  // Smoke configuration stays in memory so Product Home remains empty until the
-  // server owns the startup lease and initializes storage-layout.json.
+  // Smoke configuration stays in memory; the server creates Product Home.
   const configCenter = new ConfigCenter({
     settingsStore: new InMemorySettingsStore(),
     secretStore: new InMemorySecretStore(),

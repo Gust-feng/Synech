@@ -42,12 +42,7 @@ import { handlePanelSynechDataRoute, synechDataHttpError } from "./synech-data-r
 import { SynechDataMaintenanceError } from "./synech-data-maintenance.js";
 import { handlePanelManagedAssetRoute } from "./managed-asset-routes.js";
 import { handleSynechProjectionRoute } from "./synech-projection-routes.js";
-import {
-  acquireProductHomeLease,
-  initializeProductStorage,
-  resolveProductPaths,
-} from "../../platform/storage/index.js";
-import { createLeaseBoundClose, type PanelServerShutdown } from "./panel-server-lifecycle.js";
+import { initializeProductStorage, resolveProductPaths } from "../../platform/storage/index.js";
 export type { PanelModelCatalogFetch, PanelProviderFetch, PanelServerOptions, StartedPanelServer } from "./types.js";
 
 const PANEL_REQUEST_DRAIN_TIMEOUT_MS = 1_000;
@@ -69,7 +64,6 @@ export class PanelShutdownTimeoutError extends Error {
 
 export async function startLocalPanelServer(options: PanelServerOptions = {}): Promise<StartedPanelServer> {
   const productPaths = resolveProductPaths({ productHome: options.productHome });
-  const lease = await acquireProductHomeLease(productPaths.productHome);
   let runtime: PanelHost | undefined;
   try {
     await initializeProductStorage(productPaths);
@@ -102,14 +96,12 @@ export async function startLocalPanelServer(options: PanelServerOptions = {}): P
 
     await listen(server, port, host);
     const address = server.address() as AddressInfo;
+    let closing: Promise<void> | undefined;
     return {
       url: `http://${host}:${address.port}/`,
       productHome: createdRuntime.productPaths.productHome,
       configDirectory: createdRuntime.configDirectory,
-      close: createLeaseBoundClose(
-        () => beginPanelServerShutdown(server, createdRuntime),
-        () => lease.release(),
-      ),
+      close: () => closing ??= closePanelServer(server, createdRuntime),
     };
   } catch (startError) {
     const cleanupErrors: unknown[] = [];
@@ -119,11 +111,6 @@ export async function startLocalPanelServer(options: PanelServerOptions = {}): P
       } catch (error) {
         cleanupErrors.push(error);
       }
-    }
-    try {
-      await lease?.release();
-    } catch (error) {
-      cleanupErrors.push(error);
     }
     if (cleanupErrors.length > 0) {
       throw new AggregateError(
@@ -416,14 +403,6 @@ export async function closePanelServer(
   runtime: PanelHost,
   options: PanelServerCloseOptions = {},
 ): Promise<void> {
-  await beginPanelServerShutdown(server, runtime, options).completion;
-}
-
-function beginPanelServerShutdown(
-  server: Server,
-  runtime: PanelHost,
-  options: PanelServerCloseOptions = {},
-): PanelServerShutdown {
   const runtimeCleanupTimeoutMs = resolveRuntimeCleanupTimeout(options.runtimeCleanupTimeoutMs);
   // Enter quiescing before any asynchronous shutdown work. Ordinary terminal
   // callbacks may still run while active jobs converge, but they must not
@@ -445,32 +424,27 @@ function beginPanelServerShutdown(
   // pending. Own its eventual rejection so shutdown never creates an unhandled
   // promise rejection.
   void runtimeCleanup.catch(() => undefined);
-  const cleanupSettled = runtimeCleanup.then(() => undefined, () => undefined);
-  const completion = (async () => {
-    let shutdownTimeoutError: PanelShutdownTimeoutError | undefined;
-    try {
-      const cleaned = await settleWithin([runtimeCleanup], runtimeCleanupTimeoutMs);
-      if (cleaned) {
-        await runtimeCleanup;
-      } else {
-        shutdownTimeoutError = new PanelShutdownTimeoutError(runtimeCleanupTimeoutMs);
-      }
-    } finally {
-      // SSE and other long-lived responses are not active request jobs after
-      // their handlers install listeners. A timeout closes transport while
-      // runtime cleanup and Product Home ownership continue in the background.
-      server.closeAllConnections();
-      await serverClosed;
+  let shutdownTimeoutError: PanelShutdownTimeoutError | undefined;
+  try {
+    const cleaned = await settleWithin([runtimeCleanup], runtimeCleanupTimeoutMs);
+    if (cleaned) {
+      await runtimeCleanup;
+    } else {
+      shutdownTimeoutError = new PanelShutdownTimeoutError(runtimeCleanupTimeoutMs);
     }
+  } finally {
+    // SSE and other long-lived responses are not active request jobs after
+    // their handlers install listeners. A timeout still closes the transport.
+    server.closeAllConnections();
+    await serverClosed;
+  }
 
-    if (shutdownTimeoutError !== undefined) {
-      throw shutdownTimeoutError;
-    }
-    if (serverCloseError !== undefined) {
-      throw serverCloseError;
-    }
-  })();
-  return { completion, cleanupSettled };
+  if (shutdownTimeoutError !== undefined) {
+    throw shutdownTimeoutError;
+  }
+  if (serverCloseError !== undefined) {
+    throw serverCloseError;
+  }
 }
 
 async function disposePanelHostAfterFailedStart(runtime: PanelHost): Promise<void> {

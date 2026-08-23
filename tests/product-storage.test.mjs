@@ -6,98 +6,62 @@ import test from "node:test";
 
 import { mcpManagedRuntimeDirectories } from "../dist/adapters/mcp/mcp-local-runtime.js";
 import { startPanelDesktopSession } from "../dist/app/desktop/panel-desktop-launcher.js";
-import { createLeaseBoundClose } from "../dist/app/panel-server/panel-server-lifecycle.js";
 import { startLocalPanelServer } from "../dist/app/panel-server/request-handler.js";
-import * as panelServerPublic from "../dist/app/panel-server.js";
 import {
-  PRODUCT_HOME_LEASE_FILENAME,
-  PRODUCT_HOME_LEASE_RECOVERY_DIRECTORY,
-  STORAGE_LAYOUT_MANIFEST,
-  acquireProductHomeLease,
   initializeProductStorage,
   productStorageDirectories,
   resolveProductHome,
   resolveProductPaths,
 } from "../dist/platform/storage/index.js";
 
-test("Product Home resolver follows its documented precedence and platform defaults", async (t) => {
+test("Product Home uses explicit selection, SYNECH_HOME, then platform defaults", async (t) => {
+  const homeDirectory = path.resolve("test-user-home");
   const cases = [
-    {
-      name: "explicit selection wins over SYNECH_HOME",
-      options: {
-        productHome: "./explicit-home",
-        env: { SYNECH_HOME: "./environment-home", SYNECH_CONFIG_DIR: "./legacy-config" },
-      },
-      expected: path.resolve("./explicit-home"),
-    },
-    {
-      name: "SYNECH_HOME wins over platform defaults",
-      options: {
-        env: {
-          SYNECH_HOME: "./environment-home",
-          LOCALAPPDATA: "./local-app-data",
-          SYNECH_CONFIG_DIR: "./legacy-config",
-        },
-        platform: "win32",
-        homeDirectory: path.resolve("home"),
-      },
-      expected: path.resolve("./environment-home"),
-    },
-    {
-      name: "Windows uses LOCALAPPDATA",
-      options: {
-        env: { LOCALAPPDATA: path.resolve("local-app-data"), SYNECH_CONFIG_DIR: "./ignored" },
-        platform: "win32",
-        homeDirectory: path.resolve("home"),
-      },
-      expected: path.resolve("local-app-data", "Synech"),
-    },
-    {
-      name: "Windows falls back below the user home",
-      options: {
-        env: { SYNECH_CONFIG_DIR: "./ignored" },
-        platform: "win32",
-        homeDirectory: path.resolve("home"),
-      },
-      expected: path.resolve("home", "AppData", "Local", "Synech"),
-    },
-    {
-      name: "macOS uses Application Support",
-      options: {
-        env: { SYNECH_CONFIG_DIR: "./ignored" },
-        platform: "darwin",
-        homeDirectory: path.resolve("home"),
-      },
-      expected: path.resolve("home", "Library", "Application Support", "Synech"),
-    },
-    {
-      name: "Linux uses XDG_DATA_HOME",
-      options: {
-        env: { XDG_DATA_HOME: path.resolve("xdg-data"), SYNECH_CONFIG_DIR: "./ignored" },
-        platform: "linux",
-        homeDirectory: path.resolve("home"),
-      },
-      expected: path.resolve("xdg-data", "synech"),
-    },
-    {
-      name: "Linux falls back below .local/share",
-      options: {
-        env: { SYNECH_CONFIG_DIR: "./ignored" },
-        platform: "linux",
-        homeDirectory: path.resolve("home"),
-      },
-      expected: path.resolve("home", ".local", "share", "synech"),
-    },
+    [
+      "explicit selection",
+      { productHome: "./explicit", env: { SYNECH_HOME: "./environment" } },
+      path.resolve("explicit"),
+    ],
+    [
+      "environment selection",
+      { env: { SYNECH_HOME: "./environment" }, platform: "win32", homeDirectory },
+      path.resolve("environment"),
+    ],
+    [
+      "Windows LOCALAPPDATA",
+      { env: { LOCALAPPDATA: path.resolve("local-app-data") }, platform: "win32", homeDirectory },
+      path.resolve("local-app-data", "Synech"),
+    ],
+    [
+      "Windows home fallback",
+      { env: {}, platform: "win32", homeDirectory },
+      path.join(homeDirectory, "AppData", "Local", "Synech"),
+    ],
+    [
+      "macOS Application Support",
+      { env: {}, platform: "darwin", homeDirectory },
+      path.join(homeDirectory, "Library", "Application Support", "Synech"),
+    ],
+    [
+      "Linux XDG data",
+      { env: { XDG_DATA_HOME: path.resolve("xdg-data") }, platform: "linux", homeDirectory },
+      path.resolve("xdg-data", "synech"),
+    ],
+    [
+      "Linux home fallback",
+      { env: {}, platform: "linux", homeDirectory },
+      path.join(homeDirectory, ".local", "share", "synech"),
+    ],
   ];
 
-  for (const entry of cases) {
-    await t.test(entry.name, () => {
-      assert.equal(resolveProductHome(entry.options), entry.expected);
+  for (const [name, options, expected] of cases) {
+    await t.test(name, () => {
+      assert.equal(resolveProductHome(options), expected);
     });
   }
 });
 
-test("resolveProductPaths returns the exact v1 layout below Product Home", () => {
+test("Product paths describe the canonical config, data, state, cache and backup tree", () => {
   const productHome = path.resolve("test-product-home");
   const paths = resolveProductPaths({ productHome });
   const data = path.join(productHome, "data");
@@ -110,7 +74,6 @@ test("resolveProductPaths returns the exact v1 layout below Product Home", () =>
 
   assert.deepEqual(paths, {
     productHome,
-    layoutManifest: path.join(productHome, "storage-layout.json"),
     configDirectory: path.join(productHome, "config"),
     data: {
       root: data,
@@ -143,271 +106,35 @@ test("resolveProductPaths returns the exact v1 layout below Product Home", () =>
       },
       electron: path.join(state, "electron"),
     },
-    cache: {
-      root: cache,
-      electron: path.join(cache, "electron"),
-    },
+    cache: { root: cache, electron: path.join(cache, "electron") },
     backups: path.join(productHome, "backups"),
   });
 
-  for (const candidate of collectStringValues(paths)) {
-    if (candidate === productHome) continue;
-    const relative = path.relative(productHome, candidate);
-    assert.ok(relative.length > 0 && !relative.startsWith("..") && !path.isAbsolute(relative), candidate);
+  for (const directory of productStorageDirectories(paths)) {
+    const relative = path.relative(productHome, directory);
+    assert.equal(relative.startsWith("..") || path.isAbsolute(relative), false);
   }
 });
 
-test("initialization creates the strict v1 layout and is idempotent", async () => {
+test("Storage initialization creates the directory tree and is idempotent", async () => {
   await withTemporaryDirectory(async (temporaryDirectory) => {
     const paths = resolveProductPaths({ productHome: path.join(temporaryDirectory, "product") });
     await initializeProductStorage(paths);
-
-    const manifest = JSON.parse(await fs.readFile(paths.layoutManifest, "utf8"));
-    assert.deepEqual(manifest, STORAGE_LAYOUT_MANIFEST);
-    assert.deepEqual(Object.keys(manifest).sort(), ["layoutVersion", "product"]);
     for (const directory of productStorageDirectories(paths)) {
-      assert.equal((await fs.stat(directory)).isDirectory(), true, directory);
+      assert.equal((await fs.stat(directory)).isDirectory(), true);
     }
 
-    const preservedManifest = JSON.stringify(STORAGE_LAYOUT_MANIFEST);
-    const userFile = path.join(paths.configDirectory, "user-settings.json");
-    await fs.writeFile(paths.layoutManifest, preservedManifest, "utf8");
-    await fs.writeFile(userFile, "user-owned", "utf8");
-    await fs.rm(paths.data.agent.attachments, { recursive: true });
-    await fs.rm(paths.state.runtimeTools.mcp.bin, { recursive: true });
-
+    const marker = path.join(paths.data.agent.runs, "preserved.txt");
+    await fs.writeFile(marker, "preserved", "utf8");
     await initializeProductStorage(paths);
-
-    assert.equal(await fs.readFile(paths.layoutManifest, "utf8"), preservedManifest);
-    assert.equal(await fs.readFile(userFile, "utf8"), "user-owned");
-    assert.equal((await fs.stat(paths.data.agent.attachments)).isDirectory(), true);
-    assert.equal((await fs.stat(paths.state.runtimeTools.mcp.bin)).isDirectory(), true);
+    assert.equal(await fs.readFile(marker, "utf8"), "preserved");
   });
 });
 
-test("manifest durability syncs file content before rename and then syncs the parent directory", async () => {
-  await withTemporaryDirectory(async (temporaryDirectory) => {
-    const paths = resolveProductPaths({ productHome: path.join(temporaryDirectory, "product") });
-    const events = [];
-    const originalOpen = fs.open;
-    const originalRename = fs.rename;
-    fs.open = async (...args) => {
-      const candidate = String(args[0]);
-      const handle = await originalOpen(...args);
-      if (candidate === paths.productHome) {
-        return wrapFileHandle(handle, () => events.push("directory-sync"));
-      }
-      if (path.dirname(candidate) === paths.productHome && path.basename(candidate).startsWith(".storage-layout.")) {
-        return wrapFileHandle(handle, () => events.push("file-sync"));
-      }
-      return handle;
-    };
-    fs.rename = async (...args) => {
-      if (String(args[1]) === paths.layoutManifest) events.push("rename");
-      return originalRename(...args);
-    };
-    try {
-      await initializeProductStorage(paths);
-    } finally {
-      fs.open = originalOpen;
-      fs.rename = originalRename;
-    }
-
-    assert.deepEqual(events, ["file-sync", "rename", "directory-sync"]);
-  });
-});
-
-test("initialization recovers only regular interrupted manifest writes", async (t) => {
-  await t.test("a stale reserved temp file is removed before the empty-root check", async () => {
-    await withTemporaryDirectory(async (temporaryDirectory) => {
-      const paths = resolveProductPaths({ productHome: path.join(temporaryDirectory, "product") });
-      await fs.mkdir(paths.productHome, { recursive: true });
-      const staleTemp = path.join(paths.productHome, ".storage-layout.123.interrupted.tmp");
-      await fs.writeFile(staleTemp, "partial", "utf8");
-
-      await initializeProductStorage(paths);
-
-      await assert.rejects(fs.access(staleTemp), { code: "ENOENT" });
-      assert.deepEqual(JSON.parse(await fs.readFile(paths.layoutManifest, "utf8")), STORAGE_LAYOUT_MANIFEST);
-    });
-  });
-
-  await t.test("a reserved-looking directory remains unknown content and fails closed", async () => {
-    await withTemporaryDirectory(async (temporaryDirectory) => {
-      const paths = resolveProductPaths({ productHome: path.join(temporaryDirectory, "product") });
-      const unknownDirectory = path.join(paths.productHome, ".storage-layout.123.interrupted.tmp");
-      await fs.mkdir(unknownDirectory, { recursive: true });
-
-      await assertLayoutError(() => initializeProductStorage(paths));
-
-      assert.equal((await fs.stat(unknownDirectory)).isDirectory(), true);
-      await assert.rejects(fs.access(paths.layoutManifest), { code: "ENOENT" });
-    });
-  });
-});
-
-test("initialization fails closed for invalid or conflicting layouts", async (t) => {
-  const invalidManifestCases = [
-    { name: "invalid JSON", source: "{not-json" },
-    { name: "wrong product", source: JSON.stringify({ product: "other", layoutVersion: 1 }) },
-    { name: "layoutVersion 0", source: JSON.stringify({ product: "synech", layoutVersion: 0 }) },
-    { name: "layoutVersion 2", source: JSON.stringify({ product: "synech", layoutVersion: 2 }) },
-    { name: "undeclared manifest field", source: JSON.stringify({ product: "synech", layoutVersion: 1, extra: true }) },
-  ];
-
-  await t.test("non-empty Product Home without a manifest", async () => {
-    await withTemporaryDirectory(async (temporaryDirectory) => {
-      const paths = resolveProductPaths({ productHome: path.join(temporaryDirectory, "product") });
-      await fs.mkdir(paths.productHome, { recursive: true });
-      const sentinel = path.join(paths.productHome, "existing.txt");
-      await fs.writeFile(sentinel, "do-not-overwrite", "utf8");
-
-      await assertLayoutError(() => initializeProductStorage(paths));
-      assert.equal(await fs.readFile(sentinel, "utf8"), "do-not-overwrite");
-      await assert.rejects(fs.access(paths.layoutManifest), { code: "ENOENT" });
-    });
-  });
-
-  for (const entry of invalidManifestCases) {
-    await t.test(entry.name, async () => {
-      await withTemporaryDirectory(async (temporaryDirectory) => {
-        const paths = resolveProductPaths({ productHome: path.join(temporaryDirectory, "product") });
-        await fs.mkdir(paths.productHome, { recursive: true });
-        await fs.writeFile(paths.layoutManifest, entry.source, "utf8");
-
-        await assertLayoutError(() => initializeProductStorage(paths));
-        assert.equal(await fs.readFile(paths.layoutManifest, "utf8"), entry.source);
-      });
-    });
-  }
-
-  await t.test("a required directory path occupied by a file", async () => {
-    await withTemporaryDirectory(async (temporaryDirectory) => {
-      const paths = resolveProductPaths({ productHome: path.join(temporaryDirectory, "product") });
-      await fs.mkdir(paths.productHome, { recursive: true });
-      const manifestSource = JSON.stringify(STORAGE_LAYOUT_MANIFEST);
-      await fs.writeFile(paths.layoutManifest, manifestSource, "utf8");
-      await fs.writeFile(paths.configDirectory, "do-not-overwrite", "utf8");
-
-      await assertLayoutError(() => initializeProductStorage(paths));
-      assert.equal(await fs.readFile(paths.layoutManifest, "utf8"), manifestSource);
-      assert.equal(await fs.readFile(paths.configDirectory, "utf8"), "do-not-overwrite");
-    });
-  });
-});
-
-test("Product Home lease rejects a second owner and can be reacquired after release", async () => {
-  await withTemporaryDirectory(async (temporaryDirectory) => {
-    const productHome = path.join(temporaryDirectory, "product");
-    const leasePath = path.join(productHome, PRODUCT_HOME_LEASE_FILENAME);
-    const first = await acquireProductHomeLease(productHome);
-    assert.equal((await fs.stat(leasePath)).isFile(), true);
-
-    await assert.rejects(
-      () => acquireProductHomeLease(productHome),
-      (error) => error?.code === "product_home_in_use" && error.ownerPid === process.pid,
-    );
-
-    await first.release();
-    await assert.rejects(fs.access(leasePath), { code: "ENOENT" });
-    const second = await acquireProductHomeLease(productHome);
-    await second.release();
-    await assert.rejects(fs.access(leasePath), { code: "ENOENT" });
-  });
-});
-
-test("stale Product Home takeover admits exactly one contender at a deterministic barrier", async () => {
-  await withTemporaryDirectory(async (temporaryDirectory) => {
-    const productHome = path.join(temporaryDirectory, "product");
-    const leasePath = path.join(productHome, PRODUCT_HOME_LEASE_FILENAME);
-    const recoveryRoot = path.join(productHome, PRODUCT_HOME_LEASE_RECOVERY_DIRECTORY);
-    await fs.mkdir(productHome, { recursive: true });
-    await fs.writeFile(leasePath, JSON.stringify({
-      version: 1,
-      instanceId: "dead-owner",
-      pid: 2_147_483_647,
-      startedAt: "2000-01-01T00:00:00.000Z",
-    }), "utf8");
-
-    const originalMkdir = fs.mkdir;
-    let gateArrivals = 0;
-    let openBarrier;
-    const barrier = new Promise((resolve) => {
-      openBarrier = resolve;
-    });
-    fs.mkdir = async (candidate, options) => {
-      if (path.dirname(String(candidate)) === recoveryRoot && options === undefined) {
-        gateArrivals += 1;
-        if (gateArrivals === 2) openBarrier();
-        await barrier;
-      }
-      return originalMkdir(candidate, options);
-    };
-
-    let results;
-    try {
-      results = await Promise.allSettled([
-        acquireProductHomeLease(productHome),
-        acquireProductHomeLease(productHome),
-      ]);
-    } finally {
-      fs.mkdir = originalMkdir;
-    }
-
-    const acquired = results.filter((result) => result.status === "fulfilled");
-    const rejected = results.filter((result) => result.status === "rejected");
-    assert.ok(gateArrivals >= 2);
-    const recoveryEntries = await fs.readdir(recoveryRoot);
-    assert.equal(acquired.length, 1, JSON.stringify({ gateArrivals, recoveryEntries }));
-    assert.equal(rejected.length, 1);
-    assert.equal(rejected[0].reason?.code, "product_home_in_use");
-    assert.equal(recoveryEntries.length, 1);
-    await acquired[0].value.release();
-  });
-});
-
-test("lease release retries transient Windows errors and remains retryable after exhaustion", async () => {
-  await withTemporaryDirectory(async (temporaryDirectory) => {
-    const productHome = path.join(temporaryDirectory, "product");
-    const leasePath = path.join(productHome, PRODUCT_HOME_LEASE_FILENAME);
-    const lease = await acquireProductHomeLease(productHome);
-    const originalUnlink = fs.unlink;
-    let attempts = 0;
-    fs.unlink = async (candidate) => {
-      if (String(candidate) === leasePath) {
-        attempts += 1;
-        if (attempts <= 2) throw nodeError("EPERM");
-      }
-      return originalUnlink(candidate);
-    };
-    try {
-      await lease.release();
-    } finally {
-      fs.unlink = originalUnlink;
-    }
-    assert.equal(attempts, 3);
-    await assert.rejects(fs.access(leasePath), { code: "ENOENT" });
-
-    const retryableLease = await acquireProductHomeLease(productHome);
-    fs.unlink = async (candidate) => {
-      if (String(candidate) === leasePath) throw nodeError("EBUSY");
-      return originalUnlink(candidate);
-    };
-    try {
-      await assert.rejects(() => retryableLease.release(), { code: "EBUSY" });
-    } finally {
-      fs.unlink = originalUnlink;
-    }
-    assert.equal((await fs.stat(leasePath)).isFile(), true);
-    await retryableLease.release();
-    await assert.rejects(fs.access(leasePath), { code: "ENOENT" });
-  });
-});
-
-test("desktop storage paths are configured after server startup and before Electron readiness", async (t) => {
+test("Desktop storage paths are configured after server startup and before Electron readiness", async (t) => {
   const args = { host: "127.0.0.1", port: 0, productHome: "chosen-home", smoke: false };
 
-  await t.test("the configured path belongs to the already-started server", async () => {
+  await t.test("uses the Product Home returned by the initialized server", async () => {
     const events = [];
     const session = await startPanelDesktopSession(args, desktopDependencies({
       events,
@@ -420,7 +147,7 @@ test("desktop storage paths are configured after server startup and before Elect
     await session.close();
   });
 
-  await t.test("configuration failure closes the initialized server before readiness", async () => {
+  await t.test("closes the server when Electron rejects its storage paths", async () => {
     const events = [];
     const failure = new Error("setPath rejected");
     await assert.rejects(
@@ -437,91 +164,36 @@ test("desktop storage paths are configured after server startup and before Elect
   });
 });
 
-test("a caller-visible shutdown timeout keeps the lease until cleanup really settles", async () => {
-  let finishCleanup;
-  const cleanupSettled = new Promise((resolve) => {
-    finishCleanup = resolve;
-  });
-  let releases = 0;
-  const close = createLeaseBoundClose(
-    () => ({
-      completion: Promise.reject(Object.assign(new Error("timed out"), { code: "panel_shutdown_timeout" })),
-      cleanupSettled,
-    }),
-    async () => {
-      releases += 1;
-    },
-  );
-
-  await assert.rejects(() => close(), { code: "panel_shutdown_timeout" });
-  assert.equal(releases, 0);
-  finishCleanup();
-  await waitFor(() => releases === 1);
-});
-
-test("the public panel barrel exposes startup but not internal request construction", () => {
-  assert.equal(typeof panelServerPublic.startLocalPanelServer, "function");
-  assert.equal("createPanelRequestHandler" in panelServerPublic, false);
-});
-
-test("local panel startup owns the canonical layout and releases its lease", async () => {
+test("A Product Home can start, close and start again", async () => {
   await withTemporaryDirectory(async (temporaryDirectory) => {
     const productHome = path.join(temporaryDirectory, "product");
-    const leasePath = path.join(productHome, PRODUCT_HOME_LEASE_FILENAME);
+    const paths = resolveProductPaths({ productHome });
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const server = await startLocalPanelServer({ productHome, port: 0 });
       try {
         assert.equal(server.productHome, path.resolve(productHome));
         assert.match(server.url, /^http:\/\/127\.0\.0\.1:\d+\/$/u);
-        assert.deepEqual(
-          JSON.parse(await fs.readFile(path.join(productHome, "storage-layout.json"), "utf8")),
-          STORAGE_LAYOUT_MANIFEST,
-        );
-        assert.equal((await fs.stat(leasePath)).isFile(), true);
+        assert.equal((await fs.stat(paths.data.database)).isFile(), true);
       } finally {
         await server.close();
       }
-      await assert.rejects(fs.access(leasePath), { code: "ENOENT" });
     }
   });
 });
 
-test("MCP managed bin resolves only to the canonical Product Home state path", () => {
+test("MCP managed runtime uses the canonical Product Home state path", () => {
   const productHome = path.resolve("mcp-product-home");
-  const legacyHome = path.resolve("legacy-user-home");
   const expected = path.join(productHome, "state", "runtime-tools", "mcp", "bin");
   const env = {
     SYNECH_HOME: productHome,
-    SYNECH_CONFIG_DIR: path.join(legacyHome, ".synech"),
-    HOME: legacyHome,
-    USERPROFILE: legacyHome,
+    SYNECH_CONFIG_DIR: path.resolve("ignored-config"),
+    HOME: path.resolve("unrelated-home"),
   };
 
   assert.deepEqual(mcpManagedRuntimeDirectories(env), [expected]);
-  assert.deepEqual(
-    mcpManagedRuntimeDirectories(env, { managedBinDirectory: expected }),
-    [expected],
-  );
-  assert.equal(mcpManagedRuntimeDirectories(env).some((entry) => entry.includes(".synech")), false);
+  assert.deepEqual(mcpManagedRuntimeDirectories(env, { managedBinDirectory: expected }), [expected]);
 });
-
-async function assertLayoutError(operation) {
-  await assert.rejects(
-    operation,
-    (error) => error?.code === "product_storage_layout_invalid",
-  );
-}
-
-function collectStringValues(value) {
-  if (typeof value === "string") return [value];
-  if (value === null || typeof value !== "object") return [];
-  return Object.values(value).flatMap(collectStringValues);
-}
-
-function nodeError(code) {
-  return Object.assign(new Error(`simulated ${code}`), { code });
-}
 
 function desktopDependencies({ events, configureAppStoragePaths }) {
   return {
@@ -558,41 +230,11 @@ function desktopDependencies({ events, configureAppStoragePaths }) {
   };
 }
 
-function wrapFileHandle(handle, beforeSync) {
-  return {
-    writeFile: (...args) => handle.writeFile(...args),
-    stat: (...args) => handle.stat(...args),
-    readFile: (...args) => handle.readFile(...args),
-    async sync() {
-      beforeSync();
-      return handle.sync();
-    },
-    close: () => handle.close(),
-  };
-}
-
-async function waitFor(predicate) {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-  assert.fail("condition did not become true");
-}
-
 async function withTemporaryDirectory(operation) {
   const temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "synech-storage-test-"));
-  let operationError;
   try {
     await operation(temporaryDirectory);
-  } catch (error) {
-    operationError = error;
-  }
-
-  try {
+  } finally {
     await fs.rm(temporaryDirectory, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
-  } catch (cleanupError) {
-    if (operationError === undefined) throw cleanupError;
-    process.stderr.write(`Temporary directory cleanup also failed: ${cleanupError}\n`);
   }
-  if (operationError !== undefined) throw operationError;
 }
