@@ -38,6 +38,7 @@ export type AgentRunResourceHost = {
   readonly toolOutputStore?: ToolOutputStore;
   readonly fileMutationCoordinator?: LocalWorkspaceMutationCoordinator;
   readonly resolveManagedAttachmentPath?: (attachmentId: string) => Promise<string | undefined>;
+  readonly managedMcpBinDirectory?: string;
   /** Host-declared attachment tool exposure for a concrete run context. */
   readonly resolveAttachmentToolExposure?: (runContext: Pick<OrdinaryRunContext, "permissionBoundaryRefs">) => boolean;
 };
@@ -182,7 +183,11 @@ async function mcpManagerFromCapabilitySnapshot(
     typeof runtime.configCenter.createMcpRuntimeEnvironment === "function"
       ? await runtime.configCenter.createMcpRuntimeEnvironment({ servers, baseEnv: env })
       : env;
-  return new LazyMcpToolExecutorProvider({ servers, env: mcpEnv });
+  return new LazyMcpToolExecutorProvider({
+    servers,
+    env: mcpEnv,
+    managedBinDirectory: runtime.managedMcpBinDirectory,
+  });
 }
 
 export function createAgentToolCenterFactory(

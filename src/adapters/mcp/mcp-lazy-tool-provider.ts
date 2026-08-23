@@ -18,6 +18,7 @@ export type LazyMcpToolProviderConfig = {
   /** Aggregate model-visible MCP tool boundary across every configured server. */
   readonly maxToolCatalogItems?: number;
   readonly maxToolCatalogBytes?: number;
+  readonly managedBinDirectory?: string;
 };
 
 export type LazyMcpToolProviderOptions = {
@@ -161,6 +162,7 @@ export class LazyMcpToolExecutorProvider {
     }
     const clientConfig = mcpClientConfigFromServer(session.server, this.config.env, {
       maxConcurrentCallsPerServer: this.config.maxConcurrentCallsPerServer,
+      managedBinDirectory: this.config.managedBinDirectory,
     });
     const client = this.options.createClient?.(clientConfig) ?? new McpClientWrapper(clientConfig);
     const generation = this.lifecycleGeneration;
@@ -216,7 +218,10 @@ function lazyProviderClosedError(): Error {
 export function mcpClientConfigFromServer(
   server: McpServerSettings,
   env?: Readonly<Record<string, string | undefined>>,
-  options: { readonly maxConcurrentCallsPerServer?: number } = {},
+  options: {
+    readonly maxConcurrentCallsPerServer?: number;
+    readonly managedBinDirectory?: string;
+  } = {},
 ): McpClientConfig {
   return {
     serverId: server.serverId,
@@ -227,6 +232,7 @@ export function mcpClientConfigFromServer(
     env: resolveEnvRefs(server.envSecretRefs, env),
     httpHeaders: resolveHttpHeaders(server, env),
     maxConcurrentCalls: options.maxConcurrentCallsPerServer ?? DEFAULT_MCP_MAX_CONCURRENT_CALLS_PER_SERVER,
+    managedBinDirectory: options.managedBinDirectory,
   };
 }
 

@@ -29,9 +29,9 @@ import {
   type DesktopWindowPresentationState,
 } from "./panel-desktop-window-controls.js";
 import { startLocalPanelServer } from "../panel-server.js";
+import { resolveProductPaths, type ProductPaths } from "../../platform/storage/index.js";
 import {
   DESKTOP_APP_NAME,
-  DESKTOP_USER_DATA_DIRECTORY_NAME,
   desktopAppUserModelId,
 } from "./panel-desktop-identity.js";
 
@@ -70,10 +70,10 @@ main().catch((error: unknown) => {
 });
 
 async function main(): Promise<void> {
-  configureDesktopAppIdentity();
+  const args = parsePanelDesktopArgs(process.argv.slice(2));
+  configureDesktopAppIdentity(resolveProductPaths({ productHome: args.productHome }));
   installDesktopLocalPreferenceBridge();
   installDesktopWindowControlBridge();
-  const args = parsePanelDesktopArgs(process.argv.slice(2));
   let sessionRef: PanelDesktopSession | undefined;
   try {
     const session = await startPanelDesktopSession(args, {
@@ -83,7 +83,7 @@ async function main(): Promise<void> {
       selectContextAttachment: selectContextAttachment,
       selectSynechRestore: selectSynechRestore,
       openExternalResource: openExternalResource,
-      whenReady: app.whenReady(),
+      whenReady: () => app.whenReady(),
       onWindowAllClosed: (handler) => {
         app.on("window-all-closed", () => {
           void handler();
@@ -153,13 +153,14 @@ function exitDesktopAfterCleanup(exitCode: number): void {
   })();
 }
 
-function configureDesktopAppIdentity(): void {
+function configureDesktopAppIdentity(productPaths: ProductPaths): void {
   app.setName(DESKTOP_APP_NAME);
   if (process.platform === "win32") {
     app.setAppUserModelId(desktopAppUserModelId(app.isPackaged));
   }
   try {
-    app.setPath("userData", path.join(app.getPath("appData"), DESKTOP_USER_DATA_DIRECTORY_NAME));
+    app.setPath("userData", productPaths.state.electron);
+    app.setPath("sessionData", productPaths.cache.electron);
   } catch {
     // Electron may reject path changes in unusual embed contexts; app identity still remains set.
   }

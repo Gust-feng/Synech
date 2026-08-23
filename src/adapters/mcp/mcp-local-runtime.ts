@@ -3,13 +3,8 @@ import { existsSync } from "node:fs";
 import { copyFile, mkdir, writeFile, chmod } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  PRODUCT_CONFIG_DIRECTORY_NAME,
-  PRODUCT_HOME_ENVIRONMENT_VARIABLE,
-  PRODUCT_MCP_BIN_ENVIRONMENT_VARIABLE,
-  PRODUCT_NAMESPACE,
-  PRODUCT_RUNTIME_BIN_ENVIRONMENT_VARIABLE,
-} from "../../platform/product-identity.js";
+import { PRODUCT_MCP_BIN_ENVIRONMENT_VARIABLE } from "../../platform/product-identity.js";
+import { resolveProductPaths } from "../../platform/storage/index.js";
 
 export type McpExecutableResolutionSource = "product" | "common" | "path" | "absolute";
 export type McpExecutableManagementAction = "none" | "copied" | "wrapped";
@@ -39,12 +34,18 @@ export type McpExecutableInstallResult = McpExecutableResolution & {
 
 type McpExecutableInstallerKind = "uv" | "node" | "pnpm" | "bun";
 
+export type McpLocalRuntimeOptions = {
+  /** Host-resolved canonical directory. Explicit SYNECH_MCP_BIN still overrides it. */
+  readonly managedBinDirectory?: string;
+};
+
 export function resolveMcpExecutable(
   command: string,
-  env: Readonly<Record<string, string | undefined>> = process.env
+  env: Readonly<Record<string, string | undefined>> = process.env,
+  options: McpLocalRuntimeOptions = {},
 ): McpExecutableResolution {
   const normalized = command.trim();
-  const managedDirectories = mcpManagedRuntimeDirectories(env);
+  const managedDirectories = mcpManagedRuntimeDirectories(env, options);
   const commonDirectories = mcpCommonRuntimeDirectories(env);
   const recommendedInstallPath = recommendedMcpInstallPath(normalized, managedDirectories);
   if (normalized.length === 0) {
@@ -100,9 +101,10 @@ export function resolveMcpExecutable(
 
 export async function ensureManagedMcpExecutable(
   command: string,
-  env: Readonly<Record<string, string | undefined>> = process.env
+  env: Readonly<Record<string, string | undefined>> = process.env,
+  options: McpLocalRuntimeOptions = {},
 ): Promise<McpExecutableResolution> {
-  const resolution = resolveMcpExecutable(command, env);
+  const resolution = resolveMcpExecutable(command, env, options);
   if (
     resolution.executable === undefined ||
     resolution.source === "product" ||
@@ -132,9 +134,10 @@ export async function ensureManagedMcpExecutable(
 
 export async function installMcpExecutable(
   command: string,
-  env: Readonly<Record<string, string | undefined>> = process.env
+  env: Readonly<Record<string, string | undefined>> = process.env,
+  options: McpLocalRuntimeOptions = {},
 ): Promise<McpExecutableInstallResult> {
-  const ensured = await ensureManagedMcpExecutable(command, env);
+  const ensured = await ensureManagedMcpExecutable(command, env, options);
   const installer = installerForMcpCommand(ensured.command);
   if (ensured.executable !== undefined) {
     return {
@@ -153,7 +156,7 @@ export async function installMcpExecutable(
     };
   }
 
-  const install = installPlanForMcpExecutable(installer, env);
+  const install = installPlanForMcpExecutable(installer, env, options);
   if (install === undefined) {
     return {
       ...ensured,
@@ -164,7 +167,7 @@ export async function installMcpExecutable(
     };
   }
 
-  const installed = await runInstallCommand(install, env);
+  const installed = await runInstallCommand(install, env, options);
   if (!installed.ok) {
     return {
       ...ensured,
@@ -175,7 +178,7 @@ export async function installMcpExecutable(
     };
   }
 
-  const afterInstall = await ensureManagedMcpExecutable(command, env);
+  const afterInstall = await ensureManagedMcpExecutable(command, env, options);
   return {
     ...afterInstall,
     status: afterInstall.executable === undefined ? "not_found" : "installed",
@@ -186,10 +189,11 @@ export async function installMcpExecutable(
 }
 
 export function mcpRuntimePathEnvironment(
-  env: Readonly<Record<string, string | undefined>> = process.env
+  env: Readonly<Record<string, string | undefined>> = process.env,
+  options: McpLocalRuntimeOptions = {},
 ): Record<string, string> {
   const pathEntries = uniqueStrings([
-    ...mcpManagedRuntimeDirectories(env),
+    ...mcpManagedRuntimeDirectories(env, options),
     ...mcpCommonRuntimeDirectories(env).filter((directory) => existsSync(directory)),
     ...pathEnvironmentEntries(env),
   ]);
@@ -201,21 +205,14 @@ export function mcpRuntimePathEnvironment(
 }
 
 export function mcpManagedRuntimeDirectories(
-  env: Readonly<Record<string, string | undefined>> = process.env
+  env: Readonly<Record<string, string | undefined>> = process.env,
+  options: McpLocalRuntimeOptions = {},
 ): readonly string[] {
-  const configured = splitPathList(
-    env[PRODUCT_MCP_BIN_ENVIRONMENT_VARIABLE] ?? env[PRODUCT_RUNTIME_BIN_ENVIRONMENT_VARIABLE],
-  );
-  const productRuntimeDirectory = productRuntimeDirectoryForEnvironment(env);
-  const localAppData = env.LOCALAPPDATA;
-  return uniqueStrings([
-    ...configured,
-    path.join(productRuntimeDirectory, "bin"),
-    path.join(productRuntimeDirectory, "mcp", "bin"),
-    path.join(productRuntimeDirectory, "runtime", "bin"),
-    localAppData === undefined ? undefined : path.join(localAppData, PRODUCT_CONFIG_DIRECTORY_NAME, "bin"),
-    localAppData === undefined ? undefined : path.join(localAppData, PRODUCT_CONFIG_DIRECTORY_NAME, "mcp", "bin"),
-  ]);
+  const configured = splitPathList(env[PRODUCT_MCP_BIN_ENVIRONMENT_VARIABLE]);
+  if (configured.length > 0) return uniqueStrings(configured);
+  return [path.resolve(
+    options.managedBinDirectory ?? resolveProductPaths({ env }).state.runtimeTools.mcp.bin,
+  )];
 }
 
 async function createManagedExecutableEntry(input: {
@@ -316,7 +313,8 @@ function installerForMcpCommand(command: string): McpExecutableInstallerKind | u
 
 function installPlanForMcpExecutable(
   installer: McpExecutableInstallerKind,
-  env: Readonly<Record<string, string | undefined>>
+  env: Readonly<Record<string, string | undefined>>,
+  options: McpLocalRuntimeOptions,
 ): { readonly command: string; readonly args: readonly string[] } | undefined {
   if (installer === "node") {
     if (process.platform !== "win32") return undefined;
@@ -338,7 +336,7 @@ function installPlanForMcpExecutable(
     };
   }
   if (installer === "pnpm") {
-    const npm = resolveMcpExecutable("npm", env).executable;
+    const npm = resolveMcpExecutable("npm", env, options).executable;
     return npm === undefined ? undefined : { command: npm, args: ["install", "-g", "pnpm"] };
   }
   if (installer === "bun") {
@@ -358,11 +356,12 @@ function installPlanForMcpExecutable(
 
 function runInstallCommand(
   install: { readonly command: string; readonly args: readonly string[] },
-  env: Readonly<Record<string, string | undefined>>
+  env: Readonly<Record<string, string | undefined>>,
+  options: McpLocalRuntimeOptions,
 ): Promise<{ readonly ok: boolean; readonly errorSummary?: string }> {
   return new Promise((resolve) => {
     const child = spawn(install.command, [...install.args], {
-      env: { ...process.env, ...env, ...mcpRuntimePathEnvironment(env) },
+      env: { ...process.env, ...env, ...mcpRuntimePathEnvironment(env, options) },
       windowsHide: true,
       stdio: "ignore",
     });
@@ -455,13 +454,6 @@ function userHomeDirectory(env: Readonly<Record<string, string | undefined>>): s
     return home;
   }
   return os.homedir();
-}
-
-function productRuntimeDirectoryForEnvironment(env: Readonly<Record<string, string | undefined>>): string {
-  const explicit = env[PRODUCT_HOME_ENVIRONMENT_VARIABLE]?.trim();
-  return explicit !== undefined && explicit.length > 0
-    ? explicit
-    : path.join(userHomeDirectory(env), `.${PRODUCT_NAMESPACE}`);
 }
 
 function splitPathList(value: string | undefined): readonly string[] {

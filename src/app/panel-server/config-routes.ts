@@ -38,6 +38,7 @@ import type { ProductPaths } from "../../platform/storage/index.js";
 export type PanelConfigRouteRuntime = {
   readonly configCenter: ConfigCenter;
   readonly capabilityCenter: CapabilityCenter;
+  readonly managedMcpBinDirectory: string;
   readonly configDirectory: string;
   readonly productPaths: ProductPaths;
   readonly modelCatalogFetch?: PanelModelCatalogFetch;
@@ -536,7 +537,10 @@ export async function handlePanelConfigRoute(
   }
 
   if (request.method === "POST" && url.pathname === "/api/config/mcp/environment-check") {
-    const result = await checkPanelMcpEnvironment(parseMcpEnvironmentRequest(await readJsonBody(request)));
+    const result = await checkPanelMcpEnvironment({
+      ...parseMcpEnvironmentRequest(await readJsonBody(request)),
+      managedMcpBinDirectory: runtime.productPaths.state.runtimeTools.mcp.bin,
+    });
     writeJson(response, 200, {
       ok: result.ok,
       status: result.status,
@@ -551,7 +555,10 @@ export async function handlePanelConfigRoute(
   }
 
   if (request.method === "POST" && url.pathname === "/api/config/mcp/environment-install") {
-    const result = await installPanelMcpEnvironment(parseMcpEnvironmentRequest(await readJsonBody(request)));
+    const result = await installPanelMcpEnvironment({
+      ...parseMcpEnvironmentRequest(await readJsonBody(request)),
+      managedMcpBinDirectory: runtime.productPaths.state.runtimeTools.mcp.bin,
+    });
     writeJson(response, 200, {
       ok: result.ok,
       status: result.status,

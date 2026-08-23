@@ -9,6 +9,7 @@ export type McpManagerConfig = {
   readonly env?: Readonly<Record<string, string | undefined>>;
   readonly connectTimeoutMs?: number;
   readonly maxConcurrentCallsPerServer?: number;
+  readonly managedBinDirectory?: string;
 };
 
 export type McpServerStatus = "disconnected" | "connecting" | "connected" | "error";
@@ -62,6 +63,7 @@ export class McpManager {
         url: server.url,
         env: resolvedEnv,
         httpHeaders: resolveHttpHeaders(server, config.env),
+        managedBinDirectory: config.managedBinDirectory,
         maxConcurrentCalls,
       };
       this.entries.set(server.serverId, {

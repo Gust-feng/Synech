@@ -50,7 +50,7 @@ export type PanelDesktopDependencies = {
   readonly selectContextAttachment?: () => Promise<PanelContextAttachmentSelection | undefined>;
   readonly selectSynechRestore?: () => Promise<string | undefined>;
   readonly openExternalResource?: (target: PanelExternalResourceTarget) => Promise<void>;
-  readonly whenReady: Promise<void>;
+  readonly whenReady: () => Promise<void>;
   readonly onWindowAllClosed: (handler: () => void) => void;
   readonly onBeforeQuit: (handler: () => Promise<void>) => void;
   readonly onSessionClosed?: () => void;
@@ -105,7 +105,7 @@ export async function startPanelDesktopSession(
   }
 
   try {
-    await dependencies.whenReady;
+    await dependencies.whenReady();
     const options = createPanelDesktopWindowOptions();
     const window = dependencies.createWindow(options);
     window.onReadyToShow(() => {

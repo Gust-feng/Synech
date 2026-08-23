@@ -20,6 +20,7 @@ const PANEL_MCP_CONNECT_TIMEOUT_MS = 8_000;
 export type PanelMcpManagementRuntime = {
   readonly configCenter: ConfigCenter;
   readonly capabilityCenter: CapabilityCenter;
+  readonly managedMcpBinDirectory: string;
 };
 
 export type PanelMcpToolSummary = {
@@ -65,6 +66,7 @@ export type PanelMcpEnvironmentCheckResult = {
 export async function checkPanelMcpEnvironment(input: {
   readonly commandLine?: string;
   readonly command?: string;
+  readonly managedMcpBinDirectory?: string;
 }): Promise<PanelMcpEnvironmentCheckResult> {
   const checkedAt = new Date().toISOString();
   const command = normalizeMcpEnvironmentCommand(input);
@@ -77,7 +79,11 @@ export async function checkPanelMcpEnvironment(input: {
     };
   }
 
-  const resolution = await ensureManagedMcpExecutable(command);
+  const resolution = await ensureManagedMcpExecutable(
+    command,
+    process.env,
+    { managedBinDirectory: input.managedMcpBinDirectory },
+  );
   if (resolution.executable !== undefined) {
     return {
       ok: true,
@@ -104,6 +110,7 @@ export async function checkPanelMcpEnvironment(input: {
 export async function installPanelMcpEnvironment(input: {
   readonly commandLine?: string;
   readonly command?: string;
+  readonly managedMcpBinDirectory?: string;
 }): Promise<PanelMcpEnvironmentCheckResult> {
   const checkedAt = new Date().toISOString();
   const command = normalizeMcpEnvironmentCommand(input);
@@ -116,7 +123,11 @@ export async function installPanelMcpEnvironment(input: {
     };
   }
 
-  const result = await installMcpExecutable(command);
+  const result = await installMcpExecutable(
+    command,
+    process.env,
+    { managedBinDirectory: input.managedMcpBinDirectory },
+  );
   if (result.executable !== undefined && (result.status === "ready" || result.status === "installed")) {
     return {
       ok: true,
@@ -174,7 +185,7 @@ export async function testPanelMcpServer(
       catalog: (await runtime.capabilityCenter.snapshot()).mcpCatalog,
     };
   }
-  const missingCommand = missingStdioCommand(server);
+  const missingCommand = missingStdioCommand(server, runtime.managedMcpBinDirectory);
   if (missingCommand !== undefined) {
     const errorSummary = `MCP command not found: ${missingCommand}`;
     if (options.persistConnectionState !== false) {
@@ -197,6 +208,7 @@ export async function testPanelMcpServer(
   const manager = new McpManager({
     servers: [{ ...server, enabled: true }],
     env: mcpEnv,
+    managedBinDirectory: runtime.managedMcpBinDirectory,
     connectTimeoutMs: PANEL_MCP_CONNECT_TIMEOUT_MS,
   });
   try {
@@ -338,7 +350,7 @@ export async function listPanelMcpReferences(
       resourceTemplates: [],
     };
   }
-  const missingCommand = missingStdioCommand(server);
+  const missingCommand = missingStdioCommand(server, runtime.managedMcpBinDirectory);
   if (missingCommand !== undefined) {
     return {
       ok: false,
@@ -357,6 +369,7 @@ export async function listPanelMcpReferences(
   const manager = new McpManager({
     servers: [{ ...server, enabled: true }],
     env: mcpEnv,
+    managedBinDirectory: runtime.managedMcpBinDirectory,
     connectTimeoutMs: PANEL_MCP_CONNECT_TIMEOUT_MS,
   });
   try {
@@ -426,11 +439,15 @@ export function classifyMcpConnectionError(message: string, server: Pick<McpServ
   return "connection_failed";
 }
 
-function missingStdioCommand(server: McpServerSettings): string | undefined {
+function missingStdioCommand(server: McpServerSettings, managedBinDirectory: string): string | undefined {
   if (server.transport !== "stdio" || server.command === undefined) {
     return undefined;
   }
-  return resolveMcpExecutable(server.command).executable !== undefined ? undefined : server.command;
+  return resolveMcpExecutable(
+    server.command,
+    process.env,
+    { managedBinDirectory },
+  ).executable !== undefined ? undefined : server.command;
 }
 
 function normalizeMcpEnvironmentCommand(input: {

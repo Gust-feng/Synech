@@ -242,6 +242,7 @@ async function handlePanelRequest(
   if (await handlePanelConfigRoute({
     configCenter: runtime.configCenter,
     capabilityCenter: runtime.capabilityCenter,
+    managedMcpBinDirectory: runtime.productPaths.state.runtimeTools.mcp.bin,
     configDirectory: runtime.configDirectory,
     productPaths: runtime.productPaths,
     modelCatalogFetch: runtime.modelCatalogFetch,

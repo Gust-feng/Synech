@@ -76,6 +76,7 @@ export type CapabilityCenterOptions = {
   readonly fetch?: ToolRegistryFetchLike;
   readonly playwrightAvailable?: boolean;
   readonly toolOutputStore?: ToolOutputStore;
+  readonly managedMcpBinDirectory?: string;
   /** Host-selected feature tools included in the frozen catalog for this workspace. */
   readonly resolveToolContributions?: (
     input: CapabilityToolContributionsInput,
@@ -205,6 +206,7 @@ export class CapabilityCenter {
       ? undefined
       : new LazyMcpToolExecutorProvider({
           servers: cachedMcpServers,
+          managedBinDirectory: this.options.managedMcpBinDirectory,
           env: await this.options.configCenter.createMcpRuntimeEnvironment({
             servers: cachedMcpServers,
             baseEnv: env,

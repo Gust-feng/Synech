@@ -584,6 +584,7 @@ function assemblePanelHost(input: {
     resolveSubAgentRoots: input.resolveSubAgentRoots,
     fetch: input.providerFetch,
     toolOutputStore,
+    managedMcpBinDirectory: productPaths.state.runtimeTools.mcp.bin,
     resolveToolContributions: resolveFeatureToolContributions,
   });
   const agentSessionEnvironment = new NodeExecutionEnv({ cwd: agentDataRoot });
@@ -598,6 +599,7 @@ function assemblePanelHost(input: {
       processRegistry,
       processTerminator,
       toolOutputStore,
+      managedMcpBinDirectory: productPaths.state.runtimeTools.mcp.bin,
       fileMutationCoordinator,
       resolveManagedAttachmentPath,
       resolveAttachmentToolExposure: ({ permissionBoundaryRefs }) => hasSpaceOwnerScope(permissionBoundaryRefs),

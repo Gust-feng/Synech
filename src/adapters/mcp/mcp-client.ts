@@ -13,6 +13,7 @@ export type McpClientConfig = {
   readonly url?: string;
   readonly env?: Readonly<Record<string, string>>;
   readonly httpHeaders?: Readonly<Record<string, string>>;
+  readonly managedBinDirectory?: string;
   /** Maximum time without an MCP progress notification before the request is cancelled. */
   readonly requestIdleTimeoutMs?: number;
   /** Optional per-server in-flight tool-call limit. Undefined keeps the SDK's existing behavior. */
@@ -759,11 +760,11 @@ async function buildTransport(config: McpClientConfig): Promise<Transport> {
     if (config.command === undefined) {
       throw new Error(`MCP server "${config.serverId}" requires a command for stdio transport.`);
     }
-    const stdioEnv = buildStdioEnvironment(config.env ?? {});
+    const stdioEnv = buildStdioEnvironment(config.env ?? {}, config.managedBinDirectory);
     const command = (await ensureManagedMcpExecutable(config.command, {
       ...process.env,
       ...(stdioEnv ?? {}),
-    })).executable ?? config.command;
+    }, { managedBinDirectory: config.managedBinDirectory })).executable ?? config.command;
     return new StdioClientTransport({
       command,
       args: config.args === undefined ? undefined : [...config.args],
@@ -781,7 +782,10 @@ async function buildTransport(config: McpClientConfig): Promise<Transport> {
   });
 }
 
-function buildStdioEnvironment(env: Readonly<Record<string, string>>): Record<string, string> {
+function buildStdioEnvironment(
+  env: Readonly<Record<string, string>>,
+  managedBinDirectory: string | undefined,
+): Record<string, string> {
   const base = {
     ...getDefaultEnvironment(),
     ...platformPathEnvironment(process.env),
@@ -789,7 +793,7 @@ function buildStdioEnvironment(env: Readonly<Record<string, string>>): Record<st
   };
   return {
     ...base,
-    ...mcpRuntimePathEnvironment(base),
+    ...mcpRuntimePathEnvironment(base, { managedBinDirectory }),
     NODE_USE_SYSTEM_CA: base.NODE_USE_SYSTEM_CA ?? "1",
   };
 }
