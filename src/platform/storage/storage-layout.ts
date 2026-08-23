@@ -39,7 +39,18 @@ export async function initializeProductStorage(paths: ProductPaths): Promise<voi
     assertSupportedManifest(paths, manifest);
   }
 
-  await Promise.all(productStorageDirectories(paths).map((directory) => fs.mkdir(directory, { recursive: true })));
+  try {
+    await Promise.all(productStorageDirectories(paths).map((directory) => fs.mkdir(directory, { recursive: true })));
+  } catch (error) {
+    if (isPathTypeConflict(error)) {
+      throw new ProductStorageLayoutError(
+        paths.productHome,
+        `A required storage directory is occupied by a file below Product Home: ${paths.productHome}`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
 }
 
 async function readManifest(paths: ProductPaths): Promise<unknown | undefined> {
@@ -97,4 +108,9 @@ async function writeManifestAtomically(paths: ProductPaths): Promise<void> {
 
 function isFileMissing(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
+}
+
+function isPathTypeConflict(error: unknown): boolean {
+  return error instanceof Error && "code" in error &&
+    (error.code === "EEXIST" || error.code === "ENOTDIR");
 }

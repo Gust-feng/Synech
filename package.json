@@ -14,6 +14,7 @@
     "build": "pnpm clean:dist && pnpm build:node && pnpm copy:sub-agents && pnpm typecheck:panel && pnpm build:panel",
     "build:node": "pnpm generate:icons && tsc -p tsconfig.json",
     "copy:sub-agents": "node scripts/copy-sub-agent-assets.mjs",
+    "test:storage": "node --test --test-concurrency=1 tests/product-storage.test.mjs",
     "typecheck:panel": "tsc -p tsconfig.panel.json --noEmit",
     "build:panel": "vite build --config vite.panel.config.ts",
     "smoke:real-ai": "pnpm build && node dist/app/real-ai-smoke.js",
