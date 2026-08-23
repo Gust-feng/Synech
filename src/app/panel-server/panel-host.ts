@@ -11,10 +11,9 @@ import {
 } from "../../adapters/intelligence/index.js";
 import {
   FileSystemToolOutputStore,
-  resolveProductPaths,
   SqliteRuntimeDatabase,
-  type RuntimePaths,
 } from "../../adapters/runtime-storage/index.js";
+import type { ProductPaths } from "../../platform/storage/index.js";
 import { createOpenAITokenCounter } from "../context-maintenance/index.js";
 import { createRuntimeAgentDefinitionCatalog } from "../agent-definitions/agent-definition-catalog.js";
 import { agentDefinitionRefMatchesDefinition, runAgentDefinitionRefCacheKey } from "../agent-definitions/agent-definition-ref.js";
@@ -167,7 +166,7 @@ export type PanelHost = {
   readonly ordinaryAgentDefinition: AgentDefinition;
   readonly agentDefinitions: AgentDefinitionRegistry;
   readonly agentDefinitionOverrides: Map<string, AgentDefinition>;
-  readonly configDirectory?: string;
+  readonly configDirectory: string;
   readonly providerFetch?: PanelProviderFetch;
   readonly modelCatalogFetch?: PanelModelCatalogFetch;
   readonly directoryPicker?: () => Promise<string | undefined>;
@@ -175,7 +174,7 @@ export type PanelHost = {
   readonly externalResourceOpener?: (target: PanelExternalResourceTarget) => Promise<void>;
   readonly contextAttachmentMedia: Map<string, PanelContextAttachmentMediaEntry>;
   readonly activeRequestJobs: Set<Promise<void>>;
-  readonly runtimePaths?: RuntimePaths;
+  readonly productPaths: ProductPaths;
   readonly processRegistry: InMemoryProcessRegistry;
   readonly processTerminator: ProcessTerminator;
   readonly skillRoots: readonly SkillRootInput[];
@@ -219,18 +218,21 @@ type PanelSubAgentRootsInput = {
   readonly executionRoot?: string;
 };
 
-export function createPanelHost(options: PanelServerOptions): PanelHost {
+export type PanelHostOptions = Omit<PanelServerOptions, "host" | "port" | "productHome" | "productPaths"> & {
+  readonly productPaths: ProductPaths;
+};
+
+export function createPanelHost(options: PanelHostOptions): PanelHost {
   const agentDefinitionCatalog = createRuntimeAgentDefinitionCatalog({
     ordinaryAgentDefinition: options.ordinaryAgentDefinition,
     additionalDefinitions: options.agentDefinitions,
   });
   if (options.configCenter !== undefined) {
-    const runtimePaths = options.productPaths ?? resolvePanelHostPaths(options.configDirectory);
     return assemblePanelHost({
       configCenter: options.configCenter,
       ordinaryAgentDefinition: agentDefinitionCatalog.ordinaryAgentDefinition,
       agentDefinitions: agentDefinitionCatalog.registry,
-      configDirectory: options.configDirectory,
+      configDirectory: options.productPaths.configDirectory,
       providerFetch: options.providerFetch,
       modelCatalogFetch: options.modelCatalogFetch,
       directoryPicker: options.directoryPicker,
@@ -241,13 +243,12 @@ export function createPanelHost(options: PanelServerOptions): PanelHost {
       resolveSkillRoots: (input) => resolveSkillRoots(options, input),
       subAgentRoots: resolveSubAgentRoots(options),
       resolveSubAgentRoots: (input) => resolveSubAgentRoots(options, input),
-      skillStateStore: resolveSkillStateStore(options.configDirectory),
+      skillStateStore: resolveSkillStateStore(options.productPaths.configDirectory),
       processTerminator: options.processTerminator,
-      runtimePaths,
+      productPaths: options.productPaths,
     });
   }
-  const local = createLocalConfigCenter({ configDirectory: options.configDirectory });
-  const runtimePaths = options.productPaths ?? resolvePanelHostPaths(local.configDirectory);
+  const local = createLocalConfigCenter({ configDirectory: options.productPaths.configDirectory });
   return assemblePanelHost({
     configCenter: local.configCenter,
     ordinaryAgentDefinition: agentDefinitionCatalog.ordinaryAgentDefinition,
@@ -265,16 +266,16 @@ export function createPanelHost(options: PanelServerOptions): PanelHost {
     resolveSubAgentRoots: (input) => resolveSubAgentRoots(options, input),
     skillStateStore: resolveSkillStateStore(local.configDirectory),
     processTerminator: options.processTerminator,
-    runtimePaths,
+    productPaths: options.productPaths,
   });
 }
 
-export async function preparePanelHostStorageForStartup(runtimePaths: RuntimePaths): Promise<void> {
-  const journalRoot = path.join(runtimePaths.system.journals, "space-reference-deletions");
-  if (!hasUnappliedPendingSynechRestore(runtimePaths) ||
+export async function preparePanelHostStorageForStartup(productPaths: ProductPaths): Promise<void> {
+  const journalRoot = path.join(productPaths.state.journals, "space-reference-deletions");
+  if (!hasUnappliedPendingSynechRestore(productPaths) ||
     inspectFileSystemSpaceReferenceDeletionJournal(journalRoot) === "idle") return;
 
-  const databasePath = runtimePaths.synechDatabase;
+  const databasePath = productPaths.data.database;
   try {
     await fs.access(databasePath);
   } catch (error) {
@@ -296,7 +297,7 @@ export async function preparePanelHostStorageForStartup(runtimePaths: RuntimePat
       },
       referenceDeletion: {
         journal: createFileSystemSpaceReferenceDeletionJournal(journalRoot),
-        files: createSpaceReferenceDeletionFilePort(path.join(runtimePaths.synech.spaceFiles, "folders")),
+        files: createSpaceReferenceDeletionFilePort(path.join(productPaths.data.workbench.spaceFiles, "folders")),
         leases: new InMemoryLocalWorkspaceMutationCoordinator(),
         deleteOwnedAssets: async (assetIds) => await managedAssets.removeMany(assetIds),
       },
@@ -325,27 +326,18 @@ export async function preparePanelHostStorageForStartup(runtimePaths: RuntimePat
   }
 }
 
-export function isPanelHost(value: PanelServerOptions | PanelHost): value is PanelHost {
-  return (
-    value.configCenter instanceof ConfigCenter &&
-    "ordinaryAgentFeature" in value &&
-    "activeRequestJobs" in value &&
-    value.activeRequestJobs instanceof Set
-  );
-}
-
 function assemblePanelHost(input: {
   readonly configCenter: ConfigCenter;
   readonly ordinaryAgentDefinition: AgentDefinition;
   readonly agentDefinitions: AgentDefinitionRegistry;
-  readonly configDirectory?: string;
+  readonly configDirectory: string;
   readonly providerFetch?: PanelProviderFetch;
   readonly modelCatalogFetch?: PanelModelCatalogFetch;
   readonly directoryPicker?: () => Promise<string | undefined>;
   readonly contextAttachmentPicker?: () => Promise<PanelContextAttachmentSelection | undefined>;
   readonly synechRestorePicker?: () => Promise<string | undefined>;
   readonly externalResourceOpener?: (target: PanelExternalResourceTarget) => Promise<void>;
-  readonly runtimePaths?: RuntimePaths;
+  readonly productPaths: ProductPaths;
   readonly skillRoots: readonly SkillRootInput[];
   readonly resolveSkillRoots?: (input: PanelSkillRootsInput) => readonly SkillRootInput[];
   readonly subAgentRoots: readonly SubAgentRootInput[];
@@ -359,30 +351,30 @@ function assemblePanelHost(input: {
   const processRegistry = new InMemoryProcessRegistry();
   const fileMutationCoordinator = new InMemoryLocalWorkspaceMutationCoordinator();
   const synechProjectionChanges = createSynechProjectionChangeFeed();
-  const runtimePaths = requireRuntimePaths(input.runtimePaths);
-  const toolOutputStore = new FileSystemToolOutputStore(runtimePaths.ordinary.evidence);
+  const productPaths = input.productPaths;
+  const toolOutputStore = new FileSystemToolOutputStore(productPaths.data.agent.evidence);
   const processTerminator = input.processTerminator ?? createPlatformProcessTerminator();
-  const runtimeHome = runtimePaths.runtimeHome;
-  const knowledgeAssetRoot = runtimePaths.synech.knowledgeAssets;
-  const managedSpaceFolderRoot = path.join(runtimePaths.synech.spaceFiles, "folders");
-  const managedSpaceRoot = runtimePaths.synech.spaceFiles;
+  const productHome = productPaths.productHome;
+  const knowledgeAssetRoot = productPaths.data.workbench.knowledgeAssets;
+  const managedSpaceFolderRoot = path.join(productPaths.data.workbench.spaceFiles, "folders");
+  const managedSpaceRoot = productPaths.data.workbench.spaceFiles;
   let knowledgeAssetsReady = Promise.resolve();
-  applyPendingSynechRestore(runtimePaths, {
-    assertSpaceDeletionIdle: () => assertSpaceDeletionJournalIdle(runtimePaths),
+  applyPendingSynechRestore(productPaths, {
+    assertSpaceDeletionIdle: () => assertSpaceDeletionJournalIdle(productPaths),
   });
   const {
     database: synechDatabase,
     managedAssets,
     spaceRepository,
     personalKnowledgeRepository,
-  } = openPanelSynechStorage(runtimePaths);
+  } = openPanelSynechStorage(productPaths);
   const managedAssetFeature = createManagedAssetsFeature(managedAssets);
   const spaceConversationDeletionJournal = createSqliteSpaceConversationDeletionJournal(synechDatabase);
   const conversationLifecycleJournal = createSqliteConversationLifecycleJournal(synechDatabase);
   let beforeSynechRestoreStage: (() => Promise<void>) | undefined;
   const synechDataMaintenance = createSynechDataMaintenance({
     database: synechDatabase,
-    runtimePaths,
+    productPaths,
     restorePicker: input.synechRestorePicker,
     beforeRestoreStage: async () => {
       if (beforeSynechRestoreStage === undefined) {
@@ -392,7 +384,7 @@ function assemblePanelHost(input: {
     },
     runOwnedStorageSnapshot: async (operation) => {
       await knowledgeAssetsReady;
-      return await fileMutationCoordinator.runExclusive(runtimeHome, async () => {
+      return await fileMutationCoordinator.runExclusive(productHome, async () => {
         if ((await spaceReferenceDeletionJournal.list()).length > 0) {
           throw new Error("Synech storage cannot be snapshotted while a Space deletion journal is pending.");
         }
@@ -407,12 +399,12 @@ function assemblePanelHost(input: {
     },
   });
   const spaceReferenceDeletionJournal = createFileSystemSpaceReferenceDeletionJournal(
-    path.join(runtimePaths.system.journals, "space-reference-deletions"),
+    path.join(productPaths.state.journals, "space-reference-deletions"),
   );
-  const ordinaryRuntimeRoot = runtimePaths.ordinary.root;
+  const agentDataRoot = productPaths.data.agent.root;
   const managedAttachmentInstanceId = randomUUID();
   const managedAttachmentRepository = createFileSystemOrdinaryManagedAttachmentRepository(
-    runtimePaths.ordinary.attachments,
+    productPaths.data.agent.attachments,
   );
   const resolveManagedAttachmentPath = async (attachmentId: string): Promise<string | undefined> => {
     try {
@@ -424,17 +416,17 @@ function assemblePanelHost(input: {
     }
   };
   const agentNotesFeature = createAgentNotesFeature({
-    repository: createFileSystemAgentNoteRepository(runtimePaths.synech.notes),
+    repository: createFileSystemAgentNoteRepository(productPaths.data.workbench.notes),
   });
   // Path dependencies are durable methodology memories. They deliberately
   // live beside, rather than inside, Ordinary run snapshots: Ordinary owns
   // the run-bound read/adoption facts, while this feature owns the reusable
   // content and its revision history.
   const pathDependencyFeature = createPathDependencyFeature({
-    repository: createFileSystemPathDependencyRepository(runtimePaths.synech.methodMemory),
+    repository: createFileSystemPathDependencyRepository(productPaths.data.workbench.methodMemory),
   });
   const ordinaryMemoryFactRepository = createFileSystemOrdinaryMemoryFactRepository(
-    ordinaryRuntimeRoot,
+    agentDataRoot,
   );
   const spaceFeature = createSpaceFeature({
     repository: spaceRepository,
@@ -594,10 +586,10 @@ function assemblePanelHost(input: {
     toolOutputStore,
     resolveToolContributions: resolveFeatureToolContributions,
   });
-  const agentSessionEnvironment = new NodeExecutionEnv({ cwd: ordinaryRuntimeRoot });
+  const agentSessionEnvironment = new NodeExecutionEnv({ cwd: agentDataRoot });
   const agentSessionRepository = new FileSystemAgentSessionRepository({
     fileSystem: agentSessionEnvironment,
-    sessionsRoot: runtimePaths.ordinary.sessions,
+    sessionsRoot: productPaths.data.agent.sessions,
   });
   const ordinaryRunResources = createOrdinaryAgentRunResourceAcquirer({
     host: {
@@ -649,8 +641,8 @@ function assemblePanelHost(input: {
       input.resolveSubAgentRoots?.({ executionRoot: workspaceRoot }) ?? input.subAgentRoots,
   });
   const ordinaryAgentFeature = createOrdinaryAgentFeature({
-    repository: createFileSystemOrdinaryRunRepository(ordinaryRuntimeRoot),
-    conversationRepository: createFileSystemOrdinaryConversationControlRepository(ordinaryRuntimeRoot),
+    repository: createFileSystemOrdinaryRunRepository(agentDataRoot),
+    conversationRepository: createFileSystemOrdinaryConversationControlRepository(agentDataRoot),
     sessionRepository: agentSessionRepository,
     releaseToolEvidenceOwner: (ownerId) => toolOutputStore.releaseOwner(ownerId).then(() => undefined),
     managedAttachmentRepository,
@@ -692,9 +684,9 @@ function assemblePanelHost(input: {
     }),
   });
   // 三个删除 / 链接生命周期协调器共享同一把 sentinel 互斥键：彼此串行、与整仓备份互斥，
-  // 但不独占 runtimeHome 本身，避免盖住 SpaceFeature 引用删除生命周期在同一协调器上申请的
-  // runtimeHome 子目录锁而自死锁（见 synech-deletion-lifecycle-lock.ts）。
-  const deletionLifecycleLockKey = synechDeletionLifecycleLockKey(runtimePaths.system.locks);
+  // 但不独占 Product Home 本身，避免盖住 SpaceFeature 引用删除生命周期在同一协调器上申请的
+  // Product Home 子目录锁而自死锁（见 synech-deletion-lifecycle-lock.ts）。
+  const deletionLifecycleLockKey = synechDeletionLifecycleLockKey(productPaths.state.locks);
   const spaceConversationDeletion = createSpaceConversationDeletionCoordinator({
     spaces: spaceFeature,
     ordinary: ordinaryAgentFeature,
@@ -775,7 +767,7 @@ function assemblePanelHost(input: {
     externalResourceOpener: input.externalResourceOpener,
     contextAttachmentMedia,
     activeRequestJobs,
-    runtimePaths: input.runtimePaths,
+    productPaths: input.productPaths,
     processRegistry,
     processTerminator,
     skillRoots: input.skillRoots,
@@ -831,8 +823,8 @@ function assemblePanelHost(input: {
   return host;
 }
 
-function openPanelSynechStorage(runtimePaths: RuntimePaths) {
-  const database = new SqliteRuntimeDatabase(runtimePaths.synechDatabase);
+function openPanelSynechStorage(productPaths: ProductPaths) {
+  const database = new SqliteRuntimeDatabase(productPaths.data.database);
   try {
     return {
       database,
@@ -853,9 +845,9 @@ function openPanelSynechStorage(runtimePaths: RuntimePaths) {
   }
 }
 
-function assertSpaceDeletionJournalIdle(runtimePaths: RuntimePaths): void {
+function assertSpaceDeletionJournalIdle(productPaths: ProductPaths): void {
   const status = inspectFileSystemSpaceReferenceDeletionJournal(
-    path.join(runtimePaths.system.journals, "space-reference-deletions"),
+    path.join(productPaths.state.journals, "space-reference-deletions"),
   );
   if (status !== "idle") throw new Error("Space deletion recovery is still pending.");
 }
@@ -946,11 +938,6 @@ function managedKnowledgeAssetWriteError(error: unknown): unknown {
  */
 async function canonicalWorkspaceMountIdentity(value: string): Promise<string> {
   return await canonicalSpacePathIdentity(value, (target) => fs.realpath(target));
-}
-
-function requireRuntimePaths(runtimePaths: RuntimePaths | undefined): RuntimePaths {
-  if (runtimePaths === undefined) throw new Error("Panel runtime requires resolved product paths.");
-  return runtimePaths;
 }
 
 export function reconstructFrozenOrdinaryDefinition(
@@ -1128,7 +1115,7 @@ async function resolveConversationExecutionScope(
   if (await runtime.spaceFeature.queries.getTree(owner.id) === undefined) {
     throw new PanelHttpError(404, "space_not_found", `Space ${owner.id} was not found.`);
   }
-  const managedRoot = path.join(requireRuntimePaths(runtime.runtimePaths).synech.spaceFiles, owner.id, "files");
+  const managedRoot = path.join(runtime.productPaths.data.workbench.spaceFiles, owner.id, "files");
   await ensureSpaceManagedRoot(managedRoot);
   return { owner, cwd: managedRoot, managedRoot };
 }
@@ -1317,10 +1304,6 @@ function homeDirectory(): string {
   return process.env.USERPROFILE ?? process.env.HOME ?? process.cwd();
 }
 
-function resolveSkillStateStore(configDirectory: string | undefined): SkillStateStore | undefined {
-  return configDirectory === undefined ? undefined : new FileSystemSkillStateStore(resolveSkillStateStorePath(configDirectory));
-}
-
-function resolvePanelHostPaths(configDirectory: string | undefined): RuntimePaths | undefined {
-  return configDirectory === undefined ? undefined : resolveProductPaths(configDirectory);
+function resolveSkillStateStore(configDirectory: string): SkillStateStore {
+  return new FileSystemSkillStateStore(resolveSkillStateStorePath(configDirectory));
 }

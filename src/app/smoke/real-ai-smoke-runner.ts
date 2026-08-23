@@ -2,9 +2,11 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
+import type { LocalDevSecretStore, LocalSettings, SecretMetadata, SettingsStore } from "../../domain/config/index.js";
 import type { ModelUsage } from "../../domain/intelligence/index.js";
 import type { ToolCallResult } from "../../domain/tools/index.js";
-import { createLocalConfigCenter } from "../config-center/index.js";
+import { resolveProductPaths } from "../../platform/storage/index.js";
+import { ConfigCenter } from "../config-center/index.js";
 import { startLocalPanelServer } from "../panel-server.js";
 import type { PanelProviderFetch } from "../panel-server/types.js";
 
@@ -40,7 +42,7 @@ export type RealAiSmokeSummary =
 export type RunRealAiSmokeOptions = {
   readonly env?: RealAiSmokeEnvironment;
   readonly providerFetch?: PanelProviderFetch;
-  readonly configDirectory?: string;
+  readonly productHome?: string;
   readonly timeoutMs?: number;
 };
 
@@ -83,13 +85,19 @@ export async function runRealAiSmoke(
   const configuration = smokeConfiguration(env);
   if (configuration.status === "skipped") return configuration;
 
-  const ownsDirectory = options.configDirectory === undefined;
-  const configDirectory = options.configDirectory ?? await fs.mkdtemp(path.join(os.tmpdir(), "synech-real-ai-smoke-"));
-  const local = createLocalConfigCenter({ configDirectory });
+  const ownsDirectory = options.productHome === undefined;
+  const productHome = options.productHome ?? await fs.mkdtemp(path.join(os.tmpdir(), "synech-real-ai-smoke-"));
+  const productPaths = resolveProductPaths({ productHome });
+  // Smoke configuration stays in memory so Product Home remains empty until the
+  // server owns the startup lease and initializes storage-layout.json.
+  const configCenter = new ConfigCenter({
+    settingsStore: new InMemorySettingsStore(),
+    secretStore: new InMemorySecretStore(),
+  });
   let server: Awaited<ReturnType<typeof startLocalPanelServer>> | undefined;
   try {
     const smokeProfileId = "real-ai-smoke";
-    await local.configCenter.createModelProviderProfile({
+    await configCenter.createModelProviderProfile({
       profileId: smokeProfileId,
       label: "Real AI Smoke",
       providerKind: "openai_compatible",
@@ -100,11 +108,11 @@ export async function runRealAiSmoke(
       defaultAiMode: configuration.protocol === "openai_responses" ? "openai-responses" : "openai-compatible",
       enabled: true,
     });
-    await local.configCenter.activateModelProviderProfile(smokeProfileId);
+    await configCenter.activateModelProviderProfile(smokeProfileId);
     server = await startLocalPanelServer({
       port: 0,
-      configDirectory,
-      configCenter: local.configCenter,
+      productPaths,
+      configCenter,
       providerFetch: options.providerFetch,
     });
     const space = spaceSchema.parse(await requestJson(new URL("api/spaces", server.url), {
@@ -163,8 +171,44 @@ export async function runRealAiSmoke(
   } finally {
     await server?.close().catch(() => undefined);
     if (ownsDirectory) {
-      await fs.rm(configDirectory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }).catch(() => undefined);
+      await fs.rm(productHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }).catch(() => undefined);
     }
+  }
+}
+
+class InMemorySettingsStore implements SettingsStore {
+  private settings: LocalSettings | undefined;
+
+  async readSettings(): Promise<unknown | undefined> {
+    return this.settings;
+  }
+
+  async writeSettings(settings: LocalSettings): Promise<void> {
+    this.settings = settings;
+  }
+}
+
+class InMemorySecretStore implements LocalDevSecretStore {
+  private readonly secrets = new Map<string, { readonly value: string; readonly updatedAt: string }>();
+
+  async getMetadata(secretRef: string): Promise<SecretMetadata> {
+    const secret = this.secrets.get(secretRef);
+    return secret === undefined ? { configured: false } : { configured: true, updatedAt: secret.updatedAt };
+  }
+
+  async readSecret(secretRef: string): Promise<string | undefined> {
+    return this.secrets.get(secretRef)?.value;
+  }
+
+  async writeSecret(secretRef: string, value: string): Promise<SecretMetadata> {
+    const updatedAt = new Date().toISOString();
+    this.secrets.set(secretRef, { value, updatedAt });
+    return { configured: true, updatedAt };
+  }
+
+  async deleteSecret(secretRef: string): Promise<SecretMetadata> {
+    this.secrets.delete(secretRef);
+    return { configured: false };
   }
 }
 

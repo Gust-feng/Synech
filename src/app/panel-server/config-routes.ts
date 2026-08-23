@@ -33,14 +33,13 @@ import { checkPanelMcpEnvironment, installPanelMcpEnvironment, listPanelMcpRefer
 import type { PanelModelCatalogFetch } from "./types.js";
 import { readProductPackageVersion } from "../../platform/product-version.js";
 import { PRODUCT_DISPLAY_NAME } from "../../platform/product-identity.js";
+import type { ProductPaths } from "../../platform/storage/index.js";
 
 export type PanelConfigRouteRuntime = {
   readonly configCenter: ConfigCenter;
   readonly capabilityCenter: CapabilityCenter;
-  readonly configDirectory?: string;
-  readonly runtimePaths?: {
-    readonly runtimeHome: string;
-  };
+  readonly configDirectory: string;
+  readonly productPaths: ProductPaths;
   readonly modelCatalogFetch?: PanelModelCatalogFetch;
 };
 
@@ -771,8 +770,8 @@ function productInfoPayload(runtime: PanelConfigRouteRuntime): {
   readonly defaultEntry: "Synech / Panel";
   readonly runtimeMode: "agent";
   readonly runtimeModeLabel: string;
-  readonly configDirectory?: string;
-  readonly runtimeDirectory?: string;
+  readonly configDirectory: string;
+  readonly productHome: string;
 } {
   return {
     name: PRODUCT_DISPLAY_NAME,
@@ -781,7 +780,7 @@ function productInfoPayload(runtime: PanelConfigRouteRuntime): {
     runtimeMode: "agent",
     runtimeModeLabel: "普通 agent",
     configDirectory: runtime.configDirectory,
-    runtimeDirectory: runtime.runtimePaths?.runtimeHome,
+    productHome: runtime.productPaths.productHome,
   };
 }
 

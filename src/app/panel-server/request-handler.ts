@@ -20,7 +20,6 @@ import { parseSkillStateRequest } from "./request-parsers.js";
 import {
   cleanupPanelHostOwnedProcesses,
   createPanelHost,
-  isPanelHost,
   preparePanelHostStorageForStartup,
   type PanelHost,
 } from "./panel-host.js";
@@ -43,9 +42,11 @@ import { handlePanelSynechDataRoute, synechDataHttpError } from "./synech-data-r
 import { SynechDataMaintenanceError } from "./synech-data-maintenance.js";
 import { handlePanelManagedAssetRoute } from "./managed-asset-routes.js";
 import { handleSynechProjectionRoute } from "./synech-projection-routes.js";
-import { resolveProductConfigDirectory } from "../../adapters/config/index.js";
-import { resolveProductPaths } from "../../adapters/runtime-storage/index.js";
-import { acquirePanelHostDirectoryLease } from "./host-directory-lease.js";
+import {
+  acquireProductHomeLease,
+  initializeProductStorage,
+  resolveProductPaths,
+} from "../../platform/storage/index.js";
 export type { PanelModelCatalogFetch, PanelProviderFetch, PanelServerOptions, StartedPanelServer } from "./types.js";
 
 const PANEL_REQUEST_DRAIN_TIMEOUT_MS = 1_000;
@@ -66,14 +67,27 @@ export class PanelShutdownTimeoutError extends Error {
 }
 
 export async function startLocalPanelServer(options: PanelServerOptions = {}): Promise<StartedPanelServer> {
-  const productPaths = options.productPaths ?? resolveRuntimePathsForOptions(options);
-  const runtimeDirectory = productPaths.system.locks;
-  const lease = await acquirePanelHostDirectoryLease(runtimeDirectory);
+  const productPaths = options.productPaths ?? resolveProductPaths({ productHome: options.productHome });
+  const lease = await acquireProductHomeLease(productPaths.productHome);
   let runtime: PanelHost | undefined;
   try {
+    await initializeProductStorage(productPaths);
     await preparePanelHostStorageForStartup(productPaths);
     const createdRuntime = createPanelHost({
-      ...options,
+      configCenter: options.configCenter,
+      providerFetch: options.providerFetch,
+      modelCatalogFetch: options.modelCatalogFetch,
+      directoryPicker: options.directoryPicker,
+      contextAttachmentPicker: options.contextAttachmentPicker,
+      synechRestorePicker: options.synechRestorePicker,
+      externalResourceOpener: options.externalResourceOpener,
+      additionalSkillRoots: options.additionalSkillRoots,
+      skillRoots: options.skillRoots,
+      additionalSubAgentRoots: options.additionalSubAgentRoots,
+      subAgentRoots: options.subAgentRoots,
+      ordinaryAgentDefinition: options.ordinaryAgentDefinition,
+      agentDefinitions: options.agentDefinitions,
+      processTerminator: options.processTerminator,
       productPaths,
     });
     runtime = createdRuntime;
@@ -90,8 +104,8 @@ export async function startLocalPanelServer(options: PanelServerOptions = {}): P
     let closing: Promise<void> | undefined;
     return {
       url: `http://${host}:${address.port}/`,
+      productHome: createdRuntime.productPaths.productHome,
       configDirectory: createdRuntime.configDirectory,
-      runtimeDirectory: createdRuntime.runtimePaths?.runtimeHome,
       close: () => closing ??= (async () => {
         try {
           await closePanelServer(server, createdRuntime);
@@ -124,16 +138,7 @@ export async function startLocalPanelServer(options: PanelServerOptions = {}): P
   }
 }
 
-function resolveRuntimePathsForOptions(options: PanelServerOptions) {
-  if (options.configCenter !== undefined && options.configDirectory === undefined) {
-    throw new Error("A custom ConfigCenter requires an explicit configDirectory or productPaths.");
-  }
-  const configDirectory = options.configDirectory ?? resolveProductConfigDirectory();
-  return resolveProductPaths(configDirectory);
-}
-
-export function createPanelRequestHandler(options: PanelServerOptions | PanelHost = {}): (request: IncomingMessage, response: ServerResponse) => void {
-  const runtime = isPanelHost(options) ? options : createPanelHost(options);
+export function createPanelRequestHandler(runtime: PanelHost): (request: IncomingMessage, response: ServerResponse) => void {
 
   return (request, response) => {
     let requestJob: Promise<void>;
@@ -238,7 +243,7 @@ async function handlePanelRequest(
     configCenter: runtime.configCenter,
     capabilityCenter: runtime.capabilityCenter,
     configDirectory: runtime.configDirectory,
-    runtimePaths: runtime.runtimePaths,
+    productPaths: runtime.productPaths,
     modelCatalogFetch: runtime.modelCatalogFetch,
   }, request, response, url)) {
     return;

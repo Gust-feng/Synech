@@ -3,13 +3,14 @@ import type { ConfigCenter } from "../config-center/index.js";
 import type { ProcessTerminator } from "../runtime-guard/index.js";
 import type { SkillRootInput } from "../skills/index.js";
 import type { SubAgentRootInput } from "../sub-agents/sub-agent-loader.js";
-import type { ProductPaths } from "../../adapters/runtime-storage/index.js";
+import type { ProductPaths } from "../../platform/storage/index.js";
 
 export type PanelServerOptions = {
   readonly host?: string;
   readonly port?: number;
-  readonly configDirectory?: string;
-  /** Canonical host-resolved product identity and runtime layout. */
+  /** Explicit Product Home. Takes precedence over SYNECH_HOME and platform defaults. */
+  readonly productHome?: string;
+  /** Canonical host-resolved product identity and storage layout. */
   readonly productPaths?: ProductPaths;
   readonly configCenter?: ConfigCenter;
   readonly providerFetch?: PanelProviderFetch;
@@ -78,7 +79,7 @@ export type PanelModelCatalogFetch = (
 
 export type StartedPanelServer = {
   readonly url: string;
-  readonly configDirectory?: string;
-  readonly runtimeDirectory?: string;
+  readonly productHome: string;
+  readonly configDirectory: string;
   close(): Promise<void>;
 };

@@ -1,7 +1,7 @@
 export type PanelLaunchArgs = {
   readonly host: string;
   readonly port: number;
-  readonly configDirectory?: string;
+  readonly productHome?: string;
   readonly smoke: boolean;
   readonly devUrl?: string;
 };
@@ -24,7 +24,7 @@ function parsePanelArgsWithDefaults(
 ): PanelLaunchArgs {
   let host = DEFAULT_PANEL_HOST;
   let port = defaults.port;
-  let configDirectory: string | undefined;
+  let productHome: string | undefined;
   let devUrl: string | undefined;
   let smoke = false;
 
@@ -55,13 +55,13 @@ function parsePanelArgsWithDefaults(
       port = parsePort(requireValue(arg.slice("--port=".length), "--port"));
       continue;
     }
-    if (arg === "--config-dir") {
-      configDirectory = requireNext(argv, index, "--config-dir");
+    if (arg === "--home") {
+      productHome = requireNext(argv, index, "--home");
       index += 1;
       continue;
     }
-    if (arg.startsWith("--config-dir=")) {
-      configDirectory = requireValue(arg.slice("--config-dir=".length), "--config-dir");
+    if (arg.startsWith("--home=")) {
+      productHome = requireValue(arg.slice("--home=".length), "--home");
       continue;
     }
     if (arg === "--dev-url") {
@@ -76,7 +76,7 @@ function parsePanelArgsWithDefaults(
     throw new Error(`Unknown panel argument: ${arg}`);
   }
 
-  return { host, port, configDirectory, smoke, devUrl };
+  return { host, port, productHome, smoke, devUrl };
 }
 
 function requireNext(argv: readonly string[], index: number, flag: string): string {

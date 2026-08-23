@@ -18,7 +18,7 @@ import {
   checkSqliteDatabaseFile,
   type SqliteRuntimeDatabase,
 } from "../../adapters/runtime-storage/index.js";
-import type { RuntimePaths } from "../../adapters/runtime-storage/index.js";
+import type { ProductPaths } from "../../platform/storage/index.js";
 import { PRODUCT_DATA_FORMAT_ID, PRODUCT_NAMESPACE } from "../../platform/product-identity.js";
 
 const PENDING_RESTORE_FILE_NAME = "synech.restore-pending.sqlite3";
@@ -79,13 +79,13 @@ type WorkbenchBackupDatabase = Pick<SqliteRuntimeDatabase, "filePath" | "health"
 
 export function createSynechDataMaintenance(input: {
   readonly database: WorkbenchBackupDatabase;
-  readonly runtimePaths: RuntimePaths;
+  readonly productPaths: ProductPaths;
   readonly restorePicker?: () => Promise<string | undefined>;
   readonly beforeRestoreStage?: () => Promise<void>;
   readonly runOwnedStorageSnapshot?: <T>(operation: () => Promise<T>) => Promise<T>;
 }): SynechDataMaintenance {
-  const pendingRestorePath = path.join(input.runtimePaths.system.restoreMarkers, PENDING_RESTORE_FILE_NAME);
-  const pendingRestoreAssetsPath = path.join(input.runtimePaths.system.restoreMarkers, PENDING_RESTORE_ASSETS_NAME);
+  const pendingRestorePath = path.join(input.productPaths.state.restoreMarkers, PENDING_RESTORE_FILE_NAME);
+  const pendingRestoreAssetsPath = path.join(input.productPaths.state.restoreMarkers, PENDING_RESTORE_ASSETS_NAME);
   let queue = Promise.resolve();
   let restoreState: "running" | "quiescing" | "staged" | "failed_requires_restart" = "running";
   const run = async <T>(operation: () => Promise<T>): Promise<T> => {
@@ -96,7 +96,7 @@ export function createSynechDataMaintenance(input: {
   const createBackup = async () => {
     const createdAt = new Date().toISOString();
     const filePath = path.join(
-      input.runtimePaths.system.backups,
+      input.productPaths.backups,
       `synech-${fileTimestamp(createdAt)}-${randomUUID().slice(0, 8)}.sqlite3`,
     );
     const temporarySuffix = `.pending-${randomUUID()}`;
@@ -109,7 +109,7 @@ export function createSynechDataMaintenance(input: {
       const databaseBackup = await input.database.backupTo(temporaryFilePath);
       await mkdir(temporaryAssetsPath, { recursive: true });
       for (const storageName of OWNED_STORAGE_NAMES) {
-        const source = storagePath(input.runtimePaths, storageName);
+        const source = storagePath(input.productPaths, storageName);
         const destination = path.join(temporaryAssetsPath, storageName);
         if (existsSync(source)) await cp(source, destination, { recursive: true });
         else await mkdir(destination, { recursive: true });
@@ -225,10 +225,10 @@ export function createSynechDataMaintenance(input: {
           // owned-storage tree first so observing the database always implies
           // that the whole restore bundle is available.
           await rename(stagingAssetsPath, pendingRestoreAssetsPath);
-          fsyncDirectory(input.runtimePaths.system.restoreMarkers);
+          fsyncDirectory(input.productPaths.state.restoreMarkers);
           await rename(stagingPath, pendingRestorePath);
           pendingDatabasePublished = true;
-          fsyncDirectory(input.runtimePaths.system.restoreMarkers);
+          fsyncDirectory(input.productPaths.state.restoreMarkers);
         } catch (error) {
           await rm(stagingPath, { force: true }).catch(() => undefined);
           await rm(stagingAssetsPath, { recursive: true, force: true }).catch(() => undefined);
@@ -252,7 +252,7 @@ export function createSynechDataMaintenance(input: {
 
 /** Applies a validated pending restore before any feature opens the shared database. */
 export function applyPendingSynechRestore(
-  runtimePaths: RuntimePaths,
+  runtimePaths: ProductPaths,
   input: { readonly assertSpaceDeletionIdle: () => void },
 ): void {
   if (hasSynechRestoreState(runtimePaths)) {
@@ -317,13 +317,13 @@ export function applyPendingSynechRestore(
   }
 }
 
-export function hasUnappliedPendingSynechRestore(runtimePaths: RuntimePaths): boolean {
+export function hasUnappliedPendingSynechRestore(runtimePaths: ProductPaths): boolean {
   return existsSync(pendingRestorePath(runtimePaths)) &&
     !existsSync(restoreJournalPath(runtimePaths)) &&
     !existsSync(restoreCommitPath(runtimePaths));
 }
 
-function hasSynechRestoreState(runtimePaths: RuntimePaths): boolean {
+function hasSynechRestoreState(runtimePaths: ProductPaths): boolean {
   return [
     pendingRestorePath(runtimePaths),
     restoreJournalPath(runtimePaths),
@@ -331,7 +331,7 @@ function hasSynechRestoreState(runtimePaths: RuntimePaths): boolean {
   ].some((filePath) => existsSync(filePath));
 }
 
-function recoverInterruptedSynechRestore(runtimePaths: RuntimePaths): void {
+function recoverInterruptedSynechRestore(runtimePaths: ProductPaths): void {
   const journalPath = restoreJournalPath(runtimePaths);
   const commitPath = restoreCommitPath(runtimePaths);
   rmSync(`${journalPath}.tmp`, { force: true });
@@ -341,7 +341,7 @@ function recoverInterruptedSynechRestore(runtimePaths: RuntimePaths): void {
       readRestoreCommit(runtimePaths);
       assertInstalledSynechRestore(runtimePaths);
       rmSync(commitPath, { force: true });
-      fsyncDirectory(runtimePaths.system.restoreMarkers);
+      fsyncDirectory(runtimePaths.state.restoreMarkers);
     }
     return;
   }
@@ -355,10 +355,10 @@ function recoverInterruptedSynechRestore(runtimePaths: RuntimePaths): void {
   rollbackPreparedSynechRestore(runtimePaths, journal);
   rmSync(journalPath, { force: true });
   rmSync(commitPath, { force: true });
-  fsyncDirectory(runtimePaths.system.restoreMarkers);
+  fsyncDirectory(runtimePaths.state.restoreMarkers);
 }
 
-function validatePendingSynechRestore(runtimePaths: RuntimePaths): void {
+function validatePendingSynechRestore(runtimePaths: ProductPaths): void {
   const pendingPath = pendingRestorePath(runtimePaths);
   const pendingAssetsPath = pendingRestoreAssetsPath(runtimePaths);
   if (!existsSync(pendingAssetsPath)) throw new SynechDataMaintenanceError("restore_source_invalid", "待恢复备份缺少知识资产目录。");
@@ -377,12 +377,12 @@ function validatePendingSynechRestore(runtimePaths: RuntimePaths): void {
   }
 }
 
-function createRestoreJournal(runtimePaths: RuntimePaths): SynechRestoreJournal {
+function createRestoreJournal(runtimePaths: ProductPaths): SynechRestoreJournal {
   const restoreId = randomUUID();
   if (!existsSync(databaseFilePath(runtimePaths, ""))) {
     throw new SynechDataMaintenanceError("data_maintenance_failed", "当前 应用数据库不存在，无法安全建立恢复日志。");
   }
-  const backupStem = path.join(runtimePaths.system.backups, `replaced-${fileTimestamp(new Date().toISOString())}-${restoreId.slice(0, 8)}`);
+  const backupStem = path.join(runtimePaths.backups, `replaced-${fileTimestamp(new Date().toISOString())}-${restoreId.slice(0, 8)}`);
   return {
     version: RESTORE_METADATA_VERSION,
     namespace: PRODUCT_NAMESPACE,
@@ -394,24 +394,24 @@ function createRestoreJournal(runtimePaths: RuntimePaths): SynechRestoreJournal 
   };
 }
 
-function installPendingSynechRestore(runtimePaths: RuntimePaths, journal: SynechRestoreJournal): void {
+function installPendingSynechRestore(runtimePaths: ProductPaths, journal: SynechRestoreJournal): void {
   const backupRoot = path.dirname(journal.backupStem);
   mkdirSync(backupRoot, { recursive: true });
-  fsyncDirectory(runtimePaths.system.restoreMarkers);
+  fsyncDirectory(runtimePaths.state.restoreMarkers);
   for (const suffix of journal.originalDatabaseSuffixes) {
     moveCurrentToBackup(databaseFilePath(runtimePaths, suffix), databaseBackupPath(journal, suffix));
   }
   for (const storageName of journal.originalStorageNames) {
     moveCurrentToBackup(storagePath(runtimePaths, storageName), storageBackupPath(journal, storageName));
   }
-  fsyncDirectory(runtimePaths.system.restoreMarkers);
+  fsyncDirectory(runtimePaths.state.restoreMarkers);
   fsyncDirectory(backupRoot);
   movePendingToCurrent(pendingRestorePath(runtimePaths), databaseFilePath(runtimePaths, ""));
   for (const storageName of OWNED_STORAGE_NAMES) {
     movePendingToCurrent(pendingStoragePath(runtimePaths, storageName), storagePath(runtimePaths, storageName));
   }
   fsyncDirectory(pendingRestoreAssetsPath(runtimePaths));
-  fsyncDirectory(runtimePaths.system.restoreMarkers);
+  fsyncDirectory(runtimePaths.state.restoreMarkers);
 }
 
 function moveCurrentToBackup(current: string, backup: string): void {
@@ -426,7 +426,7 @@ function movePendingToCurrent(pending: string, current: string): void {
   renameSync(pending, current);
 }
 
-function rollbackPreparedSynechRestore(runtimePaths: RuntimePaths, journal: SynechRestoreJournal): void {
+function rollbackPreparedSynechRestore(runtimePaths: ProductPaths, journal: SynechRestoreJournal): void {
   mkdirSync(pendingRestoreAssetsPath(runtimePaths), { recursive: true });
   for (const storageName of [...OWNED_STORAGE_NAMES].reverse()) {
     const current = storagePath(runtimePaths, storageName);
@@ -445,7 +445,7 @@ function rollbackPreparedSynechRestore(runtimePaths: RuntimePaths, journal: Syne
   fsyncDirectory(pendingRestoreAssetsPath(runtimePaths));
   const backupRoot = path.dirname(journal.backupStem);
   if (existsSync(backupRoot)) fsyncDirectory(backupRoot);
-  fsyncDirectory(runtimePaths.system.restoreMarkers);
+  fsyncDirectory(runtimePaths.state.restoreMarkers);
   assertRolledBackSynechRestore(runtimePaths, journal);
   validatePendingSynechRestore(runtimePaths);
 }
@@ -459,7 +459,7 @@ function restoreBackupToCurrent(backup: string, current: string): void {
   renameSync(backup, current);
 }
 
-function finalizeCommittedSynechRestore(runtimePaths: RuntimePaths): void {
+function finalizeCommittedSynechRestore(runtimePaths: ProductPaths): void {
   const journal = readRestoreJournal(runtimePaths);
   const commit = readRestoreCommit(runtimePaths);
   if (commit.restoreId !== journal.restoreId) throw new Error("Synech restore commit does not match restore journal.");
@@ -468,10 +468,10 @@ function finalizeCommittedSynechRestore(runtimePaths: RuntimePaths): void {
   rmSync(pendingRestoreAssetsPath(runtimePaths), { recursive: true, force: true });
   rmSync(restoreJournalPath(runtimePaths), { force: true });
   rmSync(restoreCommitPath(runtimePaths), { force: true });
-  fsyncDirectory(runtimePaths.system.restoreMarkers);
+  fsyncDirectory(runtimePaths.state.restoreMarkers);
 }
 
-function assertInstalledSynechRestore(runtimePaths: RuntimePaths): void {
+function assertInstalledSynechRestore(runtimePaths: ProductPaths): void {
   if (existsSync(pendingRestorePath(runtimePaths))) {
     throw new Error("Installed Synech restore still has a pending database.");
   }
@@ -490,7 +490,7 @@ function assertInstalledSynechRestore(runtimePaths: RuntimePaths): void {
   }
 }
 
-function assertRolledBackSynechRestore(runtimePaths: RuntimePaths, journal: SynechRestoreJournal): void {
+function assertRolledBackSynechRestore(runtimePaths: ProductPaths, journal: SynechRestoreJournal): void {
   const health = checkSqliteDatabaseFile(databaseFilePath(runtimePaths, ""));
   if (!health.ok || !isSynechDatabase(health)) {
     throw new Error(`Rolled-back Synech database is invalid: ${health.checks.join("; ")}`);
@@ -507,11 +507,11 @@ function assertRolledBackSynechRestore(runtimePaths: RuntimePaths, journal: Syne
   }
 }
 
-function writeRestoreJournal(runtimePaths: RuntimePaths, journal: SynechRestoreJournal): void {
+function writeRestoreJournal(runtimePaths: ProductPaths, journal: SynechRestoreJournal): void {
   writeJsonAtomicallySync(restoreJournalPath(runtimePaths), journal);
 }
 
-function writeRestoreCommit(runtimePaths: RuntimePaths, restoreId: string): void {
+function writeRestoreCommit(runtimePaths: ProductPaths, restoreId: string): void {
   writeJsonAtomicallySync(restoreCommitPath(runtimePaths), {
     version: RESTORE_METADATA_VERSION,
     namespace: PRODUCT_NAMESPACE,
@@ -520,14 +520,14 @@ function writeRestoreCommit(runtimePaths: RuntimePaths, restoreId: string): void
   } satisfies SynechRestoreCommit);
 }
 
-function restoreCommitMatches(runtimePaths: RuntimePaths, restoreId: string): boolean {
+function restoreCommitMatches(runtimePaths: ProductPaths, restoreId: string): boolean {
   if (!existsSync(restoreCommitPath(runtimePaths))) return false;
   const commit = readRestoreCommit(runtimePaths);
   if (commit.restoreId !== restoreId) throw new Error("Synech restore commit does not match restore journal.");
   return true;
 }
 
-function readRestoreJournal(runtimePaths: RuntimePaths): SynechRestoreJournal {
+function readRestoreJournal(runtimePaths: ProductPaths): SynechRestoreJournal {
   const value = JSON.parse(readFileSync(restoreJournalPath(runtimePaths), "utf8")) as Partial<SynechRestoreJournal>;
   if (value.version !== RESTORE_METADATA_VERSION
     || value.namespace !== PRODUCT_NAMESPACE
@@ -537,7 +537,7 @@ function readRestoreJournal(runtimePaths: RuntimePaths): SynechRestoreJournal {
     || typeof value.backupStem !== "string"
     || !Array.isArray(value.originalDatabaseSuffixes)
     || !Array.isArray(value.originalStorageNames)
-    || !pathIsInside(runtimePaths.system.backups, value.backupStem)
+    || !pathIsInside(runtimePaths.backups, value.backupStem)
     || !value.originalDatabaseSuffixes.includes("")
     || new Set(value.originalDatabaseSuffixes).size !== value.originalDatabaseSuffixes.length
     || new Set(value.originalStorageNames).size !== value.originalStorageNames.length
@@ -548,7 +548,7 @@ function readRestoreJournal(runtimePaths: RuntimePaths): SynechRestoreJournal {
   return value as SynechRestoreJournal;
 }
 
-function readRestoreCommit(runtimePaths: RuntimePaths): SynechRestoreCommit {
+function readRestoreCommit(runtimePaths: ProductPaths): SynechRestoreCommit {
   const value = JSON.parse(readFileSync(restoreCommitPath(runtimePaths), "utf8")) as Partial<SynechRestoreCommit>;
   if (value.version !== RESTORE_METADATA_VERSION
     || value.namespace !== PRODUCT_NAMESPACE
@@ -627,33 +627,33 @@ function assertRestoreAdmission(state: "running" | "quiescing" | "staged" | "fai
   );
 }
 
-function databaseFilePath(runtimePaths: RuntimePaths, suffix: DatabaseFileSuffix): string {
-  return `${runtimePaths.synechDatabase}${suffix}`;
+function databaseFilePath(runtimePaths: ProductPaths, suffix: DatabaseFileSuffix): string {
+  return `${runtimePaths.data.database}${suffix}`;
 }
 
-function pendingRestorePath(runtimePaths: RuntimePaths): string {
-  return path.join(runtimePaths.system.restoreMarkers, PENDING_RESTORE_FILE_NAME);
+function pendingRestorePath(runtimePaths: ProductPaths): string {
+  return path.join(runtimePaths.state.restoreMarkers, PENDING_RESTORE_FILE_NAME);
 }
 
-function pendingRestoreAssetsPath(runtimePaths: RuntimePaths): string {
-  return path.join(runtimePaths.system.restoreMarkers, PENDING_RESTORE_ASSETS_NAME);
+function pendingRestoreAssetsPath(runtimePaths: ProductPaths): string {
+  return path.join(runtimePaths.state.restoreMarkers, PENDING_RESTORE_ASSETS_NAME);
 }
 
-function restoreJournalPath(runtimePaths: RuntimePaths): string {
-  return path.join(runtimePaths.system.restoreMarkers, RESTORE_JOURNAL_FILE_NAME);
+function restoreJournalPath(runtimePaths: ProductPaths): string {
+  return path.join(runtimePaths.state.restoreMarkers, RESTORE_JOURNAL_FILE_NAME);
 }
 
-function restoreCommitPath(runtimePaths: RuntimePaths): string {
-  return path.join(runtimePaths.system.restoreMarkers, RESTORE_COMMIT_FILE_NAME);
+function restoreCommitPath(runtimePaths: ProductPaths): string {
+  return path.join(runtimePaths.state.restoreMarkers, RESTORE_COMMIT_FILE_NAME);
 }
 
-function storagePath(runtimePaths: RuntimePaths, storageName: OwnedStorageName): string {
+function storagePath(runtimePaths: ProductPaths, storageName: OwnedStorageName): string {
   return storageName === "knowledge-assets"
-    ? runtimePaths.synech.knowledgeAssets
-    : runtimePaths.synech.spaceFiles;
+    ? runtimePaths.data.workbench.knowledgeAssets
+    : runtimePaths.data.workbench.spaceFiles;
 }
 
-function pendingStoragePath(runtimePaths: RuntimePaths, storageName: OwnedStorageName): string {
+function pendingStoragePath(runtimePaths: ProductPaths, storageName: OwnedStorageName): string {
   return path.join(pendingRestoreAssetsPath(runtimePaths), storageName);
 }
 

@@ -100,7 +100,7 @@ if (shouldStartPanelApi) {
       args.host,
       "--port",
       String(apiPort),
-      ...configDirectoryArgs(args.configDirectory),
+      ...productHomeArgs(args.productHome),
     ], { env: childEnv }));
 }
 pushChild(spawnLabeled("vite", process.execPath, [
@@ -141,7 +141,7 @@ if (args.smoke || args.desktop) {
         String(apiPort),
         "--dev-url",
         `http://${args.host}:${frontendPort}/`,
-        ...configDirectoryArgs(args.configDirectory),
+        ...productHomeArgs(args.productHome),
       ], { env: childEnv });
     }
   } catch (error) {
@@ -161,7 +161,7 @@ function parseCliArgs(argv) {
         "port": { type: "string", default: String(DEFAULT_FRONTEND_PORT) },
         "api-port": { type: "string" },
         "backend-port": { type: "string" },
-        "config-dir": { type: "string" },
+        "home": { type: "string" },
         "desktop": { type: "boolean", default: false },
         "smoke": { type: "boolean", default: false },
         "exact-port": { type: "boolean", default: false },
@@ -189,7 +189,7 @@ function parseCliArgs(argv) {
     apiPort: values["api-port"] === undefined && values["backend-port"] === undefined
       ? undefined
       : parsePort(values["api-port"] ?? values["backend-port"], values["api-port"] === undefined ? "--backend-port" : "--api-port"),
-    configDirectory: values["config-dir"]?.trim(),
+    productHome: values.home?.trim(),
     portExplicit,
     apiPortExplicit,
     exactPort: values["exact-port"],
@@ -418,8 +418,8 @@ function prefixStream(stream, label, target) {
   });
 }
 
-function configDirectoryArgs(configDirectory) {
-  return configDirectory === undefined || configDirectory.length === 0 ? [] : ["--config-dir", configDirectory];
+function productHomeArgs(productHome) {
+  return productHome === undefined || productHome.length === 0 ? [] : ["--home", productHome];
 }
 
 async function waitForHttp(label, url, predicate) {
@@ -476,7 +476,7 @@ async function stopAll(exitCode) {
 }
 
 function printHelp() {
-  console.log(`Usage: pnpm panel:dev [-- --host 127.0.0.1 --port 4305 --api-port 4306 --config-dir <path> --desktop --smoke --exact-port --no-restart]
+  console.log(`Usage: pnpm panel:dev [-- --host 127.0.0.1 --port 4305 --api-port 4306 --home <path> --desktop --smoke --exact-port --no-restart]
 
 Starts:
   - TypeScript compiler in watch mode

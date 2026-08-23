@@ -1,6 +1,5 @@
 import { promises as fs } from "node:fs";
 import { randomUUID } from "node:crypto";
-import os from "node:os";
 import path from "node:path";
 import type {
   LocalSettings,
@@ -10,19 +9,6 @@ import type {
 } from "../../domain/config/index.js";
 import { renameWithRetry } from "../../kernel/fs/atomic-write.js";
 import { asRecord, isFileNotFound, stringOrUndefined } from "../../kernel/values/index.js";
-import {
-  PRODUCT_CONFIG_DIRECTORY_NAME,
-  PRODUCT_CONFIG_ENVIRONMENT_VARIABLE,
-  PRODUCT_NAMESPACE,
-} from "../../platform/product-identity.js";
-
-export type ProductConfigDirectoryEnvironment = Readonly<Record<string, string | undefined>>;
-
-export type ResolveProductConfigDirectoryOptions = {
-  readonly env?: ProductConfigDirectoryEnvironment;
-  readonly platform?: NodeJS.Platform;
-  readonly homeDirectory?: string;
-};
 
 type LocalDevSecretsFile = {
   readonly version: 1;
@@ -106,31 +92,6 @@ export class FileSystemLocalDevSecretStore implements LocalDevSecretStore {
   }
 }
 
-export function resolveProductConfigDirectory(
-  options: ResolveProductConfigDirectoryOptions = {}
-): string {
-  const env = options.env ?? process.env;
-  const explicit = nonBlank(env[PRODUCT_CONFIG_ENVIRONMENT_VARIABLE]);
-  if (explicit !== undefined) {
-    return path.resolve(explicit);
-  }
-
-  const platform = options.platform ?? process.platform;
-  const homeDirectory = options.homeDirectory ?? os.homedir();
-
-  if (platform === "win32") {
-    const localAppData = nonBlank(env.LOCALAPPDATA);
-    return path.join(localAppData ?? homeDirectory, PRODUCT_CONFIG_DIRECTORY_NAME, "config");
-  }
-
-  if (platform === "darwin") {
-    return path.join(homeDirectory, "Library", "Application Support", PRODUCT_CONFIG_DIRECTORY_NAME, "config");
-  }
-
-  const xdgConfigHome = nonBlank(env.XDG_CONFIG_HOME);
-  return path.join(xdgConfigHome ?? path.join(homeDirectory, ".config"), PRODUCT_NAMESPACE, "config");
-}
-
 async function readJsonFile(filePath: string): Promise<unknown | undefined> {
   try {
     const raw = await fs.readFile(filePath, "utf8");
@@ -184,8 +145,4 @@ function parseSecretsFile(raw: unknown): LocalDevSecretsFile {
     secrets,
     updatedAt: stringOrUndefined(record.updatedAt) ?? new Date(0).toISOString(),
   };
-}
-
-function nonBlank(value: string | undefined): string | undefined {
-  return value !== undefined && value.trim().length > 0 ? value.trim() : undefined;
 }

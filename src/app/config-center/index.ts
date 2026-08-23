@@ -1,8 +1,6 @@
 import {
   FileSystemLocalDevSecretStore,
   FileSystemSettingsStore,
-  resolveProductConfigDirectory,
-  type ProductConfigDirectoryEnvironment,
 } from "../../adapters/config/index.js";
 import type {
   LocalSettings,
@@ -82,8 +80,7 @@ export type ConfigCenterOptions = {
 };
 
 export type CreateLocalConfigCenterOptions = {
-  readonly configDirectory?: string;
-  readonly env?: ProductConfigDirectoryEnvironment;
+  readonly configDirectory: string;
 };
 
 export type ModelRuntimeConfigEnvironment = Readonly<Record<string, string | undefined>>;
@@ -817,12 +814,11 @@ function sameCapabilityOverrideScope(
     left.model === right.model;
 }
 
-export function createLocalConfigCenter(options: CreateLocalConfigCenterOptions = {}): {
+export function createLocalConfigCenter(options: CreateLocalConfigCenterOptions): {
   readonly configCenter: ConfigCenter;
   readonly configDirectory: string;
 } {
-  const configDirectory =
-    options.configDirectory ?? resolveProductConfigDirectory({ env: options.env });
+  const configDirectory = options.configDirectory;
   return {
     configDirectory,
     configCenter: new ConfigCenter({

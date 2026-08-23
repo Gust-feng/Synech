@@ -9,7 +9,6 @@ import {
   Database,
   FileText,
   Folder,
-  HardDrive,
   Info,
   Monitor,
   Palette,
@@ -321,7 +320,7 @@ export function AboutSettings(props: {
   const defaultEntry = product?.defaultEntry ?? "Synech / Panel";
   const runtimeModeLabel = product?.runtimeModeLabel?.trim();
   const configDirectory = product?.configDirectory ?? "未提供";
-  const runtimeDirectory = product?.runtimeDirectory ?? "未提供";
+  const productHome = product?.productHome ?? "未提供";
   const developerModeGesture = useRef({ count: 0, startedAt: 0 });
 
   const handleDeveloperModeGesture = (): void => {
@@ -380,8 +379,8 @@ export function AboutSettings(props: {
           <span>仅此设备</span>
         </div>
         <div className="about-path-list" aria-label="本机数据目录">
+          <AboutPath icon={<Folder size={16} />} label="产品目录" value={productHome} />
           <AboutPath icon={<Folder size={16} />} label="配置目录" value={configDirectory} />
-          <AboutPath icon={<HardDrive size={16} />} label="运行数据目录" value={runtimeDirectory} />
         </div>
       </section>}
     </div>

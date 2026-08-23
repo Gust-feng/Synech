@@ -2,41 +2,36 @@ import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-const LEASE_FILENAME = ".panel-runtime-owner.json";
+export const PRODUCT_HOME_LEASE_FILENAME = ".synech-product-home-owner.json";
 const INCOMPLETE_LEASE_STALE_AFTER_MS = 30_000;
 
-type RuntimeDirectoryOwner = {
+type ProductHomeOwner = {
   readonly version: 1;
   readonly instanceId: string;
   readonly pid: number;
   readonly startedAt: string;
 };
 
-export class PanelHostDirectoryInUseError extends Error {
-  readonly code = "panel_runtime_directory_in_use" as const;
+export class ProductHomeInUseError extends Error {
+  readonly code = "product_home_in_use" as const;
 
-  constructor(
-    readonly runtimeDirectory: string,
-    readonly ownerPid?: number,
-  ) {
+  constructor(readonly productHome: string, readonly ownerPid?: number) {
     super(ownerPid === undefined
-      ? `Panel runtime directory ${runtimeDirectory} is already owned by another instance.`
-      : `Panel runtime directory ${runtimeDirectory} is already owned by process ${ownerPid}.`);
-    this.name = "PanelHostDirectoryInUseError";
+      ? `Product Home ${productHome} is already owned by another instance.`
+      : `Product Home ${productHome} is already owned by process ${ownerPid}.`);
+    this.name = "ProductHomeInUseError";
   }
 }
 
-export type PanelHostDirectoryLease = {
-  readonly runtimeDirectory: string;
+export type ProductHomeLease = {
+  readonly productHome: string;
   release(): Promise<void>;
 };
 
-export async function acquirePanelHostDirectoryLease(
-  runtimeDirectory: string,
-): Promise<PanelHostDirectoryLease> {
-  await fs.mkdir(runtimeDirectory, { recursive: true });
-  const leasePath = path.join(runtimeDirectory, LEASE_FILENAME);
-  const owner: RuntimeDirectoryOwner = {
+export async function acquireProductHomeLease(productHome: string): Promise<ProductHomeLease> {
+  await fs.mkdir(productHome, { recursive: true });
+  const leasePath = path.join(productHome, PRODUCT_HOME_LEASE_FILENAME);
+  const owner: ProductHomeOwner = {
     version: 1,
     instanceId: randomUUID(),
     pid: process.pid,
@@ -48,7 +43,7 @@ export async function acquirePanelHostDirectoryLease(
       await fs.writeFile(leasePath, `${JSON.stringify(owner)}\n`, { encoding: "utf8", flag: "wx" });
       let released = false;
       return {
-        runtimeDirectory,
+        productHome,
         async release() {
           if (released) return;
           released = true;
@@ -63,28 +58,28 @@ export async function acquirePanelHostDirectoryLease(
       if (!isAlreadyExists(error)) throw error;
       const existing = await readOwner(leasePath);
       if (existing !== undefined && processIsAlive(existing.pid)) {
-        throw new PanelHostDirectoryInUseError(runtimeDirectory, existing.pid);
+        throw new ProductHomeInUseError(productHome, existing.pid);
       }
       if (existing === undefined && await leaseIsRecent(leasePath)) {
-      throw new PanelHostDirectoryInUseError(runtimeDirectory);
+        throw new ProductHomeInUseError(productHome);
       }
       await fs.unlink(leasePath).catch((unlinkError: unknown) => {
         if (!isFileMissing(unlinkError)) throw unlinkError;
       });
     }
   }
-  throw new PanelHostDirectoryInUseError(runtimeDirectory);
+  throw new ProductHomeInUseError(productHome);
 }
 
-async function readOwner(leasePath: string): Promise<RuntimeDirectoryOwner | undefined> {
+async function readOwner(leasePath: string): Promise<ProductHomeOwner | undefined> {
   try {
     const value = JSON.parse(await fs.readFile(leasePath, "utf8")) as unknown;
     if (typeof value !== "object" || value === null) return undefined;
-    const owner = value as Partial<RuntimeDirectoryOwner>;
+    const owner = value as Partial<ProductHomeOwner>;
     return owner.version === 1 && typeof owner.instanceId === "string" &&
       Number.isSafeInteger(owner.pid) && (owner.pid ?? 0) > 0 &&
       typeof owner.startedAt === "string"
-      ? owner as RuntimeDirectoryOwner
+      ? owner as ProductHomeOwner
       : undefined;
   } catch (error) {
     if (isFileMissing(error) || error instanceof SyntaxError) return undefined;

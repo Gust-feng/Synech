@@ -6,13 +6,12 @@ export async function runPanelCli(argv: readonly string[] = process.argv.slice(2
   const server = await startLocalPanelServer({
     host: args.host,
     port: args.port,
-    configDirectory: args.configDirectory,
+    productHome: args.productHome,
   });
 
   console.log(`Synech 本地面板：${server.url}`);
-  if (server.configDirectory !== undefined) {
-    console.log(`配置目录：${server.configDirectory}`);
-  }
+  console.log(`产品目录：${server.productHome}`);
+  console.log(`配置目录：${server.configDirectory}`);
 
   if (args.smoke) {
     await server.close();

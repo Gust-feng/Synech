@@ -38,7 +38,8 @@ export type PanelDesktopWindowHandle = {
 
 export type PanelDesktopSession = {
   readonly url: string;
-  readonly configDirectory?: string;
+  readonly productHome: string;
+  readonly configDirectory: string;
   close(): Promise<void>;
 };
 
@@ -63,7 +64,7 @@ export async function startPanelDesktopSession(
   const server = await dependencies.startPanelServer({
     host: args.host,
     port: args.port,
-    configDirectory: args.configDirectory,
+    productHome: args.productHome,
     directoryPicker: args.smoke ? undefined : dependencies.selectDirectory,
     contextAttachmentPicker: args.smoke ? undefined : dependencies.selectContextAttachment,
     synechRestorePicker: args.smoke ? undefined : dependencies.selectSynechRestore,
@@ -97,6 +98,7 @@ export async function startPanelDesktopSession(
     dependencies.quit();
     return {
       url: panelUrl,
+      productHome: server.productHome,
       configDirectory: server.configDirectory,
       close: closeServer,
     };
@@ -118,6 +120,7 @@ export async function startPanelDesktopSession(
 
   return {
     url: panelUrl,
+    productHome: server.productHome,
     configDirectory: server.configDirectory,
     close: closeServer,
   };

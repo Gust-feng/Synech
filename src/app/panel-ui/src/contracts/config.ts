@@ -65,8 +65,8 @@ export type ProductInfo = {
   readonly defaultEntry?: string;
   readonly runtimeMode?: "agent";
   readonly runtimeModeLabel?: string;
-  readonly configDirectory?: string;
-  readonly runtimeDirectory?: string;
+  readonly configDirectory: string;
+  readonly productHome: string;
 };
 
 export type AppearanceConfig = {

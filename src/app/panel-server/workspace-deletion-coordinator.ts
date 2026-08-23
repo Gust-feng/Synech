@@ -52,7 +52,7 @@ export function createWorkspaceDeletionCoordinator(input: {
   readonly memory?: Pick<PathDependencyFeature["commands"], "deleteByOwner">;
   readonly processes: Pick<InMemoryProcessRegistry, "cleanupByConversation">;
   readonly processTerminator: ProcessTerminator;
-  /** Shared runtimeHome lease used by other cross-feature file mutations. */
+  /** Shared Product Home lease used by other cross-feature file mutations. */
   readonly runExclusive?: <T>(operation: () => Promise<T>) => Promise<T>;
   readonly now?: () => string;
 }): WorkspaceDeletionCoordinator {

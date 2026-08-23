@@ -129,9 +129,8 @@ async function main(): Promise<void> {
     }
 
     console.log(`Synech 本地桌面面板：${session.url}`);
-    if (session.configDirectory !== undefined) {
-      console.log(`配置目录：${session.configDirectory}`);
-    }
+    console.log(`产品目录：${session.productHome}`);
+    console.log(`配置目录：${session.configDirectory}`);
   } catch (error) {
     console.error("应用桌面面板启动失败。");
     console.error(error);
