@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { deleteJson, getJson, postJson } from "../../api";
 import { selectLocalContextAttachment } from "../../workbench/attachments";
 import { selectTaskWorkspaceDirectory } from "./workspace-selection";
-import type { SpaceReference, SpaceSummary, SpaceTree, SpaceTreeEntry } from "../../../../panel-api/spaces";
+import type { SpaceReference, SpaceSummary, SpaceTree, SpaceTreeEntry } from "@panel-api/spaces";
 import type { PersonalSpaceItemProjection, PersonalSpaceProjection } from "../../personal-workbench/space";
 import { subscribeWorkbenchProjectionChanges } from "../../workbench/projection-changes";
 import { invalidateDocumentPreviews } from "../../personal-workbench/workbench/app/components/referencePreviewClient";

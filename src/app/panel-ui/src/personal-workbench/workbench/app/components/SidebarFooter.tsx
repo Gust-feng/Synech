@@ -6,7 +6,7 @@ import {
   saveColorId,
   saveStyleId,
   type ThemeColorId,
-} from '../../../../shell/theme'
+} from '@ui/shell/theme'
 
 type AppearanceColorId = Extract<ThemeColorId, 'system' | 'light' | 'dark'>
 

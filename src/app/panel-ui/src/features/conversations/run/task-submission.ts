@@ -11,9 +11,9 @@ import { loadObservedRunReadModel } from "./observed-run-read-model";
 import {
   createRunReadModelPatch,
 } from "./projection";
-import { runIdsForConversation } from "../../../../../panel-api/ui-read-model";
+import { runIdsForConversation } from "@panel-api/ui-read-model";
 import { resetTranscriptCache, updateTranscriptRunCache } from "../transcript/store";
-import type { PanelToolCallResult as ToolCallResult } from "../../../../../panel-api/ordinary-agent";
+import type { PanelToolCallResult as ToolCallResult } from "@panel-api/ordinary-agent";
 import { shouldKeepRefreshing, stopLiveUpdates } from "./runtime-controls";
 import { parseModelOptionId } from "../../settings/model/options";
 import type { AppState } from "../../../workbench/state";
@@ -29,7 +29,7 @@ import {
   type StartedConversationRun,
 } from "./task-submit-flow";
 import { nextRunCapabilityState } from "./capability-state";
-import { emptyLiveRun } from "../../../../../panel-api/ui-read-model";
+import { emptyLiveRun } from "@panel-api/ui-read-model";
 import {
   safeConversation,
 } from "../../../workbench/run-client";

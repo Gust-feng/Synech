@@ -1,6 +1,6 @@
 import { ArrowUpRight, Check, PencilLine, X } from "lucide-react";
 import { useState } from "react";
-import type { QueuedChatMessage } from "../../../../contracts/composer";
+import type { QueuedChatMessage } from "@ui/contracts/composer";
 
 export type QueuedMessageListProps = {
   readonly messages: readonly QueuedChatMessage[];

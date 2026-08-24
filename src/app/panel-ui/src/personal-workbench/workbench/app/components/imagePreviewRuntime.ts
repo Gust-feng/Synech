@@ -1,4 +1,4 @@
-import type { DocumentPreview } from '../../../../../../panel-api/workbench'
+import type { DocumentPreview } from '@panel-api/workbench'
 
 const MAX_CACHED_IMAGES = 16
 const MAX_CACHED_IMAGE_BYTES = 12 * 1024 * 1024

@@ -1,4 +1,5 @@
 import { request } from "node:http";
+import path from "node:path";
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
@@ -7,6 +8,12 @@ export default defineConfig({
   root: "src/app/panel-ui",
   envDir: import.meta.dirname,
   plugins: [react(), tailwindcss(), panelApiProxyPlugin()],
+  resolve: {
+    alias: {
+      "@ui": path.resolve("src/app/panel-ui/src"),
+      "@panel-api": path.resolve("src/app/panel-api"),
+    },
+  },
   build: {
     outDir: "../../../dist/app/panel-ui",
     emptyOutDir: true,

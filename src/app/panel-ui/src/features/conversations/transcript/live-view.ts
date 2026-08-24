@@ -6,20 +6,20 @@ import {
   type ChatActiveStatusNotice,
   type ChatActiveTranscriptNode,
 } from "./active-projection.js";
-import type { LiveRunBuffer } from "../../../../../panel-api/ui-read-model";
-import { firstNonEmptyText } from "../../../../../panel-api/ui-read-model";
+import type { LiveRunBuffer } from "@panel-api/ui-read-model";
+import { firstNonEmptyText } from "@panel-api/ui-read-model";
 import {
   visibleDeliverable,
   type AssistantDeliverableLike,
-} from "../../../../../panel-api/ui-read-model";
+} from "@panel-api/ui-read-model";
 import {
   visibleResultText,
   visibleRunProblem,
   type AssistantRunDetailLike,
   type AssistantWorkViewProblemLike,
-} from "../../../../../panel-api/ui-read-model";
-import { activityVisibleNodes } from "../../../../../panel-api/ui-read-model";
-import type { ConfirmationIdentity } from "../../../../../panel-api/ui-read-model";
+} from "@panel-api/ui-read-model";
+import { activityVisibleNodes } from "@panel-api/ui-read-model";
+import type { ConfirmationIdentity } from "@panel-api/ui-read-model";
 
 export type ChatActiveWorkViewLike<
   TDeliverable extends AssistantDeliverableLike,

@@ -1,10 +1,10 @@
-import { ApiError, requestJson } from '../../../../api'
-import type { PersonalNoteRevision } from '../../../../../../panel-api/workbench'
+import { ApiError, requestJson } from '@ui/api'
+import type { PersonalNoteRevision } from '@panel-api/workbench'
 import type { Assignment, BrainLink, BrainPage, Note, Theme } from './personalKnowledgeTypes'
-import { subscribeWorkbenchProjectionChanges } from '../../../../workbench/projection-changes'
+import { subscribeWorkbenchProjectionChanges } from '@ui/workbench/projection-changes'
 
 export type { Assignment, BrainLink, BrainPage, Note, PageKind, Theme } from './personalKnowledgeTypes'
-export type { PersonalNoteRevision } from '../../../../../../panel-api/workbench'
+export type { PersonalNoteRevision } from '@panel-api/workbench'
 
 interface Snapshot {
   notes: Note[]

@@ -1,5 +1,5 @@
-import type { LiveRunBuffer } from "../../../panel-api/ui-read-model";
-import type { ConfigResponse } from "../../../panel-api/config";
+import type { LiveRunBuffer } from "@panel-api/ui-read-model";
+import type { ConfigResponse } from "@panel-api/config";
 import type { Conversation, ConversationSummary } from "../contracts/conversation";
 import type {
   OrdinaryRun,
@@ -11,7 +11,7 @@ import type {
 } from "../contracts/run";
 import type { SkillDefinition } from "../contracts/skills";
 import type { SubAgentDefinition } from "../contracts/sub-agents";
-import type { ToolsResponse } from "../../../panel-api/tools";
+import type { ToolsResponse } from "@panel-api/tools";
 
 /** Data loaded before the active workbench can render its capabilities. */
 export type AppBootstrapState = {

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import type React from "react";
-import type { WorkbenchProjectionChange } from "../../../../panel-api/workbench";
+import type { WorkbenchProjectionChange } from "@panel-api/workbench";
 import { getJson } from "../../api";
 import { subscribeWorkbenchProjectionChanges } from "../../workbench/projection-changes";
 import { invalidateUsageStatistics } from "../../workbench/usage-statistics-query";

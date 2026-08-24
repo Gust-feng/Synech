@@ -16,7 +16,7 @@ import {
   type ComposerToolConfirmationPolicy,
 } from "../config-projection";
 import type { ToolForm } from "../components/types";
-import type { CommandShellKind, SkillTriggerMode } from "../../../../../panel-api/config";
+import type { CommandShellKind, SkillTriggerMode } from "@panel-api/config";
 import type { SkillDefinition } from "../../../contracts/skills";
 import type { SettingsControllerContext } from "./controller-types";
 

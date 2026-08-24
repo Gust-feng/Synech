@@ -1,5 +1,5 @@
-import type { PanelToolCallResult as ToolCallResult } from "../../../../../panel-api/ordinary-agent";
-import type { ActivityItem } from "../../../../../panel-api/ui-read-model";
+import type { PanelToolCallResult as ToolCallResult } from "@panel-api/ordinary-agent";
+import type { ActivityItem } from "@panel-api/ui-read-model";
 import type { TranscriptNode } from "../../../contracts/run";
 
 export function toolResultForActivity(

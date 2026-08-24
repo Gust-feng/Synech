@@ -2,8 +2,8 @@ import type React from "react";
 import type { VisibleAiMode } from "../config-projection";
 import type { AppState } from "../../../workbench/state";
 import type { McpServerForm, ModelForm, ToolForm } from "../components/types";
-import type { ModelProviderModelCatalog } from "../../../../../panel-api/config";
-import type { McpServerCatalogItem } from "../../../../../panel-api/tools";
+import type { ModelProviderModelCatalog } from "@panel-api/config";
+import type { McpServerCatalogItem } from "@panel-api/tools";
 import type { SettingsControllerContext } from "./controller-types";
 import {
   createMcpSettingsController,

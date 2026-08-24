@@ -6,13 +6,13 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { ApiError } from "../../../../api";
+import { ApiError } from "@ui/api";
 import {
   deleteMemoryNote,
   deletePathDependency,
   fetchMemorySnapshot,
   fetchPathDependency,
-} from "../../../../features/spaces/memory-client";
+} from "@ui/features/spaces/memory-client";
 import type {
   MemoryNote,
   MemoryOwner,
@@ -21,7 +21,7 @@ import type {
   MemorySourceRef,
   MemoryVerification,
   PathDependency,
-} from "../../../../../../panel-api/memory";
+} from "@panel-api/memory";
 
 type NoteScope = "global" | "owner";
 type MemoryKind = "notes" | "paths";

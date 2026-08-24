@@ -6,10 +6,10 @@ import {
   type VisibleAiMode,
 } from "./config-projection";
 import type { McpServerForm, ModelForm, ToolForm } from "./components/types";
-import type { CommandShellKind, ConfigResponse, ModelCapabilities, ModelProviderModelCatalog, SkillTriggerMode } from "../../../../panel-api/config";
+import type { CommandShellKind, ConfigResponse, ModelCapabilities, ModelProviderModelCatalog, SkillTriggerMode } from "@panel-api/config";
 import type { SkillDefinition } from "../../contracts/skills";
 import type { SubAgentDefinition } from "../../contracts/sub-agents";
-import type { McpEnvironmentCheckResponse, McpReferenceResponse, McpServerPreset, ToolsResponse } from "../../../../panel-api/tools";
+import type { McpEnvironmentCheckResponse, McpReferenceResponse, McpServerPreset, ToolsResponse } from "@panel-api/tools";
 import { parseModelOptionId } from "./model/options";
 
 export async function saveModelProviderConfig(input: {

@@ -2,7 +2,7 @@ import { Fragment, forwardRef, useEffect, useImperativeHandle, useLayoutEffect, 
 import { diffLines, type Change } from 'diff'
 import { AlertTriangle, Check, ChevronRight, Code2, ExternalLink, FileText, Folder, RefreshCw } from 'lucide-react'
 import { fetchDocumentPreview, getCachedReferencePreview, refreshDocumentPreview, saveDocumentCaption, saveDocumentText, subscribeReferencePreviewCache, type DocumentPreview } from './referencePreviewClient'
-import type { SpaceReferenceAnnotation } from '../../../../../../panel-api/spaces'
+import type { SpaceReferenceAnnotation } from '@panel-api/spaces'
 import { MarkdownDocumentSurface } from './MarkdownDocumentSurface'
 import { CodeDocumentSurface } from './CodeDocumentSurface'
 import { PdfDocumentSurface } from './PdfDocumentSurface'

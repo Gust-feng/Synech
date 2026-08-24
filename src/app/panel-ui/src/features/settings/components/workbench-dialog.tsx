@@ -1,7 +1,7 @@
 import React from "react";
 import type { AppSettingsController } from "../controllers/settings-controller";
 import type { AppState } from "../../../workbench/state";
-import type { ModelProviderModelCatalog } from "../../../../../panel-api/config";
+import type { ModelProviderModelCatalog } from "@panel-api/config";
 import type { ConversationFollowUpMode } from "../../../contracts/composer";
 import { SettingsDialog } from "./dialog";
 import type { McpServerForm, ModelForm, SettingsGroup, ToolForm } from "./types";

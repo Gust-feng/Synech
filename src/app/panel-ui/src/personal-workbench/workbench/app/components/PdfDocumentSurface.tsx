@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react'
-import { pushResponsivenessContext } from '../../../../shell/responsiveness-diagnostics'
-import type { DocumentPreview } from '../../../../../../panel-api/workbench'
+import { pushResponsivenessContext } from '@ui/shell/responsiveness-diagnostics'
+import type { DocumentPreview } from '@panel-api/workbench'
 
 type PdfDocumentSurfaceProps = {
   readonly source: { readonly kind: 'pages'; readonly pages: readonly string[] }

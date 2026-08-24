@@ -15,7 +15,7 @@ import {
 } from "../config-actions";
 import { mergeConfigResponse, type VisibleAiMode } from "../config-projection";
 import type { ModelForm } from "../components/types";
-import type { ConfigResponse, ModelProviderModelCatalog } from "../../../../../panel-api/config";
+import type { ConfigResponse, ModelProviderModelCatalog } from "@panel-api/config";
 import type { SettingsControllerContext } from "./controller-types";
 
 export type ModelSettingsController = {

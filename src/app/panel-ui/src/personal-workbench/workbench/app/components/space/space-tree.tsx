@@ -23,8 +23,8 @@ import type {
   PersonalSpaceActions,
   PersonalSpaceConversationContext,
   PersonalSpaceProjection,
-} from '../../../../space'
-import { FloatingMenu } from '../../../../../components/floating-menu'
+} from '@ui/personal-workbench/space'
+import { FloatingMenu } from '@ui/components/floating-menu'
 import type { Note } from '../notesStore'
 import type { SpaceItem } from '../useMountedTree'
 import { InlineName } from './space-actions'

@@ -11,9 +11,9 @@ import {
   subscribeReferencePreviewCache,
   type DocumentPreview,
 } from './referencePreviewClient'
-import { subscribeWorkbenchProjectionChanges } from '../../../../workbench/projection-changes'
+import { subscribeWorkbenchProjectionChanges } from '@ui/workbench/projection-changes'
 import { warmReferenceDirectoryPreviews } from './space-reference-preview-warmup'
-import { ApiError } from '../../../../api'
+import { ApiError } from '@ui/api'
 
 /**
  * 挂载树状态收口 —— 把「引用目录的加载 / 缓存 / 展开」从 SpacePage 的分散状态

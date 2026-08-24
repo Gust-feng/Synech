@@ -1,6 +1,6 @@
 import React from "react";
 import { Cpu, Save } from "lucide-react";
-import type { ConfigResponse, ModelCapabilities, ModelProviderModelCatalog } from "../../../../../panel-api/config";
+import type { ConfigResponse, ModelCapabilities, ModelProviderModelCatalog } from "@panel-api/config";
 import type { ChatModelOption } from "../../../contracts/composer";
 import { modelOptionsFromConfig } from "./options";
 import { ModelOptionPicker } from "./option-picker";

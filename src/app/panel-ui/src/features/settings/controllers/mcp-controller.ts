@@ -14,7 +14,7 @@ import type {
   McpEnvironmentCheckResponse,
   McpReferenceResponse,
   McpServerCatalogItem,
-} from "../../../../../panel-api/tools";
+} from "@panel-api/tools";
 import type { SettingsControllerContext } from "./controller-types";
 
 export type McpSettingsController = {

@@ -1,4 +1,4 @@
-import type { ConfigResponse, ModelProviderModelCatalog, ToolConfirmationPolicy } from "../../../../panel-api/config";
+import type { ConfigResponse, ModelProviderModelCatalog, ToolConfirmationPolicy } from "@panel-api/config";
 
 export type ComposerReasoningEffort = "" | "low" | "medium" | "high";
 export type ComposerToolConfirmationPolicy = ToolConfirmationPolicy;

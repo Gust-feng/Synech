@@ -24,8 +24,8 @@ import {
   SidebarSectionLabel,
 } from './SidebarRows'
 import { ActionConfirmationDialog } from './ActionConfirmationDialog'
-import { conversationStatusMarker } from '../../../../features/conversations/conversation-status-marker'
-import type { ConversationSummary } from '../../../../contracts/conversation'
+import { conversationStatusMarker } from '@ui/features/conversations/conversation-status-marker'
+import type { ConversationSummary } from '@ui/contracts/conversation'
 import type { PersonalSpaceProjection } from '../../../space'
 import type { PersonalWorkspaceProjection } from '../../../workspace'
 

@@ -1,7 +1,7 @@
 import type { ChatModelOption } from "../../../contracts/composer";
 import { resolveModelIconSvgForModel } from "./icons";
 import { modelProviderSortRank, resolveModelProviderIdentity } from "./provider-logos";
-import type { ConfigResponse, ModelCapabilities, ModelProviderModelCatalog } from "../../../../../panel-api/config";
+import type { ConfigResponse, ModelCapabilities, ModelProviderModelCatalog } from "@panel-api/config";
 
 type ConfigModelProfile = NonNullable<ConfigResponse["profiles"]>[number];
 type ConfigModelProfileWithId = ConfigModelProfile & { readonly profileId: string };

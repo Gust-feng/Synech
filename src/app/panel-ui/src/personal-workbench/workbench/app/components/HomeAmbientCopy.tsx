@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { AnimatePresence, motion, type Variants } from 'motion/react'
-import { shouldUseMotion } from '../../../../shell/motion'
-import { panelStorageKey } from '../../../../shell/local-preferences'
+import { shouldUseMotion } from '@ui/shell/motion'
+import { panelStorageKey } from '@ui/shell/local-preferences'
 import type { HomeAmbientCopyPair } from './home-ambient-copy'
 
 const AMBIENT_COPY_REVEALED_KEY = panelStorageKey('home.ambient-copy-revealed')

@@ -20,11 +20,11 @@ import type {
   ModelCapabilities,
   ModelProviderModelCatalog,
   SkillTriggerMode,
-} from "../../../../../panel-api/config";
+} from "@panel-api/config";
 import type { ConversationFollowUpMode } from "../../../contracts/composer";
 import type { SkillDefinition } from "../../../contracts/skills";
 import type { SubAgentDefinition } from "../../../contracts/sub-agents";
-import type { McpEnvironmentCheckResponse, McpReferenceResponse, ToolsResponse } from "../../../../../panel-api/tools";
+import type { McpEnvironmentCheckResponse, McpReferenceResponse, ToolsResponse } from "@panel-api/tools";
 import { AppearanceSettings } from "./appearance";
 import { ModelSettings } from "../model/settings";
 import type { McpServerForm, ModelForm, SettingsGroup, ToolForm } from "./types";

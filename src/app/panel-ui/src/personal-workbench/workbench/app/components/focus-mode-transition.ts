@@ -1,4 +1,4 @@
-import { shouldUseMotion } from '../../../../shell/motion'
+import { shouldUseMotion } from '@ui/shell/motion'
 
 const TRANSITION_DURATION_MS = 320
 const TRANSITION_EASING = 'cubic-bezier(0.22, 1, 0.36, 1)'

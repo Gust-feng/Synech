@@ -1,6 +1,6 @@
 import React from "react";
 import { Link2, Plus, Save, Trash2, X } from "lucide-react";
-import type { McpEnvironmentCheckResponse, McpReferenceResponse, ToolsResponse } from "../../../../../panel-api/tools";
+import type { McpEnvironmentCheckResponse, McpReferenceResponse, ToolsResponse } from "@panel-api/tools";
 import { SettingsSelectControl } from "./select-control";
 import type { McpServerForm } from "./types";
 

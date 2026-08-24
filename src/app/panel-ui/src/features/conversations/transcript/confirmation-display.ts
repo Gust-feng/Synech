@@ -1,4 +1,4 @@
-import { cleanConfirmationSummary } from "../../../../../panel-api/ui-read-model";
+import { cleanConfirmationSummary } from "@panel-api/ui-read-model";
 
 export type DisplayableConfirmation = {
   readonly title?: string;

@@ -4,8 +4,8 @@ import type {
   OrdinaryWorkView,
   PendingConfirmation,
   TranscriptConfirmation,
-} from "../../../../contracts/run";
-import { projectConfirmationDisplay } from "../../../../features/conversations/transcript/confirmation-display";
+} from "@ui/contracts/run";
+import { projectConfirmationDisplay } from "@ui/features/conversations/transcript/confirmation-display";
 
 export type ConfirmationProjection =
   | PendingConfirmation

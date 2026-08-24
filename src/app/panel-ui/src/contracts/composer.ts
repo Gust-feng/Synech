@@ -1,7 +1,7 @@
 import type { ComposerToolConfirmationPolicy } from "../features/settings/config-projection";
 import type { ContextWindowUsage } from "../features/conversations/context-window-usage";
 import type { ContextAttachment } from "./context";
-import type { ModelCapabilities } from "../../../panel-api/config";
+import type { ModelCapabilities } from "@panel-api/config";
 import type { ModelProviderIdentity } from "../features/settings/model/provider-logos";
 
 export type ChatModelOption = {

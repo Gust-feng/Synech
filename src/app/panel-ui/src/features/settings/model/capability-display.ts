@@ -1,4 +1,4 @@
-import type { ModelCapabilities } from "../../../../../panel-api/config";
+import type { ModelCapabilities } from "@panel-api/config";
 
 export function modelCapabilitySummary(capabilities: ModelCapabilities | undefined): string | undefined {
   const contextWindow = formatTokenWindow(capabilities?.contextWindowTokens);

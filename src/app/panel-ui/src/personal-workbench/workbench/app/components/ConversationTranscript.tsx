@@ -23,40 +23,40 @@ import {
   Bot,
   Wrench,
 } from "lucide-react";
-import type { ConversationTurn, ConversationTurnAttachment } from "../../../../contracts/conversation";
-import type { AgentDeliverable, OrdinaryRun, OrdinaryWorkView, TranscriptNode } from "../../../../contracts/run";
-import type { PanelToolCallResult as ToolCallResult } from "../../../../../../panel-api/ordinary-agent";
-import type { LiveRunBuffer } from "../../../../../../panel-api/ui-read-model";
-import type { WorklineProjectedTurn } from "../../../../../../panel-api/ui-read-model";
-import type { LiveRunTranscriptProjection } from "../../../../../../panel-api/ui-read-model";
-import { projectConversationDisplayList } from "../../../../../../panel-api/ui-read-model";
-import { shouldCollapseStandaloneTimeline } from "../../../../../../panel-api/ui-read-model";
+import type { ConversationTurn, ConversationTurnAttachment } from "@ui/contracts/conversation";
+import type { AgentDeliverable, OrdinaryRun, OrdinaryWorkView, TranscriptNode } from "@ui/contracts/run";
+import type { PanelToolCallResult as ToolCallResult } from "@panel-api/ordinary-agent";
+import type { LiveRunBuffer } from "@panel-api/ui-read-model";
+import type { WorklineProjectedTurn } from "@panel-api/ui-read-model";
+import type { LiveRunTranscriptProjection } from "@panel-api/ui-read-model";
+import { projectConversationDisplayList } from "@panel-api/ui-read-model";
+import { shouldCollapseStandaloneTimeline } from "@panel-api/ui-read-model";
 import {
   getTranscriptCache,
   subscribeTranscriptCache,
   transcriptNodesCacheForConversation,
   transcriptToolResultsCacheForConversation,
-} from "../../../../features/conversations/transcript/store";
-import type { ChatModelOption } from "../../../../contracts/composer";
-import { RichText, StreamingRichText } from "../../../../components/rich-text";
-import { useStreamingText } from "../../../../features/conversations/transcript/use-streaming-text";
-import { CopyActionButton } from "../../../../components/copy-action-button";
+} from "@ui/features/conversations/transcript/store";
+import type { ChatModelOption } from "@ui/contracts/composer";
+import { RichText, StreamingRichText } from "@ui/components/rich-text";
+import { useStreamingText } from "@ui/features/conversations/transcript/use-streaming-text";
+import { CopyActionButton } from "@ui/components/copy-action-button";
 import { ActivityEvidencePanel } from "./ActivityEvidence";
-import { toolResultForActivity } from "../../../../features/conversations/transcript/tool-result-association";
+import { toolResultForActivity } from "@ui/features/conversations/transcript/tool-result-association";
 import { ConfirmationCard, type ConfirmationProjection } from "./ConfirmationCard";
-import type { ConversationDisplayItem } from "../../../../../../panel-api/ui-read-model";
-import type { AssistantWorkflowDisplay } from "../../../../../../panel-api/ui-read-model";
+import type { ConversationDisplayItem } from "@panel-api/ui-read-model";
+import type { AssistantWorkflowDisplay } from "@panel-api/ui-read-model";
 import {
   isVisibleOrdinaryActivityItem,
   resolveActivityToolKind,
   type ActivityItem,
-} from "../../../../../../panel-api/ui-read-model";
-import type { AgentWorkTimelineView } from "../../../../../../panel-api/ui-read-model";
+} from "@panel-api/ui-read-model";
+import type { AgentWorkTimelineView } from "@panel-api/ui-read-model";
 import {
   assistantTerminalNoticeTitle,
   type AssistantFailureParts,
   type AssistantTerminalStatus,
-} from "../../../../../../panel-api/ui-read-model";
+} from "@panel-api/ui-read-model";
 import {
   assistantModelForTurn,
   selectedComposerModel,

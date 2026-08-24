@@ -9,10 +9,10 @@
  * 身份与图标解析复用中性能力模块 model-provider-logos / model-icons，
  * 这里只负责把 turn 与模型选项组合成展示数据。
  */
-import type { ConversationTurn } from "../../../../contracts/conversation";
-import type { ChatModelOption } from "../../../../contracts/composer";
-import { resolveModelIconSvgForModel } from "../../../../features/settings/model/icons";
-import { resolveModelProviderIdentity, type ModelProviderIdentity } from "../../../../features/settings/model/provider-logos";
+import type { ConversationTurn } from "@ui/contracts/conversation";
+import type { ChatModelOption } from "@ui/contracts/composer";
+import { resolveModelIconSvgForModel } from "@ui/features/settings/model/icons";
+import { resolveModelProviderIdentity, type ModelProviderIdentity } from "@ui/features/settings/model/provider-logos";
 
 export type ConversationModelBadge = {
   readonly modelName: string;

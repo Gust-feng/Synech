@@ -1,4 +1,4 @@
-import type { DocumentPreview } from '../../../../../../panel-api/workbench'
+import type { DocumentPreview } from '@panel-api/workbench'
 import type { SpreadsheetSheet } from './spreadsheetPreviewTypes'
 
 const MAX_CACHED_DOCUMENT_BYTES = 8 * 1024 * 1024

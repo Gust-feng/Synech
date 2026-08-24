@@ -1,10 +1,10 @@
 import { getJson } from "../api";
 import type { AppState } from "../workbench/state";
-import type { ConfigResponse } from "../../../panel-api/config";
+import type { ConfigResponse } from "@panel-api/config";
 import type { ConversationSummary } from "../contracts/conversation";
 import type { SkillDefinition } from "../contracts/skills";
 import type { SubAgentDefinition } from "../contracts/sub-agents";
-import type { McpServerCatalogItem, ToolsResponse } from "../../../panel-api/tools";
+import type { McpServerCatalogItem, ToolsResponse } from "@panel-api/tools";
 
 export type AppBootstrapState = Pick<
   AppState,

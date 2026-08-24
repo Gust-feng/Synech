@@ -1,5 +1,5 @@
 import React from "react";
-import type { CommandShellConfig, ConfiguredCommandShellKind } from "../../../../../panel-api/config";
+import type { CommandShellConfig, ConfiguredCommandShellKind } from "@panel-api/config";
 import { CommandShellSelection } from "./command-shell-selection";
 import { RuntimeEnvironmentSettings } from "./runtime-environment";
 

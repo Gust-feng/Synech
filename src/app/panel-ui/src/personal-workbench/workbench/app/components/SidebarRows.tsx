@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { LoaderCircle } from 'lucide-react'
-import { FloatingMenu, type FloatingMenuAction } from '../../../../components/floating-menu'
+import { FloatingMenu, type FloatingMenuAction } from '@ui/components/floating-menu'
 import { SidebarInlineRenameField } from './SidebarInlineRenameField'
 
 export interface SidebarNavRowProps {

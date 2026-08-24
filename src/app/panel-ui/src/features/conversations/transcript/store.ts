@@ -8,13 +8,13 @@
  * background conversation loading.
  */
 import type { TranscriptNode } from "../../../contracts/run";
-import type { PanelToolCallResult as ToolCallResult } from "../../../../../panel-api/ordinary-agent";
+import type { PanelToolCallResult as ToolCallResult } from "@panel-api/ordinary-agent";
 import {
   resetConversationTranscriptNodes,
   transcriptNodesByRunIdForConversation,
   updateConversationTranscriptNodes,
   type TranscriptNodesByConversationId,
-} from "../../../../../panel-api/ui-read-model";
+} from "@panel-api/ui-read-model";
 
 export type TranscriptNodesCache = Readonly<Record<string, readonly TranscriptNode[]>>;
 export type TranscriptToolResultsCache = Readonly<Record<string, readonly ToolCallResult[]>>;

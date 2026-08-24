@@ -2,7 +2,7 @@ import type {
   ConfigResponse,
   ModelProviderModelCatalog,
   ModelProviderPreset,
-} from "../../../../../panel-api/config.js";
+} from "@panel-api/config";
 import {
   builtinProviderPresetId,
   modelProviderDisplayName,

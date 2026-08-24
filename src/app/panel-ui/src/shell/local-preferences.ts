@@ -1,4 +1,4 @@
-import { PRODUCT_DATA_FORMAT_ID } from "../../../panel-api/product";
+import { PRODUCT_DATA_FORMAT_ID } from "@panel-api/product";
 
 export const PANEL_PREFERENCE_STORAGE_PREFIX = `${PRODUCT_DATA_FORMAT_ID}:`;
 

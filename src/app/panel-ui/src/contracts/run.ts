@@ -10,8 +10,8 @@ import type {
   OrdinaryPanelWorkView,
   PanelModelUsage,
   PanelRunAgentDefinitionRef,
-} from "../../../panel-api/ordinary-agent";
-import type { ToolDisplayProjection, ToolErrorFacts } from "../../../panel-api/tools";
+} from "@panel-api/ordinary-agent";
+import type { ToolDisplayProjection, ToolErrorFacts } from "@panel-api/tools";
 
 export type RunAgentDefinitionRef = PanelRunAgentDefinitionRef;
 export type RunCapabilityResolution = OrdinaryPanelCapabilityResolution;

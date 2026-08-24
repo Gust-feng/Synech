@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { ChatInputProps } from '../../../../contracts/composer'
+import type { ChatInputProps } from '@ui/contracts/composer'
 import type { PersonalWorkspaceProjection } from '../../../workspace'
 import { ConversationComposer } from './ConversationComposer'
 import { HomeAmbientCopy } from './HomeAmbientCopy'
@@ -10,7 +10,7 @@ import {
 } from './home-ambient-copy'
 import { HomeBackdrop } from './HomeBackdrop'
 import { type HomeOwnerSelection, HomeOwnerPicker } from './HomeOwnerPicker'
-import { panelStorageKey } from '../../../../shell/local-preferences'
+import { panelStorageKey } from '@ui/shell/local-preferences'
 import './home-page.css'
 
 const AMBIENT_COPY_MEMORY_KEY = panelStorageKey('home.ambient-copy-memory')

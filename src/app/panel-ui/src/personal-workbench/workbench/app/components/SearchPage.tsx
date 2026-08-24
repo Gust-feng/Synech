@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { Search, FileText, Globe, MessageSquare, NotebookPen, ArrowRight, X } from 'lucide-react'
 import { type View } from './Sidebar'
-import type { ConversationSummary } from '../../../../contracts/conversation'
+import type { ConversationSummary } from '@ui/contracts/conversation'
 import type { PersonalSpaceItemProjection, PersonalSpaceProjection } from '../../../space'
 import { GUTTER, READING_WIDTH, composerSurface } from './tokens'
 import { useNotes } from './notesStore'

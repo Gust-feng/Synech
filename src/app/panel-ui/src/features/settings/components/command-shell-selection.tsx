@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import type { CommandShellConfig, CommandShellKind, ConfiguredCommandShellKind } from "../../../../../panel-api/config";
+import type { CommandShellConfig, CommandShellKind, ConfiguredCommandShellKind } from "@panel-api/config";
 import { SettingsSelectControl } from "./select-control";
 import { SettingRow } from "../../../components/workspace-common";
 

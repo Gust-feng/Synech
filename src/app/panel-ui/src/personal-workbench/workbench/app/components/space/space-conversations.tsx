@@ -1,7 +1,7 @@
 import { Fragment, useMemo, useState, type ReactNode } from 'react'
 import { Maximize2, MessageSquare, Pencil, Pin, PinOff, Trash2 } from 'lucide-react'
-import type { PersonalSpaceConversationContext } from '../../../../space'
-import { FloatingMenu } from '../../../../../components/floating-menu'
+import type { PersonalSpaceConversationContext } from '@ui/personal-workbench/space'
+import { FloatingMenu } from '@ui/components/floating-menu'
 import { InlineName } from './space-actions'
 
 const CONVERSATION_DOT_PALETTE = ['#6865a7', '#6f9279', '#c18a42', '#6f84a5', '#a66f66'] as const

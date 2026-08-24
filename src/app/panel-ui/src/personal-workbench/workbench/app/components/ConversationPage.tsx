@@ -1,5 +1,5 @@
 import { type ReactNode } from 'react'
-import type { ChatInputProps } from '../../../../contracts/composer'
+import type { ChatInputProps } from '@ui/contracts/composer'
 import { ConversationComposer } from './ConversationComposer'
 import { ConversationScrollArea } from './ConversationScrollArea'
 import { FocusModeHeader, type FocusModeHeaderProps } from './FocusMode'

@@ -1,4 +1,4 @@
-import type { WorkbenchProjectionChange } from "../../../panel-api/workbench";
+import type { WorkbenchProjectionChange } from "@panel-api/workbench";
 
 type ProjectionChangeListener = (change: WorkbenchProjectionChange) => void;
 

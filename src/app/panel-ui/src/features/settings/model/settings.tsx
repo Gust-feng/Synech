@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import type {
   ConfigResponse,
   ModelProviderModelCatalog,
-} from "../../../../../panel-api/config";
+} from "@panel-api/config";
 import { resolveModelIconSvgForModel } from "./icons";
 import { resolveModelProviderIdentity } from "./provider-logos";
 import { EmptyBlock } from "../../../components/workspace-common";

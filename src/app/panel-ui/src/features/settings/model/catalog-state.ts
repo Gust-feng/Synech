@@ -1,5 +1,5 @@
 import { useMemo, useState, type Dispatch, type SetStateAction } from "react";
-import type { ModelProviderModelCatalog } from "../../../../../panel-api/config";
+import type { ModelProviderModelCatalog } from "@panel-api/config";
 import {
   filterModelCatalogItems,
   modelCatalogItemsWithConfiguredModel,

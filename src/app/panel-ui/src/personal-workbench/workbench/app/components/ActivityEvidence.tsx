@@ -4,10 +4,10 @@ import type {
   ActivityExpandedItem,
   ActivityExpandedSection,
   ActivityItem,
-} from "../../../../../../panel-api/ui-read-model";
-import type { PanelToolCallResult as ToolCallResult } from "../../../../../../panel-api/ordinary-agent";
-import type { PanelToolFactValue as ToolFactValue } from "../../../../../../panel-api/tool-display";
-import { CopyActionButton } from "../../../../components/copy-action-button";
+} from "@panel-api/ui-read-model";
+import type { PanelToolCallResult as ToolCallResult } from "@panel-api/ordinary-agent";
+import type { PanelToolFactValue as ToolFactValue } from "@panel-api/tool-display";
+import { CopyActionButton } from "@ui/components/copy-action-button";
 
 const PRIMARY_LIST_LIMIT = 8;
 

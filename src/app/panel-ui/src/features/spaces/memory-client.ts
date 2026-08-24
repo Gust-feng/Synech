@@ -7,7 +7,7 @@ import type {
   MemorySnapshotResponse,
   PathDependencyDeleteInput,
   PathDependency,
-} from "../../../../panel-api/memory";
+} from "@panel-api/memory";
 
 type MemorySnapshotRequest = {
   readonly conversationId?: string;

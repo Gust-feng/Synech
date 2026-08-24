@@ -8,7 +8,7 @@ import {
   type KnowledgeKind,
 } from './knowledge-view-projection'
 import { useThemes } from './themesStore'
-import { panelStorageKey } from '../../../../shell/local-preferences'
+import { panelStorageKey } from '@ui/shell/local-preferences'
 import {
   KnowledgeNavigation,
   ThemeHeader,

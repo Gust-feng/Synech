@@ -1,6 +1,6 @@
 import React from "react";
 import { Globe } from "lucide-react";
-import type { ToolsResponse } from "../../../../../panel-api/tools";
+import type { ToolsResponse } from "@panel-api/tools";
 import type { ToolForm } from "./types";
 import { SettingsSelectControl } from "./select-control";
 import { CapabilitySettingsSection } from "./capability-section";

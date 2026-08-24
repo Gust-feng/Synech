@@ -1,4 +1,4 @@
-import type { DocumentPreview } from '../../../../../../panel-api/workbench'
+import type { DocumentPreview } from '@panel-api/workbench'
 
 export type DocumentContentKind = 'file' | 'markdown' | 'pdf' | 'docx' | 'xlsx' | 'web' | 'image' | 'video' | 'audio' | 'code'
 

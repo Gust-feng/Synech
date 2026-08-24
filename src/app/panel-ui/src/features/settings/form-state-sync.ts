@@ -11,7 +11,7 @@ import {
 } from "./config-projection";
 import type { AppState } from "../../workbench/state";
 import type { McpServerForm, ModelForm, ToolForm } from "./components/types";
-import type { ModelProviderModelCatalog } from "../../../../panel-api/config";
+import type { ModelProviderModelCatalog } from "@panel-api/config";
 
 type ModelOptionRef = {
   readonly id: string;

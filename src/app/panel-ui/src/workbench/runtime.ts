@@ -29,10 +29,10 @@ import type {
   VisibleAiMode,
 } from "../features/settings/config-projection";
 import type { McpServerForm, ModelForm, ToolForm } from "../features/settings/components/types";
-import type { ModelProviderModelCatalog } from "../../../panel-api/config";
+import type { ModelProviderModelCatalog } from "@panel-api/config";
 import type { ContextAttachment } from "../contracts/context";
 import type { OrdinaryWorkView } from "../contracts/run";
-import type { McpServerCatalogItem } from "../../../panel-api/tools";
+import type { McpServerCatalogItem } from "@panel-api/tools";
 
 export type AppWorkbenchRuntimeOptions = {
   readonly app: AppState;

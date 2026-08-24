@@ -1,5 +1,5 @@
 import React from "react";
-import type { RuntimeEnvironmentTool } from "../../../../../panel-api/config";
+import type { RuntimeEnvironmentTool } from "@panel-api/config";
 import { resolveRuntimeToolIconSvg } from "../../../runtime-tool-icons";
 
 export function RuntimeEnvironmentSettings(props: {

@@ -1,6 +1,6 @@
 import React from "react";
 import { MessageSquareText, RotateCcw, Save, SlidersHorizontal } from "lucide-react";
-import type { ConfigResponse, SkillTriggerMode } from "../../../../../panel-api/config";
+import type { ConfigResponse, SkillTriggerMode } from "@panel-api/config";
 import type { ConversationFollowUpMode } from "../../../contracts/composer";
 import { SettingsSelectControl } from "./select-control";
 import { CapabilitySettingsSection } from "./capability-section";

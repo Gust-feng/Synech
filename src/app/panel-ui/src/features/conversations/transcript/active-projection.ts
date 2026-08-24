@@ -3,15 +3,15 @@ import {
   type LiveAnswerProjection,
   type LiveTranscriptNode,
   type LiveRunTranscriptProjection,
-} from "../../../../../panel-api/ui-read-model";
-import { projectChatWorkline, type ChatWorklineProjection, type WorklineTaskStatus } from "../../../../../panel-api/ui-read-model";
-import type { LiveRunBuffer } from "../../../../../panel-api/ui-read-model";
-import { firstNonEmptyText, hasNonEmptyText } from "../../../../../panel-api/ui-read-model";
+} from "@panel-api/ui-read-model";
+import { projectChatWorkline, type ChatWorklineProjection, type WorklineTaskStatus } from "@panel-api/ui-read-model";
+import type { LiveRunBuffer } from "@panel-api/ui-read-model";
+import { firstNonEmptyText, hasNonEmptyText } from "@panel-api/ui-read-model";
 import {
   isLowValueUserDecisionNode,
   nodesForRun,
-} from "../../../../../panel-api/ui-read-model";
-import { isGenericApprovalDecisionText } from "../../../../../panel-api/ui-read-model";
+} from "@panel-api/ui-read-model";
+import { isGenericApprovalDecisionText } from "@panel-api/ui-read-model";
 
 export type ChatActiveConversationTurn = {
   readonly turnId: string;
