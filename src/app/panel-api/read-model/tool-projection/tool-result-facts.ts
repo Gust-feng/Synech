@@ -1,6 +1,6 @@
-import { asRecord } from "../../kernel/values/index.js";
+import { asRecord } from "../../../../kernel/values/index.js";
 export { asRecord };
-import type { ToolErrorFacts } from "../../domain/tools/index.js";
+import type { ToolErrorFacts } from "../../../../domain/tools/index.js";
 
 /** Runtime value readers shared by model and display projections. */
 

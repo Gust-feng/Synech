@@ -1,6 +1,6 @@
-import type { ToolDisplayProjection } from "../panel-api/tool-display.js";
-import type { ToolCallRequest, ToolFactValue } from "../../domain/tools/index.js";
-import { toolDisplayName } from "../../domain/tools/index.js";
+import type { ToolDisplayProjection } from "../../tool-display.js";
+import type { ToolCallRequest, ToolFactValue } from "../../../../domain/tools/index.js";
+import { toolDisplayName } from "../../../../domain/tools/index.js";
 import { commandProgramFromToolResult, commandTextFromToolResult } from "./command-text.js";
 import {
   normalizeToolDisplayForOperation,

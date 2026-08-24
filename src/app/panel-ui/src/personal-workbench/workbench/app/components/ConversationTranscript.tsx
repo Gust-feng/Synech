@@ -25,12 +25,12 @@ import {
 } from "lucide-react";
 import type { ConversationTurn, ConversationTurnAttachment } from "../../../../contracts/conversation";
 import type { AgentDeliverable, OrdinaryRun, OrdinaryWorkView, TranscriptNode } from "../../../../contracts/run";
-import type { ToolCallResult } from "../../../../../../../domain/tools";
-import type { LiveRunBuffer } from "../../../../../../panel-read-model/run/panel-run-live-buffer";
-import type { WorklineProjectedTurn } from "../../../../../../panel-read-model/assistant/panel-assistant-workline";
-import type { LiveRunTranscriptProjection } from "../../../../../../panel-read-model/transcript/panel-live-transcript";
-import { projectConversationDisplayList } from "../../../../../../panel-conversation/panel-conversation-display-list";
-import { shouldCollapseStandaloneTimeline } from "../../../../../../panel-read-model/assistant/panel-assistant-timeline-collapse";
+import type { PanelToolCallResult as ToolCallResult } from "../../../../../../panel-api/ordinary-agent";
+import type { LiveRunBuffer } from "../../../../../../panel-api/ui-read-model";
+import type { WorklineProjectedTurn } from "../../../../../../panel-api/ui-read-model";
+import type { LiveRunTranscriptProjection } from "../../../../../../panel-api/ui-read-model";
+import { projectConversationDisplayList } from "../../../../../../panel-api/ui-read-model";
+import { shouldCollapseStandaloneTimeline } from "../../../../../../panel-api/ui-read-model";
 import {
   getTranscriptCache,
   subscribeTranscriptCache,
@@ -44,21 +44,19 @@ import { CopyActionButton } from "../../../../components/copy-action-button";
 import { ActivityEvidencePanel } from "./ActivityEvidence";
 import { toolResultForActivity } from "../../../../features/conversations/transcript/tool-result-association";
 import { ConfirmationCard, type ConfirmationProjection } from "./ConfirmationCard";
-import type {
-  ConversationDisplayItem,
-} from "../../../../../../panel-conversation/panel-conversation-display-list";
-import type { AssistantWorkflowDisplay } from "../../../../../../panel-read-model/assistant/panel-assistant-workflow-display";
+import type { ConversationDisplayItem } from "../../../../../../panel-api/ui-read-model";
+import type { AssistantWorkflowDisplay } from "../../../../../../panel-api/ui-read-model";
 import {
   isVisibleOrdinaryActivityItem,
   resolveActivityToolKind,
   type ActivityItem,
-} from "../../../../../../panel-read-model/transcript/panel-transcript-activity-copy";
-import type { AgentWorkTimelineView } from "../../../../../../panel-read-model/assistant/panel-agent-work-timeline-view";
+} from "../../../../../../panel-api/ui-read-model";
+import type { AgentWorkTimelineView } from "../../../../../../panel-api/ui-read-model";
 import {
   assistantTerminalNoticeTitle,
   type AssistantFailureParts,
   type AssistantTerminalStatus,
-} from "../../../../../../panel-read-model/assistant/panel-assistant-failure";
+} from "../../../../../../panel-api/ui-read-model";
 import {
   assistantModelForTurn,
   selectedComposerModel,

@@ -3,7 +3,7 @@ import { isObservedRunSettled, shouldKeepRefreshing, stopLiveUpdates, stopPollin
 import type { AppState } from "../../../workbench/state";
 import {
   isLiveAppendOnlyEvent,
-} from "../../../../../panel-read-model/run/panel-run-live-buffer";
+} from "../../../../../panel-api/ui-read-model";
 import {
   appStateWithSettledConversationGuard,
   appStateWithAppendOnlyRunEvents,

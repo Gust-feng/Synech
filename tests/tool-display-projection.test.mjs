@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { projectToolDisplay } from "../dist/app/tool-projection/tool-display-projection.js";
-import { activityItemsForNodes } from "../dist/app/panel-read-model/transcript/panel-transcript-activity-copy.js";
+import { projectToolDisplay } from "../dist/app/panel-api/read-model/tool-projection/tool-display-projection.js";
+import { activityItemsForNodes } from "../dist/app/panel-api/read-model/transcript/panel-transcript-activity-copy.js";
 
 function request(toolName, input = {}) {
   return { callId: `call-${toolName}`, toolName, input };

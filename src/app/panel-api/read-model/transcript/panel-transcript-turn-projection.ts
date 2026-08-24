@@ -18,7 +18,7 @@ import {
   isLowValueUserDecisionNode,
   nodesForRun,
 } from "./panel-transcript-node-projection.js";
-import { isGenericApprovalDecisionText } from "../../text-projection/confirmation-copy.js";
+import { isGenericApprovalDecisionText } from "../../../text-projection/confirmation-copy.js";
 
 export type AssistantTranscriptRunLike = {
   readonly runId: string;

@@ -3,15 +3,15 @@ import {
   type LiveAnswerProjection,
   type LiveTranscriptNode,
   type LiveRunTranscriptProjection,
-} from "../../../../../panel-read-model/transcript/panel-live-transcript.js";
-import { projectChatWorkline, type ChatWorklineProjection, type WorklineTaskStatus } from "../../../../../panel-read-model/assistant/panel-assistant-workline.js";
-import type { LiveRunBuffer } from "../../../../../panel-read-model/run/panel-run-live-buffer.js";
-import { firstNonEmptyText, hasNonEmptyText } from "../../../../../panel-read-model/assistant/panel-assistant-output.js";
+} from "../../../../../panel-api/ui-read-model";
+import { projectChatWorkline, type ChatWorklineProjection, type WorklineTaskStatus } from "../../../../../panel-api/ui-read-model";
+import type { LiveRunBuffer } from "../../../../../panel-api/ui-read-model";
+import { firstNonEmptyText, hasNonEmptyText } from "../../../../../panel-api/ui-read-model";
 import {
   isLowValueUserDecisionNode,
   nodesForRun,
-} from "../../../../../panel-read-model/transcript/panel-transcript-node-projection.js";
-import { isGenericApprovalDecisionText } from "../../../../../text-projection/confirmation-copy.js";
+} from "../../../../../panel-api/ui-read-model";
+import { isGenericApprovalDecisionText } from "../../../../../panel-api/ui-read-model";
 
 export type ChatActiveConversationTurn = {
   readonly turnId: string;

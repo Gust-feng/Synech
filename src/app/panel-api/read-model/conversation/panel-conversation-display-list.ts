@@ -1,27 +1,27 @@
 import type {
   AssistantDeliverableLike,
   AssistantWorkViewOutput,
-} from "../panel-read-model/assistant/panel-assistant-message-output.js";
-import type { LiveRunBuffer } from "../panel-read-model/run/panel-run-live-buffer.js";
-import type { WorklineConversationTurn, WorklineProjectedTurn } from "../panel-read-model/assistant/panel-assistant-workline.js";
-import type { ConfirmationIdentity } from "../panel-read-model/transcript/panel-transcript-confirmation-projection.js";
+} from "../assistant/panel-assistant-message-output.js";
+import type { LiveRunBuffer } from "../run/panel-run-live-buffer.js";
+import type { WorklineConversationTurn, WorklineProjectedTurn } from "../assistant/panel-assistant-workline.js";
+import type { ConfirmationIdentity } from "../transcript/panel-transcript-confirmation-projection.js";
 import {
   projectConversationWorkflowDisplay,
   projectStandaloneAssistantWorkflowDisplay,
   type ConversationWorkflowDisplayState,
 } from "./panel-conversation-workflow-display.js";
-import type { StableAssistantTurnDisplay } from "../panel-read-model/assistant/panel-assistant-turn-display.js";
-import type { AssistantTranscriptNodeLike, AssistantTranscriptRunLike } from "../panel-read-model/transcript/panel-transcript-turn-projection.js";
+import type { StableAssistantTurnDisplay } from "../assistant/panel-assistant-turn-display.js";
+import type { AssistantTranscriptNodeLike, AssistantTranscriptRunLike } from "../transcript/panel-transcript-turn-projection.js";
 import type {
   AssistantWorkflowDisplay,
   AssistantWorkflowDisplayState,
-} from "../panel-read-model/assistant/panel-assistant-workflow-display.js";
-import type { LiveRunTranscriptProjection } from "../panel-read-model/transcript/panel-live-transcript.js";
+} from "../assistant/panel-assistant-workflow-display.js";
+import type { LiveRunTranscriptProjection } from "../transcript/panel-live-transcript.js";
 import {
   assistantTerminalStatus,
   type AssistantFailureParts,
   type AssistantTerminalStatus,
-} from "../panel-read-model/assistant/panel-assistant-failure.js";
+} from "../assistant/panel-assistant-failure.js";
 
 export type ConversationDisplayItem<
   TTurn extends WorklineConversationTurn,

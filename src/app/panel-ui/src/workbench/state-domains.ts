@@ -1,4 +1,4 @@
-import type { LiveRunBuffer } from "../../../panel-read-model/run/panel-run-live-buffer";
+import type { LiveRunBuffer } from "../../../panel-api/ui-read-model";
 import type { ConfigResponse } from "../../../panel-api/config";
 import type { Conversation, ConversationSummary } from "../contracts/conversation";
 import type {

@@ -1,4 +1,4 @@
-import { friendlyFailureCopy } from "../../text-projection/failure-copy.js";
+import { friendlyFailureCopy } from "../../../text-projection/failure-copy.js";
 
 export function sanitizeFailureCopy(value: string): string {
   const text = userVisibleAnswer(value).trim();

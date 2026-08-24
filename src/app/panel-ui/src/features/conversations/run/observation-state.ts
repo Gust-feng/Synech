@@ -8,7 +8,7 @@ import {
   stateWithObservedRunEvent,
   stateWithObservedRunEvents,
   stateWithObservedRunProjection,
-} from "../../../../../panel-read-model/run/panel-run-observation-state";
+} from "../../../../../panel-api/ui-read-model";
 import { nextRunCapabilityState } from "./capability-state";
 import type { AppState } from "../../../workbench/state";
 import type {

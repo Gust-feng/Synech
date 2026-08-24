@@ -1,9 +1,9 @@
-import claudeModelIcon from "../../../../../model-visuals/model-icons/claude_model_icon.svg?raw";
-import deepseekModelIcon from "../../../../../model-visuals/model-icons/deepseek_model_icon.svg?raw";
-import glmModelIcon from "../../../../../model-visuals/model-icons/glm.svg?raw";
-import kimiModelIcon from "../../../../../model-visuals/model-icons/kimi_model_icon.svg?raw";
-import minimaxModelIcon from "../../../../../model-visuals/model-icons/minimax_model_icon.svg?raw";
-import openaiModelIcon from "../../../../../model-visuals/model-icons/chatgpt_gpt_model_icon.svg?raw";
+import claudeModelIcon from "../../../assets/model-icons/claude_model_icon.svg?raw";
+import deepseekModelIcon from "../../../assets/model-icons/deepseek_model_icon.svg?raw";
+import glmModelIcon from "../../../assets/model-icons/glm.svg?raw";
+import kimiModelIcon from "../../../assets/model-icons/kimi_model_icon.svg?raw";
+import minimaxModelIcon from "../../../assets/model-icons/minimax_model_icon.svg?raw";
+import openaiModelIcon from "../../../assets/model-icons/chatgpt_gpt_model_icon.svg?raw";
 import { decorativeSvg } from "../../../icon-svg";
 import {
   resolveModelFamilyIdentity,

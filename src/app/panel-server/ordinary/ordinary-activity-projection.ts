@@ -8,7 +8,7 @@ import type {
   OrdinaryRunEvent,
   OrdinaryRunState,
 } from "../../ordinary-agent/contracts.js";
-import { toolStreamDetail, toolSummary } from "../../panel-read-model/run/panel-stream-tool-projection.js";
+import { toolStreamDetail, toolSummary } from "../../panel-api/read-model/run/panel-stream-tool-projection.js";
 import {
   isQuietInterruption,
   modelRequestSummary,

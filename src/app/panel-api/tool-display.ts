@@ -1,6 +1,8 @@
 import type { ToolFileDisplayOperation } from "../../domain/tools/contracts.js";
 import type { ToolFactValue } from "../../domain/tools/fact-value.js";
 
+export type PanelToolFactValue = ToolFactValue;
+
 export type ToolDisplayResultFacts = {
   readonly truncated?: boolean;
   readonly continuation?: {

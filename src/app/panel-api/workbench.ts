@@ -53,7 +53,7 @@ export type WorkbenchProjectionChange = {
 
 /* ─── Document Preview ───────────────────────────────────────────── */
 
-import type { SpaceReferenceAnnotation } from "../spaces/contracts.js";
+import type { SpaceReferenceAnnotation } from "./spaces.js";
 
 export type DocumentPresentation = {
   readonly kind: "directory" | "markdown" | "code" | "text" | "image" | "pdf" | "docx" | "xlsx" | "video" | "audio" | "web" | "unavailable";

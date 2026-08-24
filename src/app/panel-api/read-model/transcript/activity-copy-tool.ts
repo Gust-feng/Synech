@@ -1,6 +1,6 @@
-import type { ToolFactValue } from "../../../domain/tools/index.js";
-import { cleanConfirmationSummary } from "../../text-projection/confirmation-copy.js";
-import { cleanOrdinaryToolText } from "../../tool-projection/ordinary-tool-copy.js";
+import type { ToolFactValue } from "../../../../domain/tools/index.js";
+import { cleanConfirmationSummary } from "../../../text-projection/confirmation-copy.js";
+import { cleanOrdinaryToolText } from "../tool-projection/ordinary-tool-copy.js";
 import {
   isFileReadNode,
   normalizedToolName,

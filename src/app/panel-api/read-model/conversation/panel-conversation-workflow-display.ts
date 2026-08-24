@@ -1,13 +1,13 @@
 import type {
   AssistantDeliverableLike,
   AssistantWorkViewOutput,
-} from "../panel-read-model/assistant/panel-assistant-message-output.js";
+} from "../assistant/panel-assistant-message-output.js";
 import {
   projectStableAssistantTurnDisplays,
   type StableAssistantTurnDisplay,
-} from "../panel-read-model/assistant/panel-assistant-turn-display.js";
-import type { LiveRunBuffer } from "../panel-read-model/run/panel-run-live-buffer.js";
-import type { WorklineConversationTurn, WorklineProjectedTurn } from "../panel-read-model/assistant/panel-assistant-workline.js";
+} from "../assistant/panel-assistant-turn-display.js";
+import type { LiveRunBuffer } from "../run/panel-run-live-buffer.js";
+import type { WorklineConversationTurn, WorklineProjectedTurn } from "../assistant/panel-assistant-workline.js";
 import {
   assistantShellSnapshot,
   latestAssistantTurnIdForTurns,
@@ -15,24 +15,24 @@ import {
   type AssistantShellSnapshot,
   type AssistantTranscriptNodeLike,
   type AssistantTranscriptRunLike,
-} from "../panel-read-model/transcript/panel-transcript-turn-projection.js";
-import type { ConfirmationIdentity } from "../panel-read-model/transcript/panel-transcript-confirmation-projection.js";
+} from "../transcript/panel-transcript-turn-projection.js";
+import type { ConfirmationIdentity } from "../transcript/panel-transcript-confirmation-projection.js";
 import {
   materializeConversationTranscript,
   stableTranscriptNodesByRunIdMap,
-} from "../panel-read-model/transcript/panel-transcript-materializer.js";
-import type { LiveAnswerTone } from "../panel-read-model/transcript/panel-live-transcript.js";
+} from "../transcript/panel-transcript-materializer.js";
+import type { LiveAnswerTone } from "../transcript/panel-live-transcript.js";
 import {
   projectStableAssistantWorkflowDisplay,
   type AssistantWorkflowDisplay,
   type AssistantWorkflowDisplayState,
-} from "../panel-read-model/assistant/panel-assistant-workflow-display.js";
+} from "../assistant/panel-assistant-workflow-display.js";
 import {
   type AssistantTerminalStatus,
   assistantFailureParts,
   transcriptNodesWithoutFailureEcho,
   type AssistantFailureParts,
-} from "../panel-read-model/assistant/panel-assistant-failure.js";
+} from "../assistant/panel-assistant-failure.js";
 
 export type ConversationWorkflowDisplayState<
   TTurn extends WorklineConversationTurn,

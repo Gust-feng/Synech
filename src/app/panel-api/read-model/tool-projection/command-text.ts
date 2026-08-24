@@ -1,7 +1,7 @@
 import {
   commandProgramFromValue,
   commandTextFromValue,
-} from "../../domain/tools/presentation.js";
+} from "../../../../domain/tools/presentation.js";
 
 export function commandTextFromToolInput(input: unknown): string | undefined {
   return commandTextFromValue(input);

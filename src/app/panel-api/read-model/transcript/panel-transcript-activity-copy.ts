@@ -1,4 +1,4 @@
-import { cleanConfirmationSummary, isGenericApprovalDecisionText } from "../../text-projection/confirmation-copy.js";
+import { cleanConfirmationSummary, isGenericApprovalDecisionText } from "../../../text-projection/confirmation-copy.js";
 import {
   isModelSideOutputNode,
   type ProjectableTranscriptNode,

@@ -1,14 +1,14 @@
-import { asRecord } from "../../../kernel/values/index.js";
-import type { ToolDisplayProjection } from "../../panel-api/tool-display.js";
+import { asRecord } from "../../../../kernel/values/index.js";
+import type { ToolDisplayProjection } from "../../tool-display.js";
 import type {
   DelegatedAgentExecutionMetadata,
   DelegatedAgentUsage,
   ToolErrorDomain,
   ToolErrorFacts,
   ToolFactValue,
-} from "../../../domain/tools/index.js";
-import { isToolErrorDomain, toolDisplayName } from "../../../domain/tools/index.js";
-import { projectToolDisplay } from "../../tool-projection/tool-display-projection.js";
+} from "../../../../domain/tools/index.js";
+import { isToolErrorDomain, toolDisplayName } from "../../../../domain/tools/index.js";
+import { projectToolDisplay } from "../tool-projection/tool-display-projection.js";
 
 export type PanelRunStreamEventDetail = {
   readonly kind: "tool";

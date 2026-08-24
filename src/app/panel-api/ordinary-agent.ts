@@ -14,6 +14,7 @@ import type { ToolDisplayProjection } from "./tool-display.js";
 
 export type PanelModelUsage = ModelUsage;
 export type PanelRunAgentDefinitionRef = RunAgentDefinitionRef;
+export type PanelToolCallResult = ToolCallResult;
 
 export type PanelObservationRef = {
   readonly kind: string;

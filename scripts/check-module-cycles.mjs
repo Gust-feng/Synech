@@ -21,7 +21,7 @@ for (const file of files) {
     const dependency = moduleOwner(target);
     if (dependency !== owner) {
       dependencies.add(dependency);
-      if (!dependencyAllowed(owner, dependency)) {
+      if (!dependencyAllowed(owner, dependency, target)) {
         directionViolations.push(`${relative(file)} -> ${relative(target)}`);
       }
     }
@@ -66,7 +66,12 @@ function moduleOwner(file) {
     : parts[0];
 }
 
-function dependencyAllowed(owner, dependency) {
+function dependencyAllowed(owner, dependency, target) {
+  if (owner === "app/panel-ui") {
+    const targetPath = target.replaceAll("\\", "/");
+    if (dependency !== "app/panel-ui" && dependency !== "app/panel-api") return false;
+    if (targetPath.includes("/src/app/panel-api/read-model/")) return false;
+  }
   if (owner.startsWith("domain/") || owner.startsWith("kernel/") || owner.startsWith("platform/")) {
     return !dependency.startsWith("app/") && !dependency.startsWith("adapters/");
   }

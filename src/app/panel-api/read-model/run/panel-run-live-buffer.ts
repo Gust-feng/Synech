@@ -4,7 +4,7 @@ import {
   textStreamFragmentSourceFromEventId,
   type TextStreamAssembly,
 } from "../transcript/readable-text-fragments.js";
-import type { ToolDisplayProjection } from "../../panel-api/tool-display.js";
+import type { ToolDisplayProjection } from "../../tool-display.js";
 
 export type LiveRunBuffer = {
   readonly runId: string;

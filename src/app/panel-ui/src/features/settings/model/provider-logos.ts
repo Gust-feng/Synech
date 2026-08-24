@@ -9,7 +9,7 @@ import {
   resolveModelProviderIdentityFromSignal,
   type ModelFamilyIdentity,
   type ModelProviderIdentity,
-} from "../../../../../model-visuals/model-family";
+} from "./model-family";
 import { decorativeSvg } from "../../../icon-svg";
 
 export { resolveModelFamilyIdentity };

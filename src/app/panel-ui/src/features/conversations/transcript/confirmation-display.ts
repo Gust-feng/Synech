@@ -1,4 +1,4 @@
-import { cleanConfirmationSummary } from "../../../../../text-projection/confirmation-copy.js";
+import { cleanConfirmationSummary } from "../../../../../panel-api/ui-read-model";
 
 export type DisplayableConfirmation = {
   readonly title?: string;

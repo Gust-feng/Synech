@@ -2,13 +2,13 @@ import {
   mergeTranscriptNodesByRunId,
   runIdsForConversation as cachedRunIdsForConversation,
   transcriptNodesForConversation as cachedTranscriptNodesForConversation,
-} from "../../../../../panel-read-model/transcript/panel-transcript-cache";
+} from "../../../../../panel-api/ui-read-model";
 import {
   createRunReadModelPatch as createSharedRunReadModelPatch,
   detailForRun,
   nextWorkViewForRun,
   transcriptNodesFrom,
-} from "../../../../../panel-read-model/run/panel-run-projection";
+} from "../../../../../panel-api/ui-read-model";
 import type { Conversation } from "../../../contracts/conversation";
 import type {
   OrdinaryRun,
@@ -18,7 +18,7 @@ import type {
   RunEvent,
   TranscriptNode,
 } from "../../../contracts/run";
-import type { LiveRunBuffer } from "../../../../../panel-read-model/run/panel-run-live-buffer";
+import type { LiveRunBuffer } from "../../../../../panel-api/ui-read-model";
 
 export type CurrentRunProjection = {
   readonly run?: OrdinaryRun;

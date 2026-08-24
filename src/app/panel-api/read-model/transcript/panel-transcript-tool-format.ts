@@ -1,4 +1,4 @@
-import { commandDisplayText, type CommandTextLike } from "../../../domain/tools/presentation.js";
+import { commandDisplayText, type CommandTextLike } from "../../../../domain/tools/presentation.js";
 
 export type CommandDisplayProjectionLike = CommandTextLike & {
   readonly kind: "command_summary";

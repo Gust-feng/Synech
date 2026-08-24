@@ -6,7 +6,7 @@ import {
   isVisibleOrdinaryActivityItem,
   type ActivityItem,
 } from "../transcript/panel-transcript-activity-copy.js";
-import type { ModelUsage } from "../../../domain/intelligence/index.js";
+import type { ModelUsage } from "../../../../domain/intelligence/index.js";
 import {
   isModelNarrativeActivityItem,
   mergeModelNarrativeActivityItem,

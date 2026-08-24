@@ -1,5 +1,5 @@
-import type { ModelUsage } from "../../../domain/intelligence/index.js";
-import type { ToolDisplayProjection } from "../../panel-api/tool-display.js";
+import type { ModelUsage } from "../../../../domain/intelligence/index.js";
+import type { ToolDisplayProjection } from "../../tool-display.js";
 import type { LiveModelTurnBuffer, LiveRunBuffer, LiveToolActivity } from "../run/panel-run-live-buffer.js";
 import {
   mergeTranscriptNodeLists,

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { activityItemsForNodes } from "../dist/app/panel-read-model/transcript/panel-transcript-activity-copy.js";
+import { activityItemsForNodes } from "../dist/app/panel-api/read-model/transcript/panel-transcript-activity-copy.js";
 
 test("file diff copy keeps operation, path, diff section, and line delta", () => {
   const item = activityItem("Edit", {

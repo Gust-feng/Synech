@@ -1,4 +1,4 @@
-import { appendLiveRunEvents } from "../../../../../panel-read-model/run/panel-run-live-buffer.js";
+import { appendLiveRunEvents } from "../../../../../panel-api/ui-read-model";
 import { nextRunCapabilityState } from "./capability-state.js";
 import { loadObservedRunReadModel } from "./observed-run-read-model.js";
 import { createRunReadModelPatch } from "./projection.js";
