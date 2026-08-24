@@ -66,7 +66,9 @@ test("Product paths describe the canonical config, data, state, cache and backup
   const paths = resolveProductPaths({ productHome });
   const data = path.join(productHome, "data");
   const agent = path.join(data, "agent");
-  const workbench = path.join(data, "workbench");
+  const spaces = path.join(data, "spaces");
+  const knowledge = path.join(data, "knowledge");
+  const memory = path.join(data, "memory");
   const state = path.join(productHome, "state");
   const runtimeTools = path.join(state, "runtime-tools");
   const mcp = path.join(runtimeTools, "mcp");
@@ -87,12 +89,12 @@ test("Product paths describe the canonical config, data, state, cache and backup
         evidence: path.join(agent, "evidence"),
         memoryFacts: path.join(agent, "memory-facts"),
       },
-      workbench: {
-        root: workbench,
-        spaceFiles: path.join(workbench, "space-files"),
-        knowledgeAssets: path.join(workbench, "knowledge-assets"),
-        notes: path.join(workbench, "notes"),
-        methodMemory: path.join(workbench, "method-memory"),
+      spaces: { root: spaces, files: path.join(spaces, "files") },
+      knowledge: { root: knowledge, assets: path.join(knowledge, "assets") },
+      memory: {
+        root: memory,
+        agentNotes: path.join(memory, "agent-notes"),
+        methods: path.join(memory, "methods"),
       },
     },
     state: {

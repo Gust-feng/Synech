@@ -1,5 +1,8 @@
 export * from "./contracts.js";
 export * from "./agent-loop-execution.js";
+export * from "./activity-replay.js";
+export * from "./attachment-draft.js";
+export * from "./attachment-lifecycle.js";
 export * from "./conversation-control-repository.js";
 export * from "./conversation-projection.js";
 export * from "./file-system-repository.js";
@@ -7,7 +10,6 @@ export * from "./managed-attachment-repository.js";
 export * from "./memory-fact-repository.js";
 export * from "./model-input.js";
 export * from "./model-input-attachments.js";
-export * from "./run-context-input.js";
 export * from "./ordinary-agent-feature.js";
 export * from "./tool-execution-observation-gateway.js";
 export * from "./state.js";

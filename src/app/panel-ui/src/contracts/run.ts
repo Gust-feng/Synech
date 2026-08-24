@@ -11,7 +11,7 @@ import type {
   PanelModelUsage,
   PanelRunAgentDefinitionRef,
 } from "../../../panel-api/ordinary-agent";
-import type { ToolDisplayProjection, ToolErrorFacts } from "./tools";
+import type { ToolDisplayProjection, ToolErrorFacts } from "../../../panel-api/tools";
 
 export type RunAgentDefinitionRef = PanelRunAgentDefinitionRef;
 export type RunCapabilityResolution = OrdinaryPanelCapabilityResolution;

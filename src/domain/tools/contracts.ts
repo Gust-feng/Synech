@@ -1,5 +1,5 @@
 import type { ConfirmationRequest } from "../confirmation/contracts.js";
-import type { ModelInputAttachmentRef } from "../intelligence/model-input-attachments.js";
+import type { ModelInputAttachmentRef } from "../model-input/index.js";
 import type { ToolFactValue } from "./fact-value.js";
 import type { ToolJsonSchema, ToolJsonSchemaValue } from "./schema.js";
 

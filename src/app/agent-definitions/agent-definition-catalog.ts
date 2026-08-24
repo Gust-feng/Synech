@@ -39,14 +39,9 @@ export function createRuntimeAgentDefinitionCatalog(
 }
 
 function assertOrdinaryAgentDefinition(definition: AgentDefinition): void {
-  if (definition.toolVisibilityProfile.runMode !== "agent") {
-    throw new Error(
-      `Ordinary default AgentDefinition must use ordinary agent mode: ${definition.agentId} declares ${definition.toolVisibilityProfile.runMode}.`
-    );
-  }
   if (definition.turnPolicy.purpose !== "ordinary_agent") {
     throw new Error(
-      `Default Ordinary AgentDefinition must use ordinary_agent purpose: ${definition.agentId} declares ${definition.turnPolicy.purpose}.`
+      `Default Agent definition must use the primary agent purpose: ${definition.agentId} declares ${definition.turnPolicy.purpose}.`
     );
   }
 }

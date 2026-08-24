@@ -7,7 +7,6 @@ export type CapabilityAgentProfile = {
 };
 import {
   AgentCapabilitySnapshot,
-  CapabilityDraft,
   CapabilitySkillCatalogItem,
   RunCapabilityResolution,
   RunEnabledSkill,
@@ -90,20 +89,13 @@ export function resolveRunCapabilities(input: ResolveRunCapabilitiesInput): RunC
     .filter((tool) => tool.modelVisible)
     .map((tool) => tool.name);
   const warnings = capabilityResolutionWarnings({ snapshot: input.snapshot, allowedTools, toolExposures });
-  const capabilityPlan = capabilityPlanForResolvedRun({
-    baseCapabilityPlan,
-    toolExposures,
-    allowedTools,
-    warnings,
-  });
   return {
     resolutionId: createId("capability-resolution"),
     snapshotId: input.snapshot.snapshotId,
-    runMode: input.agentDefinition.toolVisibilityProfile.runMode,
     agentId: input.agentDefinition.agentId,
     agentDisplayName: input.agentDefinition.displayName,
     toolVisibilityProfileId: input.agentDefinition.toolVisibilityProfile.profileId,
-    capabilityPlan,
+    capabilityPlan: baseCapabilityPlan,
     allowedTools,
     toolExposures,
     enabledSkills: (input.skillCatalog ?? [])
@@ -129,16 +121,6 @@ export function resolveRunCapabilities(input: ResolveRunCapabilitiesInput): RunC
         contentHash: skill.contentHash,
         bodyHash: skill.bodyHash,
       })),
-    mcpDrafts: input.snapshot.mcpCatalog.map((server): CapabilityDraft => ({
-      draftId: `mcp:${server.serverId}`,
-      source: "mcp",
-      label: server.label,
-      availability: server.availability,
-      enabled: server.enabled,
-      reason: server.enabled
-        ? "已登记。"
-        : "已停用。",
-    })),
     warnings,
     createdAt: nowIso(),
   };
@@ -146,40 +128,6 @@ export function resolveRunCapabilities(input: ResolveRunCapabilitiesInput): RunC
 
 function isRunEnabledSkill(skill: CapabilitySkillCatalogItem): boolean {
   return skill.enabled && (skill.validationStatus === undefined || skill.validationStatus === "valid");
-}
-
-function capabilityPlanForResolvedRun(input: {
-  readonly baseCapabilityPlan: RunCapabilityPlan;
-  readonly toolExposures: readonly RunToolExposure[];
-  readonly allowedTools: readonly string[];
-  readonly warnings: readonly string[];
-}): RunCapabilityPlan {
-  const visibleTools = input.toolExposures.filter((tool) => tool.modelVisible);
-  const visibleToolNames = visibleTools.map((tool) => tool.name);
-  return {
-    ...input.baseCapabilityPlan,
-    tools: {
-      canExposeToModel: input.baseCapabilityPlan.canExposeModelTools,
-      allowedTools: input.allowedTools,
-    },
-    fileOperations: {
-      canReadWorkspace: visibleTools.some((tool) =>
-        tool.operationType === "read-only" ||
-        tool.operationType === "read-write" ||
-        tool.operationType === "execute"
-      ),
-      canWriteWorkspace: visibleTools.some((tool) => tool.operationType === "read-write"),
-      canDeleteWorkspace: visibleTools.some((tool) => tool.fileOperation === "delete"),
-      canExecuteCommands: visibleTools.some((tool) => tool.operationType === "execute"),
-    },
-    uiDisplay: {
-      canShowStreamingOutput: input.baseCapabilityPlan.modelCapabilities.supportsStreaming,
-      canShowToolCards: visibleToolNames.length > 0,
-      visibleToolNames,
-    },
-    allowedTools: input.allowedTools,
-    warnings: input.warnings,
-  };
 }
 
 function isDeniedByPermissionRef(toolName: string, refs: ReadonlySet<string>): boolean {

@@ -1,4 +1,121 @@
-export * from "./contracts.js";
-export * from "./model-catalog-display-name.js";
-export * from "./model-provider-market.js";
-export * from "./mcp-server-presets.js";
+export type {
+  ConfiguredModelRuntimeMode,
+  ConfiguredModelProviderKind,
+  ConfiguredModelProtocolKind,
+  ProviderProtocolProfileId,
+  ModelReasoningControlKind,
+  ModelPreferredApiStyle,
+  ModelStability,
+  OpenAIReasoningEffort,
+  ModelRunReasoningEffort,
+  OpenAIReasoningSummary,
+  OpenAITextVerbosity,
+  OpenAIServiceTier,
+  OpenAITruncationMode,
+  OpenAIModelRequestSettings,
+  ModelProviderPreset,
+  ModelProviderModelCatalogItem,
+  ModelProviderModelCatalog,
+  ModelCapabilities,
+  ProtocolToolCallCapabilities,
+  ProviderProtocolProfile,
+  ModelCapabilityProfile,
+  ModelCapabilityOverrideSettings,
+  ModelProviderProfileSettings,
+  SanitizedModelProviderConfig,
+  UpdateModelProviderConfigInput,
+  CreateModelProviderProfileInput,
+} from "./model-settings.js";
+export type {
+  ToolStateSettings,
+  ConfiguredCommandShellKind,
+  CommandShellSettings,
+  ToolConfirmationSettings,
+  UpdateToolStateInput,
+  SanitizedToolConfirmationConfig,
+  UpdateToolConfirmationConfigInput,
+  CommandShellAvailability,
+  SanitizedCommandShellOption,
+  SanitizedRuntimeEnvironmentTool,
+  SanitizedCommandShellConfig,
+  UpdateCommandShellConfigInput,
+} from "./tool-settings.js";
+export type {
+  OrdinaryAgentPromptVariant,
+  OrdinaryAgentPromptVariantInfo,
+  OrdinaryAgentPromptSettings,
+  SkillTriggerMode,
+  SkillTriggerSettings,
+  SanitizedOrdinaryAgentPromptConfig,
+  UpdateOrdinaryAgentPromptConfigInput,
+  SanitizedSkillTriggerConfig,
+  UpdateSkillTriggerConfigInput,
+} from "./agent-settings.js";
+export type {
+  McpServerTransportKind,
+  McpConfirmationMode,
+  McpToolExposureMode,
+  McpCachedToolInfo,
+  McpCachedReferenceInfo,
+  McpServerSettings,
+  UpsertMcpServerInput,
+  McpServerSecretValueInput,
+} from "./mcp-settings.js";
+export type {
+  SubAgentSourceKind,
+  CapabilityToolScope,
+  CapabilityToolCatalogItem,
+  CapabilityToolAvailability,
+  CapabilitySkillMetadataValue,
+  CapabilitySkillCompatibility,
+  CapabilitySkillProvenanceValue,
+  CapabilitySkillProvenance,
+  CapabilitySkillResourceIndexItem,
+  CapabilitySkillValidationStatus,
+  CapabilitySkillCatalogItem,
+  CapabilitySubAgentDiagnostic,
+  CapabilitySubAgentCatalogItem,
+  CapabilityMcpToolCatalogItem,
+  CapabilityMcpCatalogItem,
+  AgentCapabilitySnapshot,
+  OrdinaryCapabilitySnapshot,
+  RunToolExposureReasonCode,
+  RunToolExposure,
+  RunEnabledSkill,
+  RunCapabilityResolution,
+  RunCapabilityPlan,
+  RunAgentDefinitionRef,
+} from "./capability-snapshot.js";
+export type {
+  ConfiguredWebSearchProvider,
+  ConfiguredWebSearchProviderKind,
+  InformationAccessSettings,
+  WebSearchProviderSettings,
+  SanitizedInformationAccessConfig,
+  SanitizedWebSearchConfig,
+  WebSearchRuntimeConfig,
+  UpdateInformationAccessConfigInput,
+  UpdateWebSearchConfigInput,
+} from "./information-access.js";
+export type {
+  LocalSettings,
+  SettingsStore,
+  SecretMetadata,
+  LocalDevSecretStore,
+  SanitizedMcpServerSecretMetadata,
+} from "./settings-store.js";
+export {
+  MODEL_CATALOG_DISPLAY_NAME_PARTS,
+  modelCatalogDisplayNameFromId,
+  normalizeModelCatalogDisplayName,
+} from "./model-catalog-display-name.js";
+export {
+  BUILTIN_PROVIDER_PROTOCOL_PROFILES,
+  BUILTIN_MODEL_PROVIDER_PRESETS,
+  listBuiltinModelProviderPresets,
+  listBuiltinProviderProtocolProfiles,
+  builtinProviderProtocolProfile,
+  recommendedProtocolForProviderProtocolProfile,
+} from "./model-provider-market.js";
+export type { McpServerPreset } from "./mcp-server-presets.js";
+export { listBuiltinMcpServerPresets } from "./mcp-server-presets.js";

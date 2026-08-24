@@ -1,4 +1,4 @@
-import { shouldUseMotion } from '../../../../app-motion'
+import { shouldUseMotion } from '../../../../shell/motion'
 
 const TRANSITION_DURATION_MS = 320
 const TRANSITION_EASING = 'cubic-bezier(0.22, 1, 0.36, 1)'
@@ -32,8 +32,8 @@ let transitionSequence = 0
 
 export function runFocusModeTransition(input: FocusModeTransitionInput): FocusModeTransitionHandle {
   const root = input.root
-  const surface = root?.querySelector<HTMLElement>('.aa-conversation-surface') ?? null
-  const main = root?.querySelector<HTMLElement>('.aa-workbench-main') ?? null
+  const surface = root?.querySelector<HTMLElement>('.ui-conversation-surface') ?? null
+  const main = root?.querySelector<HTMLElement>('.ui-workbench-main') ?? null
 
   if (root !== null) activeTransitions.get(root)?.handle.cancel()
 
@@ -60,12 +60,12 @@ function enterFocusMode(
   update: () => void,
 ): FocusModeTransitionHandle {
   const initialSurfaceRect = surface.getBoundingClientRect()
-  const initialContentRect = elementRect(surface, '.aa-conversation-scroll-content')
-  const initialComposerRect = elementRect(surface, '.aa-conversation-composer-frame')
+  const initialContentRect = elementRect(surface, '.ui-conversation-scroll-content')
+  const initialComposerRect = elementRect(surface, '.ui-conversation-composer-frame')
   const controller = createController(root, 'enter')
   update()
 
-  const focusedSurface = root.querySelector<HTMLElement>('.aa-conversation-surface')
+  const focusedSurface = root.querySelector<HTMLElement>('.ui-conversation-surface')
   if (focusedSurface === null) {
     controller.finish(false)
     return controller.handle
@@ -78,15 +78,15 @@ function enterFocusMode(
       'inset(0px)',
     ),
     animateFromPreviousRect(
-      focusedSurface.querySelector<HTMLElement>('.aa-conversation-scroll-content'),
+      focusedSurface.querySelector<HTMLElement>('.ui-conversation-scroll-content'),
       initialContentRect,
     ),
     animateFromPreviousRect(
-      focusedSurface.querySelector<HTMLElement>('.aa-conversation-composer-frame'),
+      focusedSurface.querySelector<HTMLElement>('.ui-conversation-composer-frame'),
       initialComposerRect,
     ),
     animateElement(
-      focusedSurface.querySelector<HTMLElement>('.aa-focus-header'),
+      focusedSurface.querySelector<HTMLElement>('.ui-focus-header'),
       [{ opacity: 0 }, { opacity: 1 }],
       { duration: 160, delay: 100 },
     ),
@@ -103,9 +103,9 @@ function exitFocusMode(
 ): FocusModeTransitionHandle {
   const surfaceRect = surface.getBoundingClientRect()
   const targetSurfaceRect = main.getBoundingClientRect()
-  const content = surface.querySelector<HTMLElement>('.aa-conversation-scroll-content')
-  const composer = surface.querySelector<HTMLElement>('.aa-conversation-composer-frame')
-  const header = surface.querySelector<HTMLElement>('.aa-focus-header')
+  const content = surface.querySelector<HTMLElement>('.ui-conversation-scroll-content')
+  const composer = surface.querySelector<HTMLElement>('.ui-conversation-composer-frame')
+  const header = surface.querySelector<HTMLElement>('.ui-focus-header')
   const controller = createController(root, 'exit', update)
 
   controller.setAnimations([

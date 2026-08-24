@@ -23,7 +23,7 @@ import type {
   AgentSessionRef,
   AgentSessionWriteCheckpoint,
 } from "../model-runtime/agent-session.js";
-import type { OrdinaryRunContextInput } from "./run-context-input.js";
+import type { OrdinaryRunContextInput } from "../../domain/ordinary/index.js";
 import type { AgentNoteVersions } from "../agent-notes/contracts.js";
 import type { OrdinaryToolMetricsSnapshot } from "./tool-runtime-metrics.js";
 import type {
@@ -73,7 +73,7 @@ export class OrdinaryFeatureError extends Error {
  */
 export type OrdinaryFeatureDiagnostic =
   | {
-      /** Session finalize failed; the conversation queue stays paused until a retry succeeds. */
+      /** Session finalize failed; the queue stays paused until a later explicit scheduling event succeeds. */
       readonly kind: "session_finalization_failed";
       readonly runId: string;
       readonly error: unknown;
@@ -91,12 +91,10 @@ export type OrdinaryFeatureDiagnostic =
       readonly error: unknown;
     }
   | {
-      /** A successor activation attempt failed; the feature retains ownership and schedules another attempt. */
+      /** A successor activation attempt failed; the queued successor remains available. */
       readonly kind: "successor_activation_failed";
       readonly conversationId: string;
       readonly predecessorRunId?: string;
-      readonly consecutiveFailures: number;
-      readonly retryDelayMs: number;
       readonly error: unknown;
     }
   | {
@@ -107,7 +105,7 @@ export type OrdinaryFeatureDiagnostic =
       readonly error: unknown;
     }
   | {
-      /** Durable deletion remains authoritative while startup or background cleanup retries this resource. */
+      /** Durable deletion remains authoritative while cleanup is incomplete. */
       readonly kind: "conversation_cleanup_failed";
       readonly conversationId: string;
     readonly phase: "run_enumeration" | "tool_evidence" | "memory_facts" | "run_snapshot" | "session" | "terminal_settlement" | "conversation_control";
@@ -115,7 +113,7 @@ export type OrdinaryFeatureDiagnostic =
       readonly error: unknown;
     }
   | {
-      /** A tombstoned conversation still owns managed attachments and startup cleanup will retry later. */
+      /** A tombstoned conversation still owns managed attachments after cleanup failed. */
       readonly kind: "managed_attachment_cleanup_failed";
       readonly conversationId: string;
       readonly error: unknown;
@@ -127,7 +125,7 @@ export type OrdinaryFeatureDiagnostic =
       readonly error: unknown;
     }
   | {
-      /** Run birth failed after claim; the feature retries rollback and startup recovery remains the final fallback. */
+      /** Run birth failed after claim and attachment rollback also failed. */
       readonly kind: "managed_attachment_claim_rollback_failed";
       readonly runId: string;
       readonly conversationId: string;
@@ -160,7 +158,7 @@ export type OrdinaryRunBirth = {
   readonly memoryOwner: ConversationOwner;
   /** Frozen provenance prevents the configured fallback becoming a user selection after restore. */
   readonly workspaceSelection?: "default" | "explicit";
-  /** 模型可见的宿主上下文（owner 区块 ADR-0035 §6.2 + 环境区块），随 birth 冻结；无 owner 时为 undefined。 */
+  /** 模型可见的 Owner 与环境上下文，随 Run 出生事实冻结。 */
   readonly ownerContext?: string;
   readonly informationAccess: SanitizedInformationAccessConfig;
   readonly toolConfirmationPolicy: ToolConfirmationPolicy;
@@ -666,7 +664,7 @@ export interface OrdinaryAgentFeature {
     listConversations(limit?: number): Promise<readonly OrdinaryConversationReadModel[]>;
     /** Canonical owner captured by the conversation workflow. */
     getConversationOwner(conversationId: string): Promise<ConversationOwner | undefined>;
-    /** Owner 视角的对话列表（ADR-0035 §8.1），供删除协调与资源页 read-model 使用。 */
+    /** Owner 视角的对话列表，供删除协调与资源页 read-model 使用。 */
     listConversationsByOwner(owner: ConversationOwner): Promise<readonly OrdinaryConversationReadModel[]>;
     getManagedAttachment(attachmentId: string): Promise<OrdinaryManagedAttachmentRecord | undefined>;
     listMemoryFacts(query?: { readonly runId?: string; readonly memoryId?: string }): Promise<readonly OrdinaryMemoryFact[]>;

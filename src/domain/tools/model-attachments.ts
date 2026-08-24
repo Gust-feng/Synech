@@ -1,4 +1,4 @@
-import type { ModelInputAttachment } from "../intelligence/model-input-attachments.js";
+import type { ModelInputAttachment } from "../model-input/index.js";
 
 const TOOL_MODEL_ATTACHMENTS = Symbol("synech.toolModelAttachments");
 

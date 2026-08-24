@@ -283,11 +283,11 @@
   margin-left: 2px;
   vertical-align: -0.15em;
   border-radius: 1px;
-  background: color-mix(in oklch, var(--accent, var(--aa-accent, #6865a7)) 72%, transparent);
-  animation: aa-stream-caret 1.1s ease-in-out infinite;
+  background: color-mix(in oklch, var(--accent, var(--ui-accent, #6865a7)) 72%, transparent);
+  animation: ui-stream-caret 1.1s ease-in-out infinite;
 }
 
-@keyframes aa-stream-caret {
+@keyframes ui-stream-caret {
   0%, 100% {
     opacity: 0.12;
   }

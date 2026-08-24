@@ -3,7 +3,7 @@ import type {
   ModelProviderPreset,
   ProviderProtocolProfile,
   ProviderProtocolProfileId,
-} from "./contracts.js";
+} from "./model-settings.js";
 
 export const BUILTIN_PROVIDER_PROTOCOL_PROFILES: readonly ProviderProtocolProfile[] = [
   {

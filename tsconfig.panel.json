@@ -16,5 +16,5 @@
     "noEmit": true,
     "jsx": "react-jsx"
   },
-  "include": ["src/app/panel-ui/src/**/*.ts", "src/app/panel-ui/src/**/*.tsx", "src/app/panel-api-contracts.ts", "vite.panel.config.ts"]
+  "include": ["src/app/panel-ui/src/**/*.ts", "src/app/panel-ui/src/**/*.tsx", "src/app/panel-api/**/*.ts", "vite.panel.config.ts"]
 }

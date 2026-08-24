@@ -4,6 +4,20 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { DEFAULT_REQUEST_TIMEOUT_MSEC } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { ensureManagedMcpExecutable, mcpRuntimePathEnvironment } from "./mcp-local-runtime.js";
+import {
+  assertMcpCatalogWithinLimits,
+  DEFAULT_MCP_MAX_TOOL_CATALOG_BYTES,
+  DEFAULT_MCP_MAX_TOOL_CATALOG_ITEMS,
+  McpCatalogLimitError,
+  type McpCatalogLimitUnit,
+} from "../../domain/mcp/index.js";
+
+export {
+  DEFAULT_MCP_MAX_TOOL_CATALOG_BYTES,
+  DEFAULT_MCP_MAX_TOOL_CATALOG_ITEMS,
+  McpCatalogLimitError,
+};
+export type { McpCatalogLimitUnit };
 
 export type McpClientConfig = {
   readonly serverId: string;
@@ -67,26 +81,8 @@ export type McpToolInfo = {
 
 const MAX_MCP_LIST_PAGES = 100;
 export const DEFAULT_MCP_MAX_CONCURRENT_CALLS_PER_SERVER = 4;
-export const DEFAULT_MCP_MAX_TOOL_CATALOG_ITEMS = 128;
-export const DEFAULT_MCP_MAX_TOOL_CATALOG_BYTES = 128 * 1024;
 export const DEFAULT_MCP_MAX_REFERENCE_CATALOG_ITEMS = 1_024;
 export const DEFAULT_MCP_MAX_REFERENCE_CATALOG_BYTES = 1024 * 1024;
-
-export type McpCatalogLimitUnit = "items" | "serialized_bytes";
-
-export class McpCatalogLimitError extends Error {
-  readonly code = "mcp_catalog_limit_exceeded";
-
-  constructor(
-    readonly catalogKind: string,
-    readonly unit: McpCatalogLimitUnit,
-    readonly observed: number,
-    readonly limit: number,
-  ) {
-    super(`MCP ${catalogKind} catalog exceeded ${unit} limit: observed ${observed}, limit ${limit}.`);
-    this.name = "McpCatalogLimitError";
-  }
-}
 
 export type McpToolResult = {
   readonly content: readonly McpContentPart[];
@@ -702,45 +698,16 @@ type McpCatalogBudget = {
   readonly consume: (items: readonly unknown[]) => void;
 };
 
-export function assertMcpCatalogWithinLimits(
-  catalogKind: string,
-  items: readonly unknown[],
-  maxItems: number,
-  maxSerializedBytes: number,
-): void {
-  createMcpCatalogBudget(
-    catalogKind,
-    positiveCatalogLimit(maxItems, "maxCatalogItems"),
-    positiveCatalogLimit(maxSerializedBytes, "maxCatalogBytes"),
-  ).consume(items);
-}
-
 function createMcpCatalogBudget(
   catalogKind: string,
   maxItems: number,
   maxSerializedBytes: number,
 ): McpCatalogBudget {
-  let itemCount = 0;
-  // Include JSON array delimiters so the recorded byte boundary matches the complete catalog.
-  let serializedBytes = 2;
+  const collected: unknown[] = [];
   return {
     consume(items) {
-      for (const item of items) {
-        itemCount += 1;
-        if (itemCount > maxItems) {
-          throw new McpCatalogLimitError(catalogKind, "items", itemCount, maxItems);
-        }
-        const serialized = JSON.stringify(item) ?? "null";
-        serializedBytes += Buffer.byteLength(serialized, "utf8") + (itemCount > 1 ? 1 : 0);
-        if (serializedBytes > maxSerializedBytes) {
-          throw new McpCatalogLimitError(
-            catalogKind,
-            "serialized_bytes",
-            serializedBytes,
-            maxSerializedBytes,
-          );
-        }
-      }
+      collected.push(...items);
+      assertMcpCatalogWithinLimits(catalogKind, collected, maxItems, maxSerializedBytes);
     },
   };
 }

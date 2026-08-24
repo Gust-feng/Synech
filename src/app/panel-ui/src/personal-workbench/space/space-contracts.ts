@@ -31,7 +31,7 @@ export type PersonalSpaceProjection = {
   readonly description?: string;
   readonly color?: string;
   readonly items: readonly PersonalSpaceItemProjection[];
-  /** 关联对话（组合根 read-model，ADR-0035 §8.1）；新对话不再出现在 Space 树中。 */
+  /** 关联对话由组合根 read-model 提供；新对话不进入 Space 树。 */
   readonly conversations?: readonly PersonalSpaceConversationContext[];
 };
 

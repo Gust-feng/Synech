@@ -9,8 +9,8 @@ import { stringOrUndefined } from "../../../kernel/values/index.js";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { OrdinaryRunContext, OrdinaryRunContextReference } from "../../../domain/ordinary/index.js";
-import { managedUploadAttachmentId } from "../../context/attachments.js";
-import { isConversationOwnerContextRef } from "../../context/reference-origin.js";
+import { managedAttachmentId } from "../../../domain/ordinary/index.js";
+import { isConversationOwnerContextRef } from "../../../domain/ordinary/index.js";
 
 export type ContextAttachmentToolOptions = {
   readonly runContext?: ContextAttachmentRunContext;
@@ -256,9 +256,9 @@ async function resolveAttachmentRoot(
   resolveManagedAttachmentPath: ((attachmentId: string) => Promise<string | undefined>) | undefined,
 ): Promise<{ readonly kind: "file" | "project"; readonly absolutePath: string } | undefined> {
   const normalized = ref.ref.toLowerCase();
-  const managedAttachmentId = managedUploadAttachmentId(ref.ref);
-  if (ref.kind === "file" && managedAttachmentId !== undefined) {
-    const absolutePath = await resolveManagedAttachmentPath?.(managedAttachmentId);
+  const attachmentId = managedAttachmentId(ref.ref);
+  if (ref.kind === "file" && attachmentId !== undefined) {
+    const absolutePath = await resolveManagedAttachmentPath?.(attachmentId);
     return absolutePath !== undefined && path.isAbsolute(absolutePath)
       ? { kind: "file", absolutePath: path.resolve(absolutePath) }
       : undefined;
@@ -319,9 +319,9 @@ function isAttachmentReadAuthorized(ref: OrdinaryRunContextReference, permission
   if (ref.kind === "file" && normalized.startsWith("local-file:")) {
     return permissions.has(`read:local-file:${ref.ref.slice("local-file:".length)}`);
   }
-  const managedAttachmentId = managedUploadAttachmentId(ref.ref);
-  if (ref.kind === "file" && managedAttachmentId !== undefined) {
-    return permissions.has(`read:uploaded-attachment:${managedAttachmentId}`);
+  const attachmentId = managedAttachmentId(ref.ref);
+  if (ref.kind === "file" && attachmentId !== undefined) {
+    return permissions.has(`read:uploaded-attachment:${attachmentId}`);
   }
   if (ref.kind === "project" && normalized.startsWith("local-project:")) {
     return permissions.has(`read:local-project:${ref.ref.slice("local-project:".length)}`);

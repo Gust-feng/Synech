@@ -41,7 +41,7 @@ export const spaceReferenceAnnotationSchema = z.object({
   revision: z.number().int().min(1),
   updatedAt: z.string().min(1),
   updatedBy: z.enum(["agent", "user"]),
-  actor: spaceReferenceActorRecordSchema.optional(),
+  actor: spaceReferenceActorRecordSchema,
 }).strict();
 
 export const spaceReferenceImageCaptionSchema = z.object({
@@ -49,7 +49,7 @@ export const spaceReferenceImageCaptionSchema = z.object({
   revision: z.number().int().min(1),
   updatedAt: z.string().min(1),
   updatedBy: z.enum(["agent", "user"]),
-  actor: spaceReferenceActorRecordSchema.optional(),
+  actor: spaceReferenceActorRecordSchema,
 }).strict();
 
 export const spaceReferenceImageCaptionsSchema = z.record(

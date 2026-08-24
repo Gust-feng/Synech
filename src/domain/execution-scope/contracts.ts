@@ -1,5 +1,5 @@
 /**
- * 统一运行作用域（ADR-0035 §3.1）。
+ * 统一运行作用域。
  *
  * Conversation owner 是 Conversation 创建时冻结的唯一归属事实；Run 出生前由 Host
  * 根据 owner 解析 ConversationExecutionScope，同一份 scope 被 Pi 执行环境、文件工具、
@@ -74,7 +74,7 @@ export function validateConversationOwner(value: unknown): ConversationOwner {
   return { kind, id } as ConversationOwner;
 }
 
-/** owner 的默认 cwd 解析（ADR-0035 §3.2）；缺失时返回 undefined 由 Host 显式失败。 */
+/** Owner 的默认 cwd 解析；缺失时返回 undefined 由 Host 显式失败。 */
 export function defaultOwnerCwd(
   owner: ConversationOwner,
   input: {

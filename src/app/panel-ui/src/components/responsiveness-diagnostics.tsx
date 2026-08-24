@@ -4,7 +4,7 @@ import {
   clearResponsivenessIncidents,
   getResponsivenessIncidents,
   subscribeResponsivenessIncidents,
-} from '../app-responsiveness-diagnostics'
+} from '../shell/responsiveness-diagnostics'
 import './responsiveness-diagnostics.css'
 
 export function ResponsivenessDiagnostics(): React.ReactElement {

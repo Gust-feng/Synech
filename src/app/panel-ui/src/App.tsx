@@ -1,15 +1,15 @@
 import React, { useCallback, useState } from "react";
 import { PersonalWorkbench } from "./personal-workbench/personal-workbench";
-import { useAppShellEffects } from "./app-shell-effects";
-import { persistSidebarCollapsedPreference, useAppShellState } from "./app-shell-state";
-import { useAppQueuedMessages } from "./app-queued-message-state";
-import { useAppWorkbenchConfigState } from "./app-workbench-config-state";
-import { useAppWorkbenchRuntime } from "./app-workbench-runtime";
-import { workbenchSettingsDialogPropsFrom } from "./app-settings-dialog-props";
-import { useAppWorkbenchTaskState } from "./app-workbench-task-state";
-import { workbenchInputPropsFrom } from "./app-workbench-input-props";
-import { createInitialAppState } from "./app-state";
-import { useSpaceProjection } from "./app-space-state";
+import { useAppShellEffects } from "./shell/effects";
+import { persistSidebarCollapsedPreference, useAppShellState } from "./shell/state";
+import { useAppQueuedMessages } from "./features/conversations/queued-message-state";
+import { useAppWorkbenchConfigState } from "./features/settings/workbench-config-state";
+import { useAppWorkbenchRuntime } from "./workbench/runtime";
+import { workbenchSettingsDialogPropsFrom } from "./features/settings/controllers/dialog-props";
+import { useAppWorkbenchTaskState } from "./features/conversations/task-state";
+import { workbenchInputPropsFrom } from "./features/conversations/composer-input-props";
+import { createInitialAppState } from "./workbench/state";
+import { useSpaceProjection } from "./features/spaces/state";
 
 export function App(): React.ReactElement {
   const [app, setApp] = useState(createInitialAppState);

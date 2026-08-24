@@ -66,7 +66,7 @@ export const ReferencePreview = forwardRef<ReferencePreviewHandle, {
   const resolvedApiBase = apiBase ?? '/api/spaces/references'
   const targetKey = `${resolvedApiBase}:${itemId}:${initialRelativePath}`
   return (
-    <div className={`aa-reference-preview${embedded ? ' aa-reference-preview--embedded' : ''}`}>
+    <div className={`ui-reference-preview${embedded ? ' ui-reference-preview--embedded' : ''}`}>
       <ReferenceDocumentSession
         ref={ref}
         key={targetKey}
@@ -184,7 +184,7 @@ function ReferenceDocumentSessionView({
     // Electron owns the desktop close lifecycle. Browser beforeunload would
     // silently cancel the custom window close button; autosave remains the
     // desktop persistence path.
-    if (!dirty || window.synechHost !== undefined) return
+    if (!dirty || window.desktopHost !== undefined) return
     const warnBeforeUnload = (event: BeforeUnloadEvent) => event.preventDefault()
     window.addEventListener('beforeunload', warnBeforeUnload)
     return () => window.removeEventListener('beforeunload', warnBeforeUnload)
@@ -330,7 +330,7 @@ function ReferenceDocumentSessionView({
 
   if (preview === undefined) {
     return (
-      <div className="aa-reference-preview__session">
+      <div className="ui-reference-preview__session">
         <ReferenceHeader rootTitle={fallbackTitle} relativePath={initialRelativePath} source="" actions={actions} canOpen={canOpen} onOpen={onOpen} />
         <PreviewState title={fallbackTitle} message={error ?? '正在读取引用内容...'} error={error !== undefined} onRetry={() => void reload()} />
       </div>
@@ -339,7 +339,7 @@ function ReferenceDocumentSessionView({
   const markdownDocument = isMarkdownDocument(preview)
 
   return (
-    <div className="aa-reference-preview__session" ref={sessionElementRef} onScrollCapture={rememberScroll}>
+    <div className="ui-reference-preview__session" ref={sessionElementRef} onScrollCapture={rememberScroll}>
       <ReferenceHeader
         rootTitle={fallbackTitle}
         relativePath={relativePath}
@@ -353,7 +353,7 @@ function ReferenceDocumentSessionView({
       />
 
       {incoming !== undefined && (
-        <div className="aa-reference-preview__notice" role="status">
+        <div className="ui-reference-preview__notice" role="status">
           <AlertTriangle size={14} />
           <span>来源已更新，当前内容仍保持不变。</span>
           {preview.content.kind === 'text' && incoming.content.kind === 'text' && (
@@ -363,9 +363,9 @@ function ReferenceDocumentSessionView({
           <button type="button" onClick={() => void reload()}>加载新版</button>
         </div>
       )}
-      {error !== undefined && <div className="aa-reference-preview__error" role="alert">{error}</div>}
+      {error !== undefined && <div className="ui-reference-preview__error" role="alert">{error}</div>}
       {changes !== undefined ? <TextDiff changes={changes} /> : sourceModeActive && markdownDocument ? (
-        <textarea className="aa-reference-preview__editor" data-document-scroll="source" value={draft} onChange={(event) => scheduleSave(event.target.value)} spellCheck={false} />
+        <textarea className="ui-reference-preview__editor" data-document-scroll="source" value={draft} onChange={(event) => scheduleSave(event.target.value)} spellCheck={false} />
       ) : <>
         <PreviewBody preview={preview} itemId={itemId} apiBase={apiBase} relativePath={relativePath} targetKey={targetKey} draft={draft} editable={!readOnly && !loading && preview.content.kind === 'text' && preview.presentation.editable} captionEditable={!readOnly && !loading && preview.content.kind === 'media' && preview.content.mediaKind === 'image' && preview.content.captionEditable === true} onChange={scheduleSave} onCaptionChange={saveCaption} onReload={() => void reload()} onNavigatePath={onNavigatePath} />
       </>}
@@ -385,20 +385,20 @@ function WebDocument({
   annotation?: SpaceReferenceAnnotation
 }) {
   return (
-    <div className="aa-reference-preview__reader" data-document-scroll="content">
-      <article className="aa-reference-preview__markdown aa-reference-preview__web-document reading-prose">
-        <div className="aa-reference-preview__web-source">
+    <div className="ui-reference-preview__reader" data-document-scroll="content">
+      <article className="ui-reference-preview__markdown ui-reference-preview__web-document reading-prose">
+        <div className="ui-reference-preview__web-source">
           <span>{content.site ?? content.url}</span>
           <a href={content.url} target="_blank" rel="noreferrer">访问原网页<ExternalLink size={12} /></a>
         </div>
         <MarkdownDocumentSurface markdown={markdown} sourceVersion={sourceVersion} />
         {annotation?.keyPoints !== undefined && annotation.keyPoints.length > 0 && (
-          <ul className="aa-reference-preview__annotation-points">
+          <ul className="ui-reference-preview__annotation-points">
             {annotation.keyPoints.map((point, index) => <li key={index}>{point}</li>)}
           </ul>
         )}
         {annotation?.tags !== undefined && annotation.tags.length > 0 && (
-          <div className="aa-reference-preview__annotation-tags">
+          <div className="ui-reference-preview__annotation-tags">
             {annotation.tags.map((tag, index) => <span key={index}>{tag}</span>)}
           </div>
         )}
@@ -419,11 +419,11 @@ function ReferenceHeader({ rootTitle, relativePath, source, actions, canOpen, on
   onToggleSourceMode?: () => void
 }) {
   return (
-    <header className="aa-reference-preview__header">
+    <header className="ui-reference-preview__header">
       <ReferenceBreadcrumb rootTitle={rootTitle} relativePath={relativePath} source={source} />
-      <div className="aa-reference-preview__actions">
+      <div className="ui-reference-preview__actions">
         {saveState !== undefined && (
-          <span className="aa-reference-preview__save-state" data-state={saveState}>
+          <span className="ui-reference-preview__save-state" data-state={saveState}>
             {saveState === 'saved' ? <Check size={12} /> : <span />}
             {saveState === 'saved' ? '已保存' : saveState === 'saving' ? '保存中…' : '保存失败'}
           </span>
@@ -448,7 +448,7 @@ function ReferenceHeader({ rootTitle, relativePath, source, actions, canOpen, on
 function ReferenceBreadcrumb({ rootTitle, relativePath, source }: { rootTitle: string; relativePath: string; source: string }) {
   const segments = relativePath.split('/').filter(Boolean)
   return (
-    <nav className="aa-reference-preview__breadcrumb" aria-label="文件路径" title={source}>
+    <nav className="ui-reference-preview__breadcrumb" aria-label="文件路径" title={source}>
       <span data-root>{rootTitle}</span>
       {segments.map((segment, index) => (
         <Fragment key={`${index}:${segment}`}>
@@ -471,10 +471,10 @@ function PreviewBody({ preview, itemId, apiBase, relativePath, targetKey, draft,
     case 'markdown':
       if (content.kind !== 'text') return <InvalidPresentationState preview={preview} onReload={onReload} />
       return (
-        <div className="aa-reference-preview__reader" data-document-scroll="content">
-          <article className="aa-reference-preview__markdown reading-prose">
+        <div className="ui-reference-preview__reader" data-document-scroll="content">
+          <article className="ui-reference-preview__markdown reading-prose">
             <MarkdownDocumentSurface key={targetKey} markdown={draft} sourceVersion={`${targetKey}:${preview.fingerprint ?? ''}`} editable={editable} resolveImageUrl={referenceMarkdownUrlTransform(apiBase, itemId, relativePath)} onChange={onChange} />
-            {content.truncated && <p className="aa-reference-preview__truncated">仅显示前 512 KiB 内容。</p>}
+            {content.truncated && <p className="ui-reference-preview__truncated">仅显示前 512 KiB 内容。</p>}
           </article>
         </div>
       )
@@ -482,13 +482,13 @@ function PreviewBody({ preview, itemId, apiBase, relativePath, targetKey, draft,
     case 'text':
       if (content.kind !== 'text') return <InvalidPresentationState preview={preview} onReload={onReload} />
       return (
-        <div className="aa-reference-preview__text" data-presentation={preview.presentation.kind} data-editable={editable || undefined} data-document-scroll={editable ? undefined : 'content'}>
+        <div className="ui-reference-preview__text" data-presentation={preview.presentation.kind} data-editable={editable || undefined} data-document-scroll={editable ? undefined : 'content'}>
           {editable ? (
-            <textarea className="aa-reference-preview__editor aa-reference-preview__editor--inline" data-document-scroll="content" value={draft} readOnly={!editable} onChange={(event) => onChange(event.target.value)} spellCheck={false} />
+            <textarea className="ui-reference-preview__editor ui-reference-preview__editor--inline" data-document-scroll="content" value={draft} readOnly={!editable} onChange={(event) => onChange(event.target.value)} spellCheck={false} />
           ) : preview.presentation.kind === 'code'
             ? <CodeDocumentSurface source={draft} filename={preview.title} language={content.language ?? 'plaintext'} encoding={content.encoding} />
-            : <article className="aa-reference-preview__plain"><pre>{draft}</pre></article>}
-          {content.truncated && <p className="aa-reference-preview__truncated">仅显示前 512 KiB 内容。</p>}
+            : <article className="ui-reference-preview__plain"><pre>{draft}</pre></article>}
+          {content.truncated && <p className="ui-reference-preview__truncated">仅显示前 512 KiB 内容。</p>}
         </div>
       )
     case 'directory': {
@@ -496,7 +496,7 @@ function PreviewBody({ preview, itemId, apiBase, relativePath, targetKey, draft,
       if (onNavigatePath !== undefined) {
         const parent = content.relativePath.split('/').filter(Boolean).slice(0, -1).join('/')
         return (
-          <div className="aa-reference-preview__directory" data-document-scroll="content">
+          <div className="ui-reference-preview__directory" data-document-scroll="content">
             {content.relativePath.length > 0 && <button type="button" onClick={() => onNavigatePath(parent)}><ChevronRight size={13} style={{ transform: 'rotate(180deg)' }} />上一级</button>}
             {content.entries.map((entry) => (
               <button type="button" key={entry.relativePath} onClick={() => onNavigatePath(entry.relativePath)}>
@@ -520,19 +520,19 @@ function PreviewBody({ preview, itemId, apiBase, relativePath, targetKey, draft,
         return <WebDocument content={content} markdown={content.body} sourceVersion={`${targetKey}:${preview.fingerprint ?? ''}`} />
       }
       return (
-        <div className="aa-reference-preview__web" data-document-scroll="content">
+        <div className="ui-reference-preview__web" data-document-scroll="content">
           <FileText size={28} />
           <strong>{preview.title}</strong>
-          <span className="aa-reference-preview__annotation-empty">Agent 尚未整理此引用</span>
+          <span className="ui-reference-preview__annotation-empty">Agent 尚未整理此引用</span>
           <a href={content.url} target="_blank" rel="noreferrer">{content.url}<ExternalLink size={12} /></a>
         </div>
       )
     case 'pdf':
       if (content.kind === 'pages') {
-        return <div className="aa-reference-preview__reader" data-document-scroll="content"><PdfDocumentSurface source={{ kind: 'pages', pages: content.pages }} /></div>
+        return <div className="ui-reference-preview__reader" data-document-scroll="content"><PdfDocumentSurface source={{ kind: 'pages', pages: content.pages }} /></div>
       }
       if (content.kind === 'media' && content.mediaKind === 'pdf') {
-        return <div className="aa-reference-preview__reader" data-document-scroll="content"><PdfDocumentSurface source={{ kind: 'url', url: content.url, byteLength: preview.byteLength, sourceVersion: preview.fingerprint }} /></div>
+        return <div className="ui-reference-preview__reader" data-document-scroll="content"><PdfDocumentSurface source={{ kind: 'url', url: content.url, byteLength: preview.byteLength, sourceVersion: preview.fingerprint }} /></div>
       }
       return <InvalidPresentationState preview={preview} onReload={onReload} />
     case 'docx':
@@ -553,7 +553,7 @@ function PreviewBody({ preview, itemId, apiBase, relativePath, targetKey, draft,
         : <InvalidPresentationState preview={preview} onReload={onReload} />
     case 'audio':
       return content.kind === 'media' && content.mediaKind === 'audio'
-        ? <div className="aa-reference-preview__audio" data-document-scroll="content"><audio aria-label={preview.title} controls preload="metadata" src={content.url} />{content.duration && <span>{content.duration}</span>}{content.transcript && <p>{content.transcript}</p>}</div>
+        ? <div className="ui-reference-preview__audio" data-document-scroll="content"><audio aria-label={preview.title} controls preload="metadata" src={content.url} />{content.duration && <span>{content.duration}</span>}{content.transcript && <p>{content.transcript}</p>}</div>
         : <InvalidPresentationState preview={preview} onReload={onReload} />
   }
 }
@@ -591,7 +591,7 @@ function referenceMarkdownUrlTransform(apiBase: string, itemId: string, relative
 
 function TextDiff({ changes }: { changes: readonly Change[] }) {
   return (
-    <pre className="aa-reference-preview__diff" data-document-scroll="diff" aria-label="来源内容更改">
+    <pre className="ui-reference-preview__diff" data-document-scroll="diff" aria-label="来源内容更改">
       {changes.map((change, index) => <span key={index} data-change={change.added ? 'added' : change.removed ? 'removed' : 'same'}>{change.value}</span>)}
     </pre>
   )
@@ -612,7 +612,7 @@ function rememberDocumentView(targetKey: string, update: { sourceMode?: boolean;
 
 function PreviewState({ title, message, error, onRetry }: { title: string; message: string; error: boolean; onRetry: () => void }) {
   return (
-    <div className="aa-reference-preview__state">
+    <div className="ui-reference-preview__state">
       {error ? <AlertTriangle size={22} /> : <FileText size={22} />}
       <strong>{title}</strong>
       <span>{message}</span>

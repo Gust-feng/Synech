@@ -48,10 +48,6 @@ export function isString(value: unknown): value is string {
   return typeof value === "string";
 }
 
-export function isMcpToolName(toolName: string): boolean {
-  return /^[A-Za-z0-9][A-Za-z0-9_.-]*__[A-Za-z0-9][A-Za-z0-9_.-]*$/u.test(toolName);
-}
-
 export function readErrorFactsFromOutput(record: Readonly<Record<string, unknown>>): ToolErrorFacts | undefined {
   const direct = optionalRecord(record.errorFacts);
   if (direct !== undefined) {

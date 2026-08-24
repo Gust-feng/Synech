@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { ArrowUp, Check, ChevronDown, FileText, Plus, ShieldCheck, X } from 'lucide-react'
 import type { ChatInputProps } from '../../../../contracts/composer'
-import type { ComposerToolConfirmationPolicy } from '../../../../app-config-projection'
-import { formatCompactTokenCount, formatContextUsagePercent } from '../../../../context-window-usage'
-import { ModelOptionPicker } from '../../../../components/model-option-picker'
+import type { ComposerToolConfirmationPolicy } from '../../../../features/settings/config-projection'
+import { formatCompactTokenCount, formatContextUsagePercent } from '../../../../features/conversations/context-window-usage'
+import { ModelOptionPicker } from '../../../../features/settings/model/option-picker'
 import { ActionConfirmationDialog } from './ActionConfirmationDialog'
 import { composerSurface } from './tokens'
 import { QueuedMessageList } from './QueuedMessageList'
@@ -35,7 +35,7 @@ export function ConversationComposer({ input, onCompositionChange }: Conversatio
   }
 
   return (
-    <div className="aa-conversation-composer" style={composerSurface(focused)}>
+    <div className="ui-conversation-composer" style={composerSurface(focused)}>
       {input.queuedMessages !== undefined && input.queuedMessages.length > 0 && (
         <QueuedMessageList
           messages={input.queuedMessages}
@@ -50,7 +50,7 @@ export function ConversationComposer({ input, onCompositionChange }: Conversatio
             <span
               key={attachment.attachmentId}
               className="flex max-w-full items-center gap-1.5 rounded-md px-2 py-1 text-[11px]"
-              style={{ background: 'var(--aa-surface-hover)', color: 'var(--aa-text-2)' }}
+              style={{ background: 'var(--ui-surface-hover)', color: 'var(--ui-text-2)' }}
             >
               <FileText size={11} className="shrink-0" />
               <span className="truncate">{attachment.title}</span>
@@ -85,22 +85,22 @@ export function ConversationComposer({ input, onCompositionChange }: Conversatio
         rows={1}
         spellCheck={false}
         disabled={!canEdit}
-        className="aa-conversation-composer__input w-full resize-none px-3 pt-2 pb-1 outline-none disabled:cursor-not-allowed"
-        style={{ color: 'var(--aa-text-1)', background: 'transparent', lineHeight: 1.5 }}
+        className="ui-conversation-composer__input w-full resize-none px-3 pt-2 pb-1 outline-none disabled:cursor-not-allowed"
+        style={{ color: 'var(--ui-text-1)', background: 'transparent', lineHeight: 1.5 }}
       />
-      <div className="aa-conversation-composer__toolbar">
-        <div className="aa-conversation-composer__toolbar-left">
+      <div className="ui-conversation-composer__toolbar">
+        <div className="ui-conversation-composer__toolbar-left">
           <button
             type="button"
             onClick={input.onSelectAttachment}
-            className="aa-conversation-composer__icon-button"
-            style={{ color: 'var(--aa-text-3)' }}
+            className="ui-conversation-composer__icon-button"
+            style={{ color: 'var(--ui-text-3)' }}
             aria-label="添加引用"
           >
             <Plus size={17} strokeWidth={1.8} aria-hidden="true" />
           </button>
         </div>
-        <div className="aa-conversation-composer__toolbar-right">
+        <div className="ui-conversation-composer__toolbar-right">
           {input.contextUsage !== undefined && <ComposerContextUsage usage={input.contextUsage} />}
           <ComposerAccessSelect input={input} />
           <ComposerModelSelect input={input} />
@@ -109,7 +109,7 @@ export function ConversationComposer({ input, onCompositionChange }: Conversatio
               type="button"
               onClick={input.onCancel}
               className="rounded-md px-2 py-1 text-[11px] font-medium transition-colors"
-              style={{ background: 'rgba(200,64,64,0.1)', color: 'var(--aa-status-error)' }}
+              style={{ background: 'rgba(200,64,64,0.1)', color: 'var(--ui-status-error)' }}
             >
               {input.cancelLabel ?? '停止'}
             </button>
@@ -119,7 +119,7 @@ export function ConversationComposer({ input, onCompositionChange }: Conversatio
             onClick={submit}
             disabled={!canSend}
             aria-label="发送"
-            className="aa-conversation-composer__send disabled:cursor-not-allowed"
+            className="ui-conversation-composer__send disabled:cursor-not-allowed"
             data-active={canSend}
           >
             <ArrowUp size={17} strokeWidth={2.2} aria-hidden="true" />
@@ -152,12 +152,12 @@ function ComposerModelSelect({ input }: { readonly input: ChatInputProps }) {
 
 function ComposerContextUsage({ usage }: { readonly usage: NonNullable<ChatInputProps['contextUsage']> }) {
   const progressColor = usage.tone === 'danger'
-    ? 'var(--aa-status-error)'
+    ? 'var(--ui-status-error)'
     : usage.tone === 'warning'
-      ? 'var(--aa-status-wait)'
+      ? 'var(--ui-status-wait)'
       : usage.tone === 'muted'
-        ? 'var(--aa-border)'
-        : 'var(--aa-accent)'
+        ? 'var(--ui-border)'
+        : 'var(--ui-accent)'
   const progress = Math.min(100, Math.max(0, usage.ringPercent))
   const [open, setOpen] = useState(false)
   const popoverRef = useRef<HTMLDivElement>(null)
@@ -179,10 +179,10 @@ function ComposerContextUsage({ usage }: { readonly usage: NonNullable<ChatInput
   }, [open])
 
   return (
-    <div ref={popoverRef} className="aa-context-usage relative hidden shrink-0 sm:block">
+    <div ref={popoverRef} className="ui-context-usage relative hidden shrink-0 sm:block">
       <button
         type="button"
-        className="aa-context-usage__trigger flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-[var(--aa-hover-tint)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--aa-accent)]"
+        className="ui-context-usage__trigger flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-[var(--ui-hover-tint)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--ui-accent)]"
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-label={usage.label}
@@ -210,20 +210,20 @@ function ContextUsagePopover({
     <div
       role="dialog"
       aria-label="上下文用量"
-      aria-labelledby="aa-context-usage-title"
-      className="aa-context-usage__popover absolute bottom-[calc(100%+8px)] right-0 z-30 rounded-xl p-3.5"
+      aria-labelledby="ui-context-usage-title"
+      className="ui-context-usage__popover absolute bottom-[calc(100%+8px)] right-0 z-30 rounded-xl p-3.5"
     >
       <div className="flex items-center justify-between gap-3">
-        <strong id="aa-context-usage-title" className="text-sm font-medium" style={{ color: 'var(--aa-text-1)' }}>上下文用量</strong>
+        <strong id="ui-context-usage-title" className="text-sm font-medium" style={{ color: 'var(--ui-text-1)' }}>上下文用量</strong>
         <div className="flex items-center gap-2">
-          <span className="aa-context-usage__popover-percent" data-tone={tone}>
+          <span className="ui-context-usage__popover-percent" data-tone={tone}>
             {percent === undefined ? '--' : `${percent}%`}
           </span>
           <button
             type="button"
             aria-label="关闭上下文用量"
-            className="flex h-6 w-6 items-center justify-center rounded-md transition-colors hover:bg-[var(--aa-hover-tint)]"
-            style={{ color: 'var(--aa-text-3)' }}
+            className="flex h-6 w-6 items-center justify-center rounded-md transition-colors hover:bg-[var(--ui-hover-tint)]"
+            style={{ color: 'var(--ui-text-3)' }}
             onClick={onClose}
           >
             <X size={14} aria-hidden="true" />
@@ -231,10 +231,10 @@ function ContextUsagePopover({
         </div>
       </div>
       <div className="mt-2 flex items-baseline justify-between gap-3">
-        <span className="text-[11px]" style={{ color: 'var(--aa-text-3)' }}>
+        <span className="text-[11px]" style={{ color: 'var(--ui-text-3)' }}>
           {used === undefined ? '暂无用量' : `已使用 ${used} / ${max}`}
         </span>
-        <span className="text-[11px]" style={{ color: 'var(--aa-text-3)' }}>
+        <span className="text-[11px]" style={{ color: 'var(--ui-text-3)' }}>
           {usage.source === 'provider_usage' ? '输入上下文' : '等待用量'}
         </span>
       </div>
@@ -245,13 +245,13 @@ function ContextUsagePopover({
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={usage.percent === undefined ? undefined : Math.round(usage.percent)}
-        style={{ background: 'var(--aa-surface-hover)' }}
+        style={{ background: 'var(--ui-surface-hover)' }}
       >
         <span
           className="block h-full rounded-full transition-[width,background-color] duration-200"
           style={{
             width: `${Math.min(100, Math.max(0, usage.ringPercent))}%`,
-            background: tone === 'danger' ? 'var(--aa-status-error)' : tone === 'warning' ? 'var(--aa-status-wait)' : 'var(--aa-accent)',
+            background: tone === 'danger' ? 'var(--ui-status-error)' : tone === 'warning' ? 'var(--ui-status-wait)' : 'var(--ui-accent)',
           }}
         />
       </div>
@@ -265,15 +265,15 @@ function ContextUsageRing({ progress, color }: { readonly progress: number; read
   const offset = circumference * (1 - progress / 100)
   return (
     <svg
-      className="aa-context-usage__ring"
+      className="ui-context-usage__ring"
       viewBox="0 0 16 16"
       width="16"
       height="16"
       aria-hidden="true"
     >
-      <circle className="aa-context-usage__ring-track" cx="8" cy="8" r={radius} fill="none" strokeWidth="2" />
+      <circle className="ui-context-usage__ring-track" cx="8" cy="8" r={radius} fill="none" strokeWidth="2" />
       <circle
-        className="aa-context-usage__ring-value"
+        className="ui-context-usage__ring-value"
         cx="8"
         cy="8"
         r={radius}
@@ -297,15 +297,15 @@ function ComposerReasoningSelect({ input }: { readonly input: ChatInputProps }) 
         aria-label="推理力度"
         value={input.reasoningEffort}
         onChange={(event) => input.onReasoningEffortChange(event.target.value as ChatInputProps['reasoningEffort'])}
-        className="h-6 appearance-none rounded-md bg-transparent py-0 pl-2 pr-6 text-[11px] outline-none transition-colors hover:bg-[var(--aa-hover-tint)] focus-visible:ring-1 focus-visible:ring-[var(--aa-accent)]"
-        style={{ color: 'var(--aa-text-2)' }}
+        className="h-6 appearance-none rounded-md bg-transparent py-0 pl-2 pr-6 text-[11px] outline-none transition-colors hover:bg-[var(--ui-hover-tint)] focus-visible:ring-1 focus-visible:ring-[var(--ui-accent)]"
+        style={{ color: 'var(--ui-text-2)' }}
       >
         <option value="">自动</option>
         <option value="low">轻量</option>
         <option value="medium">标准</option>
         <option value="high">深入</option>
       </select>
-      <ChevronDown size={10} className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2" style={{ color: 'var(--aa-text-3)' }} aria-hidden="true" />
+      <ChevronDown size={10} className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2" style={{ color: 'var(--ui-text-3)' }} aria-hidden="true" />
     </label>
   )
 }
@@ -346,10 +346,10 @@ function ComposerAccessSelect({ input }: { readonly input: ChatInputProps }) {
   }
 
   return (
-    <div ref={rootRef} className="aa-composer-access hidden shrink-0 sm:inline-flex">
+    <div ref={rootRef} className="ui-composer-access hidden shrink-0 sm:inline-flex">
       <button
         type="button"
-        className="aa-composer-access__chip"
+        className="ui-composer-access__chip"
         data-policy={policy}
         aria-haspopup="listbox"
         aria-expanded={open}
@@ -358,10 +358,10 @@ function ComposerAccessSelect({ input }: { readonly input: ChatInputProps }) {
       >
         <ShieldCheck size={12} strokeWidth={1.8} aria-hidden="true" />
         <span>{accessPolicyLabel(policy)}</span>
-        <ChevronDown size={10} className="aa-composer-access__chevron" aria-hidden="true" />
+        <ChevronDown size={10} className="ui-composer-access__chevron" aria-hidden="true" />
       </button>
       {open && (
-        <div className="aa-composer-access__popover" role="listbox" aria-label="命令确认方式">
+        <div className="ui-composer-access__popover" role="listbox" aria-label="命令确认方式">
           <AccessOption policy="prompt" selected={policy === 'prompt'} onSelect={select} />
           <AccessOption policy="full_access" selected={policy === 'full_access'} onSelect={select} />
         </div>
@@ -400,14 +400,14 @@ function AccessOption({
       type="button"
       role="option"
       aria-selected={selected}
-      className={selected ? 'aa-composer-access__option selected' : 'aa-composer-access__option'}
+      className={selected ? 'ui-composer-access__option selected' : 'ui-composer-access__option'}
       onClick={() => onSelect(policy)}
     >
-      <span className="aa-composer-access__option-copy">
+      <span className="ui-composer-access__option-copy">
         <strong>{fullAccess ? '完全访问' : '标准访问'}</strong>
         <small>{fullAccess ? '运行命令时不再逐条询问' : '运行命令前会先询问'}</small>
       </span>
-      {selected && <Check size={13} className="aa-composer-access__option-check" aria-hidden="true" />}
+      {selected && <Check size={13} className="ui-composer-access__option-check" aria-hidden="true" />}
     </button>
   )
 }

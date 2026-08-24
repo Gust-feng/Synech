@@ -27,7 +27,7 @@ export function SidebarNavRow({ active, onClick, labelsVisible, collapsed, icon,
         display: 'block',
         height: 32,
         transition: 'color 120ms ease',
-        color: active ? 'var(--aa-accent)' : hovered ? 'var(--aa-text-1)' : 'var(--aa-text-2)',
+        color: active ? 'var(--ui-accent)' : hovered ? 'var(--ui-text-1)' : 'var(--ui-text-2)',
       }}
     >
       <span
@@ -39,7 +39,7 @@ export function SidebarNavRow({ active, onClick, labelsVisible, collapsed, icon,
           left: 0,
           width: collapsed ? 40 : '100%',
           borderRadius: 8,
-          background: active ? 'var(--aa-accent-bg)' : hovered ? 'rgba(45,40,34,0.04)' : 'transparent',
+          background: active ? 'var(--ui-accent-bg)' : hovered ? 'rgba(45,40,34,0.04)' : 'transparent',
           transition: 'background 120ms ease, width 240ms cubic-bezier(0.4,0,0.2,1)',
         }}
       />
@@ -53,7 +53,7 @@ export function SidebarNavRow({ active, onClick, labelsVisible, collapsed, icon,
           width: 3,
           height: 14,
           borderRadius: 2,
-          background: 'var(--aa-accent)',
+          background: 'var(--ui-accent)',
           zIndex: 1,
         }}/>
       )}
@@ -129,8 +129,8 @@ export function SidebarListRow({ active, onClick, dot, dotShape = 'circle', labe
         height: 32,
         paddingLeft: 12,
         paddingRight: 8,
-        color: active ? 'var(--aa-accent)' : 'var(--aa-text-2)',
-        background: active ? 'var(--aa-accent-bg)' : hovered ? 'rgba(45,40,34,0.04)' : 'transparent',
+        color: active ? 'var(--ui-accent)' : 'var(--ui-text-2)',
+        background: active ? 'var(--ui-accent-bg)' : hovered ? 'rgba(45,40,34,0.04)' : 'transparent',
         transition: 'background 120ms ease, color 120ms ease',
       }}
     >
@@ -192,7 +192,7 @@ export function SidebarSectionLabel({
         pointerEvents: labelsVisible ? 'auto' : 'none',
       }}
     >
-      <span className="flex items-center gap-1.5" style={{ color: 'var(--aa-text-3)' }}>
+      <span className="flex items-center gap-1.5" style={{ color: 'var(--ui-text-3)' }}>
         {leadingIcon !== undefined && <span aria-hidden="true" className="flex items-center justify-center">{leadingIcon}</span>}
         <span className="text-[10px] font-semibold tracking-widest uppercase">
           {label}
@@ -247,7 +247,7 @@ export function SidebarConversationScrollArea({ maxHeight, children }: { readonl
     <div
       ref={viewportRef}
       onScroll={handleScroll}
-      className="aa-conversation-scroll space-y-0.5 overflow-y-auto"
+      className="ui-conversation-scroll space-y-0.5 overflow-y-auto"
       style={{ maxHeight, WebkitMaskImage: mask, maskImage: mask }}
       data-conversation-scroll
     >

@@ -51,28 +51,28 @@ function DeferredFailure(props: {
     <div className="flex min-h-0 flex-1 items-center justify-center px-6" role="alert">
       <div
         className="w-full max-w-md border-l-2 py-1 pl-5"
-        style={{ borderColor: 'var(--aa-status-error)' }}
+        style={{ borderColor: 'var(--ui-status-error)' }}
       >
         <div className="flex items-center gap-2">
-          <AlertCircle className="shrink-0" size={16} style={{ color: 'var(--aa-status-error)' }} />
-          <p className="text-sm font-medium" style={{ color: 'var(--aa-text-1)' }}>{props.label}</p>
+          <AlertCircle className="shrink-0" size={16} style={{ color: 'var(--ui-status-error)' }} />
+          <p className="text-sm font-medium" style={{ color: 'var(--ui-text-1)' }}>{props.label}</p>
         </div>
-        <p className="mt-2 text-xs leading-5" style={{ color: 'var(--aa-text-2)' }}>
+        <p className="mt-2 text-xs leading-5" style={{ color: 'var(--ui-text-2)' }}>
           重新加载后再试。
         </p>
         <div className="relative mt-4 h-7">
           <button
             type="button"
             onClick={props.onRetry}
-            className="flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs transition-colors hover:bg-[var(--aa-hover-tint)] focus-visible:outline-2 focus-visible:outline-offset-2"
-            style={{ background: 'var(--aa-accent-bg)', color: 'var(--aa-accent)' }}
+            className="flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs transition-colors hover:bg-[var(--ui-hover-tint)] focus-visible:outline-2 focus-visible:outline-offset-2"
+            style={{ background: 'var(--ui-accent-bg)', color: 'var(--ui-accent)' }}
           >
             <RotateCcw size={12} />
             重新加载
           </button>
           {props.detail.length > 0 && (
             <details className="group absolute top-0 left-24 z-10 min-w-0">
-              <summary className="flex cursor-pointer list-none items-center gap-1 text-xs transition-colors hover:opacity-75" style={{ color: 'var(--aa-text-3)' }}>
+              <summary className="flex cursor-pointer list-none items-center gap-1 text-xs transition-colors hover:opacity-75" style={{ color: 'var(--ui-text-3)' }}>
                 错误详情
                 <ChevronDown className="transition-transform group-open:rotate-180" size={13} />
               </summary>
@@ -81,9 +81,9 @@ function DeferredFailure(props: {
                 style={{
                   left: '-6rem',
                   width: 'min(24rem, calc(100vw - 4rem))',
-                  background: 'var(--aa-surface)',
-                  borderColor: 'var(--aa-border)',
-                  color: 'var(--aa-text-2)',
+                  background: 'var(--ui-surface)',
+                  borderColor: 'var(--ui-border)',
+                  color: 'var(--ui-text-2)',
                 }}
               >
                 {props.detail}

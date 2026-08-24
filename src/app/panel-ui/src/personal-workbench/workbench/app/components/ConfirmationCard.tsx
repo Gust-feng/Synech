@@ -5,7 +5,7 @@ import type {
   PendingConfirmation,
   TranscriptConfirmation,
 } from "../../../../contracts/run";
-import { projectConfirmationDisplay } from "../../../../confirmation-display-projection";
+import { projectConfirmationDisplay } from "../../../../features/conversations/transcript/confirmation-display";
 
 export type ConfirmationProjection =
   | PendingConfirmation
@@ -14,9 +14,9 @@ export type ConfirmationProjection =
 
 // 风险分级的强调色：高风险走 error 红，中风险走 wait 琥珀，低风险走默认 accent 蓝。
 const RISK_ACCENT: Record<"low" | "medium" | "high", string> = {
-  low: "var(--aa-accent)",
-  medium: "var(--aa-status-wait)",
-  high: "var(--aa-status-error)",
+  low: "var(--ui-accent)",
+  medium: "var(--ui-status-wait)",
+  high: "var(--ui-status-error)",
 };
 
 export function ConfirmationCard(props: {
@@ -32,7 +32,7 @@ export function ConfirmationCard(props: {
       className="space-y-3 py-3"
       data-risk={view.riskLevel}
       style={{
-        color: "var(--aa-text-1)",
+        color: "var(--ui-text-1)",
         borderLeft: `3px solid ${accent}`,
         background: `color-mix(in srgb, ${accent} 7%, transparent)`,
         borderRadius: "6px",
@@ -49,7 +49,7 @@ export function ConfirmationCard(props: {
         <div className="min-w-0 space-y-1">
           {view.title.length > 0 && <strong className="block text-xs font-medium">{view.title}</strong>}
           {view.showActionPreview && (
-            <p className="whitespace-pre-wrap text-xs leading-5" style={{ color: "var(--aa-text-2)" }}>
+            <p className="whitespace-pre-wrap text-xs leading-5" style={{ color: "var(--ui-text-2)" }}>
               {view.actionPreview}
             </p>
           )}
@@ -62,7 +62,7 @@ export function ConfirmationCard(props: {
             <code
               key={resource}
               className="max-w-full truncate rounded px-1.5 py-0.5 text-[10px]"
-              style={{ background: "var(--aa-surface-hover)", color: "var(--aa-text-2)" }}
+              style={{ background: "var(--ui-surface-hover)", color: "var(--ui-text-2)" }}
               title={resource}
             >
               {resource}
@@ -74,7 +74,7 @@ export function ConfirmationCard(props: {
       {view.resumeLostSummary !== undefined && (
         <p
           className="ml-6 rounded px-2.5 py-2 text-xs leading-5"
-          style={{ background: "rgba(212, 144, 32, 0.08)", color: "var(--aa-status-wait)" }}
+          style={{ background: "rgba(212, 144, 32, 0.08)", color: "var(--ui-status-wait)" }}
         >
           {view.resumeLostSummary}
         </p>
@@ -85,7 +85,7 @@ export function ConfirmationCard(props: {
           <button
             type="button"
             className="inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-            style={{ background: isHighRisk ? "var(--aa-status-error)" : accent, color: "#fff" }}
+            style={{ background: isHighRisk ? "var(--ui-status-error)" : accent, color: "#fff" }}
             onClick={() => props.onDecision?.("approve_once")}
             disabled={props.busy || view.resumeLost}
           >
@@ -94,8 +94,8 @@ export function ConfirmationCard(props: {
           </button>
           <button
             type="button"
-            className="inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors hover:bg-[var(--aa-hover-tint)] disabled:cursor-not-allowed disabled:opacity-50"
-            style={{ color: "var(--aa-text-2)" }}
+            className="inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors hover:bg-[var(--ui-hover-tint)] disabled:cursor-not-allowed disabled:opacity-50"
+            style={{ color: "var(--ui-text-2)" }}
             onClick={() => props.onDecision?.("deny")}
             disabled={props.busy}
           >

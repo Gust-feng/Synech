@@ -23,7 +23,7 @@ export function MarkdownDocumentSurface({
     content: markdown,
     editable,
     editorProps: {
-      attributes: { class: 'aa-editor-prose aa-reference-markdown-prose', spellcheck: 'false' },
+      attributes: { class: 'ui-editor-prose ui-reference-markdown-prose', spellcheck: 'false' },
       handleDOMEvents: {
         beforeinput: () => { userEditRef.current = true; return false },
         paste: () => { userEditRef.current = true; return false },

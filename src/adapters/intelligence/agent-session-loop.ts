@@ -13,14 +13,12 @@ import {
 } from "@earendil-works/pi-agent-core";
 import { createHash } from "node:crypto";
 import {
-  isContextOverflow,
   Type,
   type Api,
   type AssistantMessage,
   type ImageContent,
   type Model,
   type Models,
-  type Usage,
 } from "@earendil-works/pi-ai";
 import type {
   AgentLoop,
@@ -30,24 +28,18 @@ import type {
   AgentLoopInput,
   AgentLoopResult,
   AgentLoopToolBoundary,
-  AgentLoopToolVisibilityPlan,
 } from "../../app/model-runtime/agent-loop.js";
-import { canonicalToolResultMessage } from "../../app/model-runtime/tool-result-message.js";
 import {
-  isProgressiveToolVisibilityCostEffective,
   serializeModelVisibleToolDefinitions,
   type ModelVisibleToolDefinitionSerialization,
 } from "../../app/model-runtime/tool-definition-visibility-cost.js";
-import { TOOL_VISIBILITY_ACTIVATION_KIND } from "../../app/model-runtime/tool-visibility-contract.js";
 import type { ConfirmationDecision, ConfirmationRequest } from "../../domain/confirmation/index.js";
-import type { ModelInputAttachment, ModelInputAttachmentRef, ModelMessage, ModelUsage } from "../../domain/intelligence/index.js";
+import type { ModelUsage } from "../../domain/intelligence/index.js";
 import {
   cloneToolInputSchema,
-  copyToolModelAttachments,
   modelVisibleToolDescription,
   normalizeToolFactValue,
   stableToolSchemaStringify,
-  toolModelAttachmentsFromOutput,
   toolCallFactId,
   type ToolCallRequest,
   type ToolCallResult,
@@ -55,10 +47,39 @@ import {
   type ToolFactValue,
   type ToolOperationType,
 } from "../../domain/tools/index.js";
-import { modelFailureKindFromError } from "../../kernel/intelligence/failures.js";
 import { compactSessionContextIfNeeded } from "./session-context-compaction.js";
 import { replaceUnsupportedImageBlocks } from "./session-image-placeholder.js";
 import type { ModelProviderPayloadTransformer } from "./model-provider-binding.js";
+import {
+  createToolVisibilitySession,
+  narrowToolVisibilityPlan,
+  type ToolVisibilityToolSet,
+} from "./tool-visibility-session.js";
+import {
+  cancelledApprovalResult,
+  cloneToolResult,
+  deniedToolResult,
+  harnessToolResult,
+  pendingToolResultForMessage,
+  piImmediateToolResult,
+  requireApprovalRequiredResult,
+  requireConfirmationRequest,
+  toolRequestFromResult,
+  toolResultAcceptanceFailure,
+  toolResultForPiTransport,
+  toolResultFromDetails,
+  toolResultHasInlineImage,
+  type PendingToolResultDelivery,
+  type ToolExecutionDetails,
+} from "./tool-result-transport.js";
+import {
+  assistantText,
+  imageContentFromAttachments,
+  modelMessageFromAssistant,
+  modelUsageFromProvider,
+  providerFailureFromAssistant,
+  providerRefusalFromAssistant,
+} from "./provider-result-projection.js";
 import { errorMessage } from "../../kernel/values/index.js";
 
 export type AgentSessionLoopOptions = {
@@ -96,20 +117,6 @@ export type AgentSessionToolDefinitionMetricsObserver = (
   metrics: AgentSessionToolDefinitionMetrics,
 ) => void;
 
-type HarnessToolBundle = {
-  readonly tools: readonly AgentTool[];
-  readonly metadataByName: ReadonlyMap<string, ToolDefinition["metadata"]>;
-  readonly activeToolNames: readonly string[];
-  readonly bind?: (harness: AgentHarness) => void;
-};
-
-type ToolExecutionDetails = {
-  readonly kind: "progress";
-} | {
-  readonly kind: "result";
-  readonly result: ToolCallResult;
-};
-
 type Deferred<T> = {
   readonly promise: Promise<T>;
   resolve(value: T): void;
@@ -125,10 +132,6 @@ type PendingToolRequest = {
   readonly request: ToolCallRequest;
   /** Visibility at the provider request that produced this call, before any same-batch load. */
   readonly modelVisibleAtRequest: boolean;
-};
-
-type PendingToolResultDelivery = {
-  readonly result: ToolCallResult;
 };
 
 type ApprovalResolution = {
@@ -369,7 +372,7 @@ function createHarnessTools(
   input: AgentLoopInput,
   state: AgentSessionExecutionState,
   options: AgentSessionLoopOptions,
-): HarnessToolBundle {
+): ToolVisibilityToolSet {
   const allowed = new Set(input.tools.permission.allowedTools);
   const agentTools = input.agentTools ?? [];
   const agentToolNames = new Set(agentTools.map((tool) => tool.toolName));
@@ -388,476 +391,37 @@ function createHarnessTools(
         options,
         requireDelegatedAgentResultGateway(input.tools.gateway),
       ));
-  return createHarnessToolBundle({
+  return createToolVisibilitySession({
     tools: [...mechanicalTools, ...delegatedTools],
     metadataByName: new Map([
       ...mechanicalDefinitions.map((definition) => [definition.name, definition.metadata] as const),
       ...agentTools.map((agentTool) => [agentTool.toolName, undefined] as const),
     ]),
-    input,
-    state,
     visibilityPlan: input.toolVisibilityPlan,
+    host: toolVisibilityHost(input, state),
   });
 }
 
-type VisibilityControlExecutionResult = {
-  readonly result: ToolCallResult;
-  readonly addedToolNames?: readonly string[];
-  readonly rollback?: () => Promise<void>;
-};
-
-type VisibilityStateMutation = <T>(operation: () => Promise<T>) => Promise<T>;
-
-type VisibilitySearchInput = {
-  readonly query?: string;
-  readonly serverId?: string;
-  readonly cursor: number;
-  readonly limit: number;
-};
-
-function createHarnessToolBundle(input: {
-  readonly tools: readonly AgentTool[];
-  readonly metadataByName: ReadonlyMap<string, ToolDefinition["metadata"]>;
-  readonly input: AgentLoopInput;
-  readonly state: AgentSessionExecutionState;
-  readonly visibilityPlan?: AgentLoopToolVisibilityPlan;
-  readonly requestScope?: (request: ToolCallRequest) => ToolCallRequest;
-  readonly onToolInvoked?: () => void;
-}): HarnessToolBundle {
-  const baseTools = [...input.tools];
-  assertUniqueToolNames(baseTools);
-  if (input.visibilityPlan === undefined) {
-    return {
-      tools: baseTools,
-      metadataByName: input.metadataByName,
-      activeToolNames: baseTools.map((tool) => tool.name),
-    };
-  }
-
-  const visibilityPlan = input.visibilityPlan;
-  assertVisibilityPlanPartition(visibilityPlan, baseTools);
-  let harness: AgentHarness | undefined;
-  let visibilityMutationTail = Promise.resolve();
-  const mutateVisibilityState: VisibilityStateMutation = async <T>(operation: () => Promise<T>): Promise<T> => {
-    const previous = visibilityMutationTail;
-    let release!: () => void;
-    visibilityMutationTail = new Promise<void>((resolve) => { release = resolve; });
-    await previous;
-    try {
-      return await operation();
-    } finally {
-      release();
-    }
-  };
-  const allToolNames = [
-    ...baseTools.map((tool) => tool.name),
-    visibilityPlan.controls.search.name,
-    visibilityPlan.controls.load.name,
-  ];
-  const deferredTools = [...visibilityPlan.deferredTools];
-  const searchTool = createVisibilityControlTool({
-    definition: visibilityPlan.controls.search,
-    input: input.input,
-    state: input.state,
-    requestScope: input.requestScope,
-    onToolInvoked: input.onToolInvoked,
-    execute: async (request) => ({
-      result: searchDeferredTools(
-        request,
-        deferredTools,
-        requireBoundVisibilityHarness(harness).getActiveTools().map((tool) => tool.name),
-      ),
-    }),
-  });
-  const loadTool = createVisibilityControlTool({
-    definition: visibilityPlan.controls.load,
-    input: input.input,
-    state: input.state,
-    requestScope: input.requestScope,
-    onToolInvoked: input.onToolInvoked,
-    execute: async (request) => loadDeferredTools({
-      request,
-      deferredTools,
-      controlToolNames: [
-        visibilityPlan.controls.search.name,
-        visibilityPlan.controls.load.name,
-      ],
-      harness: requireBoundVisibilityHarness(harness),
-      mutateVisibilityState,
-    }),
-  });
-  const tools = [...baseTools, searchTool, loadTool];
-  assertUniqueToolNames(tools);
-  const initiallyActive = new Set([
-    ...visibilityPlan.initiallyVisibleToolNames,
-    visibilityPlan.controls.search.name,
-    visibilityPlan.controls.load.name,
-  ]);
+function toolVisibilityHost(
+  input: AgentLoopInput,
+  state: AgentSessionExecutionState,
+  requestScope?: (request: ToolCallRequest) => ToolCallRequest,
+  onToolInvoked?: () => void,
+) {
   return {
-    tools,
-    metadataByName: new Map([
-      ...input.metadataByName,
-      [visibilityPlan.controls.search.name, visibilityPlan.controls.search.metadata] as const,
-      [visibilityPlan.controls.load.name, visibilityPlan.controls.load.metadata] as const,
-    ]),
-    activeToolNames: allToolNames.filter((name) => initiallyActive.has(name)),
-    bind: (boundHarness) => {
-      if (harness !== undefined && harness !== boundHarness) {
-        throw new Error("Progressive tool visibility bundle is already bound to another AgentHarness.");
-      }
-      harness = boundHarness;
+    abortSignal: input.abortSignal,
+    ...(requestScope === undefined ? {} : { requestScope }),
+    onToolRequested: (request: ToolCallRequest) => emitToolRequested(input, request),
+    ...(onToolInvoked === undefined ? {} : { onToolInvoked }),
+    acceptResult: (result: ToolCallResult) => acceptToolResultForDelivery(input, state, result),
+    projectResult: (
+      result: ToolCallResult,
+      terminate: boolean,
+      addedToolNames?: readonly string[],
+    ) => harnessToolResult(result, state, terminate, addedToolNames),
+    recordMaintenanceFailure: (failure: { readonly code: string; readonly error: string }) => {
+      state.maintenanceFailure ??= failure;
     },
-  };
-}
-
-function assertVisibilityPlanPartition(
-  plan: AgentLoopToolVisibilityPlan,
-  baseTools: readonly AgentTool[],
-): void {
-  const initialNames = [...plan.initiallyVisibleToolNames];
-  const deferredNames = plan.deferredTools.map((tool) => tool.name);
-  assertUniqueToolNameList(initialNames, "initially visible");
-  assertUniqueToolNameList(deferredNames, "deferred");
-  if (plan.controls.search.name === plan.controls.load.name) {
-    throw new Error(`Progressive tool visibility controls share the name ${plan.controls.search.name}.`);
-  }
-  const baseNames = baseTools.map((tool) => tool.name);
-  const baseNameSet = new Set(baseNames);
-  const partition = new Set(initialNames);
-  for (const name of deferredNames) {
-    if (partition.has(name)) {
-      throw new Error(`Progressive tool visibility plan places ${name} in both partitions.`);
-    }
-    partition.add(name);
-  }
-  const missing = baseNames.filter((name) => !partition.has(name));
-  const foreign = [...partition].filter((name) => !baseNameSet.has(name));
-  if (missing.length > 0 || foreign.length > 0) {
-    throw new Error(
-      `Progressive tool visibility plan does not partition the frozen run tools (missing: ${missing.join(", ") || "none"}; foreign: ${foreign.join(", ") || "none"}).`,
-    );
-  }
-}
-
-function assertUniqueToolNameList(names: readonly string[], label: string): void {
-  const unique = new Set(names);
-  if (unique.size !== names.length) {
-    throw new Error(`Progressive tool visibility ${label} names contain duplicates.`);
-  }
-}
-
-function createVisibilityControlTool(input: {
-  readonly definition: ToolDefinition;
-  readonly input: AgentLoopInput;
-  readonly state: AgentSessionExecutionState;
-  readonly requestScope?: (request: ToolCallRequest) => ToolCallRequest;
-  readonly onToolInvoked?: () => void;
-  readonly execute: (request: ToolCallRequest) => Promise<VisibilityControlExecutionResult>;
-}): AgentTool {
-  return {
-    name: input.definition.name,
-    label: input.definition.name,
-    description: modelVisibleToolDescription(input.definition),
-    parameters: Type.Unsafe(globalThis.structuredClone(input.definition.inputSchema)),
-    executionMode: "parallel",
-    async execute(callId, parameters, signal) {
-      const startedAt = Date.now();
-      let request: ToolCallRequest;
-      try {
-        const unscopedRequest: ToolCallRequest = {
-          callId,
-          toolName: input.definition.name,
-          input: normalizeToolFactValue(parameters),
-        };
-        request = input.requestScope?.(unscopedRequest) ?? unscopedRequest;
-      } catch (error) {
-        const unscopedRequest = { callId, toolName: input.definition.name, input: undefined };
-        request = input.requestScope?.(unscopedRequest) ?? unscopedRequest;
-        emitToolRequested(input.input, request);
-        input.onToolInvoked?.();
-        const result = visibilityControlFailure(request, errorMessage(error), "tool_visibility_invalid_input", startedAt);
-        const acceptanceFailure = await acceptToolResultForDelivery(input.input, input.state, result);
-        return acceptanceFailure ?? harnessToolResult(result, input.state, false);
-      }
-      emitToolRequested(input.input, request);
-      input.onToolInvoked?.();
-      const abortSignal = signal ?? input.input.abortSignal;
-      let execution: VisibilityControlExecutionResult;
-      if (abortSignal.aborted) {
-        execution = {
-          result: visibilityControlCancellation(request, abortSignal.reason, startedAt),
-        };
-      } else {
-        try {
-          execution = await input.execute(request);
-        } catch (error) {
-          execution = abortSignal.aborted
-            ? { result: visibilityControlCancellation(request, abortSignal.reason ?? error, startedAt) }
-            : {
-                result: visibilityControlFailure(
-                  request,
-                  errorMessage(error),
-                  "tool_visibility_control_failed",
-                  startedAt,
-                ),
-              };
-        }
-      }
-      const acceptanceFailure = await acceptToolResultForDelivery(input.input, input.state, execution.result);
-      if (acceptanceFailure !== undefined) {
-        try {
-          await execution.rollback?.();
-        } catch (error) {
-          input.state.maintenanceFailure ??= {
-            code: "tool_visibility_activation_rollback_failed",
-            error: `Tool visibility activation could not be rolled back after result acceptance failed: ${errorMessage(error)}`,
-          };
-        }
-        return acceptanceFailure;
-      }
-      return harnessToolResult(
-        execution.result,
-        input.state,
-        execution.result.status === "cancelled",
-        execution.addedToolNames,
-      );
-    },
-  };
-}
-
-function searchDeferredTools(
-  request: ToolCallRequest,
-  deferredTools: AgentLoopToolVisibilityPlan["deferredTools"],
-  activeToolNames: readonly string[],
-): ToolCallResult {
-  const startedAt = Date.now();
-  let search: VisibilitySearchInput;
-  try {
-    search = parseVisibilitySearchInput(request.input);
-  } catch (error) {
-    return visibilityControlFailure(request, errorMessage(error), "tool_visibility_invalid_input", startedAt);
-  }
-  const query = search.query?.trim().toLowerCase();
-  const serverId = search.serverId?.trim();
-  const active = new Set(activeToolNames);
-  const matching = deferredTools.filter((tool) => {
-    if (serverId !== undefined && tool.source.id !== serverId) return false;
-    if (query === undefined) return true;
-    return [tool.name, tool.displayName, tool.description, tool.source.id, tool.source.label]
-      .some((value) => value.toLowerCase().includes(query));
-  });
-  const page = matching.slice(search.cursor, search.cursor + search.limit);
-  const nextCursor = search.cursor + page.length;
-  const output: ToolFactValue = {
-    matches: page.map((tool) => ({
-      name: tool.name,
-      displayName: tool.displayName,
-      description: tool.description,
-      source: globalThis.structuredClone(tool.source),
-      loaded: active.has(tool.name),
-    })),
-    totalMatches: matching.length,
-    returned: page.length,
-    ...(nextCursor < matching.length
-      ? {
-          continuation: {
-            nextInput: {
-              ...(search.query === undefined ? {} : { query: search.query }),
-              ...(search.serverId === undefined ? {} : { server_id: search.serverId }),
-              cursor: nextCursor,
-              limit: search.limit,
-            },
-          },
-        }
-      : {}),
-  };
-  return {
-    ...request,
-    output,
-    status: "completed",
-    durationMs: Math.max(0, Date.now() - startedAt),
-  };
-}
-
-async function loadDeferredTools(input: {
-  readonly request: ToolCallRequest;
-  readonly deferredTools: AgentLoopToolVisibilityPlan["deferredTools"];
-  readonly controlToolNames: readonly string[];
-  readonly harness: AgentHarness;
-  readonly mutateVisibilityState: VisibilityStateMutation;
-}): Promise<VisibilityControlExecutionResult> {
-  const startedAt = Date.now();
-  let requestedNames: readonly string[];
-  try {
-    requestedNames = parseVisibilityLoadInput(input.request.input);
-  } catch (error) {
-    return {
-      result: visibilityControlFailure(
-        input.request,
-        errorMessage(error),
-        "tool_visibility_invalid_input",
-        startedAt,
-      ),
-    };
-  }
-  const loadable = new Set(input.deferredTools.map((tool) => tool.name));
-  const invalid = requestedNames.filter((name) => !loadable.has(name));
-  if (invalid.length > 0) {
-    return {
-      result: visibilityControlFailure(
-        input.request,
-        `Requested MCP tools are not loadable in this frozen run: ${invalid.join(", ")}.`,
-        "tool_visibility_tool_not_loadable",
-        startedAt,
-        { invalidToolNames: invalid },
-      ),
-    };
-  }
-  return input.mutateVisibilityState(async () => {
-    const activeBeforeNames = input.harness.getActiveTools().map((tool) => tool.name);
-    const activeBefore = new Set(activeBeforeNames);
-    const activatedToolNames = requestedNames.filter((name) => !activeBefore.has(name));
-    const alreadyLoaded = requestedNames.filter((name) => activeBefore.has(name));
-    if (activatedToolNames.length > 0) {
-      await input.harness.setActiveTools(activeNamesAfterVisibilityChange({
-        activeNames: [...activeBeforeNames, ...activatedToolNames],
-        deferredTools: input.deferredTools,
-        controlToolNames: input.controlToolNames,
-      }));
-    }
-    const activeAfter = new Set(input.harness.getActiveTools().map((tool) => tool.name));
-    const output: ToolFactValue = {
-      kind: TOOL_VISIBILITY_ACTIVATION_KIND,
-      activatedToolNames,
-      alreadyLoaded,
-      remainingDeferredToolCount: input.deferredTools.filter((tool) => !activeAfter.has(tool.name)).length,
-      availableFrom: "next_model_request",
-    };
-    return {
-      result: {
-        ...input.request,
-        output,
-        status: "completed",
-        durationMs: Math.max(0, Date.now() - startedAt),
-      },
-      ...(activatedToolNames.length === 0 ? {} : { addedToolNames: activatedToolNames }),
-      ...(activatedToolNames.length === 0
-        ? {}
-        : {
-            rollback: () => input.mutateVisibilityState(async () => {
-              const activated = new Set(activatedToolNames);
-              const currentNames = input.harness.getActiveTools().map((tool) => tool.name);
-              await input.harness.setActiveTools(activeNamesAfterVisibilityChange({
-                activeNames: currentNames.filter((name) => !activated.has(name)),
-                deferredTools: input.deferredTools,
-                controlToolNames: input.controlToolNames,
-              }));
-            }),
-          }),
-    };
-  });
-}
-
-function activeNamesAfterVisibilityChange(input: {
-  readonly activeNames: readonly string[];
-  readonly deferredTools: AgentLoopToolVisibilityPlan["deferredTools"];
-  readonly controlToolNames: readonly string[];
-}): string[] {
-  const active = new Set(input.activeNames);
-  const hasDeferred = input.deferredTools.some((tool) => !active.has(tool.name));
-  const controls = new Set(input.controlToolNames);
-  if (!hasDeferred) return input.activeNames.filter((name) => !controls.has(name));
-  return [...input.activeNames, ...input.controlToolNames.filter((name) => !active.has(name))];
-}
-
-function parseVisibilitySearchInput(value: ToolFactValue | undefined): VisibilitySearchInput {
-  const record = requireToolInputRecord(value, "McpSearch");
-  const query = record.query;
-  const serverId = record.server_id;
-  const cursor = record.cursor ?? 0;
-  const limit = record.limit ?? 10;
-  if (query !== undefined && (typeof query !== "string" || query.trim().length === 0 || query.length > 200)) {
-    throw new Error("McpSearch query must be a non-empty string of at most 200 characters.");
-  }
-  if (serverId !== undefined && (typeof serverId !== "string" || serverId.trim().length === 0 || serverId.length > 128)) {
-    throw new Error("McpSearch server_id must be a non-empty string of at most 128 characters.");
-  }
-  if (!Number.isSafeInteger(cursor) || typeof cursor !== "number" || cursor < 0) {
-    throw new Error("McpSearch cursor must be a non-negative safe integer.");
-  }
-  if (!Number.isSafeInteger(limit) || typeof limit !== "number" || limit < 1 || limit > 20) {
-    throw new Error("McpSearch limit must be a safe integer between 1 and 20.");
-  }
-  return {
-    ...(query === undefined ? {} : { query }),
-    ...(serverId === undefined ? {} : { serverId }),
-    cursor,
-    limit,
-  };
-}
-
-function parseVisibilityLoadInput(value: ToolFactValue | undefined): readonly string[] {
-  const record = requireToolInputRecord(value, "McpLoad");
-  const names = record.tool_names;
-  if (!Array.isArray(names) || names.length < 1 || names.length > 16 ||
-      names.some((name) => typeof name !== "string" || name.trim().length === 0 || name.length > 128)) {
-    throw new Error("McpLoad tool_names must contain between 1 and 16 non-empty tool names.");
-  }
-  const normalized = names as string[];
-  if (new Set(normalized).size !== normalized.length) {
-    throw new Error("McpLoad tool_names must be unique.");
-  }
-  return normalized;
-}
-
-function requireToolInputRecord(
-  value: ToolFactValue | undefined,
-  toolName: string,
-): Readonly<Record<string, ToolFactValue | undefined>> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`${toolName} requires an object input.`);
-  }
-  return value as Readonly<Record<string, ToolFactValue | undefined>>;
-}
-
-function requireBoundVisibilityHarness(harness: AgentHarness | undefined): AgentHarness {
-  if (harness === undefined) {
-    throw new Error("Progressive tool visibility controller is not bound to its AgentHarness.");
-  }
-  return harness;
-}
-
-function visibilityControlFailure(
-  request: ToolCallRequest,
-  error: string,
-  code: string,
-  startedAt: number,
-  facts: Readonly<Record<string, string | readonly string[]>> = {},
-): ToolCallResult {
-  return {
-    ...request,
-    output: undefined,
-    status: "failed",
-    error,
-    errorDomain: "runtime_error",
-    errorFacts: { code, doNotBlindlyRetry: true, ...facts },
-    durationMs: Math.max(0, Date.now() - startedAt),
-  };
-}
-
-function visibilityControlCancellation(
-  request: ToolCallRequest,
-  reason: unknown,
-  startedAt: number,
-): ToolCallResult {
-  return {
-    ...request,
-    output: undefined,
-    status: "cancelled",
-    error: `Tool visibility control was cancelled: ${abortMessage(reason)}`,
-    errorDomain: "runtime_error",
-    errorFacts: { code: "tool_visibility_control_cancelled" },
-    durationMs: Math.max(0, Date.now() - startedAt),
   };
 }
 
@@ -1029,19 +593,21 @@ async function runDelegatedAgent(input: {
   ));
   const requestScope = (request: ToolCallRequest): ToolCallRequest =>
     scopedDelegatedToolRequest(parentFactId, request);
-  const harnessTools = createHarnessToolBundle({
+  const harnessTools = createToolVisibilitySession({
     tools,
     metadataByName: new Map(toolDefinitions.map((definition) => [definition.name, definition.metadata] as const)),
-    input: input.input,
-    state: input.state,
     visibilityPlan: narrowToolVisibilityPlan(
       input.input.toolVisibilityPlan,
       input.invocation.allowedTools,
       toolDefinitions,
       input.options.toolDefinitionTokenCounter,
     ),
-    requestScope,
-    onToolInvoked: () => { metrics.toolCallCount += 1; },
+    host: toolVisibilityHost(
+      input.input,
+      input.state,
+      requestScope,
+      () => { metrics.toolCallCount += 1; },
+    ),
   });
   const harness = new AgentHarness({
     env: input.options.executionEnvironment,
@@ -1157,7 +723,12 @@ function attachDelegatedHarnessHooks(
       return;
     }
     if (event.type === "message_end" && event.message.role === "toolResult") {
-      const delivery = pendingToolResultForMessage(state, event.message, parentFactId);
+      const delivery = pendingToolResultForMessage(
+        state.pendingToolResults,
+        event.message,
+        parentFactId,
+        (error) => throwHarnessMaintenanceFailure(state, "session_tool_result_identity_mismatch", error),
+      );
       if (delivery !== undefined) {
         await deliverAcceptedToolResult(loopInput, state, delivery);
       }
@@ -1432,7 +1003,12 @@ async function projectHarnessEvent(
   if (entryId === null) throw new Error("Session did not expose the entry appended by message_end.");
   state.latestLeafEntryId = entryId;
   if (event.message.role === "toolResult") {
-    const delivery = pendingToolResultForMessage(state, event.message);
+    const delivery = pendingToolResultForMessage(
+      state.pendingToolResults,
+      event.message,
+      undefined,
+      (error) => throwHarnessMaintenanceFailure(state, "session_tool_result_identity_mismatch", error),
+    );
     if (delivery !== undefined) {
       await deliverAcceptedToolResult(input, state, delivery);
     }
@@ -1561,64 +1137,6 @@ function throwHarnessMaintenanceFailure(
   throw new Error(error);
 }
 
-function piImmediateToolResult(input: {
-  readonly request: ToolCallRequest;
-  readonly rawResult: ToolExecutionEndEvent["result"];
-  readonly prepared: boolean;
-  readonly knownActiveTool: boolean;
-  readonly cancellationRequested: boolean;
-}): ToolCallResult {
-  const error = piToolResultText(input.rawResult.content) ||
-    `Pi did not return a canonical result for ${input.request.toolName}.`;
-  if (input.cancellationRequested) {
-    return {
-      ...input.request,
-      output: undefined,
-      status: "cancelled",
-      error,
-      errorDomain: "runtime_error",
-      errorFacts: { code: "pi_tool_call_cancelled" },
-      durationMs: 0,
-    };
-  }
-  if (input.prepared) {
-    return {
-      ...input.request,
-      output: undefined,
-      status: "failed",
-      error,
-      errorDomain: "tool_error",
-      errorFacts: { code: "pi_tool_execution_failed", doNotBlindlyRetry: true },
-      failureAttribution: "execution_failure",
-      durationMs: 0,
-    };
-  }
-  return {
-    ...input.request,
-    output: undefined,
-    status: "failed",
-    error,
-    errorDomain: input.knownActiveTool ? "tool_error" : "runtime_error",
-    errorFacts: {
-      code: input.knownActiveTool ? "pi_tool_schema_validation_failed" : "pi_tool_call_rejected",
-      doNotBlindlyRetry: true,
-    },
-    ...(input.knownActiveTool ? { failureAttribution: "schema_validation" as const } : {}),
-    durationMs: 0,
-  };
-}
-
-function piToolResultText(content: unknown): string {
-  if (!Array.isArray(content)) return "";
-  return content
-    .filter((block): block is { readonly type: "text"; readonly text: string } =>
-      typeof block === "object" && block !== null &&
-      "type" in block && block.type === "text" &&
-      "text" in block && typeof block.text === "string")
-    .map((block) => block.text)
-    .join("\n");
-}
-
 function approvalResult(
   input: AgentLoopInput,
   state: AgentSessionExecutionState,
@@ -1738,33 +1256,6 @@ function finalResult(
     };
   }
   return { ...facts, status: "completed", finalText: assistantText(assistant) };
-}
-
-function providerRefusalFromAssistant(assistant: AssistantMessage): string | undefined {
-  const diagnostic = assistant.diagnostics?.find((item) => item.type === "provider_refusal");
-  if (diagnostic === undefined) return undefined;
-  const refusal = diagnostic.details?.refusal;
-  return typeof refusal === "string" ? refusal.trim() : "";
-}
-
-function providerFailureFromAssistant(
-  assistant: AssistantMessage,
-  contextWindow: number,
-): { readonly error: string; readonly errorCode: string } | undefined {
-  if (isContextOverflow(assistant, contextWindow)) {
-    return {
-      error: assistant.errorMessage ?? "The model request exceeded the available context window.",
-      errorCode: "context_overflow",
-    };
-  }
-  if (assistant.stopReason !== "error") {
-    return undefined;
-  }
-  const error = assistant.errorMessage ?? "Provider returned an error stop reason.";
-  return {
-    error,
-    errorCode: modelFailureKindFromError(new Error(error)),
-  };
 }
 
 function failedRunResult(error: unknown, input: AgentLoopInput, state: AgentSessionExecutionState): AgentLoopResult {
@@ -1950,7 +1441,7 @@ async function acceptToolResult(
   const factId = toolCallFactId(deliverable);
   state.toolResults.set(factId, cloneToolResult(deliverable));
   const delivery: PendingToolResultDelivery = { result: deliverable };
-  if (toolResultImageContentFromAttachments(canonicalToolResultMessage(deliverable).attachments).length > 0) {
+  if (toolResultHasInlineImage(deliverable)) {
     state.pendingToolResults.set(factId, delivery);
   } else {
     await deliverAcceptedToolResult(input, state, { result: deliverable });
@@ -2093,43 +1584,6 @@ function requireFrozenToolDefinition(
   return definition;
 }
 
-function narrowToolVisibilityPlan(
-  plan: AgentLoopToolVisibilityPlan | undefined,
-  allowedToolNames: readonly string[],
-  definitions: readonly ToolDefinition[],
-  countTokens: AgentSessionToolDefinitionTokenCounter | undefined,
-): AgentLoopToolVisibilityPlan | undefined {
-  if (plan === undefined || countTokens === undefined) return undefined;
-  const allowed = new Set(allowedToolNames);
-  const deferredTools = plan.deferredTools.filter((tool) => allowed.has(tool.name));
-  if (deferredTools.length === 0) return undefined;
-  const deferredNames = new Set(deferredTools.map((tool) => tool.name));
-  const narrowedDefinitions = definitions.filter((definition) => allowed.has(definition.name));
-  const initiallyVisibleDefinitions = narrowedDefinitions.filter((definition) => !deferredNames.has(definition.name));
-  if (!isProgressiveToolVisibilityCostEffective({
-    directDefinitions: narrowedDefinitions,
-    deferredDefinitions: narrowedDefinitions.filter((definition) => deferredNames.has(definition.name)),
-    progressiveDefinitions: [
-      ...initiallyVisibleDefinitions,
-      plan.controls.search,
-      plan.controls.load,
-    ],
-    costGate: plan.costGate,
-    countTokens,
-  })) {
-    return undefined;
-  }
-  return {
-    ...plan,
-    initiallyVisibleToolNames: initiallyVisibleDefinitions.map((definition) => definition.name),
-    deferredTools,
-    controls: {
-      search: globalThis.structuredClone(plan.controls.search),
-      load: globalThis.structuredClone(plan.controls.load),
-    },
-  };
-}
-
 function scopedDelegatedToolRequest(parentFactId: string, request: ToolCallRequest): ToolCallRequest {
   return {
     ...request,
@@ -2209,14 +1663,6 @@ function delegatedExecutionMetadata(metrics: DelegatedAgentExecutionMetrics) {
   };
 }
 
-function assertUniqueToolNames(tools: readonly AgentTool[]): void {
-  const names = new Set<string>();
-  for (const tool of tools) {
-    if (names.has(tool.name)) throw new Error(`Agent session tool name is duplicated: ${tool.name}`);
-    names.add(tool.name);
-  }
-}
-
 function bindRunAbortSignal(state: AgentSessionExecutionState, signal: AbortSignal): void {
   const abort = (): void => {
     state.cancellationRequested = true;
@@ -2233,266 +1679,12 @@ function clearRunAbortSignals(state: AgentSessionExecutionState): void {
   state.abortSignalCleanups.clear();
 }
 
-function harnessToolResult(
-  result: ToolCallResult,
-  state: Pick<AgentSessionExecutionState, "supportsVisionInput" | "modelInputSupportsImage">,
-  terminate = false,
-  addedToolNames?: readonly string[],
-) {
-  const deliverable = toolResultForPiTransport(
-    result,
-    state.supportsVisionInput,
-    state.modelInputSupportsImage,
-  );
-  const message = canonicalToolResultMessage(deliverable);
-  const imageContent = toolResultImageContentFromAttachments(message.attachments);
-  return {
-    content: [{ type: "text" as const, text: message.content }, ...imageContent],
-    details: { kind: "result" as const, result: cloneToolResult(deliverable) },
-    ...(deliverable === result && addedToolNames !== undefined && addedToolNames.length > 0
-      ? { addedToolNames: [...addedToolNames] }
-      : {}),
-    ...(terminate || deliverable.errorFacts?.code === "tool_result_attachment_not_supported" ||
-        deliverable.errorFacts?.code === "tool_result_image_input_unsupported" ||
-        deliverable.errorFacts?.code === "tool_result_image_input_projection_mismatch"
-      ? { terminate: true }
-      : {}),
-  };
-}
-
-function toolResultForPiTransport(
-  result: ToolCallResult,
-  supportsVisionInput: boolean,
-  modelInputSupportsImage: boolean,
-): ToolCallResult {
-  const attachments = toolModelAttachmentsFromOutput(result.output);
-  const unsupported = attachments?.find((attachment) =>
-    attachment.kind !== "image" || attachment.source.kind !== "data"
-  );
-  const image = attachments?.find((attachment) => attachment.kind === "image" && attachment.source.kind === "data");
-  const deliveryFailureCode = image !== undefined && !supportsVisionInput
-    ? "tool_result_image_input_unsupported"
-    : image !== undefined && !modelInputSupportsImage
-      ? "tool_result_image_input_projection_mismatch"
-      : undefined;
-  if (unsupported === undefined && deliveryFailureCode === undefined) {
-    return attachments === undefined || result.modelAttachmentRefs !== undefined
-      ? result
-      : { ...result, modelAttachmentRefs: modelAttachmentRefsFromAttachments(attachments) };
-  }
-  const attachment = unsupported ?? image;
-  if (attachment === undefined) return result;
-  return {
-    ...result,
-    // structuredClone retains the JSON execution facts while intentionally
-    // dropping the non-enumerable attachment carrier rejected by this transport.
-    output: result.output === undefined ? undefined : globalThis.structuredClone(result.output),
-    modelAttachmentRefs: undefined,
-    status: "failed",
-    error: deliveryFailureCode === undefined
-      ? `Tool result could not be delivered to the Pi model because ${attachment.kind} attachments are unsupported by the active model transport.`
-      : `Tool result image could not be delivered because the active model does not accept image input.`,
-    errorDomain: "runtime_error",
-    errorFacts: {
-      ...(result.errorFacts ?? {}),
-      code: deliveryFailureCode ?? "tool_result_attachment_not_supported",
-      sourceExecutionStatus: result.status,
-      doNotBlindlyRetry: true,
-      outputDeliveryPhase: "model_transport",
-      attachmentKind: attachment.kind,
-      attachmentSource: attachment.source.kind,
-    },
-    confirmationRequest: undefined,
-  };
-}
-
-function modelAttachmentRefsFromAttachments(
-  attachments: readonly ModelInputAttachment[],
-): readonly ModelInputAttachmentRef[] {
-  return attachments.flatMap((attachment) => {
-    if (attachment.kind !== "image" || attachment.source.kind !== "data") return [];
-    return [{
-      kind: "image" as const,
-      ...(attachment.attachmentId === undefined ? {} : { attachmentId: attachment.attachmentId }),
-      ...(attachment.inputRef === undefined ? {} : { inputRef: attachment.inputRef }),
-      mimeType: attachment.source.mimeType,
-      ...(attachment.byteLength === undefined ? {} : { byteLength: attachment.byteLength }),
-      sha256: createHash("sha256").update(Buffer.from(attachment.source.data, "base64")).digest("hex"),
-    }];
-  });
-}
-
-function deniedToolResult(
-  approval: ToolCallResult & { readonly status: "approval_required" },
-  decision: ConfirmationDecision,
-): ToolCallResult {
-  const guidance = decision.decision === "guidance" ? decision.guidance?.trim() : undefined;
-  return {
-    ...approval,
-    status: "failed",
-    error: guidance === undefined || guidance.length === 0
-      ? "User rejected this tool call."
-      : `User rejected this tool call with guidance: ${guidance}`,
-    errorDomain: "tool_error",
-    errorFacts: { code: decision.decision === "guidance" ? "tool_call_guidance" : "tool_call_denied" },
-    confirmationRequest: undefined,
-  };
-}
-
-function cancelledApprovalResult(
-  approval: ToolCallResult & { readonly status: "approval_required" },
-  reason: unknown,
-): ToolCallResult {
-  return {
-    ...approval,
-    status: "cancelled",
-    error: `Tool call was cancelled while awaiting confirmation: ${abortMessage(reason)}`,
-    errorDomain: "tool_error",
-    errorFacts: { code: "tool_call_cancelled" },
-    confirmationRequest: undefined,
-  };
-}
-
-function toolResultAcceptanceFailure(result: ToolCallResult, error: unknown): ToolCallResult {
-  return {
-    ...result,
-    output: undefined,
-    status: "failed",
-    error: `The owning feature could not accept this tool result: ${errorMessage(error)}`,
-    errorDomain: "runtime_error",
-    errorFacts: {
-      code: "tool_result_acceptance_failed",
-      sourceExecutionStatus: result.status,
-      doNotBlindlyRetry: true,
-    },
-    confirmationRequest: undefined,
-  };
-}
-
-function requireConfirmationRequest(result: ToolCallResult): ConfirmationRequest {
-  if (result.confirmationRequest === undefined) {
-    throw new Error(`Approval-required tool result ${toolCallFactId(result)} is missing its confirmation request.`);
-  }
-  return result.confirmationRequest;
-}
-
-function requireApprovalRequiredResult(
-  result: ToolCallResult,
-): ToolCallResult & { readonly status: "approval_required" } {
-  if (result.status !== "approval_required") {
-    throw new Error(`Expected an approval-required tool result, received ${result.status}.`);
-  }
-  return result as ToolCallResult & { readonly status: "approval_required" };
-}
-
-function toolRequestFromResult(result: ToolCallResult): ToolCallRequest {
-  return {
-    callId: result.callId,
-    ...(result.factId === undefined ? {} : { factId: result.factId }),
-    ...(result.parentToolCallFactId === undefined ? {} : { parentToolCallFactId: result.parentToolCallFactId }),
-    toolName: result.toolName,
-    input: result.input,
-  };
-}
-
-function toolResultFromDetails(details: unknown): ToolCallResult | undefined {
-  if (typeof details !== "object" || details === null || !("kind" in details)) return undefined;
-  const candidate = details as ToolExecutionDetails;
-  return candidate.kind === "result" ? candidate.result : undefined;
-}
-
-type PiToolResultMessage = Extract<AgentMessage, { readonly role: "toolResult" }>;
-
-function pendingToolResultForMessage(
-  state: AgentSessionExecutionState,
-  message: PiToolResultMessage,
-  parentToolCallFactId?: string,
-): PendingToolResultDelivery | undefined {
-  const detailed = toolResultFromDetails(message.details);
-  if (detailed !== undefined) {
-    return state.pendingToolResults.get(toolCallFactId(detailed));
-  }
-  const matches = [...state.pendingToolResults.values()].filter(({ result }) =>
-    result.callId === message.toolCallId && result.toolName === message.toolName &&
-    result.parentToolCallFactId === parentToolCallFactId);
-  if (matches.length > 1) {
-    throwHarnessMaintenanceFailure(
-      state,
-      "session_tool_result_identity_mismatch",
-      `Pi returned ambiguous pending tool results for call ${message.toolCallId}.`,
-    );
-  }
-  return matches[0];
-}
-
 function emitToolRequested(input: AgentLoopInput, request: ToolCallRequest): void {
   try {
     input.onToolRequested?.(globalThis.structuredClone(request));
   } catch {
     // Requested activity is observational and cannot change execution.
   }
-}
-
-function modelMessageFromAssistant(message: AssistantMessage): ModelMessage {
-  const text = message.content.filter((block) => block.type === "text").map((block) => block.text).join("");
-  const toolCalls = message.content
-    .filter((block) => block.type === "toolCall")
-    .map((call) => ({ callId: call.id, toolName: call.name, input: normalizeToolFactValue(call.arguments) }));
-  return {
-    role: "assistant",
-    content: text,
-    ...(toolCalls.length === 0 ? {} : { toolCalls }),
-  };
-}
-
-function imageContentFromAttachments(attachments: readonly ModelInputAttachment[] | undefined): ImageContent[] {
-  return (attachments ?? []).map((attachment) => {
-    if (attachment.kind !== "image" || attachment.source.kind !== "data") {
-      throw new Error(`Agent loop cannot persist ${attachment.kind} attachment ${attachment.attachmentId ?? "unknown"}.`);
-    }
-    return { type: "image", mimeType: attachment.source.mimeType, data: attachment.source.data };
-  });
-}
-
-function toolResultImageContentFromAttachments(
-  attachments: readonly ModelInputAttachment[] | undefined,
-): ImageContent[] {
-  return (attachments ?? [])
-    .flatMap((attachment) => {
-      if (attachment.kind !== "image" || attachment.source.kind !== "data") return [];
-      return [{
-        type: "image" as const,
-        mimeType: attachment.source.mimeType,
-        data: attachment.source.data,
-      }];
-    });
-}
-
-function assistantText(message: AssistantMessage): string {
-  return message.content.filter((block) => block.type === "text").map((block) => block.text).join("");
-}
-
-function modelUsageFromProvider(usage: Usage): ModelUsage {
-  return {
-    requestCount: 1,
-    inputTokens: usage.input + usage.cacheRead,
-    outputTokens: usage.output,
-    totalTokens: usage.totalTokens,
-    cachedInputTokens: usage.cacheRead,
-    cacheWriteInputTokens: usage.cacheWrite,
-    uncachedInputTokens: usage.input,
-    ...(usage.reasoning === undefined ? {} : { reasoningOutputTokens: usage.reasoning }),
-    estimatedCostUsd: usage.cost.total,
-    latestAgentRequest: {
-      inputTokens: usage.input + usage.cacheRead,
-      outputTokens: usage.output,
-      totalTokens: usage.totalTokens,
-      cachedInputTokens: usage.cacheRead,
-      cacheWriteInputTokens: usage.cacheWrite,
-      uncachedInputTokens: usage.input,
-      ...(usage.reasoning === undefined ? {} : { reasoningOutputTokens: usage.reasoning }),
-    },
-  };
 }
 
 function emptyProviderTimingAccumulator(): ProviderTimingAccumulator {
@@ -2602,19 +1794,6 @@ function deferred<T>(): Deferred<T> {
     reject = fail;
   });
   return { promise, resolve, reject };
-}
-
-function cloneToolResult(result: ToolCallResult): ToolCallResult {
-  const cloned = globalThis.structuredClone(result);
-  if (result.output !== undefined && cloned.output !== undefined &&
-      typeof result.output === "object" && result.output !== null &&
-      typeof cloned.output === "object" && cloned.output !== null) {
-    return {
-      ...cloned,
-      output: copyToolModelAttachments(result.output, cloned.output),
-    };
-  }
-  return cloned;
 }
 
 function uniqueStrings(values: readonly string[]): readonly string[] {

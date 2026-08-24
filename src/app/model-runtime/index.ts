@@ -8,17 +8,15 @@ import {
 } from "../../domain/tools/index.js";
 
 export {
-  fetchModelRuntimeModelCatalog,
   ModelRuntimeConfigurationError,
-} from "./factory.js";
+} from "./openai-runtime-config.js";
 
 export type {
   ModelRuntimeConfigurationIssueCode,
   ModelRuntimeChannelFactory,
   ModelRuntimeEnvironment,
-  ModelRuntimeModelCatalogFetch,
   ModelRuntimeSummaryInput,
-} from "./factory.js";
+} from "./openai-runtime-config.js";
 export type { ModelRuntimeMode, OrdinaryModelRuntimeMode } from "./contracts.js";
 export type {
   AgentLoop,

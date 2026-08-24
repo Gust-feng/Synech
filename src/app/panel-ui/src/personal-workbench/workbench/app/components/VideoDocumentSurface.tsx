@@ -256,11 +256,11 @@ export function VideoDocumentSurface({ url, title, poster, duration: durationLab
   const volumeMuted = muted || volume === 0
 
   return (
-    <div className="aa-video-document" data-document-scroll="content" data-state={visualState}>
-      <div className="aa-video-document__stage">
-        <div className="aa-video-document__player" ref={playerRef}>
+    <div className="ui-video-document" data-document-scroll="content" data-state={visualState}>
+      <div className="ui-video-document__stage">
+        <div className="ui-video-document__player" ref={playerRef}>
           <div
-            className="aa-video-document__viewport"
+            className="ui-video-document__viewport"
             role="button"
             tabIndex={0}
             aria-label={playing ? '暂停视频' : '播放视频'}
@@ -268,9 +268,9 @@ export function VideoDocumentSurface({ url, title, poster, duration: durationLab
             onDoubleClick={() => void toggleFullscreen()}
             onKeyDown={handleViewportKeyDown}
           >
-            <canvas className="aa-video-document__canvas" role="img" aria-label={`${title} 画面`} ref={canvasRef} />
+            <canvas className="ui-video-document__canvas" role="img" aria-label={`${title} 画面`} ref={canvasRef} />
             <video
-              className="aa-video-document__source"
+              className="ui-video-document__source"
               ref={videoRef}
               aria-hidden="true"
               tabIndex={-1}
@@ -290,22 +290,22 @@ export function VideoDocumentSurface({ url, title, poster, duration: durationLab
               onError={failPlayback}
             />
             {visualState === 'poster' && (
-              <img className="aa-video-document__poster" src={visiblePoster} alt="" />
+              <img className="ui-video-document__poster" src={visiblePoster} alt="" />
             )}
             {surfaceState !== 'ready' && visualState !== 'poster' && (
               <div
-                className="aa-video-document__placeholder"
+                className="ui-video-document__placeholder"
                 role={surfaceState === 'error' ? 'alert' : 'status'}
                 aria-label={surfaceState === 'loading' ? '正在加载视频' : undefined}
               >
-                <div className="aa-video-document__placeholder-content">
-                  <span className="aa-video-document__placeholder-icon">
+                <div className="ui-video-document__placeholder-content">
+                  <span className="ui-video-document__placeholder-icon">
                     <Film size={22} aria-hidden="true" />
                   </span>
                   <strong>{surfaceState === 'loading' ? '正在准备视频预览' : '无法播放这个视频。'}</strong>
                   <span>{surfaceState === 'loading' ? title : '请检查视频文件后重新打开预览。'}</span>
                   {surfaceState === 'loading' && (
-                    <span className="aa-video-document__placeholder-progress" aria-hidden="true">
+                    <span className="ui-video-document__placeholder-progress" aria-hidden="true">
                       <span />
                     </span>
                   )}
@@ -314,8 +314,8 @@ export function VideoDocumentSurface({ url, title, poster, duration: durationLab
             )}
           </div>
 
-          <div className="aa-video-document__controls" role="group" aria-label="视频播放控件">
-            <div className="aa-video-document__timeline">
+          <div className="ui-video-document__controls" role="group" aria-label="视频播放控件">
+            <div className="ui-video-document__timeline">
               <progress max={progressMax} value={progressValue} aria-hidden="true" />
               <input
                 type="range"
@@ -328,17 +328,17 @@ export function VideoDocumentSurface({ url, title, poster, duration: durationLab
                 onChange={changeProgress}
               />
             </div>
-            <div className="aa-video-document__control-row">
-              <button className="aa-video-document__control" type="button" aria-label={playing ? '暂停' : '播放'} disabled={surfaceState === 'error'} onClick={() => void togglePlayback()}>
+            <div className="ui-video-document__control-row">
+              <button className="ui-video-document__control" type="button" aria-label={playing ? '暂停' : '播放'} disabled={surfaceState === 'error'} onClick={() => void togglePlayback()}>
                 {playing ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}
               </button>
-              <span className="aa-video-document__time">{formatVideoTime(currentTime)} / {resolvedDuration}</span>
-              <span className="aa-video-document__control-spacer" />
-              <button className="aa-video-document__control" type="button" aria-label={volumeMuted ? '取消静音' : '静音'} onClick={toggleMute}>
+              <span className="ui-video-document__time">{formatVideoTime(currentTime)} / {resolvedDuration}</span>
+              <span className="ui-video-document__control-spacer" />
+              <button className="ui-video-document__control" type="button" aria-label={volumeMuted ? '取消静音' : '静音'} onClick={toggleMute}>
                 {volumeMuted ? <VolumeX size={16} /> : <Volume2 size={16} />}
               </button>
-              <input className="aa-video-document__volume" type="range" aria-label="音量" min={0} max={1} step="0.05" value={muted ? 0 : volume} onChange={changeVolume} />
-              <button className="aa-video-document__control" type="button" aria-label={fullscreen ? '退出全屏' : '全屏'} onClick={() => void toggleFullscreen()}>
+              <input className="ui-video-document__volume" type="range" aria-label="音量" min={0} max={1} step="0.05" value={muted ? 0 : volume} onChange={changeVolume} />
+              <button className="ui-video-document__control" type="button" aria-label={fullscreen ? '退出全屏' : '全屏'} onClick={() => void toggleFullscreen()}>
                 {fullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
               </button>
             </div>

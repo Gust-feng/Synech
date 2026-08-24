@@ -42,20 +42,20 @@ export function DocxDocumentSurface({ url, byteLength, sourceVersion }: {
   }, [byteLength, sourceVersion, url])
 
   return (
-    <div className="aa-docx-document" data-state={state} data-document-scroll="content">
+    <div className="ui-docx-document" data-state={state} data-document-scroll="content">
       {state !== 'ready' && (
-        <div className="aa-office-document__state" role={state === 'error' ? 'alert' : 'status'}>
-          {state === 'error' ? <AlertTriangle size={20} /> : <LoaderCircle size={20} className="aa-office-document__spinner" />}
+        <div className="ui-office-document__state" role={state === 'error' ? 'alert' : 'status'}>
+          {state === 'error' ? <AlertTriangle size={20} /> : <LoaderCircle size={20} className="ui-office-document__spinner" />}
           <span>{message}</span>
         </div>
       )}
       <div
-        className="aa-docx-document__styles"
+        className="ui-docx-document__styles"
         aria-hidden="true"
         dangerouslySetInnerHTML={markup === undefined ? undefined : { __html: markup.styleHtml }}
       />
       <div
-        className="aa-docx-document__body"
+        className="ui-docx-document__body"
         aria-label="Word 文档内容"
         dangerouslySetInnerHTML={markup === undefined ? undefined : { __html: markup.bodyHtml }}
       />

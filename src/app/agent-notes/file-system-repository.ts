@@ -19,7 +19,7 @@ import { agentNoteScopeIdentity } from "./scope-identity.js";
 /**
  * 笔记的文件系统存储。
  *
- * 布局（`<root>` 为 `runtime/synech/notes` 目录）：
+ * 布局（`<root>` 为 Agent Notes 数据目录）：
  *
  * ```text
  * <root>/global/NOTES.md
@@ -29,11 +29,8 @@ import { agentNoteScopeIdentity } from "./scope-identity.js";
  * <root>/workspaces/<hash>/owner.json       # 记录稳定 owner 身份，供人排查
  * ```
  *
- * 旧版本按 workspaceRoot 哈希命名的目录不会被这里扫描或猜测迁移；只有新 owner 身份写入
- * 的目录才是当前仓储的可见事实。迁移若有必要，必须由上层以可证明的 owner 关系显式执行。
- *
- * 笔记正文就是用户可直接打开编辑的 Markdown；这是 ADR-0033 的治理手段
- * （透明可编辑），所以正文旁不放任何会让手工编辑失效的校验和或索引。
+ * 笔记正文是用户可直接打开编辑的 Markdown，所以正文旁不放任何会让手工编辑
+ * 失效的校验和或索引。
  */
 export function createFileSystemAgentNoteRepository(
   rootDir: string,

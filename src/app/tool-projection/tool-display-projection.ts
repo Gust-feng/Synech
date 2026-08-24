@@ -8,13 +8,13 @@ import {
 } from "./tool-display-normalization.js";
 import {
   asRecord,
-  isMcpToolName,
   isString,
   numberOrUndefined,
   readErrorMessageFromOutput,
   searchMessageFromOutput,
   stringArray,
   stringOrUndefined,
+  textOrUndefined,
 } from "./tool-result-facts.js";
 const SEARCH_DISPLAY_RESULTS_LIMIT = 20;
 
@@ -28,7 +28,7 @@ export function projectToolDisplay(request: ToolCallRequest, output: ToolFactVal
 function projectToolDisplayCore(request: ToolCallRequest, output: ToolFactValue | undefined): ToolDisplayProjection {
   const record = asRecord(output);
   const input = asRecord(request.input);
-  if (request.toolName === "ResearchSearch") {
+  if (request.toolName === "ResearchSearch" || request.toolName === "WebSearch") {
     const results = (Array.isArray(record.results) ? record.results : [])
       .slice(0, SEARCH_DISPLAY_RESULTS_LIMIT)
       .map(projectSearchDisplayItem)
@@ -118,16 +118,9 @@ function projectToolDisplayCore(request: ToolCallRequest, output: ToolFactValue 
       result: stringOrUndefined(output),
     };
   }
-  if (isMcpToolName(request.toolName)) {
-    return normalizeToolDisplayForOperation({
-      toolName: request.toolName,
-      input: request.input,
-      output,
-    });
-  }
   if (request.toolName === "Shell" || request.toolName === "ProcessStop") {
-    const stdout = stringOrUndefined(record.stdout);
-    const stderr = stringOrUndefined(record.stderr);
+    const stdout = textOrUndefined(record.stdout);
+    const stderr = textOrUndefined(record.stderr);
     const commandLine = commandTextFromToolResult(record, request.input);
     return {
       kind: "command_summary",

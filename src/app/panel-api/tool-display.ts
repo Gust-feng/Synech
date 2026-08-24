@@ -26,5 +26,5 @@ export type ToolDisplayProjection = ToolDisplayResultFacts & (
   | { readonly kind: "space_operation"; readonly operation: "list" | "create" | "move" | "add_reference" | "mount" | "create_managed_folder" | "create_entry" | "rename_entry" | "delete_entry" | "update_caption" | "remove_reference" | "rename"; readonly status?: string; readonly spaceId?: string; readonly title?: string; readonly targetId?: string; readonly destinationSpaceId?: string; readonly count?: number; readonly items?: readonly { readonly spaceId: string; readonly title?: string; readonly folderCount?: number; readonly referenceItemCount?: number }[] }
   | { readonly kind: "note_operation"; readonly operation: "write"; readonly status?: string; readonly scope?: "workspace" | "global"; readonly characters?: number }
   | { readonly kind: "generic_tool_summary"; readonly action?: string; readonly summary?: string; readonly items?: readonly string[] }
-  | { readonly kind: "raw_tool_result"; readonly action?: string; readonly summary?: string; readonly items?: readonly string[] }
+  | { readonly kind: "raw_tool_result"; readonly toolName: string; readonly label: string; readonly value?: ToolFactValue }
 );

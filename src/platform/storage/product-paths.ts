@@ -11,19 +11,29 @@ export type AgentDataPaths = {
   readonly memoryFacts: string;
 };
 
-export type WorkbenchDataPaths = {
+export type SpaceDataPaths = {
   readonly root: string;
-  readonly spaceFiles: string;
-  readonly knowledgeAssets: string;
-  readonly notes: string;
-  readonly methodMemory: string;
+  readonly files: string;
+};
+
+export type KnowledgeDataPaths = {
+  readonly root: string;
+  readonly assets: string;
+};
+
+export type MemoryDataPaths = {
+  readonly root: string;
+  readonly agentNotes: string;
+  readonly methods: string;
 };
 
 export type ProductDataPaths = {
   readonly root: string;
   readonly database: string;
   readonly agent: AgentDataPaths;
-  readonly workbench: WorkbenchDataPaths;
+  readonly spaces: SpaceDataPaths;
+  readonly knowledge: KnowledgeDataPaths;
+  readonly memory: MemoryDataPaths;
 };
 
 export type ProductStatePaths = {
@@ -59,7 +69,9 @@ export function resolveProductPaths(options: ResolveProductHomeOptions = {}): Pr
   const productHome = resolveProductHome(options);
   const dataRoot = path.join(productHome, "data");
   const agentRoot = path.join(dataRoot, "agent");
-  const workbenchRoot = path.join(dataRoot, "workbench");
+  const spacesRoot = path.join(dataRoot, "spaces");
+  const knowledgeRoot = path.join(dataRoot, "knowledge");
+  const memoryRoot = path.join(dataRoot, "memory");
   const stateRoot = path.join(productHome, "state");
   const runtimeToolsRoot = path.join(stateRoot, "runtime-tools");
   const mcpRuntimeRoot = path.join(runtimeToolsRoot, "mcp");
@@ -79,12 +91,18 @@ export function resolveProductPaths(options: ResolveProductHomeOptions = {}): Pr
         evidence: path.join(agentRoot, "evidence"),
         memoryFacts: path.join(agentRoot, "memory-facts"),
       },
-      workbench: {
-        root: workbenchRoot,
-        spaceFiles: path.join(workbenchRoot, "space-files"),
-        knowledgeAssets: path.join(workbenchRoot, "knowledge-assets"),
-        notes: path.join(workbenchRoot, "notes"),
-        methodMemory: path.join(workbenchRoot, "method-memory"),
+      spaces: {
+        root: spacesRoot,
+        files: path.join(spacesRoot, "files"),
+      },
+      knowledge: {
+        root: knowledgeRoot,
+        assets: path.join(knowledgeRoot, "assets"),
+      },
+      memory: {
+        root: memoryRoot,
+        agentNotes: path.join(memoryRoot, "agent-notes"),
+        methods: path.join(memoryRoot, "methods"),
       },
     },
     state: {
@@ -120,11 +138,13 @@ export function productStorageDirectories(paths: ProductPaths): readonly string[
     paths.data.agent.attachments,
     paths.data.agent.evidence,
     paths.data.agent.memoryFacts,
-    paths.data.workbench.root,
-    paths.data.workbench.spaceFiles,
-    paths.data.workbench.knowledgeAssets,
-    paths.data.workbench.notes,
-    paths.data.workbench.methodMemory,
+    paths.data.spaces.root,
+    paths.data.spaces.files,
+    paths.data.knowledge.root,
+    paths.data.knowledge.assets,
+    paths.data.memory.root,
+    paths.data.memory.agentNotes,
+    paths.data.memory.methods,
     paths.state.root,
     paths.state.journals,
     paths.state.locks,

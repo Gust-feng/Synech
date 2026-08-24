@@ -125,42 +125,9 @@ export type ProcessCleanupAttempt = {
   readonly killTree: ProcessKillTreeResult;
 };
 
-export type ProcessCleanupReason =
-  | "run_release"
-  | "cancel"
-  | "shutdown"
-  | "reference_revoked"
-  | "space_deleted"
-  | "conversation_deleted";
-
-export type ProcessCleanupScope = "run" | "registry" | "reference" | "space" | "conversation";
-
-export type ProcessCleanupFact = {
-  readonly kind: "process_cleanup";
-  readonly observedAt: string;
-  readonly scope: ProcessCleanupScope;
-  readonly reason: ProcessCleanupReason;
-  readonly runId?: string;
-  readonly conversationId?: string;
-  readonly spaceId?: string;
-  readonly referenceId?: string;
-  readonly attempted: readonly ProcessCleanupAttempt[];
-  readonly skipped: readonly ProcessCleanupSkip[];
-};
-
 export type ProcessCleanupResult = {
-  readonly runId: string;
   readonly attempted: readonly ProcessCleanupAttempt[];
   readonly skipped: readonly ProcessCleanupSkip[];
-  readonly summary: ProcessRunResidueSummary;
-  readonly fact: ProcessCleanupFact;
-};
-
-export type ProcessCleanupOptions = {
-  readonly includeUnowned?: boolean;
-  readonly statuses?: readonly ProcessStatus[];
-  readonly lifetimes?: readonly ProcessLifetime[];
-  readonly reason?: ProcessCleanupReason;
 };
 
 export type ProcessStopResult =
@@ -178,77 +145,21 @@ export type ProcessStopResult =
       readonly killTree: ProcessKillTreeResult;
     };
 
-export type ProcessRegistryCleanupResult = {
-  readonly kind: "process_registry_cleanup";
-  readonly reason: ProcessCleanupReason;
-  readonly observedAt: string;
-  readonly attempted: readonly ProcessCleanupAttempt[];
-  readonly skipped: readonly ProcessCleanupSkip[];
-  readonly fact: ProcessCleanupFact;
-};
-
-export function processCleanupHasUnresolvedStops(result: ProcessRegistryCleanupResult): boolean {
+export function processCleanupHasUnresolvedStops(result: ProcessCleanupResult): boolean {
   return result.attempted.some((attempt) => attempt.outcome === "unknown" || attempt.outcome === "error") ||
     result.skipped.some((skip) => skip.reason !== "inactive_status");
 }
 
-export type ProcessStatusCounts = Readonly<Record<ProcessStatus, number>>;
-
-export type ProcessRunProcessSummary = {
-  readonly processId: string;
-  readonly conversationId?: string;
-  readonly spaceId?: string;
-  readonly referenceId?: string;
-  readonly runId?: string;
-  readonly toolCallId?: string;
-  readonly authorizationMode?: ProcessAuthorizationMode;
-  readonly permissionState?: ProcessPermissionState;
-  readonly pid?: number;
-  readonly kind: ProcessKind;
-  readonly lifetime: ProcessLifetime;
-  readonly owned: boolean;
-  readonly commandLine: string;
-  readonly cwd: string;
-  readonly startedAt: string;
-  readonly endedAt?: string;
-  readonly status: ProcessStatus;
-  readonly exitCode?: number;
-  readonly signal?: string;
-  readonly logRef?: string;
-  readonly logPath?: string;
-  readonly stopCommand?: string;
-  readonly ports: readonly ProcessPortFact[];
-  readonly factCount: number;
-  readonly latestFact?: ProcessFact;
-};
-
-export type ProcessRunResidueSummary = {
-  readonly kind: "process_run_residue_summary";
-  readonly runId: string;
-  readonly observedAt: string;
-  readonly totalCount: number;
-  readonly ownedCount: number;
-  readonly unownedCount: number;
-  readonly residualCount: number;
-  readonly statuses: ProcessStatusCounts;
-  readonly processes: readonly ProcessRunProcessSummary[];
-  readonly residualProcesses: readonly ProcessRunProcessSummary[];
-};
-
-export type ProcessRegistryClock = () => string;
+type ProcessRegistryClock = () => string;
 
 export type ProcessTerminator = {
   readonly killTree: (pid: number, record: ProcessRecord) => Promise<ProcessKillTreeResult> | ProcessKillTreeResult;
 };
 
-const ACTIVE_PROCESS_STATUSES: readonly ProcessStatus[] = ["starting", "running", "killing"];
 const UNRESOLVED_PROCESS_STATUSES: readonly ProcessStatus[] = ["starting", "running", "killing", "unknown"];
-const PROCESS_STATUSES: readonly ProcessStatus[] = ["starting", "running", "exited", "killing", "killed", "unknown"];
 
 export class InMemoryProcessRegistry {
   private readonly records = new Map<string, ProcessRecord>();
-  private readonly cleanupFacts: ProcessCleanupFact[] = [];
-  private readonly residueSummaries: ProcessRunResidueSummary[] = [];
   private readonly now: ProcessRegistryClock;
   private acceptingRegistrations = true;
 
@@ -282,39 +193,6 @@ export class InMemoryProcessRegistry {
 
   listAll(): readonly ProcessRecord[] {
     return Array.from(this.records.values(), cloneRecord);
-  }
-
-  listCleanupFacts(): readonly ProcessCleanupFact[] {
-    return this.cleanupFacts.map(cloneCleanupFact);
-  }
-
-  listRunResidueSummaries(runId?: string): readonly ProcessRunResidueSummary[] {
-    const summaries = runId === undefined
-      ? this.residueSummaries
-      : this.residueSummaries.filter((summary) => summary.runId === runId);
-    return summaries.map(cloneRunResidueSummary);
-  }
-
-  listByRun(runId: string): readonly ProcessRecord[] {
-    return this.listAll().filter((record) => record.runId === runId);
-  }
-
-  listActiveByRun(runId: string): readonly ProcessRecord[] {
-    return this.listByRun(runId).filter((record) => isActiveStatus(record.status));
-  }
-
-  listUnresolvedByRun(runId: string): readonly ProcessRecord[] {
-    return this.listByRun(runId).filter((record) => isUnresolvedStatus(record.status));
-  }
-
-  summarizeRun(runId: string): ProcessRunResidueSummary {
-    return processRunResidueSummary(runId, this.listByRun(runId), this.now());
-  }
-
-  recordRunResidueSummary(runId: string): ProcessRunResidueSummary {
-    const summary = this.summarizeRun(runId);
-    this.residueSummaries.push(cloneRunResidueSummary(summary));
-    return cloneRunResidueSummary(summary);
   }
 
   update(processId: string, patch: ProcessRecordUpdate): ProcessRecord | undefined {
@@ -376,37 +254,20 @@ export class InMemoryProcessRegistry {
   async cleanupByRun(
     runId: string,
     terminator: ProcessTerminator,
-    options: ProcessCleanupOptions = {}
   ): Promise<ProcessCleanupResult> {
-    const cleanup = await this.cleanupMatchingRecords({
-      scope: "run",
-      runId,
-      reason: options.reason ?? "run_release",
+    return await this.cleanupMatchingRecords({
       records: Array.from(this.records.values()).filter((record) => record.runId === runId),
       terminator,
-      includeUnowned: options.includeUnowned ?? false,
-      statuses: options.statuses ?? UNRESOLVED_PROCESS_STATUSES,
-      lifetimes: options.lifetimes ?? ["run"],
+      lifetimes: ["run"],
     });
-
-    return {
-      runId,
-      attempted: cleanup.attempted,
-      skipped: cleanup.skipped,
-      summary: this.summarizeRun(runId),
-      fact: cleanup.fact,
-    };
   }
 
   /** Revokes a removed reference before the first asynchronous stop attempt. */
   async revokeByReference(
     referenceId: string,
     terminator: ProcessTerminator,
-  ): Promise<ProcessRegistryCleanupResult> {
+  ): Promise<ProcessCleanupResult> {
     return await this.cleanupResourceRecords({
-      scope: "reference",
-      reason: "reference_revoked",
-      referenceId,
       records: Array.from(this.records.values()).filter((record) => record.referenceId === referenceId),
       terminator,
     });
@@ -415,11 +276,8 @@ export class InMemoryProcessRegistry {
   async cleanupBySpace(
     spaceId: string,
     terminator: ProcessTerminator,
-  ): Promise<ProcessRegistryCleanupResult> {
+  ): Promise<ProcessCleanupResult> {
     return await this.cleanupResourceRecords({
-      scope: "space",
-      reason: "space_deleted",
-      spaceId,
       records: Array.from(this.records.values()).filter((record) => record.spaceId === spaceId),
       terminator,
     });
@@ -428,63 +286,23 @@ export class InMemoryProcessRegistry {
   async cleanupByConversation(
     conversationId: string,
     terminator: ProcessTerminator,
-  ): Promise<ProcessRegistryCleanupResult> {
+  ): Promise<ProcessCleanupResult> {
     return await this.cleanupResourceRecords({
-      scope: "conversation",
-      reason: "conversation_deleted",
-      conversationId,
       records: Array.from(this.records.values()).filter((record) => record.conversationId === conversationId),
       terminator,
     });
   }
 
-  async cleanupOwnedBackgroundProcesses(
-    terminator: ProcessTerminator,
-    options: Omit<ProcessCleanupOptions, "includeUnowned"> = {}
-  ): Promise<ProcessRegistryCleanupResult> {
-    const cleanup = await this.cleanupMatchingRecords({
-      scope: "registry",
-      reason: options.reason ?? "shutdown",
-      records: Array.from(this.records.values()).filter((record) => record.kind === "background"),
-      terminator,
-      includeUnowned: false,
-      statuses: options.statuses ?? UNRESOLVED_PROCESS_STATUSES,
-      lifetimes: options.lifetimes,
-    });
-    return {
-      kind: "process_registry_cleanup",
-      reason: cleanup.fact.reason,
-      observedAt: cleanup.fact.observedAt,
-      attempted: cleanup.attempted,
-      skipped: cleanup.skipped,
-      fact: cleanup.fact,
-    };
-  }
-
   async cleanupOwnedProcesses(
     terminator: ProcessTerminator,
-    options: Omit<ProcessCleanupOptions, "includeUnowned"> = {}
-  ): Promise<ProcessRegistryCleanupResult> {
+  ): Promise<ProcessCleanupResult> {
     // Closing admission before the first await prevents a new owned process
     // from escaping after the shutdown snapshot has been taken.
     this.acceptingRegistrations = false;
-    const cleanup = await this.cleanupMatchingRecords({
-      scope: "registry",
-      reason: options.reason ?? "shutdown",
+    return await this.cleanupMatchingRecords({
       records: Array.from(this.records.values()),
       terminator,
-      includeUnowned: false,
-      statuses: options.statuses ?? UNRESOLVED_PROCESS_STATUSES,
-      lifetimes: options.lifetimes,
     });
-    return {
-      kind: "process_registry_cleanup",
-      reason: cleanup.fact.reason,
-      observedAt: cleanup.fact.observedAt,
-      attempted: cleanup.attempted,
-      skipped: cleanup.skipped,
-      fact: cleanup.fact,
-    };
   }
 
   async stopOwned(processId: string, terminator: ProcessTerminator): Promise<ProcessStopResult> {
@@ -512,14 +330,9 @@ export class InMemoryProcessRegistry {
   }
 
   private async cleanupResourceRecords(input: {
-    readonly scope: "reference" | "space" | "conversation";
-    readonly reason: "reference_revoked" | "space_deleted" | "conversation_deleted";
-    readonly conversationId?: string;
-    readonly spaceId?: string;
-    readonly referenceId?: string;
     readonly records: readonly ProcessRecord[];
     readonly terminator: ProcessTerminator;
-  }): Promise<ProcessRegistryCleanupResult> {
+  }): Promise<ProcessCleanupResult> {
     // This loop intentionally runs before the first await. Once the owning
     // resource is removed, managed process records must stop advertising an
     // active permission even while OS termination is still in progress.
@@ -530,15 +343,8 @@ export class InMemoryProcessRegistry {
     }
 
     const cleanup = await this.cleanupMatchingRecords({
-      scope: input.scope,
-      reason: input.reason,
-      conversationId: input.conversationId,
-      spaceId: input.spaceId,
-      referenceId: input.referenceId,
       records: input.records,
       terminator: input.terminator,
-      includeUnowned: false,
-      statuses: UNRESOLVED_PROCESS_STATUSES,
     });
     for (const attempt of cleanup.attempted) {
       this.update(attempt.processId, {
@@ -553,43 +359,24 @@ export class InMemoryProcessRegistry {
       });
     }
 
-    return {
-      kind: "process_registry_cleanup",
-      reason: cleanup.fact.reason,
-      observedAt: cleanup.fact.observedAt,
-      attempted: cleanup.attempted,
-      skipped: cleanup.skipped,
-      fact: cleanup.fact,
-    };
+    return cleanup;
   }
 
   private async cleanupMatchingRecords(input: {
-    readonly scope: ProcessCleanupScope;
-    readonly runId?: string;
-    readonly conversationId?: string;
-    readonly spaceId?: string;
-    readonly referenceId?: string;
-    readonly reason: ProcessCleanupReason;
     readonly records: readonly ProcessRecord[];
     readonly terminator: ProcessTerminator;
-    readonly includeUnowned: boolean;
-    readonly statuses: readonly ProcessStatus[];
     readonly lifetimes?: readonly ProcessLifetime[];
-  }): Promise<{
-    readonly attempted: readonly ProcessCleanupAttempt[];
-    readonly skipped: readonly ProcessCleanupSkip[];
-    readonly fact: ProcessCleanupFact;
-  }> {
+  }): Promise<ProcessCleanupResult> {
     const attempted: ProcessCleanupAttempt[] = [];
     const skipped: ProcessCleanupSkip[] = [];
 
     for (const record of input.records) {
-      if (!input.includeUnowned && !record.owned) {
+      if (!record.owned) {
         skipped.push(cleanupSkip(record, "unowned"));
         continue;
       }
 
-      if (!input.statuses.includes(record.status)) {
+      if (!isUnresolvedStatus(record.status)) {
         skipped.push(cleanupSkip(record, "inactive_status"));
         continue;
       }
@@ -600,26 +387,7 @@ export class InMemoryProcessRegistry {
       attempted.push(await this.terminateRecord(record, input.terminator));
     }
 
-    const cleanupBase: ProcessCleanupFact = {
-      kind: "process_cleanup",
-      observedAt: this.now(),
-      scope: input.scope,
-      reason: input.reason,
-      attempted: attempted.map(cloneCleanupAttempt),
-      skipped: skipped.map(cloneCleanupSkip),
-    };
-    const cleanupFact = withDefinedOptionals(cleanupBase, {
-      runId: input.runId,
-      conversationId: input.conversationId,
-      spaceId: input.spaceId,
-      referenceId: input.referenceId,
-    });
-    this.cleanupFacts.push(cloneCleanupFact(cleanupFact));
-    return {
-      attempted: attempted.map(cloneCleanupAttempt),
-      skipped: skipped.map(cloneCleanupSkip),
-      fact: cloneCleanupFact(cleanupFact),
-    };
+    return { attempted, skipped };
   }
 
   private async terminateRecord(
@@ -718,10 +486,6 @@ function withDefinedOptionals<T extends object>(base: T, optionals: Partial<T>):
   return output as T;
 }
 
-function isActiveStatus(status: ProcessStatus): boolean {
-  return ACTIVE_PROCESS_STATUSES.includes(status);
-}
-
 function isUnresolvedStatus(status: ProcessStatus): boolean {
   return UNRESOLVED_PROCESS_STATUSES.includes(status);
 }
@@ -788,158 +552,8 @@ function cloneFacts(facts: readonly ProcessFact[]): readonly ProcessFact[] {
   return facts.map((fact) => ({ ...fact }));
 }
 
-function cloneCleanupAttempt(attempt: ProcessCleanupAttempt): ProcessCleanupAttempt {
-  return {
-    ...attempt,
-    killTree: cloneKillTreeResult(attempt.killTree),
-  };
-}
-
-function cloneCleanupSkip(skip: ProcessCleanupSkip): ProcessCleanupSkip {
-  return { ...skip };
-}
-
-function cloneCleanupFact(fact: ProcessCleanupFact): ProcessCleanupFact {
-  const clone: ProcessCleanupFact = {
-    kind: fact.kind,
-    observedAt: fact.observedAt,
-    scope: fact.scope,
-    reason: fact.reason,
-    attempted: fact.attempted.map(cloneCleanupAttempt),
-    skipped: fact.skipped.map(cloneCleanupSkip),
-  };
-  return withDefinedOptionals(clone, {
-    runId: fact.runId,
-    conversationId: fact.conversationId,
-    spaceId: fact.spaceId,
-    referenceId: fact.referenceId,
-  });
-}
-
 function cloneKillTreeResult(result: ProcessKillTreeResult): ProcessKillTreeResult {
   return { ...result };
-}
-
-function cloneRunResidueSummary(summary: ProcessRunResidueSummary): ProcessRunResidueSummary {
-  return {
-    ...summary,
-    statuses: { ...summary.statuses },
-    processes: summary.processes.map(cloneRunProcessSummary),
-    residualProcesses: summary.residualProcesses.map(cloneRunProcessSummary),
-  };
-}
-
-function cloneRunProcessSummary(summary: ProcessRunProcessSummary): ProcessRunProcessSummary {
-  const clone: ProcessRunProcessSummary = {
-    processId: summary.processId,
-    kind: summary.kind,
-    lifetime: summary.lifetime,
-    owned: summary.owned,
-    commandLine: summary.commandLine,
-    cwd: summary.cwd,
-    startedAt: summary.startedAt,
-    status: summary.status,
-    ports: clonePortFacts(summary.ports),
-    factCount: summary.factCount,
-  };
-  return withDefinedOptionals(clone, {
-    conversationId: summary.conversationId,
-    spaceId: summary.spaceId,
-    referenceId: summary.referenceId,
-    runId: summary.runId,
-    toolCallId: summary.toolCallId,
-    authorizationMode: summary.authorizationMode,
-    permissionState: summary.permissionState,
-    pid: summary.pid,
-    endedAt: summary.endedAt,
-    exitCode: summary.exitCode,
-    signal: summary.signal,
-    logRef: summary.logRef,
-    logPath: summary.logPath,
-    stopCommand: summary.stopCommand,
-    latestFact: summary.latestFact === undefined ? undefined : { ...summary.latestFact },
-  });
-}
-
-function processRunResidueSummary(
-  runId: string,
-  records: readonly ProcessRecord[],
-  observedAt: string
-): ProcessRunResidueSummary {
-  const processes = records.map(processRunProcessSummary);
-  return {
-    kind: "process_run_residue_summary",
-    runId,
-    observedAt,
-    totalCount: processes.length,
-    ownedCount: processes.filter((process) => process.owned).length,
-    unownedCount: processes.filter((process) => !process.owned).length,
-    residualCount: processes.filter((process) => isUnresolvedStatus(process.status)).length,
-    statuses: processStatusCounts(records),
-    processes,
-    residualProcesses: processes.filter((process) => isUnresolvedStatus(process.status)),
-  };
-}
-
-function processRunProcessSummary(record: ProcessRecord): ProcessRunProcessSummary {
-  const latestFact = record.facts.at(-1);
-  const summary: ProcessRunProcessSummary = {
-    processId: record.processId,
-    conversationId: record.conversationId,
-    spaceId: record.spaceId,
-    referenceId: record.referenceId,
-    runId: record.runId,
-    toolCallId: record.toolCallId,
-    authorizationMode: record.authorizationMode,
-    permissionState: record.permissionState,
-    pid: record.pid,
-    kind: record.kind,
-    lifetime: record.lifetime,
-    owned: record.owned,
-    commandLine: record.commandLine,
-    cwd: record.cwd,
-    startedAt: record.startedAt,
-    endedAt: record.endedAt,
-    status: record.status,
-    exitCode: record.exitCode,
-    signal: record.signal,
-    logRef: record.logRef,
-    logPath: record.logPath,
-    stopCommand: record.stopCommand,
-    ports: clonePortFacts(record.ports),
-    factCount: record.facts.length,
-    latestFact: latestFact === undefined ? undefined : { ...latestFact },
-  };
-  return withDefinedOptionals(summary, {
-    runId: summary.runId,
-    toolCallId: summary.toolCallId,
-    pid: summary.pid,
-    endedAt: summary.endedAt,
-    exitCode: summary.exitCode,
-    signal: summary.signal,
-    logRef: summary.logRef,
-    logPath: summary.logPath,
-    stopCommand: summary.stopCommand,
-    latestFact: summary.latestFact,
-  });
-}
-
-function processStatusCounts(records: readonly ProcessRecord[]): ProcessStatusCounts {
-  const counts: Record<ProcessStatus, number> = {
-    starting: 0,
-    running: 0,
-    exited: 0,
-    killing: 0,
-    killed: 0,
-    unknown: 0,
-  };
-  for (const record of records) {
-    counts[record.status] += 1;
-  }
-  for (const status of PROCESS_STATUSES) {
-    counts[status] = counts[status] ?? 0;
-  }
-  return counts;
 }
 
 function errorMessage(error: unknown): string {

@@ -6,6 +6,7 @@ import type {
   SanitizedInformationAccessConfig,
   SanitizedModelProviderConfig,
   SanitizedWebSearchConfig,
+  WebSearchRuntimeConfig,
   ModelProviderProfileSettings,
 } from "../../domain/config/index.js";
 import {
@@ -105,6 +106,35 @@ export async function toSanitizedWebSearchConfig(input: {
         : "no-provider",
     updatedAt: informationAccess.webSearch.updatedAt,
   };
+}
+
+export async function toWebSearchRuntimeConfig(input: {
+  readonly web: SanitizedInformationAccessConfig["web"];
+  readonly secretStore: LocalDevSecretStore;
+}): Promise<WebSearchRuntimeConfig | undefined> {
+  const web = input.web;
+  if (web.providerKind === undefined || web.status !== "ready" || web.secretRef === undefined) {
+    return undefined;
+  }
+  const apiKey = await input.secretStore.readSecret(web.secretRef);
+  if (apiKey === undefined) {
+    return undefined;
+  }
+  const common = {
+    apiKey,
+    maxResults: web.maxResults,
+    endpoint: web.endpoint,
+    searchDepth: web.searchDepth,
+    searchType: web.searchType,
+    searchEngine: web.searchEngine,
+    market: web.market,
+  };
+  if (web.providerKind === "google") {
+    return web.engineId === undefined
+      ? undefined
+      : { ...common, provider: "google", engineId: web.engineId };
+  }
+  return { ...common, provider: web.providerKind, engineId: web.engineId };
 }
 
 export function toSanitizedOrdinaryAgentPromptConfig(

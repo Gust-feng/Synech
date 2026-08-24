@@ -3,9 +3,12 @@ import path from "node:path";
 import { CodedExecutionError } from "../execution-errors/index.js";
 import type { ModelCapabilities } from "../../domain/config/index.js";
 import type { ModelInputAttachment, ModelMessage } from "../../domain/intelligence/index.js";
-import type { OrdinaryRunContext, OrdinaryRunContextReference } from "../../domain/ordinary/index.js";
-import { managedUploadAttachmentId } from "../context/attachments.js";
-import { isConversationOwnerContextRef } from "../context/reference-origin.js";
+import {
+  managedAttachmentId,
+  type OrdinaryRunContext,
+  type OrdinaryRunContextReference,
+} from "../../domain/ordinary/index.js";
+import { isConversationOwnerContextRef } from "../../domain/ordinary/index.js";
 
 const MAX_IMAGE_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 
@@ -181,10 +184,10 @@ async function resolveReadableFileRef(
   if (ref.kind !== "file") {
     return undefined;
   }
-  const managedAttachmentId = managedUploadAttachmentId(ref.ref);
-  if (managedAttachmentId !== undefined) {
-    if (!permissionRefs.includes(`read:uploaded-attachment:${managedAttachmentId}`)) return undefined;
-    const absolutePath = await resolveManagedAttachmentPath?.(managedAttachmentId);
+  const attachmentId = managedAttachmentId(ref.ref);
+  if (attachmentId !== undefined) {
+    if (!permissionRefs.includes(`read:uploaded-attachment:${attachmentId}`)) return undefined;
+    const absolutePath = await resolveManagedAttachmentPath?.(attachmentId);
     return absolutePath !== undefined && path.isAbsolute(absolutePath)
       ? { absolutePath: path.resolve(absolutePath) }
       : undefined;

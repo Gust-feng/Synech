@@ -33,9 +33,9 @@ export class ErrorBoundary extends React.Component<
 
 function ErrorFallback({ error }: { readonly error: Error }): React.ReactElement {
   return (
-    <div className="aa-global-error">
-      <div className="aa-global-error__panel" role="alert">
-        <AlertCircle className="aa-global-error__icon" size={18} />
+    <div className="ui-global-error">
+      <div className="ui-global-error__panel" role="alert">
+        <AlertCircle className="ui-global-error__icon" size={18} />
         <h1>工作台遇到问题</h1>
         <p>
           页面发生了意外错误，可以尝试刷新恢复。

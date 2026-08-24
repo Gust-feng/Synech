@@ -1,23 +1,22 @@
 import type { McpServerSettings } from "../../domain/config/index.js";
 import type { ToolExecutor } from "../../domain/tools/index.js";
 import {
-  assertMcpCatalogWithinLimits,
-  DEFAULT_MCP_MAX_TOOL_CATALOG_BYTES,
-  DEFAULT_MCP_MAX_TOOL_CATALOG_ITEMS,
   DEFAULT_MCP_MAX_CONCURRENT_CALLS_PER_SERVER,
   McpClientWrapper,
   type McpClientConfig,
   type McpToolInfo,
 } from "./mcp-client.js";
+import {
+  assertCachedMcpToolCatalogWithinLimits,
+  normalizeCachedMcpToolCatalog,
+  type NormalizedCachedMcpToolCatalogEntry,
+} from "../../domain/mcp/index.js";
 import { createLazyMcpToolExecutor } from "./mcp-tool-adapter.js";
 
 export type LazyMcpToolProviderConfig = {
   readonly servers: readonly McpServerSettings[];
   readonly env?: Readonly<Record<string, string | undefined>>;
   readonly maxConcurrentCallsPerServer?: number;
-  /** Aggregate model-visible MCP tool boundary across every configured server. */
-  readonly maxToolCatalogItems?: number;
-  readonly maxToolCatalogBytes?: number;
   readonly managedBinDirectory?: string;
 };
 
@@ -32,8 +31,19 @@ type LazyServerSession = {
   connectAbortController?: AbortController;
 };
 
+type LazyCachedToolSource = {
+  readonly session: LazyServerSession;
+  readonly serverId: string;
+  readonly tool: McpToolInfo;
+  readonly confirmationStrategy: {
+    readonly confirmationMode: McpServerSettings["confirmationMode"];
+    readonly autoApprovedTools: readonly string[];
+  };
+};
+
 export class LazyMcpToolExecutorProvider {
   private readonly sessions = new Map<string, LazyServerSession>();
+  private readonly cachedTools: readonly NormalizedCachedMcpToolCatalogEntry<LazyCachedToolSource>[];
   private lifecycleGeneration = 0;
   private closed = false;
   private disconnecting?: Promise<void>;
@@ -48,48 +58,39 @@ export class LazyMcpToolExecutorProvider {
       }
       this.sessions.set(server.serverId, { server });
     }
+    this.cachedTools = normalizeCachedMcpToolCatalog(
+      [...this.sessions.values()].flatMap((session) =>
+        (session.server.cachedTools ?? []).map((tool): LazyCachedToolSource => ({
+          session,
+          serverId: session.server.serverId,
+          tool: tool as McpToolInfo,
+          confirmationStrategy: {
+            confirmationMode: session.server.confirmationMode,
+            autoApprovedTools: session.server.autoApprovedTools,
+          },
+        })),
+      ),
+    );
+    assertCachedMcpToolCatalogWithinLimits(this.exposedCachedTools());
   }
 
   getToolsForRegistry(): readonly ToolExecutor[] {
-    const selected: Array<{ readonly session: LazyServerSession; readonly tool: McpToolInfo }> = [];
-    for (const session of this.sessions.values()) {
-      for (const tool of session.server.cachedTools ?? []) {
-        if (!isToolEnabled(session.server, tool.name)) {
-          continue;
-        }
-        selected.push({ session, tool: tool as McpToolInfo });
-      }
-    }
-    this.assertToolCatalogWithinLimits(selected.map((entry) => entry.tool));
-    return selected.map(({ session, tool }) =>
+    return this.exposedCachedTools().map(({ session, tool, serverId, definition }) =>
       createLazyMcpToolExecutor(
         () => this.getClient(session),
         tool,
-        session.server.serverId,
-        {
-          confirmationMode: session.server.confirmationMode,
-          autoApprovedTools: session.server.autoApprovedTools,
-        },
+        serverId,
+        definition,
       ));
   }
 
   getDiscoveredToolsForRegistry(): readonly ToolExecutor[] {
-    const discovered: Array<{ readonly session: LazyServerSession; readonly tool: McpToolInfo }> = [];
-    for (const session of this.sessions.values()) {
-      for (const tool of session.server.cachedTools ?? []) {
-        discovered.push({ session, tool: tool as McpToolInfo });
-      }
-    }
-    this.assertToolCatalogWithinLimits(discovered.map((entry) => entry.tool));
-    return discovered.map(({ session, tool }) =>
+    return this.cachedTools.map(({ session, tool, serverId, definition }) =>
       createLazyMcpToolExecutor(
         () => this.getClient(session),
         tool,
-        session.server.serverId,
-        {
-          confirmationMode: session.server.confirmationMode,
-          autoApprovedTools: session.server.autoApprovedTools,
-        },
+        serverId,
+        definition,
       ));
   }
 
@@ -199,13 +200,8 @@ export class LazyMcpToolExecutorProvider {
     return connecting;
   }
 
-  private assertToolCatalogWithinLimits(tools: readonly McpToolInfo[]): void {
-    assertMcpCatalogWithinLimits(
-      "model-visible tools",
-      tools,
-      this.config.maxToolCatalogItems ?? DEFAULT_MCP_MAX_TOOL_CATALOG_ITEMS,
-      this.config.maxToolCatalogBytes ?? DEFAULT_MCP_MAX_TOOL_CATALOG_BYTES,
-    );
+  private exposedCachedTools(): readonly NormalizedCachedMcpToolCatalogEntry<LazyCachedToolSource>[] {
+    return this.cachedTools.filter(({ session, tool }) => isToolEnabled(session.server, tool.name));
   }
 }
 

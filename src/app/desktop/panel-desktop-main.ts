@@ -28,7 +28,7 @@ import {
   type DesktopWindowNativeEventState,
   type DesktopWindowPresentationState,
 } from "./panel-desktop-window-controls.js";
-import { startLocalPanelServer } from "../panel-server.js";
+import { startLocalPanelServer } from "../panel-server/index.js";
 import { resolveProductPaths, type ProductPaths } from "../../platform/storage/index.js";
 import {
   DESKTOP_APP_NAME,
@@ -50,13 +50,13 @@ process.on("warning", (warning) => {
 const desktopWindowStates = new WeakMap<BrowserWindow, DesktopWindowState>();
 let desktopLocalPreferenceStore: DesktopLocalPreferenceStore | undefined;
 let desktopExitCleanup: Promise<void> | undefined;
-const WINDOW_MINIMIZE_CHANNEL = "synech:window-minimize";
-const WINDOW_TOGGLE_MAXIMIZE_CHANNEL = "synech:window-toggle-maximize";
-const WINDOW_GET_STATE_CHANNEL = "synech:window-get-state";
-const WINDOW_STATE_CHANGED_CHANNEL = "synech:window-state-changed";
-const WINDOW_CLOSE_CHANNEL = "synech:window-close";
-const LOCAL_PREFERENCE_GET_CHANNEL = "synech:local-preference-get";
-const LOCAL_PREFERENCE_SET_CHANNEL = "synech:local-preference-set";
+const WINDOW_MINIMIZE_CHANNEL = "desktop:window-minimize";
+const WINDOW_TOGGLE_MAXIMIZE_CHANNEL = "desktop:window-toggle-maximize";
+const WINDOW_GET_STATE_CHANNEL = "desktop:window-get-state";
+const WINDOW_STATE_CHANGED_CHANNEL = "desktop:window-state-changed";
+const WINDOW_CLOSE_CHANNEL = "desktop:window-close";
+const LOCAL_PREFERENCE_GET_CHANNEL = "desktop:local-preference-get";
+const LOCAL_PREFERENCE_SET_CHANNEL = "desktop:local-preference-set";
 type DesktopWindowState = {
   readonly nativeWindowEvents: DesktopWindowNativeEventState;
 };
@@ -84,7 +84,7 @@ async function main(): Promise<void> {
       createWindow: (options) => createElectronPanelWindow(options),
       selectDirectory: selectDirectory,
       selectContextAttachment: selectContextAttachment,
-      selectSynechRestore: selectSynechRestore,
+      selectRestore,
       openExternalResource: openExternalResource,
       whenReady: () => app.whenReady(),
       onWindowAllClosed: (handler) => {
@@ -206,7 +206,7 @@ async function selectContextAttachment(): Promise<{ readonly kind: "file" | "pro
   };
 }
 
-async function selectSynechRestore(): Promise<string | undefined> {
+async function selectRestore(): Promise<string | undefined> {
   await app.whenReady();
   const window = currentPanelDialogWindow();
   const options: OpenDialogOptions = {

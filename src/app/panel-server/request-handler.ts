@@ -13,35 +13,35 @@ import {
   writeJson,
   writePanelError,
 } from "./http-utils.js";
-import { handlePanelConfigRoute } from "./config-routes.js";
-import { handlePanelContextRoute } from "./context-routes.js";
+import { handlePanelConfigRoute } from "./settings/config-routes.js";
+import { handlePanelContextRoute } from "./workbench/context-routes.js";
 import type { PanelServerOptions, StartedPanelServer } from "./types.js";
 import { parseSkillStateRequest } from "./request-parsers.js";
 import {
   cleanupPanelHostOwnedProcesses,
   createPanelHost,
-  preparePanelHostStorageForStartup,
   type PanelHost,
 } from "./panel-host.js";
-import { listPanelSkillSettings, refreshPanelSkillSettings, setPanelSkillEnabled } from "./skill-service.js";
+import { preparePanelStorageForStartup } from "./storage/panel-storage.js";
+import { listPanelSkillSettings, refreshPanelSkillSettings, setPanelSkillEnabled } from "./settings/skill-service.js";
 import { OrdinaryFeatureError } from "../ordinary-agent/contracts.js";
-import { OrdinaryPanelCursorError } from "./ordinary-agent-panel-projection.js";
-import { handlePanelOrdinaryRoute } from "./ordinary-routes.js";
-import { agentMemoryHttpError, handlePanelAgentMemoryRoute } from "./agent-memory-routes.js";
+import { OrdinaryPanelCursorError } from "./ordinary/ordinary-agent-panel-projection.js";
+import { handlePanelOrdinaryRoute } from "./ordinary/ordinary-routes.js";
+import { agentMemoryHttpError, handlePanelAgentMemoryRoute } from "./ordinary/agent-memory-routes.js";
 import { AgentNotesError } from "../agent-notes/index.js";
 import { PathDependencyFeatureError } from "../path-dependencies/index.js";
 import { SpaceFeatureError } from "../spaces/index.js";
-import { handlePanelSpaceRoute, spaceFeatureHttpError } from "./space-routes.js";
-import { handlePanelSpaceMetadataRoute } from "./space-metadata-routes.js";
+import { handlePanelSpaceRoute, spaceFeatureHttpError } from "./spaces/space-routes.js";
+import { handlePanelSpaceMetadataRoute } from "./spaces/space-metadata-routes.js";
 import { WorkspaceFeatureError } from "../workspaces/index.js";
-import { handlePanelWorkspaceRoute, workspaceFeatureHttpError } from "./workspace-routes.js";
+import { handlePanelWorkspaceRoute, workspaceFeatureHttpError } from "./spaces/workspace-routes.js";
 import { PersonalKnowledgeError } from "../personal-knowledge/index.js";
-import { handlePanelPersonalKnowledgeRoute, personalKnowledgeHttpError } from "./personal-knowledge-routes.js";
-import { createPanelUsageStatistics } from "./panel-usage-statistics.js";
-import { handlePanelSynechDataRoute, synechDataHttpError } from "./synech-data-routes.js";
-import { SynechDataMaintenanceError } from "./synech-data-maintenance.js";
-import { handlePanelManagedAssetRoute } from "./managed-asset-routes.js";
-import { handleSynechProjectionRoute } from "./synech-projection-routes.js";
+import { handlePanelPersonalKnowledgeRoute, personalKnowledgeHttpError } from "./storage/personal-knowledge-routes.js";
+import { createPanelUsageStatistics } from "./workbench/panel-usage-statistics.js";
+import { handlePanelDataRoute, dataMaintenanceHttpError } from "./storage/data-routes.js";
+import { DataMaintenanceError } from "./storage/data-maintenance.js";
+import { handlePanelManagedAssetRoute } from "./storage/managed-asset-routes.js";
+import { handleWorkbenchProjectionRoute } from "./workbench/workbench-projection-routes.js";
 import { initializeProductStorage, resolveProductPaths } from "../../platform/storage/index.js";
 export type { PanelModelCatalogFetch, PanelProviderFetch, PanelServerOptions, StartedPanelServer } from "./types.js";
 
@@ -67,14 +67,14 @@ export async function startLocalPanelServer(options: PanelServerOptions = {}): P
   let runtime: PanelHost | undefined;
   try {
     await initializeProductStorage(productPaths);
-    await preparePanelHostStorageForStartup(productPaths);
+    await preparePanelStorageForStartup(productPaths);
     const createdRuntime = createPanelHost({
       configCenter: options.configCenter,
       providerFetch: options.providerFetch,
       modelCatalogFetch: options.modelCatalogFetch,
       directoryPicker: options.directoryPicker,
       contextAttachmentPicker: options.contextAttachmentPicker,
-      synechRestorePicker: options.synechRestorePicker,
+      restorePicker: options.restorePicker,
       externalResourceOpener: options.externalResourceOpener,
       additionalSkillRoots: options.additionalSkillRoots,
       skillRoots: options.skillRoots,
@@ -160,8 +160,8 @@ function createPanelRequestHandler(runtime: PanelHost): (request: IncomingMessag
         writePanelError(response, personalKnowledgeHttpError(error));
         return;
       }
-      if (error instanceof SynechDataMaintenanceError) {
-        writePanelError(response, synechDataHttpError(error));
+      if (error instanceof DataMaintenanceError) {
+        writePanelError(response, dataMaintenanceHttpError(error));
         return;
       }
       logUnhandledPanelRequestError(request, error);
@@ -250,8 +250,8 @@ async function handlePanelRequest(
     return;
   }
 
-  if (await handleSynechProjectionRoute({
-    synechProjectionChanges: runtime.synechProjectionChanges,
+  if (await handleWorkbenchProjectionRoute({
+    projectionChanges: runtime.projectionChanges,
   }, request, response, url)) {
     return;
   }
@@ -283,7 +283,7 @@ async function handlePanelRequest(
     spaceFeature: runtime.spaceFeature,
     ordinaryAgentFeature: runtime.ordinaryAgentFeature,
     spaceConversationDeletion: runtime.spaceConversationDeletion,
-    ensureInitialSynechData: runtime.ensureInitialSynechData,
+    ensureDefaultSpace: runtime.ensureDefaultSpace,
     flushSpaceKnowledgeSync: runtime.flushSpaceKnowledgeSync,
   }, request, response, url)) {
     return;
@@ -309,7 +309,7 @@ async function handlePanelRequest(
   }
 
   if (await handlePanelManagedAssetRoute({
-    ensureInitialSynechData: runtime.ensureInitialSynechData,
+    ensureDefaultSpace: runtime.ensureDefaultSpace,
     managedAssets: runtime.managedAssets,
   }, request, response, url)) {
     return;
@@ -317,15 +317,15 @@ async function handlePanelRequest(
 
   if (await handlePanelPersonalKnowledgeRoute({
     personalKnowledgeFeature: runtime.personalKnowledgeFeature,
-    ensureInitialSynechData: runtime.ensureInitialSynechData,
+    ensureDefaultSpace: runtime.ensureDefaultSpace,
     knowledgeAssetsReady: runtime.knowledgeAssetsReady,
     knowledgeAssetRoot: runtime.knowledgeAssetRoot,
   }, request, response, url)) {
     return;
   }
 
-  if (await handlePanelSynechDataRoute({
-    synechDataMaintenance: runtime.synechDataMaintenance,
+  if (await handlePanelDataRoute({
+    dataMaintenance: runtime.dataMaintenance,
   }, request, response, url)) {
     return;
   }
@@ -470,7 +470,7 @@ export async function releasePanelHostResources(
   const errors: unknown[] = [];
   await captureCleanupError(errors, () => ordinaryDisposal);
   await captureCleanupError(errors, () => runtime.pathDependencyFeature.release());
-  await captureCleanupError(errors, async () => runtime.releaseSynechProjectionChanges());
+  await captureCleanupError(errors, async () => runtime.releaseProjectionChanges());
   await captureCleanupError(errors, () => releaseWorkbenchStorage(runtime));
   await captureCleanupError(errors, () => runtime.releaseAgentSessionStorage());
   await captureCleanupError(errors, () => runtime.toolOutputStore.close?.() ?? runtime.toolOutputStore.clear());
@@ -489,7 +489,7 @@ async function releaseWorkbenchStorage(runtime: PanelHost): Promise<void> {
   await runtime.flushSpaceKnowledgeSync();
   await runtime.personalKnowledgeFeature.release();
   await runtime.spaceFeature.release();
-  runtime.synechDatabase.close();
+  runtime.database.close();
 }
 
 function ordinaryFeatureHttpError(error: OrdinaryFeatureError): PanelHttpError {

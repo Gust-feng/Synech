@@ -3,7 +3,7 @@ import type { ObservationRef } from "../../domain/ordinary/index.js";
 import type { OrdinaryRunContext, OrdinaryRunContextReference } from "../../domain/ordinary/index.js";
 import { normalizeModelFacingText } from "../text-projection/visible-text-safety.js";
 import type { AgentDefinition } from "../agent-prompts/contracts.js";
-import { isConversationOwnerContextRef } from "../context/reference-origin.js";
+import { isConversationOwnerContextRef } from "../../domain/ordinary/index.js";
 import type { SelectedSkillContext } from "../skills/index.js";
 
 export type OrdinaryAgentModelInput = {
@@ -17,12 +17,12 @@ export type BuildOrdinaryAgentModelInputOptions = {
   readonly runContext: OrdinaryRunContext;
   readonly priorModelContext?: readonly ModelMessage[];
   readonly skillContexts?: readonly SelectedSkillContext[];
-  /** 模型可见的宿主上下文（owner 区块 ADR-0035 §6.2 + 环境区块）；随 birth 冻结，未提供时不注入。 */
+  /** 模型可见的 Owner 与环境上下文；随 Run 出生事实冻结，未提供时不注入。 */
   readonly ownerContext?: string;
 };
 
 /**
- * Builds the Ordinary Agent request in provider-neutral message order.
+ * Builds the Agent request in provider-neutral message order.
  * Earlier model messages stay byte-for-byte equivalent apart from cloning;
  * context-window compaction is owned by the model loop, not this assembler.
  */

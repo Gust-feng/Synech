@@ -18,7 +18,7 @@ export type CreateAgentNotesFeatureInput = {
 };
 
 /**
- * Agent 笔记 feature（ADR-0033）。
+ * Agent 笔记功能。
  *
  * 职责刻意保持最小：读、写、组装启动注入。什么值得记、笔记怎么组织是模型的
  * 判断；用户的治理权是直接查看和编辑文件。这里不做自动总结、不做关键词过滤、
@@ -84,7 +84,7 @@ export function createAgentNotesFeature(input: CreateAgentNotesFeatureInput): Ag
       async write(command) {
         assertAgentNoteScope(command.scope);
         if (command.content.length > AGENT_NOTE_MAX_CHARS) {
-          // 显式失败而不是静默截断：让模型自己收到边界并整理笔记（ADR-0033 §3）。
+          // 显式失败而不是静默截断，让模型收到边界并自行整理笔记。
           throw new AgentNotesError(
             "note_too_large",
             `Note is ${command.content.length} chars; the limit is ${AGENT_NOTE_MAX_CHARS}. ` +

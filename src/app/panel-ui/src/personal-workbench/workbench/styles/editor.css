@@ -1,27 +1,27 @@
 /**
  * Tiptap WYSIWYG 编辑器排版 —— 匹配 Workbench 设计 token。
  *
- * 编辑器内容区使用 .aa-editor-prose 类名，所有排版决策收敛在此，
+ * 编辑器内容区使用 .ui-editor-prose 类名，所有排版决策收敛在此，
  * 与全局阅读偏好（reading-prose / --reading-width）共用同一视觉语言。
  */
 
 /* ── 基础排版 ── */
-.aa-editor-prose {
+.ui-editor-prose {
   font-family: var(--reading-font, "Noto Sans SC", Inter, system-ui, sans-serif);
   font-size: var(--reading-body-size, 16px);
   line-height: 1.85;
-  color: var(--aa-text-1, #292722);
-  caret-color: var(--aa-accent, #6865a7);
+  color: var(--ui-text-1, #292722);
+  caret-color: var(--ui-accent, #6865a7);
   outline: none;
   min-height: 60vh;
 }
 
-.aa-editor-prose > * + * {
+.ui-editor-prose > * + * {
   margin-top: 0.5em;
 }
 
 /* ── 标题 ── */
-.aa-editor-prose h1 {
+.ui-editor-prose h1 {
   font-size: 1.6em;
   font-weight: 700;
   line-height: 1.3;
@@ -30,7 +30,7 @@
   letter-spacing: -0.01em;
 }
 
-.aa-editor-prose h2 {
+.ui-editor-prose h2 {
   font-size: 1.35em;
   font-weight: 650;
   line-height: 1.35;
@@ -38,7 +38,7 @@
   margin-bottom: 0.35em;
 }
 
-.aa-editor-prose h3 {
+.ui-editor-prose h3 {
   font-size: 1.15em;
   font-weight: 600;
   line-height: 1.4;
@@ -46,7 +46,7 @@
   margin-bottom: 0.3em;
 }
 
-.aa-editor-prose h4 {
+.ui-editor-prose h4 {
   font-size: 1em;
   font-weight: 600;
   line-height: 1.5;
@@ -54,37 +54,37 @@
 }
 
 /* ── 段落与文本 ── */
-.aa-editor-prose p {
+.ui-editor-prose p {
   margin-bottom: 0.6em;
 }
 
-.aa-editor-prose strong {
+.ui-editor-prose strong {
   font-weight: 650;
-  color: var(--aa-text-1, #292722);
+  color: var(--ui-text-1, #292722);
 }
 
-.aa-editor-prose em {
+.ui-editor-prose em {
   font-style: italic;
 }
 
-.aa-editor-prose s {
+.ui-editor-prose s {
   text-decoration: line-through;
-  color: var(--aa-text-3, #aba39b);
+  color: var(--ui-text-3, #aba39b);
 }
 
 /* ── 行内代码 ── */
-.aa-editor-prose code {
+.ui-editor-prose code {
   font-family: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
   font-size: 0.875em;
-  background: color-mix(in srgb, var(--aa-text-1, #292722) 5%, transparent);
-  border: 1px solid color-mix(in srgb, var(--aa-text-1, #292722) 8%, transparent);
+  background: color-mix(in srgb, var(--ui-text-1, #292722) 5%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ui-text-1, #292722) 8%, transparent);
   border-radius: 4px;
   padding: 0.15em 0.4em;
-  color: var(--aa-accent, #6865a7);
+  color: var(--ui-accent, #6865a7);
 }
 
 /* ── 代码块 ── */
-.aa-editor-prose pre {
+.ui-editor-prose pre {
   background: #2c2a27;
   color: #e8e4df;
   border-radius: 8px;
@@ -95,7 +95,7 @@
   line-height: 1.65;
 }
 
-.aa-editor-prose pre code {
+.ui-editor-prose pre code {
   font-family: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
   background: none;
   border: none;
@@ -105,95 +105,95 @@
 }
 
 /* ── 引用块 ── */
-.aa-editor-prose blockquote {
-  border-left: 3px solid var(--aa-accent, #6865a7);
+.ui-editor-prose blockquote {
+  border-left: 3px solid var(--ui-accent, #6865a7);
   padding-left: 16px;
   margin: 1em 0;
-  color: var(--aa-text-2, #87827c);
+  color: var(--ui-text-2, #87827c);
   font-style: italic;
 }
 
-.aa-editor-prose blockquote p {
+.ui-editor-prose blockquote p {
   margin-bottom: 0.3em;
 }
 
 /* ── 列表 ── */
-.aa-editor-prose ul {
+.ui-editor-prose ul {
   list-style: disc;
   padding-left: 1.5em;
   margin: 0.5em 0;
 }
 
-.aa-editor-prose ol {
+.ui-editor-prose ol {
   list-style: decimal;
   padding-left: 1.5em;
   margin: 0.5em 0;
 }
 
-.aa-editor-prose li {
+.ui-editor-prose li {
   margin-bottom: 0.25em;
 }
 
-.aa-editor-prose li::marker {
-  color: var(--aa-text-3, #aba39b);
+.ui-editor-prose li::marker {
+  color: var(--ui-text-3, #aba39b);
 }
 
 /* ── 任务列表 ── */
-.aa-editor-prose ul[data-type="taskList"] {
+.ui-editor-prose ul[data-type="taskList"] {
   list-style: none;
   padding-left: 0;
 }
 
-.aa-editor-prose ul[data-type="taskList"] li {
+.ui-editor-prose ul[data-type="taskList"] li {
   display: flex;
   align-items: flex-start;
   gap: 8px;
 }
 
-.aa-editor-prose ul[data-type="taskList"] li > label {
+.ui-editor-prose ul[data-type="taskList"] li > label {
   margin-top: 3px;
   flex-shrink: 0;
 }
 
-.aa-editor-prose ul[data-type="taskList"] li > label input[type="checkbox"] {
+.ui-editor-prose ul[data-type="taskList"] li > label input[type="checkbox"] {
   width: 15px;
   height: 15px;
-  accent-color: var(--aa-accent, #6865a7);
+  accent-color: var(--ui-accent, #6865a7);
   border-radius: 3px;
   cursor: pointer;
 }
 
-.aa-editor-prose ul[data-type="taskList"] li > div {
+.ui-editor-prose ul[data-type="taskList"] li > div {
   flex: 1;
 }
 
-.aa-editor-prose ul[data-type="taskList"] li[data-checked="true"] > div {
+.ui-editor-prose ul[data-type="taskList"] li[data-checked="true"] > div {
   text-decoration: line-through;
-  color: var(--aa-text-3, #aba39b);
+  color: var(--ui-text-3, #aba39b);
 }
 
 /* ── 链接 ── */
-.aa-editor-prose a {
-  color: var(--aa-accent, #6865a7);
+.ui-editor-prose a {
+  color: var(--ui-accent, #6865a7);
   text-decoration: underline;
   text-decoration-color: rgba(104, 101, 167, 0.3);
   text-underline-offset: 2px;
   transition: text-decoration-color 120ms ease;
 }
 
-.aa-editor-prose a:hover {
-  text-decoration-color: var(--aa-accent, #6865a7);
+.ui-editor-prose a:hover {
+  text-decoration-color: var(--ui-accent, #6865a7);
 }
 
 /* ── 分隔线 ── */
-.aa-editor-prose hr {
+.ui-editor-prose hr {
   border: none;
-  border-top: 1px solid var(--aa-border, rgba(45, 40, 34, 0.09));
+  border-top: 1px solid var(--ui-border, rgba(45, 40, 34, 0.09));
   margin: 2em 0;
 }
 
 /* ── 图片 ── */
-.aa-editor-prose img {
+.ui-editor-prose img {
   display: block;
   height: auto;
   max-width: 100%;
@@ -202,43 +202,43 @@
 }
 
 /* ── 表格 ── */
-.aa-editor-prose .tableWrapper {
+.ui-editor-prose .tableWrapper {
   max-width: 100%;
   margin: 1em 0;
   overflow-x: auto;
 }
 
-.aa-editor-prose table {
+.ui-editor-prose table {
   width: 100%;
   min-width: 420px;
   border-collapse: collapse;
   font-size: 0.92em;
 }
 
-.aa-editor-prose th,
-.aa-editor-prose td {
+.ui-editor-prose th,
+.ui-editor-prose td {
   min-width: 80px;
-  border: 1px solid var(--aa-border, rgba(45, 40, 34, 0.09));
+  border: 1px solid var(--ui-border, rgba(45, 40, 34, 0.09));
   padding: 8px 10px;
   text-align: left;
   vertical-align: top;
 }
 
-.aa-editor-prose th {
-  background: var(--aa-surface-hover, #eeebe6);
+.ui-editor-prose th {
+  background: var(--ui-surface-hover, #eeebe6);
   font-weight: 650;
 }
 
 /* ── 占位符（空编辑器） ── */
-.aa-editor-prose p.is-editor-empty:first-child::before {
+.ui-editor-prose p.is-editor-empty:first-child::before {
   content: attr(data-placeholder);
-  color: var(--aa-text-3, #aba39b);
+  color: var(--ui-text-3, #aba39b);
   float: left;
   height: 0;
   pointer-events: none;
 }
 
 /* ── 选中高亮 ── */
-.aa-editor-prose ::selection {
+.ui-editor-prose ::selection {
   background: rgba(104, 101, 167, 0.18);
 }

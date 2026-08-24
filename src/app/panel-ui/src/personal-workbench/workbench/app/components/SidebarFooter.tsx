@@ -6,7 +6,7 @@ import {
   saveColorId,
   saveStyleId,
   type ThemeColorId,
-} from '../../../../app-theme'
+} from '../../../../shell/theme'
 
 type AppearanceColorId = Extract<ThemeColorId, 'system' | 'light' | 'dark'>
 
@@ -82,30 +82,30 @@ export function SidebarFooter({ onOpenSettings }: { readonly onOpenSettings: () 
   }
 
   return (
-    <footer className="aa-sidebar-footer">
-      <div ref={menuRef} className="aa-sidebar-footer-menu">
+    <footer className="ui-sidebar-footer">
+      <div ref={menuRef} className="ui-sidebar-footer-menu">
         <button
           type="button"
           onClick={toggleMenu}
           aria-label="设置与外观"
           aria-haspopup="menu"
           aria-expanded={menuOpen}
-          className="aa-sidebar-footer__trigger"
+          className="ui-sidebar-footer__trigger"
         >
-          <span className="aa-sidebar-footer__icon" aria-hidden="true">
+          <span className="ui-sidebar-footer__icon" aria-hidden="true">
             <Settings size={14} />
           </span>
-          <span className="aa-sidebar-footer__label">设置</span>
+          <span className="ui-sidebar-footer__label">设置</span>
           <ChevronUp
-            className={`aa-sidebar-footer__chevron${menuOpen ? ' open' : ''}`}
+            className={`ui-sidebar-footer__chevron${menuOpen ? ' open' : ''}`}
             size={13}
             aria-hidden="true"
           />
         </button>
 
         {menuOpen && (
-          <div className="aa-sidebar-footer-menu__popover" role="menu" aria-label="设置与外观">
-            <div className="aa-sidebar-footer-menu__heading">主题</div>
+          <div className="ui-sidebar-footer-menu__popover" role="menu" aria-label="设置与外观">
+            <div className="ui-sidebar-footer-menu__heading">主题</div>
             {APPEARANCE_OPTIONS.map((option) => {
               const Icon = option.icon
               const active = activeColorId === option.id && getInitialTheme().styleId === 'default'
@@ -115,23 +115,23 @@ export function SidebarFooter({ onOpenSettings }: { readonly onOpenSettings: () 
                   type="button"
                   role="menuitemradio"
                   aria-checked={active}
-                  className={`aa-sidebar-footer-menu__option${active ? ' active' : ''}`}
+                  className={`ui-sidebar-footer-menu__option${active ? ' active' : ''}`}
                   onClick={() => selectAppearance(option.id)}
                 >
                   <Icon size={14} aria-hidden="true" />
-                  <span className="aa-sidebar-footer-menu__copy">{option.label}</span>
+                  <span className="ui-sidebar-footer-menu__copy">{option.label}</span>
                   {active && <Check size={14} aria-hidden="true" />}
                 </button>
               )
             })}
 
-            <div role="separator" className="aa-sidebar-footer-menu__separator" />
+            <div role="separator" className="ui-sidebar-footer-menu__separator" />
 
             <button
               type="button"
               role="menuitem"
               onClick={openSettings}
-              className="aa-sidebar-footer-menu__item"
+              className="ui-sidebar-footer-menu__item"
             >
               <Settings size={14} aria-hidden="true" />
               <span>打开设置</span>

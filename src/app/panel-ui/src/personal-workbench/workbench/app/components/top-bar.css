@@ -1,7 +1,7 @@
 .topbar-shell {
   position: relative;
   isolation: isolate;
-  border-bottom: 1px solid color-mix(in srgb, var(--aa-border) 58%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--ui-border) 58%, transparent);
 }
 
 .topbar-shell[data-desktop-shell='true'] {
@@ -39,7 +39,7 @@
   border: 1px solid transparent;
   border-radius: 7px;
   background: transparent;
-  color: var(--aa-text-3);
+  color: var(--ui-text-3);
   cursor: pointer;
   transition:
     background-color 150ms ease,
@@ -48,13 +48,13 @@
 }
 
 .topbar-nav-button:hover {
-  background: color-mix(in srgb, var(--aa-text-1) 5%, transparent);
-  color: var(--aa-text-2);
+  background: color-mix(in srgb, var(--ui-text-1) 5%, transparent);
+  color: var(--ui-text-2);
 }
 
 .topbar-nav-button:focus-visible {
-  border-color: color-mix(in srgb, var(--aa-accent) 36%, transparent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--aa-accent) 10%, transparent);
+  border-color: color-mix(in srgb, var(--ui-accent) 36%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ui-accent) 10%, transparent);
   outline: none;
 }
 
@@ -87,13 +87,13 @@
 .topbar-search-trigger:hover,
 .topbar-search-trigger:focus-visible {
   width: 176px;
-  background: color-mix(in srgb, var(--aa-text-1) 5%, transparent);
-  color: var(--aa-text-2) !important;
+  background: color-mix(in srgb, var(--ui-text-1) 5%, transparent);
+  color: var(--ui-text-2) !important;
 }
 
 .topbar-search-trigger:focus-visible {
-  border-color: color-mix(in srgb, var(--aa-accent) 36%, transparent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--aa-accent) 10%, transparent);
+  border-color: color-mix(in srgb, var(--ui-accent) 36%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ui-accent) 10%, transparent);
   outline: none;
 }
 
@@ -130,8 +130,8 @@
 .topbar-search-shortcut {
   padding: 2px 6px;
   border-radius: 5px;
-  background: color-mix(in srgb, var(--aa-text-1) 7%, transparent);
-  color: var(--aa-text-3);
+  background: color-mix(in srgb, var(--ui-text-1) 7%, transparent);
+  color: var(--ui-text-3);
   font-family: system-ui, sans-serif;
   font-size: 10px;
   line-height: 14px;
@@ -148,7 +148,7 @@
 .topbar-surface-title {
   max-width: 240px;
   overflow: hidden;
-  color: var(--aa-text-2);
+  color: var(--ui-text-2);
   font-size: 12px;
   line-height: 18px;
   text-overflow: ellipsis;
@@ -160,13 +160,13 @@
   flex: none;
   align-items: center;
   gap: 5px;
-  color: var(--aa-accent);
+  color: var(--ui-accent);
   font-size: 11px;
   line-height: 18px;
 }
 
 .topbar-conversation-status[data-state='attention'] {
-  color: var(--aa-status-wait);
+  color: var(--ui-status-wait);
 }
 
 .topbar-conversation-status__dot {
@@ -190,18 +190,18 @@
   border: 1px solid transparent;
   border-radius: 7px;
   background: transparent;
-  color: var(--aa-text-3);
+  color: var(--ui-text-3);
   cursor: pointer;
   transition: background-color 150ms ease, color 150ms ease;
 }
 
 .topbar-focus-button:hover {
-  background: color-mix(in srgb, var(--aa-text-1) 5%, transparent);
-  color: var(--aa-text-2);
+  background: color-mix(in srgb, var(--ui-text-1) 5%, transparent);
+  color: var(--ui-text-2);
 }
 
 .topbar-focus-button:focus-visible {
-  border-color: color-mix(in srgb, var(--aa-accent) 36%, transparent);
+  border-color: color-mix(in srgb, var(--ui-accent) 36%, transparent);
   outline: none;
 }
 
@@ -225,7 +225,7 @@
   width: 1px;
   height: 16px;
   margin-right: 6px;
-  background: color-mix(in srgb, var(--aa-border) 72%, transparent);
+  background: color-mix(in srgb, var(--ui-border) 72%, transparent);
   content: '';
 }
 
@@ -240,7 +240,7 @@
   border: 1px solid transparent;
   border-radius: 7px;
   background: transparent;
-  color: var(--aa-text-3);
+  color: var(--ui-text-3);
   cursor: pointer;
   app-region: no-drag;
   transition:
@@ -249,13 +249,13 @@
 }
 
 .topbar-window-control:hover {
-  background: color-mix(in srgb, var(--aa-text-1) 6%, transparent);
-  color: var(--aa-text-1);
+  background: color-mix(in srgb, var(--ui-text-1) 6%, transparent);
+  color: var(--ui-text-1);
 }
 
 .topbar-window-control:focus-visible {
-  border-color: color-mix(in srgb, var(--aa-accent) 34%, transparent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--aa-accent) 9%, transparent);
+  border-color: color-mix(in srgb, var(--ui-accent) 34%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ui-accent) 9%, transparent);
   outline: none;
 }
 
@@ -268,8 +268,8 @@
 }
 
 .topbar-window-control-close:hover {
-  background: color-mix(in srgb, var(--aa-status-error) 14%, transparent);
-  color: var(--aa-status-error);
+  background: color-mix(in srgb, var(--ui-status-error) 14%, transparent);
+  color: var(--ui-status-error);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -297,6 +297,6 @@
   padding: 1px 8px;
   border-radius: 999px;
   font-size: 11px;
-  color: var(--aa-text-3);
-  background: var(--aa-accent-bg);
+  color: var(--ui-text-3);
+  background: var(--ui-accent-bg);
 }

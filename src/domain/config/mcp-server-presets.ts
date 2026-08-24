@@ -1,4 +1,4 @@
-import type { UpsertMcpServerInput } from "./contracts.js";
+import type { UpsertMcpServerInput } from "./mcp-settings.js";
 
 export type McpServerPreset = {
   readonly presetId: string;

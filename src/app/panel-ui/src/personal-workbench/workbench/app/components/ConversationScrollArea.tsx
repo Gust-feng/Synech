@@ -118,15 +118,15 @@ export function ConversationScrollArea(props: {
   }, [measurePosition, smoothScrollToLatest, stopSmoothing])
 
   return (
-    <div className="aa-conversation-scroll-shell relative min-h-0 flex-1">
+    <div className="ui-conversation-scroll-shell relative min-h-0 flex-1">
       <div
         ref={viewportRef}
-        className="aa-conversation-scroll-viewport h-full overflow-y-auto"
+        className="ui-conversation-scroll-viewport h-full overflow-y-auto"
         data-conversation-scroll="viewport"
       >
         <div
           ref={contentRef}
-          className={`aa-conversation-scroll-content ${props.contentClassName}`}
+          className={`ui-conversation-scroll-content ${props.contentClassName}`}
           style={{ maxWidth: 'var(--reading-width)' }}
         >
           {props.children}
@@ -135,7 +135,7 @@ export function ConversationScrollArea(props: {
       {showJumpToLatest && (
         <button
           type="button"
-          className="aa-conversation-jump-to-latest"
+          className="ui-conversation-jump-to-latest"
           onClick={jumpToLatest}
           aria-label="跳到最新回答"
         >

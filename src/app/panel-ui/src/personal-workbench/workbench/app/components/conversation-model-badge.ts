@@ -11,8 +11,8 @@
  */
 import type { ConversationTurn } from "../../../../contracts/conversation";
 import type { ChatModelOption } from "../../../../contracts/composer";
-import { resolveModelIconSvgForModel } from "../../../../model-icons";
-import { resolveModelProviderIdentity, type ModelProviderIdentity } from "../../../../model-provider-logos";
+import { resolveModelIconSvgForModel } from "../../../../features/settings/model/icons";
+import { resolveModelProviderIdentity, type ModelProviderIdentity } from "../../../../features/settings/model/provider-logos";
 
 export type ConversationModelBadge = {
   readonly modelName: string;

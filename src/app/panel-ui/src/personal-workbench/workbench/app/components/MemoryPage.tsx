@@ -12,7 +12,7 @@ import {
   deletePathDependency,
   fetchMemorySnapshot,
   fetchPathDependency,
-} from "../../../../memory-client";
+} from "../../../../features/spaces/memory-client";
 import type {
   MemoryNote,
   MemoryOwner,
@@ -21,7 +21,7 @@ import type {
   MemorySourceRef,
   MemoryVerification,
   PathDependency,
-} from "../../../../contracts/memory";
+} from "../../../../../../panel-api/memory";
 
 type NoteScope = "global" | "owner";
 type MemoryKind = "notes" | "paths";
@@ -575,7 +575,6 @@ function verificationBadge(value: MemoryVerification | undefined): React.ReactEl
 }
 
 function verificationStatus(value: MemoryVerification | undefined): "not_recorded" | "observed" | undefined {
-  if (typeof value === "string") return value;
   return value?.status;
 }
 

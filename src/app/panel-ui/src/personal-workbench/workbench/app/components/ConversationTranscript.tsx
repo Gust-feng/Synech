@@ -2,7 +2,7 @@
  * Conversation workbench 的对话转录渲染器。
  *
  * 消费 ConversationDisplayItem[] 与 canonical tool result 数据，使用
- * 使用工作台的 --aa-* token 渲染，不依赖旧 Transcript 组件和主题。
+ * 使用工作台的 --ui-* token 渲染，不依赖旧 Transcript 组件和主题。
  *
  * 数据权威不变：projectConversationDisplayList 产出什么，这里就渲染什么。
  * 全量可见性不变：工具活动、确认流、失败归因、Sub-Agent 嵌套全部保留。
@@ -36,13 +36,13 @@ import {
   subscribeTranscriptCache,
   transcriptNodesCacheForConversation,
   transcriptToolResultsCacheForConversation,
-} from "../../../../panel-ui-transcript-store";
+} from "../../../../features/conversations/transcript/store";
 import type { ChatModelOption } from "../../../../contracts/composer";
 import { RichText, StreamingRichText } from "../../../../components/rich-text";
-import { useStreamingText } from "../../../../use-streaming-text";
+import { useStreamingText } from "../../../../features/conversations/transcript/use-streaming-text";
 import { CopyActionButton } from "../../../../components/copy-action-button";
 import { ActivityEvidencePanel } from "./ActivityEvidence";
-import { toolResultForActivity } from "../../../../tool-result-association";
+import { toolResultForActivity } from "../../../../features/conversations/transcript/tool-result-association";
 import { ConfirmationCard, type ConfirmationProjection } from "./ConfirmationCard";
 import type {
   ConversationDisplayItem,
@@ -142,7 +142,7 @@ export function ConversationTranscript(props: ConversationTranscriptProps): Reac
   if (items.length === 0) return null;
 
   return (
-    <div className="aa-conversation-stream">
+    <div className="ui-conversation-stream">
       {items.map((item) => {
         if (item.kind === "user") {
           return <ConversationUserMessage key={item.key} content={item.turn.content} attachments={item.turn.attachments} />;
@@ -187,15 +187,15 @@ const ConversationUserMessage = React.memo(function ConversationUserMessage(prop
 }) {
   const attachments = props.attachments?.filter((a) => a.attachmentId.trim().length > 0) ?? [];
   return (
-    <div className="aa-conversation-turn aa-conversation-turn--user flex justify-end">
-      <div className="aa-user-message flex max-w-[520px] flex-col items-end gap-1.5">
+    <div className="ui-conversation-turn ui-conversation-turn--user flex justify-end">
+      <div className="ui-user-message flex max-w-[520px] flex-col items-end gap-1.5">
         {attachments.length > 0 && (
           <div className="flex flex-wrap justify-end gap-1.5">
             {attachments.map((attachment) => (
               <span
                 key={attachment.attachmentId}
                 className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px]"
-                style={{ background: "var(--aa-surface-hover, #eeebe6)", color: "var(--aa-text-2)" }}
+                style={{ background: "var(--ui-surface-hover, #eeebe6)", color: "var(--ui-text-2)" }}
               >
                 <FileText size={11} className="shrink-0" />
                 <span className="max-w-[160px] truncate">{attachment.title}</span>
@@ -205,8 +205,8 @@ const ConversationUserMessage = React.memo(function ConversationUserMessage(prop
         )}
         {props.content.trim().length > 0 && (
           <div
-            className="aa-user-message__body user-message-content px-3.5 py-2.5"
-            style={{ lineHeight: 1.7, color: "var(--aa-text-1)" }}
+            className="ui-user-message__body user-message-content px-3.5 py-2.5"
+            style={{ lineHeight: 1.7, color: "var(--ui-text-1)" }}
           >
             <RichText text={props.content} />
           </div>
@@ -243,7 +243,7 @@ function ConversationAssistantMessage(props: {
     return <ConversationPendingDots />;
   }
   return (
-    <div className="aa-conversation-turn aa-conversation-turn--assistant space-y-3">
+    <div className="ui-conversation-turn ui-conversation-turn--assistant space-y-3">
       <ConversationModelLabel model={props.model} />
       {workflow.segments.map((segment, index) => {
         if (segment.kind === "activity") {
@@ -290,7 +290,7 @@ function ConversationFailureMessage(props: {
   const bodySegments = workflow?.segments.filter((s) => s.kind !== "activity") ?? [];
   const activitySegments = workflow?.segments.filter((s) => s.kind === "activity") ?? [];
   return (
-    <div className="aa-conversation-turn aa-conversation-turn--assistant space-y-3">
+    <div className="ui-conversation-turn ui-conversation-turn--assistant space-y-3">
       <ConversationModelLabel model={props.model} />
       {bodySegments.map((segment, index) => {
         if (segment.kind === "awaiting") return <ConversationPendingDots key={`a-${index}`} />;
@@ -300,15 +300,15 @@ function ConversationFailureMessage(props: {
       {/* 失败通知 */}
       <div
         className="flex items-start gap-2.5 rounded-lg px-4 py-3 text-sm"
-        style={{ background: "rgba(200,64,64,0.06)", border: "1px solid rgba(200,64,64,0.15)", color: "var(--aa-text-1)" }}
+        style={{ background: "rgba(200,64,64,0.06)", border: "1px solid rgba(200,64,64,0.15)", color: "var(--ui-text-1)" }}
       >
-        <CircleAlert size={14} className="mt-0.5 shrink-0" style={{ color: "var(--aa-status-error, #C84040)" }} />
+        <CircleAlert size={14} className="mt-0.5 shrink-0" style={{ color: "var(--ui-status-error, #C84040)" }} />
         <div className="min-w-0 space-y-1">
-          <p className="font-medium" style={{ color: "var(--aa-status-error, #C84040)" }}>
+          <p className="font-medium" style={{ color: "var(--ui-status-error, #C84040)" }}>
             {assistantTerminalNoticeTitle(props.terminalStatus ?? "failed")}
           </p>
           {props.failure.error !== undefined && (
-            <p className="text-xs" style={{ color: "var(--aa-text-2)", lineHeight: 1.6 }}>{props.failure.error}</p>
+            <p className="text-xs" style={{ color: "var(--ui-text-2)", lineHeight: 1.6 }}>{props.failure.error}</p>
           )}
         </div>
       </div>
@@ -333,15 +333,15 @@ function ConversationFailureMessage(props: {
 function ConversationModelLabel(props: { readonly model?: ConversationModelBadge }): React.ReactElement | null {
   if (props.model === undefined) return null;
   return (
-    <div className="aa-model-badge">
+    <div className="ui-model-badge">
       {props.model.iconSvg !== undefined && (
         <span
-          className="aa-model-badge__icon"
+          className="ui-model-badge__icon"
           aria-hidden="true"
           dangerouslySetInnerHTML={{ __html: props.model.iconSvg }}
         />
       )}
-      <span className="aa-model-badge__name">{props.model.modelName}</span>
+      <span className="ui-model-badge__name">{props.model.modelName}</span>
     </div>
   );
 }
@@ -355,8 +355,8 @@ const ConversationAnswerBlock = React.memo(function ConversationAnswerBlock(prop
   if (props.text.trim().length === 0) return null;
   return (
     <div
-      className="aa-answer-block assistant-answer reading-prose"
-      style={{ color: "var(--aa-text-1)", lineHeight: 1.85 }}
+      className="ui-answer-block assistant-answer reading-prose"
+      style={{ color: "var(--ui-text-1)", lineHeight: 1.85 }}
     >
       {props.live ? <StreamingRichText text={props.text} live /> : <RichText text={props.text} />}
     </div>
@@ -366,8 +366,8 @@ const ConversationAnswerBlock = React.memo(function ConversationAnswerBlock(prop
 function ConversationAnswerActions(props: { readonly text: string; readonly visible: boolean }): React.ReactElement | null {
   if (!props.visible || props.text.trim().length === 0) return null;
   return (
-    <div className="aa-answer-actions">
-      <CopyActionButton value={props.text} label="复制回答" className="aa-answer-copy" />
+    <div className="ui-answer-actions">
+      <CopyActionButton value={props.text} label="复制回答" className="ui-answer-copy" />
     </div>
   );
 }
@@ -381,10 +381,10 @@ function ConversationPendingDots() {
         <span
           key={i}
           className="h-1.5 w-1.5 rounded-full"
-          style={{ background: "var(--aa-accent, #6865a7)", opacity: 0.5, animation: `aa-thinking 1.2s ${i * 0.18}s infinite` }}
+          style={{ background: "var(--ui-accent, #6865a7)", opacity: 0.5, animation: `ui-thinking 1.2s ${i * 0.18}s infinite` }}
         />
       ))}
-      <style>{`@keyframes aa-thinking{0%,80%,100%{transform:scale(0.7);opacity:0.3}40%{transform:scale(1);opacity:0.75}}`}</style>
+      <style>{`@keyframes ui-thinking{0%,80%,100%{transform:scale(0.7);opacity:0.3}40%{transform:scale(1);opacity:0.75}}`}</style>
     </div>
   );
 }
@@ -460,25 +460,25 @@ function ConversationThinkingBlock(props: { readonly items: readonly ActivityIte
   const displayed = useStreamingText(text, thinkingInProgress);
   if (displayed.length === 0) return null;
   return (
-    <div className="aa-thinking-block">
+    <div className="ui-thinking-block">
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
         aria-label={open ? "收起思考" : "展开思考"}
         className="flex w-full items-center gap-2 text-left"
-        style={{ color: "var(--aa-text-2)" }}
+        style={{ color: "var(--ui-text-2)" }}
       >
-        <Brain size={12} className="shrink-0" style={{ color: "var(--aa-text-3)" }} />
+        <Brain size={12} className="shrink-0" style={{ color: "var(--ui-text-3)" }} />
         <span className="text-[12px] font-medium tracking-wide">思考</span>
-        <span className="ml-auto" style={{ color: "var(--aa-text-3)" }}>
+        <span className="ml-auto" style={{ color: "var(--ui-text-3)" }}>
           {open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
         </span>
       </button>
       {open && (
         <div
-          className="aa-thinking-content mt-1.5 border-l-2 pl-3 text-[12px] leading-[1.75]"
-          style={{ borderColor: "var(--aa-border)", color: "var(--aa-text-2)", whiteSpace: "pre-wrap" }}
+          className="ui-thinking-content mt-1.5 border-l-2 pl-3 text-[12px] leading-[1.75]"
+          style={{ borderColor: "var(--ui-border)", color: "var(--ui-text-2)", whiteSpace: "pre-wrap" }}
         >
           {displayed}
         </div>
@@ -525,43 +525,43 @@ function ConversationActivityTimeline(props: {
         ? `${failedCount} 项操作未完成`
         : `完成 ${visibleItems.length} 项操作`;
   const summaryColor = summaryState === "running"
-    ? "var(--aa-accent)"
+    ? "var(--ui-accent)"
     : summaryState === "attention"
-      ? "var(--aa-status-wait)"
+      ? "var(--ui-status-wait)"
       : summaryState === "failed"
-        ? "var(--aa-status-error)"
-        : "var(--aa-text-2)";
+        ? "var(--ui-status-error)"
+        : "var(--ui-text-2)";
   const summaryContent = (
     <>
-      <Wrench size={11} style={{ color: "var(--aa-text-3)" }} />
+      <Wrench size={11} style={{ color: "var(--ui-text-3)" }} />
       <span className="font-medium" style={{ color: summaryColor }}>
         {summaryLabel}
       </span>
       {running && (
-        <span className="h-1.5 w-1.5 rounded-full" style={{ background: "var(--aa-accent)", animation: "pulse 1.2s infinite" }} />
+        <span className="h-1.5 w-1.5 rounded-full" style={{ background: "var(--ui-accent)", animation: "pulse 1.2s infinite" }} />
       )}
     </>
   );
 
   return (
-    <div className="aa-activity-timeline overflow-hidden" data-state={summaryState}>
+    <div className="ui-activity-timeline overflow-hidden" data-state={summaryState}>
       {/* 摘要行 */}
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        className="aa-activity-summary flex w-full items-center gap-2 text-left"
-        style={{ color: "var(--aa-text-2)" }}
+        className="ui-activity-summary flex w-full items-center gap-2 text-left"
+        style={{ color: "var(--ui-text-2)" }}
       >
         {summaryContent}
-        <span className="ml-auto" style={{ color: "var(--aa-text-3)" }}>
+        <span className="ml-auto" style={{ color: "var(--ui-text-3)" }}>
           {open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
         </span>
       </button>
 
       {/* 展开的活动列表 */}
       {open && visibleItems.length > 0 && (
-        <div className="aa-activity-details space-y-1">
+        <div className="ui-activity-details space-y-1">
           <div className="space-y-2">
             {visibleItems.map((item) => (
               <ConversationActivityItem
@@ -578,7 +578,7 @@ function ConversationActivityTimeline(props: {
 
       {/* 确认卡片 */}
       {confirmation.current !== undefined && (
-        <div className="aa-activity-confirmation">
+        <div className="ui-activity-confirmation">
           <ConfirmationCard
             confirmation={confirmation.current}
             busy={props.confirmationBusy}
@@ -621,7 +621,7 @@ function ConversationActivityItem(props: {
   const [open, setOpen] = useState(false);
 
   return (
-    <div className="aa-activity-item min-w-0" style={{ color: "var(--aa-text-2)" }}>
+    <div className="ui-activity-item min-w-0" style={{ color: "var(--ui-text-2)" }}>
       <button
         type="button"
         className="flex w-full min-w-0 items-center gap-2 text-left"
@@ -633,23 +633,23 @@ function ConversationActivityItem(props: {
       {isActive ? (
         <span
           className="h-2.5 w-2.5 shrink-0 rounded-full border-[1.5px] border-t-transparent animate-spin"
-          style={{ borderColor: "var(--aa-accent)", borderTopColor: "transparent" }}
+          style={{ borderColor: "var(--ui-accent)", borderTopColor: "transparent" }}
         />
       ) : isFailed ? (
-        <CircleAlert size={10} className="shrink-0" style={{ color: "var(--aa-status-error, #C84040)" }} />
+        <CircleAlert size={10} className="shrink-0" style={{ color: "var(--ui-status-error, #C84040)" }} />
       ) : (
-        <Check size={10} className="shrink-0" style={{ color: "var(--aa-status-done, #48A870)" }} />
+        <Check size={10} className="shrink-0" style={{ color: "var(--ui-status-done, #48A870)" }} />
       )}
       {/* 工具图标 */}
-      <span className="shrink-0" style={{ color: "var(--aa-text-3)", lineHeight: 0 }}>{icon}</span>
+      <span className="shrink-0" style={{ color: "var(--ui-text-3)", lineHeight: 0 }}>{icon}</span>
       {/* 标签 */}
       <span className="min-w-0 truncate">{displayText}</span>
       {/* 详情 */}
       {badgeLabel !== undefined && (
-        <span className="aa-activity-item__badge ml-auto shrink-0" style={{ color: "var(--aa-text-3)" }}>{badgeLabel}</span>
+        <span className="ui-activity-item__badge ml-auto shrink-0" style={{ color: "var(--ui-text-3)" }}>{badgeLabel}</span>
       )}
       {hasEvidence && (
-        <span className="ml-auto shrink-0" style={{ color: "var(--aa-text-3)" }}>
+        <span className="ml-auto shrink-0" style={{ color: "var(--ui-text-3)" }}>
           {open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
         </span>
       )}
@@ -664,7 +664,7 @@ function ConversationActivityItem(props: {
         </div>
       )}
       {item.children !== undefined && item.children.length > 0 && (
-        <div className="ml-3 mt-1 space-y-1 border-l pl-3" style={{ borderColor: "var(--aa-border)" }}>
+        <div className="ml-3 mt-1 space-y-1 border-l pl-3" style={{ borderColor: "var(--ui-border)" }}>
           {item.children.map((child) => (
             <ConversationActivityItem
               key={child.key}

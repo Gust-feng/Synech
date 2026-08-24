@@ -66,10 +66,10 @@ export function HomeOwnerPicker({ spaces = [], workspaces = [], value, onChange 
   }
 
   return (
-    <div ref={rootRef} className="aa-home-owner-picker">
+    <div ref={rootRef} className="ui-home-owner-picker">
       <button
         type="button"
-        className="aa-home-owner-picker__trigger"
+        className="ui-home-owner-picker__trigger"
         aria-label="对话空间"
         aria-haspopup="listbox"
         aria-expanded={open}
@@ -78,13 +78,13 @@ export function HomeOwnerPicker({ spaces = [], workspaces = [], value, onChange 
         onClick={() => setOpen((current) => !current)}
       >
         <Layers size={13} strokeWidth={1.8} aria-hidden="true" />
-        <span className="aa-home-owner-picker__trigger-label">{triggerLabel}</span>
-        <ChevronDown size={12} className="aa-home-owner-picker__chevron" aria-hidden="true" />
+        <span className="ui-home-owner-picker__trigger-label">{triggerLabel}</span>
+        <ChevronDown size={12} className="ui-home-owner-picker__chevron" aria-hidden="true" />
       </button>
       {open && !empty && (
-        <div id={popoverId} className="aa-home-owner-picker__popover" role="listbox" aria-label="对话空间">
+        <div id={popoverId} className="ui-home-owner-picker__popover" role="listbox" aria-label="对话空间">
           {spaceOptions.length > 0 && (
-            <section className="aa-home-owner-picker__group">
+            <section className="ui-home-owner-picker__group">
               <h3>空间</h3>
               {spaceOptions.map((option) => (
                 <HomeOwnerRow
@@ -97,7 +97,7 @@ export function HomeOwnerPicker({ spaces = [], workspaces = [], value, onChange 
             </section>
           )}
           {workspaceOptions.length > 0 && (
-            <section className="aa-home-owner-picker__group">
+            <section className="ui-home-owner-picker__group">
               <h3>工作区</h3>
               {workspaceOptions.map((option) => (
                 <HomeOwnerRow
@@ -125,11 +125,11 @@ function HomeOwnerRow(props: {
       type="button"
       role="option"
       aria-selected={props.selected}
-      className={props.selected ? 'aa-home-owner-picker__row selected' : 'aa-home-owner-picker__row'}
+      className={props.selected ? 'ui-home-owner-picker__row selected' : 'ui-home-owner-picker__row'}
       onClick={() => props.onSelect(props.option)}
     >
-      <span className="aa-home-owner-picker__row-title">{props.option.title}</span>
-      {props.selected && <Check size={12} className="aa-home-owner-picker__row-check" aria-hidden="true" />}
+      <span className="ui-home-owner-picker__row-title">{props.option.title}</span>
+      {props.selected && <Check size={12} className="ui-home-owner-picker__row-check" aria-hidden="true" />}
     </button>
   )
 }

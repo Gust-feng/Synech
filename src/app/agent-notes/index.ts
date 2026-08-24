@@ -20,7 +20,6 @@ export { agentNoteOwnerIdentity, agentNoteScopeIdentity } from "./scope-identity
 export { createAgentNotesFeature, type CreateAgentNotesFeatureInput } from "./agent-notes-feature.js";
 export { createFileSystemAgentNoteRepository } from "./file-system-repository.js";
 export {
-  createAgentNotesToolRegistryContribution,
   createNoteWriteTool,
   type NoteToolOptions,
 } from "./note-tools.js";

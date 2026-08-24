@@ -15,7 +15,7 @@ interface TopBarProps {
   sidebarCollapsed: boolean
   onToggleSidebar: () => void
   surfaceTitle?: string
-  /** 对话固定 owner 徽标（ADR-0035 §9.4），如 "空间 · 产品规划"。 */
+  /** 对话固定 Owner 徽标，如“空间 · 产品规划”。 */
   surfaceOwner?: string
   conversationState?: LiveConversationState
   onEnterFocus?: () => void
@@ -41,7 +41,7 @@ export function TopBar({
   onBrainRoot,
 }: TopBarProps) {
   const isMinimal = MINIMAL_VIEWS.includes(view)
-  const desktopShell = typeof window !== 'undefined' && window.synechHost !== undefined
+  const desktopShell = typeof window !== 'undefined' && window.desktopHost !== undefined
   const conversationStatus = visibleConversationHeaderState(conversationState)
 
   return (
@@ -71,7 +71,7 @@ export function TopBar({
             aria-keyshortcuts="Control+K Meta+K"
             onClick={onSearch}
             className="topbar-search-trigger shrink-0"
-            style={{ color: 'var(--aa-text-3)' }}
+            style={{ color: 'var(--ui-text-3)' }}
           >
             <Search className="topbar-search-icon" size={14} aria-hidden="true" />
             <span className="topbar-search-details" aria-hidden="true">
@@ -90,14 +90,14 @@ export function TopBar({
               className="topbar-nav-button topbar-back-button shrink-0"
             >
               <ChevronLeft size={15} />
-              <span className="text-xs" style={{ color: 'var(--aa-text-3)' }}>
+              <span className="text-xs" style={{ color: 'var(--ui-text-3)' }}>
                 知识库
               </span>
             </button>
             {brainFileTitle && (
               <span
                 className="text-xs truncate max-w-[200px] -ml-1"
-                style={{ color: 'var(--aa-text-3)' }}
+                style={{ color: 'var(--ui-text-3)' }}
               >
                 {brainFileTitle}
               </span>
@@ -113,7 +113,7 @@ export function TopBar({
             >
               <ChevronLeft size={15} />
               {!isMinimal && (
-                <span className="text-xs" style={{ color: 'var(--aa-text-3)' }}>
+                <span className="text-xs" style={{ color: 'var(--ui-text-3)' }}>
                   {topBarSectionLabel(view)}
                 </span>
               )}

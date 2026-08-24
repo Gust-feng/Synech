@@ -1,5 +1,5 @@
 /**
- * Canonical identities for the clean Ordinary Agent baseline.
+ * Canonical identities for the default Agent.
  */
 export const ORDINARY_AGENT_ID = "ordinary-agent" as const;
 export const ORDINARY_AGENT_PROMPT_REF_EN = "prompt:ordinary-agent:en-v1" as const;

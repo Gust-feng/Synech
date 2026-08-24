@@ -10,7 +10,7 @@ const DEFAULT_WINDOW_STATE: DesktopWindowState = {
 }
 
 export function DesktopWindowControls() {
-  const desktop = typeof window === 'undefined' ? undefined : window.synechHost
+  const desktop = typeof window === 'undefined' ? undefined : window.desktopHost
   const [windowState, setWindowState] = useState<DesktopWindowState>(DEFAULT_WINDOW_STATE)
 
   useEffect(() => {

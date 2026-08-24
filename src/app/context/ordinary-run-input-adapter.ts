@@ -3,7 +3,7 @@ import path from "node:path";
 import type {
   OrdinaryRunContextInput,
   OrdinaryRunContextReferenceInput,
-} from "../ordinary-agent/run-context-input.js";
+} from "../../domain/ordinary/index.js";
 import {
   createOrdinaryRunContext,
   type OrdinaryRunContext,

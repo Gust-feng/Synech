@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { AnimatePresence, motion, type Variants } from 'motion/react'
-import { shouldUseMotion } from '../../../../app-motion'
-import { panelStorageKey } from '../../../../app-local-preferences'
+import { shouldUseMotion } from '../../../../shell/motion'
+import { panelStorageKey } from '../../../../shell/local-preferences'
 import type { HomeAmbientCopyPair } from './home-ambient-copy'
 
 const AMBIENT_COPY_REVEALED_KEY = panelStorageKey('home.ambient-copy-revealed')
@@ -70,25 +70,25 @@ export function HomeAmbientCopy({ copy, hasDraft }: HomeAmbientCopyProps) {
 
   return (
     <p
-      className="aa-agent-home__ambient"
+      className="ui-agent-home__ambient"
       data-state={active ? 'active' : 'idle'}
       aria-label={active ? activeCopy : idleCopy}
     >
-      <span className="aa-agent-home__ambient-reserve" aria-hidden="true">
-        <span className="aa-agent-home__ambient-reserve-variant">{idleCopy}</span>
-        <span className="aa-agent-home__ambient-reserve-variant">{activeCopy}</span>
+      <span className="ui-agent-home__ambient-reserve" aria-hidden="true">
+        <span className="ui-agent-home__ambient-reserve-variant">{idleCopy}</span>
+        <span className="ui-agent-home__ambient-reserve-variant">{activeCopy}</span>
       </span>
       <motion.span
-        className={`aa-agent-home__ambient-copy${animate ? ' aa-agent-home__ambient-copy--entering' : ''}`}
+        className={`ui-agent-home__ambient-copy${animate ? ' ui-agent-home__ambient-copy--entering' : ''}`}
         aria-hidden="true"
         initial={animate ? { opacity: 0, y: 8 } : false}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.46, ease: [0.16, 1, 0.3, 1] }}
       >
-        <span className="aa-agent-home__ambient-lead">{copy.lead}</span>
+        <span className="ui-agent-home__ambient-lead">{copy.lead}</span>
         <AnimatePresence mode="wait" initial={false}>
           <motion.span
-            className="aa-agent-home__ambient-tail"
+            className="ui-agent-home__ambient-tail"
             key={active ? 'active' : 'idle'}
             variants={AMBIENT_TAIL_VARIANTS}
             initial={motionEnabled ? 'enter' : false}

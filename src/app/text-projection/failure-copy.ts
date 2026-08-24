@@ -3,7 +3,7 @@ export function friendlyFailureCopy(value: string): string {
   if (/^Model output failed the requested output contract\.$/i.test(text)) {
     return "模型输出校验失败。";
   }
-  if (/^Ordinary Agent model stopped without a visible answer\.$/i.test(text)) {
+  if (/^Agent model stopped without a visible answer\.$/i.test(text)) {
     return "没有返回可用结果。";
   }
   const sdkNoBody = /^(\d{3})\s+status code \(no body\)$/i.exec(text);

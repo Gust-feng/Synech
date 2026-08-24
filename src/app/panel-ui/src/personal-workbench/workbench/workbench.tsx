@@ -1,16 +1,16 @@
 import { AlertCircle, RotateCcw, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { flushSync } from "react-dom";
-import type { CurrentRunProjection } from "../../app-run-projection";
-import { projectChatActiveView } from "../../chat-active-view";
+import type { CurrentRunProjection } from "../../features/conversations/run/projection";
+import { projectChatActiveView } from "../../features/conversations/transcript/live-view";
 import type { ChatInputProps } from "../../contracts/composer";
-import { WorkbenchSettingsDialog, type WorkbenchSettingsDialogProps } from "../../components/workbench-settings-dialog";
-import { SynechBootstrapLoading } from "../../components/synech-bootstrap-loading";
+import { WorkbenchSettingsDialog, type WorkbenchSettingsDialogProps } from "../../features/settings/components/workbench-dialog";
+import { WorkbenchBootstrapLoading } from "../../components/workbench-bootstrap-loading";
 import type { Conversation, ConversationSummary } from "../../contracts/conversation";
 import type { PendingConfirmation } from "../../contracts/run";
 import type { ConfirmationProjection } from "./app/components/ConfirmationCard";
 import type { PersonalSpaceActions, PersonalSpaceProjection } from "../space";
-import { useWorkspaceProjection } from "../../app-workspace-state";
+import { useWorkspaceProjection } from "../../features/spaces/workspace-state";
 import { ConversationPage } from "./app/components/ConversationPage";
 import { BrainPage } from "./app/components/BrainPage";
 import { SurfaceErrorBoundary } from "./app/components/SurfaceErrorBoundary";
@@ -25,7 +25,7 @@ import type { LiveConversationState } from "./app/components/conversation-surfac
 import { runFocusModeTransition, type FocusModeTransitionHandle } from "./app/components/focus-mode-transition";
 import { resolveById } from "./app/components/brainStore";
 import { warmStartupReferencePreviews } from "./app/components/space-reference-preview-warmup";
-import { applyPrefs, handleReadingSizeWheel, loadPrefs } from "../../reading-preferences";
+import { applyPrefs, handleReadingSizeWheel, loadPrefs } from "../../shell/reading-preferences";
 import {
   initializePersonalKnowledge,
   getPersonalKnowledgeError,
@@ -80,7 +80,7 @@ export type PersonalWorkbenchProps = {
 
 type ConversationMode = "normal" | "focus";
 
-/** 宿主统一会话承载请求：指定某个会话在哪个空间右侧对话面板展示（ADR-0035 口径）。 */
+/** 宿主统一会话承载请求：指定某个会话在哪个空间右侧对话面板展示。 */
 type ConversationSurfaceRequest = { readonly conversationId: string; readonly spaceId: string };
 
 /** Conversation uses one canonical projection and is composed into the active Synech surface. */
@@ -331,11 +331,11 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
   return (
     <div
       ref={rootRef}
-      className="aa-workbench-root flex h-screen min-h-0 w-full overflow-hidden"
+      className="ui-workbench-root flex h-screen min-h-0 w-full overflow-hidden"
       spellCheck={false}
       style={{
-        background: "var(--aa-canvas)",
-        color: "var(--aa-text-1)",
+        background: "var(--ui-canvas)",
+        color: "var(--ui-text-1)",
         fontFamily: '"Noto Sans SC", Inter, system-ui, -apple-system, sans-serif',
       }}
     >
@@ -344,7 +344,7 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
           from { opacity: 0; }
           to { opacity: 1; }
         }
-        .aa-workbench-root .view-enter { animation: viewFadeIn 140ms ease; }
+        .ui-workbench-root .view-enter { animation: viewFadeIn 140ms ease; }
       `}</style>
       <Sidebar
         view={view}
@@ -396,13 +396,13 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
 
         <main
           aria-label={viewLabel(view)}
-          className="aa-workbench-main flex min-h-0 flex-1 flex-col overflow-hidden"
+          className="ui-workbench-main flex min-h-0 flex-1 flex-col overflow-hidden"
         >
           <div
             className={`${view === "space" ? "" : "view-enter "}flex min-h-0 flex-1 flex-col overflow-hidden`}
             key={view}
           >
-            {showLoadingFallback ? <SynechBootstrapLoading /> : (
+            {showLoadingFallback ? <WorkbenchBootstrapLoading /> : (
               <SurfaceErrorBoundary resetKey={view} label="这个视图暂时无法打开">
                   {renderView({
                     view,
@@ -676,18 +676,18 @@ function WorkbenchStatusNotice(props: {
   return (
     <div
       className="fixed bottom-5 right-5 z-50 flex max-w-sm items-start gap-2.5 rounded-md px-3 py-2.5 shadow-sm"
-      style={{ background: "var(--aa-surface)", border: "1px solid var(--aa-border)", color: "var(--aa-text-2)" }}
+      style={{ background: "var(--ui-surface)", border: "1px solid var(--ui-border)", color: "var(--ui-text-2)" }}
       role="alert"
     >
-      <AlertCircle className="mt-0.5 shrink-0" size={14} style={{ color: "var(--aa-status-error)" }} />
+      <AlertCircle className="mt-0.5 shrink-0" size={14} style={{ color: "var(--ui-status-error)" }} />
       <span className="min-w-0 flex-1 break-words text-xs leading-5">{props.message}</span>
       {props.onRetry !== undefined && (
         <button
           type="button"
           aria-label="重新加载工作台数据"
           onClick={props.onRetry}
-          className="flex h-6 w-6 shrink-0 items-center justify-center rounded hover:bg-[var(--aa-hover-tint)] disabled:opacity-40"
-          style={{ color: "var(--aa-text-3)" }}
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded hover:bg-[var(--ui-hover-tint)] disabled:opacity-40"
+          style={{ color: "var(--ui-text-3)" }}
           disabled={props.retrying}
         >
           <RotateCcw className={props.retrying ? "animate-spin" : undefined} size={12} />
@@ -698,8 +698,8 @@ function WorkbenchStatusNotice(props: {
           type="button"
           aria-label="关闭错误提示"
           onClick={props.onDismiss}
-          className="flex h-6 w-6 shrink-0 items-center justify-center rounded hover:bg-[var(--aa-hover-tint)]"
-          style={{ color: "var(--aa-text-3)" }}
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded hover:bg-[var(--ui-hover-tint)]"
+          style={{ color: "var(--ui-text-3)" }}
         >
           <X size={12} />
         </button>

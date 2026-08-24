@@ -1,10 +1,10 @@
 import { ApiError, requestJson } from '../../../../api'
-import type { PersonalNoteRevision } from '../../../../../../panel-api-contracts'
+import type { PersonalNoteRevision } from '../../../../../../panel-api/workbench'
 import type { Assignment, BrainLink, BrainPage, Note, Theme } from './personalKnowledgeTypes'
-import { subscribeSynechProjectionChanges } from '../../../../app-synech-projection-changes'
+import { subscribeWorkbenchProjectionChanges } from '../../../../workbench/projection-changes'
 
 export type { Assignment, BrainLink, BrainPage, Note, PageKind, Theme } from './personalKnowledgeTypes'
-export type { PersonalNoteRevision } from '../../../../../../panel-api-contracts'
+export type { PersonalNoteRevision } from '../../../../../../panel-api/workbench'
 
 interface Snapshot {
   notes: Note[]
@@ -420,7 +420,7 @@ function noteSnippet(body: string, query: string): string {
 
 function ensureProjectionChangeSubscription(): void {
   if (projectionChangeUnsubscribe !== undefined) return
-  projectionChangeUnsubscribe = subscribeSynechProjectionChanges((change) => {
+  projectionChangeUnsubscribe = subscribeWorkbenchProjectionChanges((change) => {
     if (!change.owners.includes('personal_knowledge')) return
     if (persistenceEnabled) void refreshPersonalKnowledge().catch(() => undefined)
   })

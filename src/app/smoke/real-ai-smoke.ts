@@ -4,12 +4,12 @@ const args = parseRealAiSmokeArgs(process.argv.slice(2));
 const summary = await runRealAiSmoke(args.goal, { productHome: args.productHome });
 
 if (summary.status === "skipped") {
-  console.log("Synech Ordinary Agent real AI smoke skipped");
+  console.log("Synech Agent real AI smoke skipped");
 } else if (summary.status === "failed") {
-  console.log("Synech Ordinary Agent real AI smoke failed");
+  console.log("Synech Agent real AI smoke failed");
   process.exitCode = 1;
 } else {
-  console.log("Synech Ordinary Agent real AI smoke completed");
+  console.log("Synech Agent real AI smoke completed");
 }
 
 console.log(JSON.stringify(summary, null, 2));

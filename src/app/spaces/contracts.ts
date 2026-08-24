@@ -56,8 +56,8 @@ export type SpaceReferenceAnnotation = {
   readonly revision: number;
   readonly updatedAt: string;
   readonly updatedBy: SpaceReferenceActorKind;
-  /** 写入审计（对齐 Personal Knowledge actor）。旧数据不包含该字段。 */
-  readonly actor?: SpaceReferenceActorRecord;
+  /** 写入审计（对齐 Personal Knowledge actor）。 */
+  readonly actor: SpaceReferenceActorRecord;
 };
 
 /** 工具/用户提交的 annotation 内容字段；revision、时间与 actor 由 SpaceFeature 生成。 */
@@ -81,7 +81,7 @@ export type SpaceReferenceImageCaption = {
   readonly revision: number;
   readonly updatedAt: string;
   readonly updatedBy: SpaceReferenceActorKind;
-  readonly actor?: SpaceReferenceActorRecord;
+  readonly actor: SpaceReferenceActorRecord;
 };
 
 /** 一次 annotation 写入的完整审计来源；`kind` 是显示语义，其余字段来自执行上下文。 */
@@ -166,11 +166,11 @@ export type SpaceFeature = {
     createSpace(input: { readonly id?: string; readonly title: string }): Promise<Space>;
     /** Deletes the Space container and Space-owned assets; external sources remain untouched. */
     deleteSpace(spaceId: string): Promise<void>;
-    addReference(input: { readonly id?: string; readonly spaceId: string; readonly title: string; readonly parentId?: string; readonly reference: SpaceAddableReference; readonly annotation?: SpaceReferenceAnnotationInput; readonly actor?: SpaceReferenceActorRecord }): Promise<SpaceReferenceItem>;
+    addReference(input: { readonly id?: string; readonly spaceId: string; readonly title: string; readonly parentId?: string; readonly reference: SpaceAddableReference; readonly annotation?: SpaceReferenceAnnotationInput; readonly actor: SpaceReferenceActorRecord }): Promise<SpaceReferenceItem>;
     /** Updates the annotation content of one reference with optimistic concurrency; revision advances on success. */
-    updateReferenceAnnotation(input: { readonly itemId: string; readonly expectedRevision: number; readonly patch: SpaceReferenceAnnotationPatch; readonly actor?: SpaceReferenceActorRecord }): Promise<SpaceReferenceItem>;
+    updateReferenceAnnotation(input: { readonly itemId: string; readonly expectedRevision: number; readonly patch: SpaceReferenceAnnotationPatch; readonly actor: SpaceReferenceActorRecord }): Promise<SpaceReferenceItem>;
     /** Updates one image caption without mutating the referenced image file. */
-    updateReferenceImageCaption(input: { readonly itemId: string; readonly relativePath: string; readonly expectedRevision: number; readonly text: string; readonly actor?: SpaceReferenceActorRecord }): Promise<SpaceReferenceItem>;
+    updateReferenceImageCaption(input: { readonly itemId: string; readonly relativePath: string; readonly expectedRevision: number; readonly text: string; readonly actor: SpaceReferenceActorRecord }): Promise<SpaceReferenceItem>;
     rename(input: { readonly target: SpaceTarget; readonly title: string }): Promise<SpaceTarget>;
     move(input: { readonly target: SpaceMovableTarget; readonly destinationSpaceId: string }): Promise<SpaceMovableTarget>;
     /** Removes only an external/metadata link and never deletes an external source. Conversation owners use the coordinator command. */

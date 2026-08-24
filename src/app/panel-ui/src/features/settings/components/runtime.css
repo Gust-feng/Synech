@@ -1,0 +1,319 @@
+/*
+ * Scoped settings bridge for the Personal Workspace shell.
+ * The production settings components still use the shared panel class names,
+ * so this layer maps those tokens to the workbench paper palette and keeps
+ * layout refinements local to .ui-workbench-root.
+ */
+.ui-workbench-root .settings-overlay {
+  --fg: var(--ui-text-1);
+  --muted: var(--ui-text-2);
+  --placeholder: var(--ui-text-3);
+  --surface: var(--ui-surface);
+  --surface-panel: var(--ui-surface);
+  --surface-muted: var(--ui-surface-hover);
+  --surface-subtle: color-mix(in oklch, var(--ui-surface) 60%, var(--ui-canvas));
+  --surface-highlight: var(--ui-accent-bg);
+  --content-surface: var(--ui-surface);
+  --content-surface-muted: var(--ui-surface-hover);
+  --content-border: var(--ui-border);
+  --content-highlight: var(--ui-accent-bg);
+  --border: var(--ui-border);
+  --accent: var(--ui-accent);
+  --accent-strong: var(--ui-accent);
+  --accent-active: color-mix(in oklch, var(--ui-accent) 82%, black);
+  --accent-border: color-mix(in oklch, var(--ui-accent) 40%, var(--ui-border));
+  --accent-border-soft: color-mix(in oklch, var(--ui-accent) 18%, var(--ui-border));
+  --accent-soft: var(--ui-accent-bg);
+  --preview-accent: var(--ui-accent);
+  --secondary: var(--ui-text-2);
+  --primary-foreground: var(--ui-surface);
+  --status-success: var(--ui-status-done);
+  --status-warning: var(--ui-status-wait);
+  --status-danger: var(--ui-status-error);
+  --danger-soft: color-mix(in oklch, var(--ui-status-error) 10%, transparent);
+  --danger-border: color-mix(in oklch, var(--ui-status-error) 30%, var(--ui-border));
+  --amber-soft: color-mix(in oklch, var(--ui-status-wait) 12%, transparent);
+  --amber-text: color-mix(in oklch, var(--ui-status-wait) 72%, black);
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 8px;
+  --radius-xl: 10px;
+  --radius-2xl: 12px;
+  --radius-pill: 999px;
+  --border-width-thin: 1px;
+  --border-width-md: 1px;
+  --weight-body: 400;
+  --weight-label: 500;
+  --weight-heading: 600;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --list-pane-bg: var(--ui-surface);
+  --detail-pane-bg: var(--ui-canvas);
+  --row-bg: var(--ui-surface);
+  --row-border: var(--ui-border);
+  --row-hover-bg: var(--ui-surface-hover);
+  --row-hover-border: var(--ui-border);
+  --row-hover-shadow: none;
+  --row-active-bg: var(--ui-accent-bg);
+  --row-active-border: color-mix(in oklch, var(--ui-accent) 30%, var(--ui-border));
+  --row-active-shadow: none;
+  --list-row-border: transparent;
+  --list-row-radius: 8px;
+  --list-row-marker-width: 2px;
+  --list-row-active-border: color-mix(in oklch, var(--ui-accent) 24%, var(--ui-border));
+  --list-row-active-marker: var(--ui-accent);
+  --list-row-active-shadow: none;
+  --list-row-hover-border: var(--ui-border);
+  --list-row-hover-marker: transparent;
+  --list-row-hover-shadow: none;
+  --field-bg: var(--ui-surface);
+  --field-border: var(--ui-border);
+  --field-hover-bg: var(--ui-surface-hover);
+  --field-hover-border: var(--ui-border);
+  --field-focus-border: var(--ui-accent);
+  --field-focus-ring: 0 0 0 3px color-mix(in oklch, var(--ui-accent) 18%, transparent);
+  --floating-panel-bg: var(--ui-surface);
+  --floating-panel-border: var(--ui-border);
+  --floating-panel-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.5) inset,
+    0 18px 48px -20px rgba(45, 40, 34, 0.24),
+    0 2px 10px rgba(45, 40, 34, 0.05);
+  --floating-panel-backdrop-filter: none;
+  --overlay-ink: rgba(38, 33, 28, 1);
+  --app-backdrop-blur: 4px;
+  --settings-dialog-max-width: 920px;
+  --settings-dialog-max-height: 680px;
+  --settings-sidebar-width: 200px;
+  --settings-sidebar-compact-width: 168px;
+  --motion-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --motion-interaction-duration: 140ms;
+  --motion-fast-duration: 100ms;
+  --motion-panel-duration: 220ms;
+  --motion-dialog-duration: 240ms;
+  --scrollbar-pane-thumb: rgba(45, 40, 34, 0.18);
+  --scrollbar-pane-thumb-hover: rgba(45, 40, 34, 0.28);
+  --panel-card-bg: var(--ui-surface);
+  --panel-card-border: var(--ui-border);
+  --panel-card-shadow: none;
+  --panel-card-backdrop-filter: none;
+  --subpanel-bg: var(--ui-surface);
+  --subpanel-border: var(--ui-border);
+  --subpanel-footer-bg: var(--ui-surface-hover);
+  --subpanel-shadow: 0 10px 28px -14px rgba(45, 40, 34, 0.18);
+  --subpanel-backdrop-filter: none;
+  --popover-bg: var(--ui-surface);
+  --popover-fg: var(--ui-text-1);
+  --popover-border: var(--ui-border);
+  --popover-shadow: 0 12px 30px -12px rgba(45, 40, 34, 0.2);
+  --popover-backdrop-filter: none;
+  --empty-state-bg: color-mix(in oklch, var(--ui-surface) 70%, var(--ui-canvas));
+  --empty-state-border: var(--ui-border);
+  --empty-state-shadow: none;
+  --shadow-ink: rgba(45, 40, 34, 0.1);
+  --shadow-soft: 0 6px 18px -8px rgba(45, 40, 34, 0.14);
+  --preview-bg: var(--ui-canvas);
+  --preview-fg: var(--ui-text-1);
+  --preview-secondary: var(--ui-text-2);
+  --preview-surface: var(--ui-surface);
+  --preview-border: var(--ui-border);
+  --preview-sidebar: var(--ui-surface);
+  --preview-sidebar-bg: var(--ui-surface);
+  --preview-sidebar-divider: var(--ui-border);
+  --preview-sidebar-divider-width: 1px;
+  --preview-content-bg: var(--ui-canvas);
+  --preview-card-bg: var(--ui-surface);
+  --preview-card-radius: 8px;
+  --preview-composer-bg: var(--ui-surface);
+  --preview-composer-border: var(--ui-border);
+  --preview-composer-radius: 10px;
+  --preview-frame-bg: var(--ui-canvas);
+  --preview-frame-border: var(--ui-border);
+  --preview-radius-sm: 6px;
+  --palette-preview-border: var(--ui-border);
+  --palette-preview-ink: var(--ui-text-1);
+  --palette-preview-surface: var(--ui-surface);
+  --theme-preview-frame-radius: 12px;
+  z-index: 50;
+}
+
+.ui-workbench-root .settings-backdrop {
+  border: 0;
+}
+
+/* 深色下修正设置桥接 token：强调/琥珀文本改为向白混合，浮层阴影去掉浅色内高光。 */
+html[data-style="default"][data-color="dark"] .ui-workbench-root .settings-overlay {
+  --accent-active: color-mix(in oklch, var(--ui-accent) 82%, white);
+  --amber-text: color-mix(in oklch, var(--ui-status-wait) 78%, white);
+  --floating-panel-shadow:
+    0 1px 0 color-mix(in oklch, var(--ui-surface-hover) 60%, transparent) inset,
+    0 18px 48px -20px rgba(5, 5, 7, 0.45),
+    0 2px 10px rgba(5, 5, 7, 0.22);
+}
+
+.ui-workbench-root .settings-dialog {
+  z-index: 1;
+  color: var(--fg);
+}
+
+.ui-workbench-root .settings-sidebar {
+  min-width: 0;
+  padding: 14px 8px;
+}
+
+.ui-workbench-root .settings-close-button {
+  width: 28px;
+  height: 28px;
+  margin: 0 4px 12px auto;
+  border-radius: 6px;
+}
+
+.ui-workbench-root .settings-sidebar nav {
+  gap: 2px;
+  overflow-y: auto;
+  padding: 0 2px;
+}
+
+.ui-workbench-root .settings-sidebar nav button {
+  min-width: 0;
+  height: 36px;
+  padding: 0 10px;
+  font-size: 13px;
+}
+
+.ui-workbench-root .settings-main > header {
+  height: 52px;
+  min-height: 52px;
+  background: color-mix(in oklch, var(--ui-surface) 80%, var(--ui-canvas));
+  padding: 0 24px;
+}
+
+.ui-workbench-root .settings-main h2 {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.ui-workbench-root .settings-content {
+  padding: 20px 24px 28px;
+}
+
+.ui-workbench-root .settings-content.model-settings-content {
+  padding: 0;
+}
+
+.ui-workbench-root .settings-content > * {
+  min-width: 0;
+}
+
+.ui-workbench-root :is(.settings-card, .service-settings-card, .mcp-service-card, .provider-row, .model-catalog-panel, .settings-runtime-card) {
+  border-radius: 8px;
+}
+
+.ui-workbench-root .settings-content a {
+  color: var(--ui-accent);
+}
+
+.ui-workbench-root .settings-content :is(input, select, textarea, button):focus-visible,
+.ui-workbench-root .settings-close-button:focus-visible,
+.ui-workbench-root .settings-sidebar nav button:focus-visible {
+  outline: 2px solid color-mix(in oklch, var(--ui-accent) 58%, transparent);
+  outline-offset: 2px;
+}
+
+/* Nested field inputs use the surrounding field as the focus target. */
+.ui-workbench-root .settings-content .provider-search input:focus-visible,
+.ui-workbench-root .settings-content .model-search-field input:focus-visible,
+.ui-workbench-root .settings-content .api-key-field input:focus-visible,
+.ui-workbench-root .settings-content .provider-base-url-field input:focus-visible {
+  border: 0;
+  box-shadow: none;
+  outline: none;
+  outline-offset: 0;
+}
+
+/* Search is a passive filter; keep its field boundary stable without a focus halo. */
+.ui-workbench-root .settings-content .provider-search:focus-within,
+.ui-workbench-root .settings-content .model-search-field:focus-within {
+  border-color: var(--field-border);
+  background: var(--field-bg);
+  box-shadow: none;
+}
+
+@keyframes modal-card-enter {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 8px, 0) scale(0.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@media (max-width: 620px) {
+  .ui-workbench-root .settings-overlay {
+    padding: 10px;
+  }
+
+  .ui-workbench-root .settings-dialog {
+    width: calc(100vw - 20px);
+    height: calc(100vh - 20px);
+    grid-template-columns: minmax(148px, 38vw) minmax(0, 1fr);
+  }
+
+  .ui-workbench-root .settings-sidebar {
+    padding: 10px 6px;
+  }
+
+  .ui-workbench-root .settings-sidebar nav button {
+    grid-template-columns: auto minmax(0, 1fr);
+    justify-items: stretch;
+    padding: 0 10px;
+  }
+
+  .ui-workbench-root .settings-sidebar nav button span {
+    display: inline;
+  }
+
+  .ui-workbench-root .settings-content {
+    padding: 16px;
+  }
+
+  .ui-workbench-root .settings-content.model-settings-content {
+    padding: 0;
+  }
+}
+
+@media (max-width: 420px) {
+  .ui-workbench-root .settings-overlay {
+    padding: 0;
+  }
+
+  .ui-workbench-root .settings-dialog {
+    width: 100vw;
+    height: 100vh;
+    grid-template-columns: 54px minmax(0, 1fr);
+    border-right: 0;
+    border-left: 0;
+  }
+
+  .ui-workbench-root .settings-sidebar {
+    padding: 8px 0;
+  }
+
+  .ui-workbench-root .settings-sidebar nav button {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    padding: 0;
+  }
+
+  .ui-workbench-root .settings-sidebar nav button span {
+    display: none;
+  }
+}

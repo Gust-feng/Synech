@@ -105,7 +105,7 @@ export function FloatingMenu({ label, visible, actions, trigger, align = 'right'
   }
 
   return (
-    <span className="aa-floating-menu" onClick={(event) => event.stopPropagation()}>
+    <span className="ui-floating-menu" onClick={(event) => event.stopPropagation()}>
       <button
         ref={triggerRef}
         type="button"
@@ -118,7 +118,7 @@ export function FloatingMenu({ label, visible, actions, trigger, align = 'right'
           event.stopPropagation()
           setOpen((current) => !current)
         }}
-        className="aa-floating-menu__trigger"
+        className="ui-floating-menu__trigger"
         style={{ opacity: shown ? 1 : 0, pointerEvents: shown ? 'auto' : 'none' }}
       >
         {trigger ?? <MoreHorizontal size={14} />}
@@ -129,7 +129,7 @@ export function FloatingMenu({ label, visible, actions, trigger, align = 'right'
           id={popoverId}
           role="menu"
           aria-label={label}
-          className="aa-floating-menu__popover"
+          className="ui-floating-menu__popover"
           style={popoverStyle}
         >
           {actions.map((action) => (
@@ -138,7 +138,7 @@ export function FloatingMenu({ label, visible, actions, trigger, align = 'right'
               type="button"
               role="menuitem"
               onClick={() => select(action)}
-              className={action.danger === true ? 'aa-floating-menu__item aa-floating-menu__item--danger' : 'aa-floating-menu__item'}
+              className={action.danger === true ? 'ui-floating-menu__item ui-floating-menu__item--danger' : 'ui-floating-menu__item'}
             >
               {action.icon}
               {action.label}

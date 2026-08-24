@@ -3,6 +3,7 @@ import type {
   ModelCapabilities,
   SanitizedCommandShellConfig,
   ToolStateSettings,
+  WebSearchRuntimeConfig,
 } from "../../domain/config/index.js";
 import type { ContextAttachmentRunContext } from "./adapters/context-attachment-access.js";
 import type { ToolCategory, ToolExecutor } from "../../domain/tools/index.js";
@@ -40,6 +41,7 @@ import {
   createLocalWorkspaceSandboxPolicy,
 } from "./adapters/local-workspace-sandbox.js";
 import { createReadToolOutputTool } from "./adapters/tool-output-read-tool.js";
+import { createWebSearchTool } from "./adapters/web-search-tool.js";
 import { ToolRegistry, type ToolRegistryScope } from "./tool-registry.js";
 import type { ToolOutputStore } from "./tool-output-store.js";
 import type { ToolOutputTokenCounter } from "./tool-output-limits.js";
@@ -48,6 +50,7 @@ import type { ToolExecutionMetricsSink } from "../../domain/tools/index.js";
 export type CreateAgentToolRegistryOptions = {
   readonly env?: Readonly<Record<string, string | undefined>>;
   readonly fetch?: ToolRegistryFetchLike;
+  readonly webSearch?: WebSearchRuntimeConfig;
   readonly workspaceRoot?: string;
   readonly playwrightAvailable?: boolean;
   readonly toolStates?: readonly ToolStateSettings[];
@@ -114,6 +117,10 @@ export function createAgentToolRegistry(
     ...contextAttachmentExecutors(options, workspaceRoot),
     createHttpRequestTool({ outputStore: options.toolOutputStore }),
     createBrowserSnapshotTool({ outputStore: options.toolOutputStore }),
+    ...(options.webSearch === undefined ? [] : [createWebSearchTool({
+      ...options.webSearch,
+      fetch: options.fetch,
+    })]),
     ...(options.toolOutputStore === undefined ? [] : [createReadToolOutputTool(options.toolOutputStore, {
       outputTokenCounter: options.outputTokenCounter,
     })]),

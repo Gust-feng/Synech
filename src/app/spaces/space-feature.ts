@@ -269,7 +269,7 @@ export function createSpaceFeature(input: CreateSpaceFeatureInput): SpaceFeature
             ...(parentId === undefined ? {} : { parentId }),
             reference: validatedReference,
             ...(sourceIdentity === undefined ? {} : { sourceIdentity }),
-            ...(annotation === undefined ? {} : { annotation: initialAnnotation(annotation, at, actor ?? { kind: "agent" }) }),
+            ...(annotation === undefined ? {} : { annotation: initialAnnotation(annotation, at, actor) }),
             createdAt: at,
             updatedAt: at,
           };
@@ -295,7 +295,7 @@ export function createSpaceFeature(input: CreateSpaceFeatureInput): SpaceFeature
             );
           }
           const at = now();
-          const annotation = updatedAnnotation(current.annotation, patch, at, actor ?? { kind: "agent" });
+          const annotation = updatedAnnotation(current.annotation, patch, at, actor);
           const item: SpaceReferenceItem = { ...current, annotation, updatedAt: at };
           await input.repository.write({
             ...snapshot,
@@ -331,7 +331,7 @@ export function createSpaceFeature(input: CreateSpaceFeatureInput): SpaceFeature
             );
           }
           const at = now();
-          const caption = updatedImageCaption(currentCaption, text, at, actor ?? { kind: "user" });
+          const caption = updatedImageCaption(currentCaption, text, at, actor);
           const item: SpaceReferenceItem = {
             ...current,
             imageCaptions: { ...current.imageCaptions, [relativePath]: caption },

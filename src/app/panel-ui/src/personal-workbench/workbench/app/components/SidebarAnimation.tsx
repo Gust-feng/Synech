@@ -26,7 +26,7 @@ export function SidebarAnimation({ collapsed }: { collapsed: boolean }) {
       }}
     >
       <div
-        className="aa-sidebar-animation__scene aa-sidebar-animation__scene--light"
+        className="ui-sidebar-animation__scene ui-sidebar-animation__scene--light"
         style={{ position: 'absolute', inset: 0 }}
       >
       {/* ── upper scene: moonlit sky · one distant ridge ── */}
@@ -40,29 +40,29 @@ export function SidebarAnimation({ collapsed }: { collapsed: boolean }) {
       >
         <defs>
           {/* ink-wash tones */}
-          <radialGradient id="aa-moonglow" cx="0.5" cy="0.5" r="0.5">
-            <stop offset="0%" stopColor="var(--aa-accent)" stopOpacity="0.09" />
-            <stop offset="55%" stopColor="var(--aa-accent)" stopOpacity="0.03" />
-            <stop offset="100%" stopColor="var(--aa-accent)" stopOpacity="0" />
+          <radialGradient id="ui-moonglow" cx="0.5" cy="0.5" r="0.5">
+            <stop offset="0%" stopColor="var(--ui-accent)" stopOpacity="0.09" />
+            <stop offset="55%" stopColor="var(--ui-accent)" stopOpacity="0.03" />
+            <stop offset="100%" stopColor="var(--ui-accent)" stopOpacity="0" />
           </radialGradient>
-          <linearGradient id="aa-ridgewash" x1="0" y1="0" x2="0" y2="1">
+          <linearGradient id="ui-ridgewash" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor="rgba(45,40,34,1)" stopOpacity="0.05" />
             <stop offset="100%" stopColor="rgba(45,40,34,1)" stopOpacity="0" />
           </linearGradient>
         </defs>
 
         {/* soft moon halo — the ink-wash glow */}
-        <circle cx="52" cy="36" r="30" fill="url(#aa-moonglow)" />
+        <circle cx="52" cy="36" r="30" fill="url(#ui-moonglow)" />
 
         {/* 远岫 wash — faint body of mass beneath the nearest ridge, fully
             contained above the nav band so it never touches a label */}
         <path
           d="M0 107 C 30 103 46 96 66 95 C 88 96 150 101 236 103 L236 120 L0 120 Z"
-          fill="url(#aa-ridgewash)"
+          fill="url(#ui-ridgewash)"
         />
 
         {/* the moon — one clear, delicate focal point */}
-        <circle cx="52" cy="36" r="14" stroke="var(--aa-accent)" strokeOpacity="0.5" strokeWidth="1" />
+        <circle cx="52" cy="36" r="14" stroke="var(--ui-accent)" strokeOpacity="0.5" strokeWidth="1" />
         {/* a single thread of cloud drifting across it */}
         <path d="M28 42 Q52 39 82 42" stroke={INK + '0.1)'} strokeWidth="0.9" strokeLinecap="round" />
 
@@ -126,13 +126,13 @@ export function SidebarAnimation({ collapsed }: { collapsed: boolean }) {
         style={{ position: 'absolute', left: 0, bottom: 48, display: 'block' }}
       >
         <defs>
-          <linearGradient id="aa-waterwash" x1="0" y1="0" x2="0" y2="1">
+          <linearGradient id="ui-waterwash" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor="rgba(45,40,34,1)" stopOpacity="0" />
             <stop offset="100%" stopColor="rgba(45,40,34,1)" stopOpacity="0.05" />
           </linearGradient>
         </defs>
         {/* faint water wash for depth */}
-        <rect x="0" y="30" width="236" height="120" fill="url(#aa-waterwash)" />
+        <rect x="0" y="30" width="236" height="120" fill="url(#ui-waterwash)" />
 
         {/* ripples */}
         <path d="M8 40 Q60 36 118 40 Q176 44 228 40" stroke={INK + '0.15)'} strokeWidth="1" strokeLinecap="round" />
@@ -141,9 +141,9 @@ export function SidebarAnimation({ collapsed }: { collapsed: boolean }) {
         <path d="M16 104 Q68 101 120 104 Q172 107 220 104" stroke={INK + '0.08)'} strokeWidth="1" strokeLinecap="round" />
 
         {/* moon's broken reflection, under its sky position (x≈60) */}
-        <path d="M52 40 L68 40" stroke="var(--aa-accent)" strokeOpacity="0.32" strokeWidth="1.1" strokeLinecap="round" />
-        <path d="M50 60 L70 60" stroke="var(--aa-accent)" strokeOpacity="0.24" strokeWidth="1.1" strokeLinecap="round" />
-        <path d="M55 82 L65 82" stroke="var(--aa-accent)" strokeOpacity="0.18" strokeWidth="1.1" strokeLinecap="round" />
+        <path d="M52 40 L68 40" stroke="var(--ui-accent)" strokeOpacity="0.32" strokeWidth="1.1" strokeLinecap="round" />
+        <path d="M50 60 L70 60" stroke="var(--ui-accent)" strokeOpacity="0.24" strokeWidth="1.1" strokeLinecap="round" />
+        <path d="M55 82 L65 82" stroke="var(--ui-accent)" strokeOpacity="0.18" strokeWidth="1.1" strokeLinecap="round" />
 
         {/* a single small boat, off to the right for tension */}
         <path d="M140 41 Q152 48 164 41" stroke={INK + '0.4)'} strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
@@ -153,7 +153,7 @@ export function SidebarAnimation({ collapsed }: { collapsed: boolean }) {
       </div>
 
       <div
-        className="aa-sidebar-animation__scene aa-sidebar-animation__scene--dark"
+        className="ui-sidebar-animation__scene ui-sidebar-animation__scene--dark"
         style={{ position: 'absolute', inset: 0 }}
       >
         <svg
@@ -165,25 +165,25 @@ export function SidebarAnimation({ collapsed }: { collapsed: boolean }) {
           style={{ position: 'absolute', left: 0, top: 0, display: 'block' }}
         >
           <defs>
-            <radialGradient id="aa-sidebar-night-moon-glow" cx="0.5" cy="0.5" r="0.5">
-              <stop offset="0%" stopColor="var(--aa-accent)" stopOpacity="0.16" />
-              <stop offset="48%" stopColor="var(--aa-accent)" stopOpacity="0.06" />
-              <stop offset="100%" stopColor="var(--aa-accent)" stopOpacity="0" />
+            <radialGradient id="ui-sidebar-night-moon-glow" cx="0.5" cy="0.5" r="0.5">
+              <stop offset="0%" stopColor="var(--ui-accent)" stopOpacity="0.16" />
+              <stop offset="48%" stopColor="var(--ui-accent)" stopOpacity="0.06" />
+              <stop offset="100%" stopColor="var(--ui-accent)" stopOpacity="0" />
             </radialGradient>
-            <radialGradient id="aa-sidebar-night-firefly-glow" cx="0.5" cy="0.5" r="0.5">
-              <stop offset="0%" stopColor="var(--aa-accent)" stopOpacity="0.42" />
-              <stop offset="34%" stopColor="var(--aa-accent)" stopOpacity="0.13" />
-              <stop offset="100%" stopColor="var(--aa-accent)" stopOpacity="0" />
+            <radialGradient id="ui-sidebar-night-firefly-glow" cx="0.5" cy="0.5" r="0.5">
+              <stop offset="0%" stopColor="var(--ui-accent)" stopOpacity="0.42" />
+              <stop offset="34%" stopColor="var(--ui-accent)" stopOpacity="0.13" />
+              <stop offset="100%" stopColor="var(--ui-accent)" stopOpacity="0" />
             </radialGradient>
-            <linearGradient id="aa-sidebar-night-paper" x1="0" y1="0" x2="1" y2="1">
+            <linearGradient id="ui-sidebar-night-paper" x1="0" y1="0" x2="1" y2="1">
               <stop offset="0" stopColor="#36333b" stopOpacity="0.34" />
               <stop offset="1" stopColor="#242329" stopOpacity="0.025" />
             </linearGradient>
-            <linearGradient id="aa-sidebar-night-ridgewash" x1="0" y1="0" x2="0" y2="1">
+            <linearGradient id="ui-sidebar-night-ridgewash" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor="#ecebf3" stopOpacity="0.08" />
               <stop offset="100%" stopColor="#ecebf3" stopOpacity="0" />
             </linearGradient>
-            <mask id="aa-sidebar-night-crescent" maskUnits="userSpaceOnUse" x="35" y="19" width="34" height="34">
+            <mask id="ui-sidebar-night-crescent" maskUnits="userSpaceOnUse" x="35" y="19" width="34" height="34">
               <rect x="35" y="19" width="34" height="34" fill="black" />
               <circle cx="52" cy="36" r="13" fill="white" />
               <circle cx="58" cy="31" r="12" fill="black" />
@@ -195,26 +195,26 @@ export function SidebarAnimation({ collapsed }: { collapsed: boolean }) {
               distant ridges. */}
           <path
             d="M236 0 L132 0 C152 36 141 64 112 88 C144 112 138 148 104 176 C130 188 152 200 164 210 L236 210 Z"
-            fill="url(#aa-sidebar-night-paper)"
+            fill="url(#ui-sidebar-night-paper)"
           />
-          <circle cx="52" cy="36" r="30" fill="url(#aa-sidebar-night-moon-glow)" />
-          <circle cx="52" cy="36" r="13" fill="var(--aa-accent)" fillOpacity="0.7" mask="url(#aa-sidebar-night-crescent)" />
+          <circle cx="52" cy="36" r="30" fill="url(#ui-sidebar-night-moon-glow)" />
+          <circle cx="52" cy="36" r="13" fill="var(--ui-accent)" fillOpacity="0.7" mask="url(#ui-sidebar-night-crescent)" />
           <path d="M28 43 Q50 40 78 43" stroke={NIGHT_INK + '0.11)'} strokeWidth="0.8" strokeLinecap="round" />
 
           {/* Fireflies occupy the light scene's airy counterweight without
               reusing its birds. Three unequal points avoid a decorative star field. */}
-          <circle cx="105" cy="35" r="5" fill="url(#aa-sidebar-night-firefly-glow)" />
-          <circle cx="105" cy="35" r="0.85" fill="var(--aa-accent)" fillOpacity="0.72" />
-          <circle cx="123" cy="43" r="4.5" fill="url(#aa-sidebar-night-firefly-glow)" />
-          <circle cx="123" cy="43" r="0.75" fill="var(--aa-accent)" fillOpacity="0.56" />
-          <circle cx="137" cy="31" r="3.5" fill="url(#aa-sidebar-night-firefly-glow)" />
-          <circle cx="137" cy="31" r="0.65" fill="var(--aa-accent)" fillOpacity="0.42" />
+          <circle cx="105" cy="35" r="5" fill="url(#ui-sidebar-night-firefly-glow)" />
+          <circle cx="105" cy="35" r="0.85" fill="var(--ui-accent)" fillOpacity="0.72" />
+          <circle cx="123" cy="43" r="4.5" fill="url(#ui-sidebar-night-firefly-glow)" />
+          <circle cx="123" cy="43" r="0.75" fill="var(--ui-accent)" fillOpacity="0.56" />
+          <circle cx="137" cy="31" r="3.5" fill="url(#ui-sidebar-night-firefly-glow)" />
+          <circle cx="137" cy="31" r="0.65" fill="var(--ui-accent)" fillOpacity="0.42" />
 
           {/* Same mountain footprint as the light scene; only the ink and
               opacity change for the night reading. */}
           <path
             d="M0 107 C 30 103 46 96 66 95 C 88 96 150 101 236 103 L236 120 L0 120 Z"
-            fill="url(#aa-sidebar-night-ridgewash)"
+            fill="url(#ui-sidebar-night-ridgewash)"
           />
           <path
             d="M0 107 C 30 103 46 96 66 95 C 88 96 150 101 236 103"
@@ -244,11 +244,11 @@ export function SidebarAnimation({ collapsed }: { collapsed: boolean }) {
           style={{ position: 'absolute', left: 0, bottom: 48, display: 'block' }}
         >
           <defs>
-            <linearGradient id="aa-sidebar-night-waterwash" x1="0" y1="0" x2="0" y2="1">
+            <linearGradient id="ui-sidebar-night-waterwash" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor="#ecebf3" stopOpacity="0" />
               <stop offset="100%" stopColor="#ecebf3" stopOpacity="0.08" />
             </linearGradient>
-            <radialGradient id="aa-sidebar-night-lantern-glow" cx="0.5" cy="0.5" r="0.5">
+            <radialGradient id="ui-sidebar-night-lantern-glow" cx="0.5" cy="0.5" r="0.5">
               <stop offset="0%" stopColor={NIGHT_LANTERN} stopOpacity="0.24" />
               <stop offset="42%" stopColor={NIGHT_LANTERN} stopOpacity="0.08" />
               <stop offset="100%" stopColor={NIGHT_LANTERN} stopOpacity="0" />
@@ -259,20 +259,20 @@ export function SidebarAnimation({ collapsed }: { collapsed: boolean }) {
             fill="#34323a"
             fillOpacity="0.2"
           />
-          <rect x="0" y="30" width="236" height="160" fill="url(#aa-sidebar-night-waterwash)" />
+          <rect x="0" y="30" width="236" height="160" fill="url(#ui-sidebar-night-waterwash)" />
           <path d="M8 40 Q60 36 118 40 Q176 44 228 40" stroke={NIGHT_INK + '0.2)'} strokeWidth="1" strokeLinecap="round" />
           <path d="M12 60 Q64 57 120 60 Q176 63 224 60" stroke={NIGHT_INK + '0.16)'} strokeWidth="1" strokeLinecap="round" />
           <path d="M8 82 Q64 78 120 82 Q178 86 228 82" stroke={NIGHT_INK + '0.12)'} strokeWidth="1" strokeLinecap="round" />
           <path d="M16 104 Q68 101 120 104 Q172 107 220 104" stroke={NIGHT_INK + '0.1)'} strokeWidth="1" strokeLinecap="round" />
 
           {/* Broken reflection reconnects the upper light source to the water. */}
-          <path d="M52 40 L68 40" stroke="var(--aa-accent)" strokeOpacity="0.4" strokeWidth="1.1" strokeLinecap="round" />
-          <path d="M50 60 L70 60" stroke="var(--aa-accent)" strokeOpacity="0.28" strokeWidth="1.1" strokeLinecap="round" />
-          <path d="M55 82 L65 82" stroke="var(--aa-accent)" strokeOpacity="0.2" strokeWidth="1.1" strokeLinecap="round" />
+          <path d="M52 40 L68 40" stroke="var(--ui-accent)" strokeOpacity="0.4" strokeWidth="1.1" strokeLinecap="round" />
+          <path d="M50 60 L70 60" stroke="var(--ui-accent)" strokeOpacity="0.28" strokeWidth="1.1" strokeLinecap="round" />
+          <path d="M55 82 L65 82" stroke="var(--ui-accent)" strokeOpacity="0.2" strokeWidth="1.1" strokeLinecap="round" />
 
           {/* A floating lantern replaces the light scene's boat and gives the
               lower night field one warm, restrained point of life. */}
-          <circle cx="152" cy="40" r="17" fill="url(#aa-sidebar-night-lantern-glow)" />
+          <circle cx="152" cy="40" r="17" fill="url(#ui-sidebar-night-lantern-glow)" />
           <path d="M147.5 36 Q152 30.5 156.5 36" stroke={NIGHT_LANTERN} strokeOpacity="0.58" strokeWidth="0.8" strokeLinecap="round" fill="none" />
           <path d="M146 37 L158 37 L159.5 44.5 L144.5 44.5 Z" fill={NIGHT_LANTERN} fillOpacity="0.34" stroke={NIGHT_LANTERN} strokeOpacity="0.66" strokeWidth="0.75" strokeLinejoin="round" />
           <rect x="149" y="39" width="6" height="3.5" rx="1" fill={NIGHT_LANTERN} fillOpacity="0.58" />

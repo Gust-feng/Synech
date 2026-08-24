@@ -199,7 +199,7 @@ const capabilitySnapshotSchema = z.object({
   skillCatalog: z.array(z.object({ id: z.string().min(1), name: z.string(), description: z.string(), enabled: z.boolean() }).passthrough()),
   subAgentCatalog: z.array(z.object({ id: z.string().min(1), name: z.string(), description: z.string(), enabled: z.boolean() }).passthrough()),
   mcpCatalog: z.array(z.object({ serverId: z.string().min(1), enabled: z.boolean(), availability: z.string() }).passthrough()),
-  executionRoot: z.string().min(1), securitySummary: z.string(), warnings: z.array(z.string()),
+  executionRoot: z.string().min(1), warnings: z.array(z.string()),
 }).passthrough();
 const memoryOwnerSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("space"), id: z.string().min(1) }).strict(),
@@ -255,7 +255,6 @@ const statusSchema = z.discriminatedUnion("kind", [
 const capabilityResolutionSchema = z.object({
   resolutionId: z.string().min(1),
   snapshotId: z.string().min(1),
-  runMode: z.literal("agent"),
   agentId: z.string().min(1),
   agentDisplayName: z.string(),
   toolVisibilityProfileId: z.string().min(1),
@@ -272,15 +271,6 @@ const capabilityResolutionSchema = z.object({
       supportsVisionInput: z.boolean(), supportsReasoningEffort: z.boolean(), preferredApiStyle: z.string(), stability: z.string(),
     }).passthrough(),
     canExposeModelTools: z.boolean(),
-    tools: z.object({ canExposeToModel: z.boolean(), allowedTools: z.array(z.string()) }).strict().optional(),
-    fileOperations: z.object({
-      canReadWorkspace: z.boolean(), canWriteWorkspace: z.boolean(), canDeleteWorkspace: z.boolean(), canExecuteCommands: z.boolean(),
-    }).strict().optional(),
-    uiDisplay: z.object({
-      canShowStreamingOutput: z.boolean(), canShowToolCards: z.boolean(), visibleToolNames: z.array(z.string()),
-    }).strict().optional(),
-    allowedTools: z.array(z.string()),
-    warnings: z.array(z.string()),
   }).strict(),
   allowedTools: z.array(z.string()),
   toolExposures: z.array(z.object({
@@ -301,10 +291,6 @@ const capabilityResolutionSchema = z.object({
   enabledSkills: z.array(z.object({
     id: z.string().min(1), name: z.string(), description: z.string(), triggers: z.array(z.string()),
   }).passthrough()),
-  mcpDrafts: z.array(z.object({
-    draftId: z.string().min(1), source: z.literal("mcp"), label: z.string(),
-    availability: z.enum(["configured", "disabled", "unavailable"]), enabled: z.boolean(), reason: z.string(),
-  }).strict()),
   warnings: z.array(z.string()),
   createdAt: z.string().min(1),
 }).strict();

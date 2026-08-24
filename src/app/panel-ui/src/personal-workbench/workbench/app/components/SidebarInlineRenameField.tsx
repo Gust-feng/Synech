@@ -44,7 +44,7 @@ export function SidebarInlineRenameField({ value, onCommit, onCancel, selectAll 
       spellCheck={false}
       className="flex-1 min-w-0 text-sm bg-transparent outline-none"
       style={{
-        color: 'var(--aa-text-1)',
+        color: 'var(--ui-text-1)',
         borderBottom: '1px solid rgba(45,40,34,0.25)',
         paddingBottom: 1,
       }}

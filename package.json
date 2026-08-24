@@ -1,6 +1,6 @@
 {
   "name": "synech",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.7.0",
@@ -11,10 +11,12 @@
   "scripts": {
     "clean:dist": "node scripts/clean-dist.mjs",
     "clean:workspace": "node scripts/clean-workspace.mjs",
-    "build": "pnpm clean:dist && pnpm build:node && pnpm copy:sub-agents && pnpm typecheck:panel && pnpm build:panel",
+    "build": "pnpm clean:dist && pnpm build:node && pnpm check:architecture && pnpm copy:sub-agents && pnpm typecheck:panel && pnpm build:panel",
     "build:node": "pnpm generate:icons && tsc -p tsconfig.json",
     "copy:sub-agents": "node scripts/copy-sub-agent-assets.mjs",
-    "test:storage": "node --test --test-concurrency=1 tests/product-storage.test.mjs",
+    "test": "pnpm clean:dist && pnpm build:node && pnpm check:architecture && pnpm test:node",
+    "check:architecture": "node scripts/check-module-cycles.mjs",
+    "test:node": "node --test --test-concurrency=1 tests/*.test.mjs",
     "typecheck:panel": "tsc -p tsconfig.panel.json --noEmit",
     "build:panel": "vite build --config vite.panel.config.ts",
     "smoke:real-ai": "pnpm build && node dist/app/real-ai-smoke.js",

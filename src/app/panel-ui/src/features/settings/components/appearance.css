@@ -1,0 +1,98 @@
+.appearance-preference-card,
+.appearance-motion-card {
+  display: grid;
+  gap: var(--space-3);
+  border-width: 1px;
+  border-radius: 14px;
+}
+
+.appearance-preference-options,
+.appearance-motion-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.appearance-preference-option {
+  display: grid;
+  min-width: 0;
+  min-height: 48px;
+  place-content: center;
+  gap: 3px;
+  border: 1px solid color-mix(in oklch, var(--field-border) 88%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--field-bg);
+  color: color-mix(in oklch, var(--fg) 84%, var(--muted));
+  text-align: center;
+  transition:
+    border-color var(--motion-fast-duration) var(--motion-ease-standard),
+    background-color var(--motion-fast-duration) var(--motion-ease-standard),
+    color var(--motion-fast-duration) var(--motion-ease-standard),
+    box-shadow var(--motion-fast-duration) var(--motion-ease-standard);
+}
+
+.appearance-preference-option span {
+  font-size: 13px;
+  font-weight: var(--weight-label);
+  line-height: 1.2;
+}
+
+.appearance-preference-option small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.appearance-motion-option {
+  display: inline-flex;
+  min-width: 0;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid color-mix(in oklch, var(--field-border) 88%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--field-bg);
+  padding: 0 10px;
+  color: color-mix(in oklch, var(--fg) 84%, var(--muted));
+  font-size: 12.5px;
+  font-weight: var(--weight-label);
+  line-height: 1.1;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition:
+    border-color var(--motion-fast-duration) var(--motion-ease-standard),
+    background-color var(--motion-fast-duration) var(--motion-ease-standard),
+    color var(--motion-fast-duration) var(--motion-ease-standard),
+    box-shadow var(--motion-fast-duration) var(--motion-ease-standard);
+}
+
+.appearance-preference-option:hover,
+.appearance-motion-option:hover {
+  border-color: var(--field-hover-border);
+  background: var(--field-hover-bg);
+  color: var(--fg);
+}
+
+.appearance-preference-option.active,
+.appearance-motion-option.active {
+  border-color: var(--field-focus-border);
+  background: color-mix(in oklch, var(--accent-soft) 68%, var(--surface));
+  color: var(--accent-active);
+  box-shadow: 0 0 0 1px color-mix(in oklch, var(--accent) 10%, transparent);
+}
+
+.appearance-preference-option:focus-visible,
+.appearance-motion-option:focus-visible {
+  border-color: var(--field-focus-border);
+  box-shadow: var(--field-focus-ring);
+  outline: none;
+}
+
+@media (max-width: 720px) {
+  .appearance-preference-options,
+  .appearance-motion-options {
+    grid-template-columns: 1fr;
+  }
+}

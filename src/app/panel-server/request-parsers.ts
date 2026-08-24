@@ -25,9 +25,9 @@ import {
   OrdinaryRunContextInputValidationError,
   parseOrdinaryRunContextInput,
 } from "../context/ordinary-run-input-adapter.js";
-import type { CreateContextAttachmentPreviewInput } from "../context/attachments.js";
+import type { CreateContextAttachmentPreviewInput } from "./workbench/context-attachment-preview.js";
 import type { ModelRuntimeMode } from "../model-runtime/index.js";
-import type { OrdinaryRunContextInput } from "../ordinary-agent/index.js";
+import type { OrdinaryRunContextInput } from "../../domain/ordinary/index.js";
 import { ORDINARY_AGENT_SYSTEM_PROMPT_MAX_CHARS, isKnownOrdinaryAgentPromptVariant } from "../config-center/ordinary-agent-prompt-settings.js";
 import { sanitizeAssistantVisibleText } from "../text-projection/visible-text-safety.js";
 import { preserveVisibleText } from "../../kernel/visible-text-policy.js";

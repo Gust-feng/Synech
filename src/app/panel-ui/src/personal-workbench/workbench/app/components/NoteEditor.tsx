@@ -92,7 +92,7 @@ export function NoteEditor({ note, onSave, onOpenFocus, onClose, onRestoreAsNew 
   const editor = useEditor({
     extensions: createMarkdownEditorExtensions('从这里开始写…'),
     content: note.bodyMarkdown,
-    editorProps: { attributes: { class: 'aa-editor-prose', spellcheck: 'false' } },
+    editorProps: { attributes: { class: 'ui-editor-prose', spellcheck: 'false' } },
     onUpdate: ({ editor: value }) => {
       const bodyMarkdown = markdownFromEditor(value)
       editorBodyRef.current = bodyMarkdown
@@ -250,38 +250,38 @@ export function NoteEditor({ note, onSave, onOpenFocus, onClose, onRestoreAsNew 
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden min-w-0">
-      <header className="shrink-0 flex items-center gap-3 px-5" style={{ height: 48, borderBottom: '1px solid var(--aa-border, rgba(45,40,34,0.09))' }}>
+      <header className="shrink-0 flex items-center gap-3 px-5" style={{ height: 48, borderBottom: '1px solid var(--ui-border, rgba(45,40,34,0.09))' }}>
         <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: '#6f8778' }} />
-        <span className="text-xs shrink-0" style={{ color: 'var(--aa-text-3, #aba39b)' }}>笔记</span>
-        <span className="flex items-center gap-1 text-xs shrink-0" style={{ color: 'var(--aa-text-3, #aba39b)' }}>
-          {saved && durableSaveState === 'saved' ? <Check size={12} /> : <span className="w-2 h-2 rounded-full animate-pulse" style={{ background: durableSaveState.startsWith('error:') ? '#b85c52' : 'var(--aa-accent, #6865a7)' }} />}
+        <span className="text-xs shrink-0" style={{ color: 'var(--ui-text-3, #aba39b)' }}>笔记</span>
+        <span className="flex items-center gap-1 text-xs shrink-0" style={{ color: 'var(--ui-text-3, #aba39b)' }}>
+          {saved && durableSaveState === 'saved' ? <Check size={12} /> : <span className="w-2 h-2 rounded-full animate-pulse" style={{ background: durableSaveState.startsWith('error:') ? '#b85c52' : 'var(--ui-accent, #6865a7)' }} />}
           {durableSaveState.startsWith('error:') ? '保存失败' : saved && durableSaveState === 'saved' ? '已保存' : '保存中…'}
         </span>
         <div className="flex-1" />
-        <button onClick={toggleSourceMode} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs transition-colors hover:bg-[var(--aa-hover-tint)]" style={{ color: sourceMode ? 'var(--aa-accent, #6865a7)' : 'var(--aa-text-2, #87827c)' }}>
+        <button onClick={toggleSourceMode} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs transition-colors hover:bg-[var(--ui-hover-tint)]" style={{ color: sourceMode ? 'var(--ui-accent, #6865a7)' : 'var(--ui-text-2, #87827c)' }}>
           <Code2 size={12} />{sourceMode ? '编辑' : '源码'}
         </button>
-        {onOpenFocus && <button onClick={onOpenFocus} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs transition-colors hover:bg-[var(--aa-hover-tint)]" style={{ color: 'var(--aa-text-2, #87827c)' }}><Maximize2 size={12} />专注</button>}
-        <button onClick={() => (collected ? brain.uncollect(note.id) : brain.collectNote(note.id))} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs transition-colors hover:bg-[var(--aa-hover-tint)]" style={{ color: collected ? 'var(--aa-accent, #6865a7)' : 'var(--aa-text-2, #87827c)' }}>
+        {onOpenFocus && <button onClick={onOpenFocus} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs transition-colors hover:bg-[var(--ui-hover-tint)]" style={{ color: 'var(--ui-text-2, #87827c)' }}><Maximize2 size={12} />专注</button>}
+        <button onClick={() => (collected ? brain.uncollect(note.id) : brain.collectNote(note.id))} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs transition-colors hover:bg-[var(--ui-hover-tint)]" style={{ color: collected ? 'var(--ui-accent, #6865a7)' : 'var(--ui-text-2, #87827c)' }}>
           <Brain size={12} />{collected ? '已收藏' : '收藏'}
         </button>
       </header>
 
       {incoming !== undefined && (
-        <div className="aa-note-conflict" role="status">
+        <div className="ui-note-conflict" role="status">
           <AlertTriangle size={14} />
           <div>
             <strong>{incoming.status === 'deleted' ? '这篇笔记已被外部删除' : `${actorLabel(incoming.latestRevision)}更新了这篇笔记`}</strong>
             <span>{incoming.status === 'deleted' ? '当前草稿仍保留在编辑器中。' : '当前内容没有被覆盖，请选择要保留的版本。'}</span>
           </div>
           {incoming.status === 'current' ? (
-            <div className="aa-note-conflict__actions">
+            <div className="ui-note-conflict__actions">
               <button type="button" onClick={() => setShowIncomingDiff((value) => !value)}>{showIncomingDiff ? '返回编辑' : '比较更改'}</button>
               <button type="button" onClick={() => void keepLocalVersion()}>保留我的版本</button>
               <button type="button" data-primary onClick={() => void useIncomingVersion()}>采用新版</button>
             </div>
           ) : (
-            <div className="aa-note-conflict__actions">
+            <div className="ui-note-conflict__actions">
               <button type="button" onClick={() => void closeDeletedDraft()}>关闭</button>
               <button type="button" data-primary onClick={() => void restoreDeletedDraft()}>恢复为新笔记</button>
             </div>
@@ -290,13 +290,13 @@ export function NoteEditor({ note, onSave, onOpenFocus, onClose, onRestoreAsNew 
       )}
 
       <div className="shrink-0 mx-auto w-full px-6 pt-8" style={{ maxWidth: 'var(--reading-width, 680px)' }}>
-        <input aria-label="笔记名称" value={title} onChange={(event) => { setTitle(event.target.value); scheduleSave({ title: event.target.value }) }} placeholder="无标题" spellCheck={false} className="w-full outline-none bg-transparent reading-prose" style={{ color: 'var(--aa-text-1, #292722)', fontSize: 22, fontWeight: 600 }} />
+        <input aria-label="笔记名称" value={title} onChange={(event) => { setTitle(event.target.value); scheduleSave({ title: event.target.value }) }} placeholder="无标题" spellCheck={false} className="w-full outline-none bg-transparent reading-prose" style={{ color: 'var(--ui-text-1, #292722)', fontSize: 22, fontWeight: 600 }} />
       </div>
 
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto px-6 py-4 pb-24" style={{ maxWidth: 'var(--reading-width, 680px)' }}>
           {incomingChanges !== undefined ? <NoteDiff changes={incomingChanges} /> : sourceMode ? (
-            <textarea value={sourceBody} onChange={(event) => { setSourceBody(event.target.value); scheduleSave({ bodyMarkdown: event.target.value }) }} className="w-full outline-none bg-transparent resize-none text-sm leading-relaxed" style={{ color: 'var(--aa-text-1, #292722)', minHeight: '60vh', fontFamily: '"JetBrains Mono", "Fira Code", ui-monospace, monospace', fontSize: 13, lineHeight: 1.7 }} spellCheck={false} />
+            <textarea value={sourceBody} onChange={(event) => { setSourceBody(event.target.value); scheduleSave({ bodyMarkdown: event.target.value }) }} className="w-full outline-none bg-transparent resize-none text-sm leading-relaxed" style={{ color: 'var(--ui-text-1, #292722)', minHeight: '60vh', fontFamily: '"JetBrains Mono", "Fira Code", ui-monospace, monospace', fontSize: 13, lineHeight: 1.7 }} spellCheck={false} />
           ) : <EditorContent editor={editor} />}
         </div>
       </div>
@@ -311,5 +311,5 @@ function actorLabel(revision: PersonalNoteRevision | undefined): string {
 }
 
 function NoteDiff({ changes }: { changes: readonly Change[] }) {
-  return <pre className="aa-note-conflict__diff" aria-label="笔记内容更改">{changes.map((change, index) => <span key={index} data-change={change.added ? 'incoming' : change.removed ? 'local' : 'same'}>{change.value}</span>)}</pre>
+  return <pre className="ui-note-conflict__diff" aria-label="笔记内容更改">{changes.map((change, index) => <span key={index} data-change={change.added ? 'incoming' : change.removed ? 'local' : 'same'}>{change.value}</span>)}</pre>
 }

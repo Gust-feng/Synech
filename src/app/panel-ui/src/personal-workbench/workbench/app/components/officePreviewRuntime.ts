@@ -1,11 +1,11 @@
-import type { DocumentPreview } from '../../../../../../panel-api-contracts'
+import type { DocumentPreview } from '../../../../../../panel-api/workbench'
 import type { SpreadsheetSheet } from './spreadsheetPreviewTypes'
 
 const MAX_CACHED_DOCUMENT_BYTES = 8 * 1024 * 1024
 const MAX_DOCUMENT_CACHE_BYTES = 24 * 1024 * 1024
 const MAX_RENDERED_OFFICE_PREVIEWS = 8
 const DOCX_RENDER_OPTIONS = {
-  className: 'aa-docx',
+  className: 'ui-docx',
   inWrapper: true,
   ignoreWidth: false,
   ignoreHeight: false,

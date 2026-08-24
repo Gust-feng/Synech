@@ -20,7 +20,6 @@ import {
   assertCanonicalToolName,
   cloneToolInputSchema,
   cloneToolJsonSchema,
-  copyToolModelAttachments,
   isToolErrorDomain,
   InvalidToolFactError,
   normalizeToolErrorFacts,
@@ -34,19 +33,9 @@ import {
   confirmationRequestFromSecurityDecision,
   evaluateToolCallSecurity,
 } from "../../kernel/tools/index.js";
-import { toolResultMessage } from "../../kernel/intelligence/tool-use-loop-messages.js";
-import {
-  ToolOutputStoreError,
-  type ToolOutputMediaType,
-  type ToolOutputStore,
-} from "./tool-output-store.js";
-import {
-  DEFAULT_MAX_INLINE_TOOL_OUTPUT_CHARS,
-  DEFAULT_MAX_INLINE_TOOL_RESULT_TOKENS,
-  DEFAULT_TARGET_INLINE_TOOL_BODY_TOKENS,
-  MAX_TOOL_OUTPUT_READ_CHARS,
-  type ToolOutputTokenCounter,
-} from "./tool-output-limits.js";
+import type { ToolOutputStore } from "./tool-output-store.js";
+import type { ToolOutputTokenCounter } from "./tool-output-limits.js";
+import { TOOL_OUTPUT_READER_NAME, ToolResultRetention } from "./tool-result-retention.js";
 import { utf16SafePrefixLength } from "./text-window.js";
 
 export type ToolCenterOptions = {
@@ -59,11 +48,6 @@ export type ToolCenterOptions = {
   readonly metricsSink?: ToolExecutionMetricsSink;
 };
 
-const RETAINED_TOOL_OUTPUT_PREVIEW_CHARS = 4_000;
-const RETAINED_TOOL_OUTPUT_READ_CHARS = MAX_TOOL_OUTPUT_READ_CHARS;
-const MAX_INLINE_APPROVAL_PARTIAL_OUTPUT_CHARS = 24_000;
-const TOOL_OUTPUT_READER_NAME = "ReadOutput";
-
 type ToolExecutionPreflightInternal =
   | (Extract<ToolExecutionPreflight, { readonly status: "ready" }> & {
       readonly executor: ToolExecutor;
@@ -73,28 +57,12 @@ type ToolExecutionPreflightInternal =
 export class ToolCenter implements ToolExecutionGateway {
   private readonly tools = new Map<string, ToolExecutor>();
   private readonly platform: NodeJS.Platform;
-  private readonly outputStore: ToolOutputStore | undefined;
-  private readonly maxInlineOutputChars: number;
-  private readonly outputTokenCounter: ToolOutputTokenCounter | undefined;
-  private readonly maxInlineOutputTokens: number;
-  private readonly targetInlineBodyTokens: number;
+  private readonly resultRetention: ToolResultRetention;
   private readonly metricsSink: ToolExecutionMetricsSink | undefined;
 
   constructor(options: ToolCenterOptions = {}) {
     this.platform = options.platform ?? process.platform;
-    this.outputStore = options.outputStore;
-    this.maxInlineOutputChars = positiveInlineOutputLimit(options.maxInlineOutputChars);
-    this.outputTokenCounter = options.outputTokenCounter;
-    this.maxInlineOutputTokens = positiveTokenLimit(
-      options.maxInlineOutputTokens,
-      DEFAULT_MAX_INLINE_TOOL_RESULT_TOKENS,
-      "maxInlineOutputTokens",
-    );
-    this.targetInlineBodyTokens = positiveTokenLimit(
-      options.targetInlineBodyTokens,
-      DEFAULT_TARGET_INLINE_TOOL_BODY_TOKENS,
-      "targetInlineBodyTokens",
-    );
+    this.resultRetention = new ToolResultRetention(options);
     this.metricsSink = options.metricsSink;
   }
 
@@ -192,11 +160,10 @@ export class ToolCenter implements ToolExecutionGateway {
         failureAttribution: "execution_failure" as const,
       };
       const deliveryStartedAt = Date.now();
-      const delivered = await this.prepareThrownErrorForDelivery(
+      const delivered = await this.resultRetention.prepareThrownError(
         rawFailure,
-        permission,
         failure,
-        context.traceId,
+        this.retentionContext(permission, context.traceId),
       );
       this.recordExecutionMetric(rawFailure, delivered, Date.now() - deliveryStartedAt);
       return delivered;
@@ -208,10 +175,9 @@ export class ToolCenter implements ToolExecutionGateway {
       if (isToolExecutorResult(output)) {
         const rawResult = normalizeExecutorResult(output.result, factRequest, startedAt);
         const deliveryStartedAt = Date.now();
-        const delivered = await this.prepareResultForDelivery(
+        const delivered = await this.resultRetention.prepareResult(
           rawResult,
-          permission,
-          context.traceId,
+          this.retentionContext(permission, context.traceId),
         );
         this.recordExecutionMetric(rawResult, delivered, Date.now() - deliveryStartedAt);
         return delivered;
@@ -226,7 +192,10 @@ export class ToolCenter implements ToolExecutionGateway {
         durationMs: Date.now() - startedAt,
       };
       const deliveryStartedAt = Date.now();
-      const delivered = await this.prepareResultForDelivery(rawResult, permission, context.traceId);
+      const delivered = await this.resultRetention.prepareResult(
+        rawResult,
+        this.retentionContext(permission, context.traceId),
+      );
       this.recordExecutionMetric(rawResult, delivered, Date.now() - deliveryStartedAt);
       return delivered;
     } catch (error) {
@@ -244,7 +213,10 @@ export class ToolCenter implements ToolExecutionGateway {
           }),
       };
       const deliveryStartedAt = Date.now();
-      const delivered = await this.prepareResultForDelivery(rawFailure, permission, context.traceId);
+      const delivered = await this.resultRetention.prepareResult(
+        rawFailure,
+        this.retentionContext(permission, context.traceId),
+      );
       this.recordExecutionMetric(rawFailure, delivered, Date.now() - deliveryStartedAt);
       return delivered;
     }
@@ -256,7 +228,10 @@ export class ToolCenter implements ToolExecutionGateway {
     ownerId: string,
   ): Promise<ToolCallResult> {
     const deliveryStartedAt = Date.now();
-    const delivered = await this.prepareResultForDelivery(result, permission, ownerId);
+    const delivered = await this.resultRetention.prepareResult(
+      result,
+      this.retentionContext(permission, ownerId),
+    );
     this.recordExecutionMetric(result, delivered, Date.now() - deliveryStartedAt);
     return delivered;
   }
@@ -267,12 +242,8 @@ export class ToolCenter implements ToolExecutionGateway {
     try {
       const rawBody = raw.output === undefined ? "" : JSON.stringify(raw.output);
       const rawInput = raw.input === undefined ? "" : JSON.stringify(raw.input);
-      const rawEnvelopeTokens = this.outputTokenCounter === undefined
-        ? undefined
-        : toolResultEnvelopeTokens(this.outputTokenCounter, raw);
-      const finalEnvelopeTokens = this.outputTokenCounter === undefined
-        ? undefined
-        : toolResultEnvelopeTokens(this.outputTokenCounter, delivered);
+      const rawEnvelopeTokens = this.resultRetention.envelopeTokens(raw);
+      const finalEnvelopeTokens = this.resultRetention.envelopeTokens(delivered);
       const deliveredOutput = recordFromUnknown(delivered.output);
       const continuation = recordFromUnknown(deliveredOutput.continuation);
       const inputRecord = recordFromUnknown(raw.input);
@@ -288,19 +259,16 @@ export class ToolCenter implements ToolExecutionGateway {
       const retentionFailureCode = stringFromUnknown(
         deliveredErrorFacts.outputDeliveryCode ?? deliveredErrorFacts.errorEvidenceCode,
       );
-      const bodyLimit = rawBody.length > this.maxInlineOutputChars;
-      const envelopeLimit = rawEnvelopeTokens !== undefined && rawEnvelopeTokens > this.maxInlineOutputTokens;
+      const bodyLimit = rawBody.length > this.resultRetention.maxInlineOutputChars;
+      const envelopeLimit = rawEnvelopeTokens !== undefined &&
+        rawEnvelopeTokens > this.resultRetention.maxInlineOutputTokens;
       sink.record({
         kind: "execution",
         toolName: raw.toolName,
         operationType: this.tools.get(raw.toolName)?.definition.metadata?.operationType ?? "read-write",
         status: delivered.status,
-        inputTokens: this.outputTokenCounter === undefined
-          ? undefined
-          : this.outputTokenCounter.countText(rawInput),
-        rawBodyTokens: this.outputTokenCounter === undefined
-          ? undefined
-          : this.outputTokenCounter.countText(rawBody),
+        inputTokens: this.resultRetention.textTokens(rawInput),
+        rawBodyTokens: this.resultRetention.textTokens(rawBody),
         rawEnvelopeTokens,
         finalEnvelopeTokens,
         outputChars: rawBody.length,
@@ -434,492 +402,14 @@ export class ToolCenter implements ToolExecutionGateway {
     return { status: "ready", request: factRequest, executor };
   }
 
-  private async prepareResultForDelivery(
-    result: ToolCallResult,
-    permission: ToolPermissionCheck,
-    ownerId: string,
-  ): Promise<ToolCallResult> {
-    if (result.toolName === TOOL_OUTPUT_READER_NAME) {
-      return result;
-    }
-    const failureCandidate = oversizedExplicitFailureCandidate(
-      result,
-      this.maxInlineOutputChars,
-      this.exceedsTokenEnvelope(result),
-    );
-    if (failureCandidate !== undefined) {
-      return this.prepareExplicitFailureForDelivery(
-        result,
-        permission,
-        failureCandidate,
-        ownerId,
-      );
-    }
-    const inlineOutputLimit = result.status === "approval_required"
-      ? Math.min(this.maxInlineOutputChars, MAX_INLINE_APPROVAL_PARTIAL_OUTPUT_CHARS)
-      : this.maxInlineOutputChars;
-    const candidate = oversizedOutputCandidate(
-      result.output,
-      inlineOutputLimit,
-      this.exceedsTokenEnvelope(result),
-    );
-    if (candidate === undefined) {
-      return result;
-    }
-
-    const preview = retainedOutputPreview(candidate.content);
-    if (
-      this.outputStore === undefined ||
-      !this.tools.has(TOOL_OUTPUT_READER_NAME) ||
-      !permission.allowedTools.includes(TOOL_OUTPUT_READER_NAME)
-    ) {
-      return outputRetentionFailure(result, candidate, preview, {
-        code: "tool_output_reader_unavailable",
-        message: "Tool output exceeded the model transport budget, but read_output is not available in this run.",
-      });
-    }
-
-    try {
-      const retained = await this.outputStore.retain({
-        mediaType: candidate.mediaType,
-        content: candidate.content,
-        sourceToolName: result.toolName,
-        sourceCallId: result.callId,
-        sourceFactId: toolCallFactId(result),
-        ownerId,
-      });
-      const deliveryOutput = copyToolModelAttachments(
-        result.output,
-        retainedContentDelivery(preview, retained),
-      );
-      return this.fitRetainedDeliveryPreview(
-        { ...result, output: deliveryOutput },
-        candidate.content,
-      );
-    } catch (error) {
-      const storeError = error instanceof ToolOutputStoreError ? error : undefined;
-      return outputRetentionFailure(result, candidate, preview, {
-        code: storeError?.code ?? "tool_output_retention_failed",
-        message: storeError?.message ?? "Tool output could not be retained for model continuation.",
-        facts: storeError?.facts,
-      });
-    }
-  }
-
-  private async prepareExplicitFailureForDelivery(
-    result: ToolCallResult,
-    permission: ToolPermissionCheck,
-    candidate: OversizedOutputCandidate,
-    ownerId: string,
-  ): Promise<ToolCallResult> {
-    const preview = retainedOutputPreview(candidate.content);
-    if (
-      this.outputStore === undefined ||
-      !this.tools.has(TOOL_OUTPUT_READER_NAME) ||
-      !permission.allowedTools.includes(TOOL_OUTPUT_READER_NAME)
-    ) {
-      return explicitFailureRetentionFailure(result, candidate, preview, {
-        code: "tool_error_reader_unavailable",
-        message: "Tool failure evidence exceeded the model transport budget, but read_output is not available in this run.",
-      });
-    }
-
-    try {
-      const retained = await this.outputStore.retain({
-        mediaType: candidate.mediaType,
-        content: candidate.content,
-        sourceToolName: result.toolName,
-        sourceCallId: result.callId,
-        sourceFactId: toolCallFactId(result),
-        ownerId,
-      });
-      return this.fitRetainedDeliveryPreview({
-        ...result,
-        output: copyToolModelAttachments(
-          result.output,
-          retainedContentDelivery(preview, retained),
-        ),
-        error: retainedErrorMessage(result.error),
-        errorFacts: retainedExplicitFailureFacts(result.errorFacts, retained),
-      }, candidate.content);
-    } catch (storeFailure) {
-      const storeError = storeFailure instanceof ToolOutputStoreError ? storeFailure : undefined;
-      return explicitFailureRetentionFailure(result, candidate, preview, {
-        code: storeError?.code ?? "tool_error_retention_failed",
-        message: storeError?.message ?? "Tool failure evidence could not be retained for model continuation.",
-        facts: storeError?.facts,
-      });
-    }
-  }
-
-  private exceedsTokenEnvelope(result: ToolCallResult): boolean {
-    return this.outputTokenCounter !== undefined &&
-      toolResultEnvelopeTokens(this.outputTokenCounter, result) > this.maxInlineOutputTokens;
-  }
-
-  private fitRetainedDeliveryPreview(
-    result: ToolCallResult,
-    sourceContent: string,
-  ): ToolCallResult {
-    if (this.outputTokenCounter === undefined) return result;
-    const output = result.output;
-    if (typeof output !== "object" || output === null || Array.isArray(output)) return result;
-    let low = 0;
-    let high = sourceContent.length;
-    let best = "";
-    while (low <= high) {
-      const requestedLength = Math.floor((low + high) / 2);
-      const prefixLength = utf16SafePrefixLength(sourceContent, requestedLength);
-      const preview = prefixLength < sourceContent.length
-        ? `${sourceContent.slice(0, Math.max(0, utf16SafePrefixLength(sourceContent, prefixLength - 1)))}…`
-        : sourceContent;
-      const candidate = {
-        ...result,
-        output: { ...output, contentPreview: preview },
-      };
-      const fits = this.outputTokenCounter.countText(preview) <= this.targetInlineBodyTokens &&
-        toolResultEnvelopeTokens(this.outputTokenCounter, candidate) <= this.maxInlineOutputTokens;
-      if (fits) {
-        best = preview;
-        low = requestedLength + 1;
-      } else {
-        high = requestedLength - 1;
-      }
-    }
-    return { ...result, output: { ...output, contentPreview: best } };
-  }
-
-  private async prepareThrownErrorForDelivery(
-    result: ToolCallResult,
-    permission: ToolPermissionCheck,
-    error: SanitizedToolError,
-    ownerId: string,
-  ): Promise<ToolCallResult> {
-    const completeErrorResult = { ...result, errorFacts: error.fullFacts };
-    const candidate = oversizedThrownErrorCandidate(
-      error,
-      this.maxInlineOutputChars,
-      this.exceedsTokenEnvelope(completeErrorResult),
-    );
-    if (candidate === undefined) {
-      return completeErrorResult;
-    }
-
-    const preview = retainedOutputPreview(candidate.content);
-    const deliveryResult = {
-      ...result,
-      error: retainedErrorMessage(result.error),
-    };
-    if (
-      this.outputStore === undefined ||
-      !this.tools.has(TOOL_OUTPUT_READER_NAME) ||
-      !permission.allowedTools.includes(TOOL_OUTPUT_READER_NAME)
-    ) {
-      return errorRetentionFailure(deliveryResult, candidate, preview, {
-        code: "tool_error_reader_unavailable",
-        message: "Tool error evidence exceeded the model transport budget, but read_output is not available in this run.",
-      });
-    }
-
-    try {
-      const retained = await this.outputStore.retain({
-        mediaType: candidate.mediaType,
-        content: candidate.content,
-        sourceToolName: result.toolName,
-        sourceCallId: result.callId,
-        sourceFactId: toolCallFactId(result),
-        ownerId,
-      });
-      return this.fitRetainedDeliveryPreview({
-        ...deliveryResult,
-        output: retainedContentDelivery(preview, retained),
-      }, candidate.content);
-    } catch (storeFailure) {
-      const storeError = storeFailure instanceof ToolOutputStoreError ? storeFailure : undefined;
-      return errorRetentionFailure(deliveryResult, candidate, preview, {
-        code: storeError?.code ?? "tool_error_retention_failed",
-        message: storeError?.message ?? "Tool error evidence could not be retained for model continuation.",
-        facts: storeError?.facts,
-      });
-    }
-  }
-
-}
-
-type OversizedOutputCandidate = {
-  readonly mediaType: ToolOutputMediaType;
-  readonly content: string;
-};
-
-type RetainedToolOutput = Awaited<ReturnType<ToolOutputStore["retain"]>>;
-
-type RetainedContentDelivery = {
-  readonly contentRef: string;
-  readonly mediaType: ToolOutputMediaType;
-  readonly contentChars: number;
-  readonly contentBytes: number;
-  readonly contentSha256: string;
-  readonly contentPreview: string;
-  readonly hasMoreAfter: true;
-  readonly truncated: true;
-  readonly expiresAt?: string;
-  readonly continuationAvailability: "live_only" | "durable";
-  readonly continuation: {
-    readonly ref: string;
-    readonly nextInput: {
-      readonly ref: string;
-      readonly startChar: number;
-      readonly maxChars: number;
-    };
-    readonly note: string;
-  };
-};
-
-function oversizedOutputCandidate(
-  output: ToolCallResult["output"],
-  maxInlineChars: number,
-  exceedsTokenEnvelope = false,
-): OversizedOutputCandidate | undefined {
-  if (output === undefined) {
-    return undefined;
-  }
-  if (typeof output === "string") {
-    return JSON.stringify(output).length > maxInlineChars || exceedsTokenEnvelope
-      ? { mediaType: "text/plain", content: output }
-      : undefined;
-  }
-  const content = JSON.stringify(output);
-  return content.length > maxInlineChars || exceedsTokenEnvelope
-    ? { mediaType: "application/json", content }
-    : undefined;
-}
-
-function oversizedExplicitFailureCandidate(
-  result: ToolCallResult,
-  maxInlineChars: number,
-  exceedsTokenEnvelope = false,
-): OversizedOutputCandidate | undefined {
-  if (result.status !== "failed" && result.status !== "cancelled") {
-    return undefined;
-  }
-  const content = JSON.stringify({
-    status: result.status,
-    ...(result.output === undefined ? {} : { output: result.output }),
-    ...(result.error === undefined ? {} : { error: result.error }),
-    ...(result.errorDomain === undefined ? {} : { errorDomain: result.errorDomain }),
-    ...(result.errorFacts === undefined ? {} : { errorFacts: result.errorFacts }),
-  });
-  return content.length > maxInlineChars || exceedsTokenEnvelope
-    ? { mediaType: "application/json", content }
-    : undefined;
-}
-
-function toolResultEnvelopeTokens(
-  counter: ToolOutputTokenCounter,
-  result: ToolCallResult,
-): number {
-  return counter.countText(JSON.stringify(toolResultMessage(result)));
-}
-
-function retainedOutputPreview(content: string): string {
-  if (content.length <= RETAINED_TOOL_OUTPUT_PREVIEW_CHARS) {
-    return content;
-  }
-  const end = utf16SafePrefixLength(content, RETAINED_TOOL_OUTPUT_PREVIEW_CHARS - 1);
-  return `${content.slice(0, end)}…`;
-}
-
-function retainedContentDelivery(
-  preview: string,
-  retained: RetainedToolOutput,
-): RetainedContentDelivery {
-  return {
-    contentRef: retained.ref,
-    mediaType: retained.mediaType,
-    contentChars: retained.totalChars,
-    contentBytes: retained.byteLength,
-    contentSha256: retained.sha256,
-    contentPreview: preview,
-    hasMoreAfter: true,
-    truncated: true,
-    ...(retained.expiresAt === undefined ? {} : { expiresAt: retained.expiresAt }),
-    continuationAvailability: retained.availability,
-    continuation: {
-      ref: retained.ref,
-      nextInput: {
-        ref: retained.ref,
-        startChar: 0,
-        maxChars: RETAINED_TOOL_OUTPUT_READ_CHARS,
-      },
-      note: "Call read_output with nextInput to read the retained result without executing the original tool again.",
-    },
-  };
-}
-
-function oversizedThrownErrorCandidate(
-  error: SanitizedToolError,
-  maxInlineChars: number,
-  exceedsTokenEnvelope = false,
-): OversizedOutputCandidate | undefined {
-  const content = JSON.stringify({
-    message: error.message,
-    errorDomain: error.errorDomain,
-    ...(error.fullFacts === undefined ? {} : { facts: error.fullFacts }),
-  });
-  return content.length > maxInlineChars || exceedsTokenEnvelope
-    ? { mediaType: "application/json", content }
-    : undefined;
-}
-
-function retainedErrorMessage(value: string | undefined): string | undefined {
-  return value === undefined ? undefined : retainedOutputPreview(value);
-}
-
-function retainedExplicitFailureFacts(
-  facts: ToolErrorFacts | undefined,
-  retained: RetainedToolOutput,
-): ToolErrorFacts {
-  return mergeToolErrorFacts(compactErrorFactsForDelivery(facts), {
-    errorEvidenceCode: "tool_error_evidence_retained",
-    errorEvidencePhase: "explicit_failure_retention",
-    errorEvidenceRef: retained.ref,
-    errorEvidenceChars: retained.totalChars,
-  });
-}
-
-function explicitFailureRetentionFailure(
-  result: ToolCallResult,
-  candidate: OversizedOutputCandidate,
-  preview: string,
-  failure: {
-    readonly code: string;
-    readonly message: string;
-    readonly facts?: Readonly<Record<string, string | number>>;
-  },
-): ToolCallResult {
-  return {
-    ...result,
-    output: copyToolModelAttachments(result.output, {
-      mediaType: candidate.mediaType,
-      contentChars: candidate.content.length,
-      contentPreview: preview,
-      hasMoreAfter: true,
-      contentIncomplete: true,
-      retentionFailed: true,
-    }),
-    error: retainedErrorMessage(result.error) ?? failure.message,
-    errorFacts: mergeToolErrorFacts(compactErrorFactsForDelivery(result.errorFacts), {
-      ...(failure.facts ?? {}),
-      errorEvidenceCode: failure.code,
-      errorEvidencePhase: "explicit_failure_retention",
-      errorEvidenceMessage: failure.message,
-    }),
-  };
-}
-
-function errorRetentionFailure(
-  result: ToolCallResult,
-  candidate: OversizedOutputCandidate,
-  preview: string,
-  failure: {
-    readonly code: string;
-    readonly message: string;
-    readonly facts?: Readonly<Record<string, string | number>>;
-  },
-): ToolCallResult {
-  return {
-    ...result,
-    output: {
-      mediaType: candidate.mediaType,
-      contentChars: candidate.content.length,
-      contentPreview: preview,
-      hasMoreAfter: true,
-      contentIncomplete: true,
-      retentionFailed: true,
-    },
-    errorFacts: mergeToolErrorFacts(result.errorFacts, {
-      ...(failure.facts ?? {}),
-      errorEvidenceCode: failure.code,
-      errorEvidencePhase: "error_retention",
-      errorEvidenceMessage: failure.message,
-    }),
-  };
-}
-
-function outputRetentionFailure(
-  result: ToolCallResult,
-  candidate: OversizedOutputCandidate,
-  preview: string,
-  failure: {
-    readonly code: string;
-    readonly message: string;
-    readonly facts?: Readonly<Record<string, string | number>>;
-  },
-): ToolCallResult {
-  const output = copyToolModelAttachments(result.output, {
-    mediaType: candidate.mediaType,
-    contentChars: candidate.content.length,
-    contentPreview: preview,
-    retentionFailed: true,
-    contentIncomplete: true,
-    deliveryStatus: "failed",
-    deliveryCode: failure.code,
-    deliveryMessage: failure.message,
-    sourceExecutionStatus: result.status,
-    doNotBlindlyRetry: result.status === "completed",
-  });
-  if (result.status !== "completed") {
+  private retentionContext(permission: ToolPermissionCheck, ownerId: string) {
     return {
-      ...result,
-      output,
-      error: result.error ?? failure.message,
-      errorDomain: result.errorDomain ?? "runtime_error",
-      errorFacts: mergeToolErrorFacts(compactErrorFactsForDelivery(result.errorFacts), {
-        ...(failure.facts ?? {}),
-        outputDeliveryCode: failure.code,
-        outputDeliveryPhase: "output_retention",
-        outputDeliveryMessage: failure.message,
-        originalStatus: result.status,
-      }),
+      ownerId,
+      readerAvailable: this.tools.has(TOOL_OUTPUT_READER_NAME) &&
+        permission.allowedTools.includes(TOOL_OUTPUT_READER_NAME),
     };
   }
-  return {
-    ...result,
-    output,
-    status: "failed",
-    error: failure.message,
-    errorDomain: "runtime_error",
-    errorFacts: {
-      code: failure.code,
-      phase: "output_retention",
-      originalStatus: result.status,
-      outputDeliveryCode: failure.code,
-      ...(failure.facts ?? {}),
-    },
-    confirmationRequest: undefined,
-  };
-}
 
-function compactErrorFactsForDelivery(facts: ToolErrorFacts | undefined): ToolErrorFacts | undefined {
-  return normalizeToolErrorFacts(facts, {
-    compactString: (value) => compactToolErrorText(value, 500),
-  });
-}
-
-function positiveInlineOutputLimit(value: number | undefined): number {
-  const resolved = value ?? DEFAULT_MAX_INLINE_TOOL_OUTPUT_CHARS;
-  if (!Number.isSafeInteger(resolved) || resolved <= 0) {
-    throw new Error("ToolCenter maxInlineOutputChars must be a positive safe integer.");
-  }
-  return resolved;
-}
-
-function positiveTokenLimit(value: number | undefined, fallback: number, name: string): number {
-  const resolved = value ?? fallback;
-  if (!Number.isSafeInteger(resolved) || resolved <= 0) {
-    throw new Error(`ToolCenter ${name} must be a positive safe integer.`);
-  }
-  return resolved;
 }
 
 function isToolExecutorResult(value: unknown): value is ToolExecutorResult {

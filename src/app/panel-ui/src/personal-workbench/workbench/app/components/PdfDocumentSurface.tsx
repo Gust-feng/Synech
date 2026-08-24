@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react'
-import { pushResponsivenessContext } from '../../../../app-responsiveness-diagnostics'
-import type { DocumentPreview } from '../../../../../../panel-api-contracts'
+import { pushResponsivenessContext } from '../../../../shell/responsiveness-diagnostics'
+import type { DocumentPreview } from '../../../../../../panel-api/workbench'
 
 type PdfDocumentSurfaceProps = {
   readonly source: { readonly kind: 'pages'; readonly pages: readonly string[] }
@@ -103,8 +103,8 @@ export function PdfDocumentThumbnail({
   }, [firstPage])
 
   return (
-    <div className="aa-pdf-document__thumbnail" aria-label={`${title} PDF 首页`}>
-      <div className="aa-pdf-document__thumbnail-paper">
+    <div className="ui-pdf-document__thumbnail" aria-label={`${title} PDF 首页`}>
+      <div className="ui-pdf-document__thumbnail-paper">
         {firstPage !== undefined ? (
           <canvas ref={canvasRef} />
         ) : fallbackText !== undefined ? (
@@ -119,7 +119,7 @@ export function PdfDocumentThumbnail({
 
 function PdfThumbnailPlaceholder() {
   return (
-    <div className="aa-pdf-document__thumbnail-placeholder" aria-hidden="true">
+    <div className="ui-pdf-document__thumbnail-placeholder" aria-hidden="true">
       {[72, 92, 84, 58, 88, 66].map((width, index) => <span key={index} style={{ width: `${width}%` }} />)}
     </div>
   )
@@ -140,9 +140,9 @@ function StructuredPdfPages({ pages }: { readonly pages: readonly string[] }) {
   useResponsivenessContext(`PDF text preview (${pages.length} pages)`)
   if (pages.length === 0) return <PdfState message="这个 PDF 暂无可显示内容。" />
   return (
-    <div className="aa-pdf-document" data-pdf-source="structured">
+    <div className="ui-pdf-document" data-pdf-source="structured">
       {pages.slice(0, pagination.visibleCount).map((page, index) => (
-        <article className="aa-pdf-document__page aa-pdf-document__page--text" key={index}>
+        <article className="ui-pdf-document__page ui-pdf-document__page--text" key={index}>
           <pre>{page}</pre>
           <PageNumber current={index + 1} total={pages.length} />
         </article>
@@ -194,7 +194,7 @@ function RenderedPdfDocument({ url, byteLength, sourceVersion }: {
   if (document === undefined) return <PdfState message="正在读取 PDF..." />
   const firstPage = getCachedPdfFirstPage(url, byteLength, sourceVersion)
   return (
-    <div className="aa-pdf-document" data-pdf-source="file">
+    <div className="ui-pdf-document" data-pdf-source="file">
       {Array.from({ length: pagination.visibleCount }, (_, index) => (
         <RenderedPdfPage document={document} pageNumber={index + 1} total={document.numPages} initialPage={index === 0 ? firstPage : undefined} key={index} />
       ))}
@@ -288,13 +288,13 @@ function RenderedPdfPage({ document, pageNumber, total, initialPage }: {
 
   return (
     <article
-      className="aa-pdf-document__page aa-pdf-document__page--canvas"
+      className="ui-pdf-document__page ui-pdf-document__page--canvas"
       ref={articleRef}
       style={{ aspectRatio }}
       aria-label={`PDF 第 ${pageNumber} 页`}
     >
       <canvas ref={canvasRef} />
-      {failed && <span className="aa-pdf-document__page-error">这一页暂时无法显示。</span>}
+      {failed && <span className="ui-pdf-document__page-error">这一页暂时无法显示。</span>}
       <PageNumber current={pageNumber} total={total} />
     </article>
   )
@@ -309,7 +309,7 @@ function PdfPageContinuation(props: {
   if (props.visibleCount >= props.total) return null
   const remaining = props.total - props.visibleCount
   return (
-    <div className="aa-pdf-document__continuation" ref={props.sentinelRef}>
+    <div className="ui-pdf-document__continuation" ref={props.sentinelRef}>
       <span>{props.visibleCount} / {props.total} 页</span>
       <button type="button" onClick={props.loadMore}>继续加载后 {Math.min(PAGE_BATCH_SIZE, remaining)} 页</button>
     </div>
@@ -317,12 +317,12 @@ function PdfPageContinuation(props: {
 }
 
 function PageNumber({ current, total }: { readonly current: number; readonly total: number }) {
-  return <span className="aa-pdf-document__page-number">{current} / {total}</span>
+  return <span className="ui-pdf-document__page-number">{current} / {total}</span>
 }
 
 function PdfState({ message, onRetry }: { readonly message: string; readonly onRetry?: () => void }) {
   return (
-    <div className="aa-pdf-document__state" role={onRetry === undefined ? 'status' : 'alert'}>
+    <div className="ui-pdf-document__state" role={onRetry === undefined ? 'status' : 'alert'}>
       <span>{message}</span>
       {onRetry !== undefined && <button type="button" onClick={onRetry}>重试</button>}
     </div>

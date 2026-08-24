@@ -63,8 +63,8 @@ export function SpreadsheetDocumentSurface({ url, byteLength, sourceVersion }: {
   const columnsTruncated = columnCount < totalColumnCount
   const rowsTruncated = rows.length < sheet.data.length
   return (
-    <div className="aa-spreadsheet-document">
-      <div className="aa-spreadsheet-document__tabs" role="tablist" aria-label="工作表">
+    <div className="ui-spreadsheet-document">
+      <div className="ui-spreadsheet-document__tabs" role="tablist" aria-label="工作表">
         {sheets.map((candidate, index) => (
           <button
             type="button"
@@ -81,7 +81,7 @@ export function SpreadsheetDocumentSurface({ url, byteLength, sourceVersion }: {
           </button>
         ))}
       </div>
-      <div className="aa-spreadsheet-document__viewport" data-document-scroll="content">
+      <div className="ui-spreadsheet-document__viewport" data-document-scroll="content">
         <table aria-label={`${sheet.sheet} 工作表`}>
           <thead>
             <tr>
@@ -101,9 +101,9 @@ export function SpreadsheetDocumentSurface({ url, byteLength, sourceVersion }: {
             ))}
           </tbody>
         </table>
-        {sheet.data.length === 0 && <div className="aa-spreadsheet-document__empty">这个工作表是空的。</div>}
+        {sheet.data.length === 0 && <div className="ui-spreadsheet-document__empty">这个工作表是空的。</div>}
         {(rowsTruncated || columnsTruncated) && (
-          <div className="aa-spreadsheet-document__continuation">
+          <div className="ui-spreadsheet-document__continuation">
             <span>已显示 {rows.length} / {sheet.data.length} 行{columnsTruncated ? `，前 ${columnCount} 列` : ''}</span>
             {rowsTruncated && <button type="button" onClick={() => setVisibleRows((count) => count + ROW_BATCH_SIZE)}>继续显示行</button>}
             {columnsTruncated && <button type="button" onClick={() => setVisibleColumns((count) => count + COLUMN_BATCH_SIZE)}>继续显示列</button>}
@@ -116,9 +116,9 @@ export function SpreadsheetDocumentSurface({ url, byteLength, sourceVersion }: {
 
 function OfficeState({ error, message }: { error: boolean; message: string }) {
   return (
-    <div className="aa-spreadsheet-document aa-spreadsheet-document--state">
-      <div className="aa-office-document__state" role={error ? 'alert' : 'status'}>
-        {error ? <AlertTriangle size={20} /> : <LoaderCircle size={20} className="aa-office-document__spinner" />}
+    <div className="ui-spreadsheet-document ui-spreadsheet-document--state">
+      <div className="ui-office-document__state" role={error ? 'alert' : 'status'}>
+        {error ? <AlertTriangle size={20} /> : <LoaderCircle size={20} className="ui-office-document__spinner" />}
         <span>{message}</span>
       </div>
     </div>

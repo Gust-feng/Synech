@@ -98,18 +98,18 @@ export function ImageDocumentSurface({
 
   return (
     <div
-      className={`aa-reference-preview__media${caption || editable ? ' aa-reference-preview__media--described' : ''}${editable ? ' aa-reference-preview__media--caption-editable' : ''}`}
+      className={`ui-reference-preview__media${caption || editable ? ' ui-reference-preview__media--described' : ''}${editable ? ' ui-reference-preview__media--caption-editable' : ''}`}
       data-document-scroll="content"
     >
       <StableImage key={sourceKey} url={url} sourceVersion={sourceVersion} alt={alt} />
       {showCaptionEntry ? (
-        <button className="aa-reference-preview__caption-add" type="button" onClick={beginEditing}>
+        <button className="ui-reference-preview__caption-add" type="button" onClick={beginEditing}>
           <Plus size={13} aria-hidden="true" />
           <span>添加图片说明</span>
         </button>
       ) : (caption || editing || saving) && <p
         ref={editorRef}
-        className="aa-reference-preview__caption-text"
+        className="ui-reference-preview__caption-text"
         contentEditable={editable && !saving}
         spellCheck={false}
         suppressContentEditableWarning
@@ -126,7 +126,7 @@ export function ImageDocumentSurface({
         onBlur={() => void commit()}
         onKeyDown={handleKeyDown}
       >{editable ? null : caption}</p>}
-      {error && <span className="aa-reference-preview__caption-status" role="alert">{error}</span>}
+      {error && <span className="ui-reference-preview__caption-status" role="alert">{error}</span>}
     </div>
   )
 }

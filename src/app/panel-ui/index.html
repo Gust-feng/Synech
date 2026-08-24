@@ -23,7 +23,7 @@
           const preferenceKey = (name) => "synech/v1:" + name;
           const readPreference = (name) => {
             const key = preferenceKey(name);
-            return window.synechHost?.getLocalPreference?.(key) ?? localStorage.getItem(key);
+            return window.desktopHost?.getLocalPreference?.(key) ?? localStorage.getItem(key);
           };
           const savedStyle = readPreference("theme.style");
           const style = styles.has(savedStyle) ? savedStyle : "default";
@@ -67,14 +67,14 @@
           font-family: "Noto Sans SC", Inter, system-ui, -apple-system, sans-serif;
         }
 
-        .synech-bootstrap {
+        .workbench-bootstrap {
           display: flex;
           height: 100%;
           overflow: hidden;
           background: #f4f2ef;
         }
 
-        .synech-bootstrap__sidebar {
+        .workbench-bootstrap__sidebar {
           width: 236px;
           flex: 0 0 236px;
           box-sizing: border-box;
@@ -83,68 +83,68 @@
           padding: 138px 20px 16px;
         }
 
-        .synech-bootstrap__content {
+        .workbench-bootstrap__content {
           display: flex;
           min-width: 0;
           flex: 1;
           flex-direction: column;
         }
 
-        .synech-bootstrap__topbar {
+        .workbench-bootstrap__topbar {
           height: 44px;
           flex: 0 0 44px;
           border-bottom: 1px solid rgba(45, 40, 34, 0.09);
           background: #faf9f7;
         }
 
-        .synech-bootstrap__canvas {
+        .workbench-bootstrap__canvas {
           display: grid;
           min-height: 0;
           flex: 1;
           place-items: center;
         }
 
-        .synech-bootstrap__line {
+        .workbench-bootstrap__line {
           display: block;
           border-radius: 999px;
           background: #eeebe6;
         }
 
-        .synech-bootstrap__line {
+        .workbench-bootstrap__line {
           width: 118px;
           height: 10px;
           margin-bottom: 18px;
         }
 
-        .synech-bootstrap__line--short {
+        .workbench-bootstrap__line--short {
           width: 76px;
         }
 
         html[data-style="default"][data-color="dark"] body,
-        html[data-style="default"][data-color="dark"] .synech-bootstrap {
+        html[data-style="default"][data-color="dark"] .workbench-bootstrap {
           background: #1b1b20;
           color: #e8e5e2;
         }
 
-        html[data-style="default"][data-color="dark"] .synech-bootstrap__sidebar,
-        html[data-style="default"][data-color="dark"] .synech-bootstrap__topbar {
+        html[data-style="default"][data-color="dark"] .workbench-bootstrap__sidebar,
+        html[data-style="default"][data-color="dark"] .workbench-bootstrap__topbar {
           border-color: rgba(232, 229, 226, 0.1);
           background: #232227;
         }
 
-        html[data-style="default"][data-color="dark"] .synech-bootstrap__line {
+        html[data-style="default"][data-color="dark"] .workbench-bootstrap__line {
           background: #33323a;
         }
 
       </style>
-      <div class="synech-bootstrap" aria-label="正在加载 Synech">
-        <aside class="synech-bootstrap__sidebar" aria-hidden="true">
-          <span class="synech-bootstrap__line"></span>
-          <span class="synech-bootstrap__line synech-bootstrap__line--short"></span>
+      <div class="workbench-bootstrap" aria-label="正在加载 Synech">
+        <aside class="workbench-bootstrap__sidebar" aria-hidden="true">
+          <span class="workbench-bootstrap__line"></span>
+          <span class="workbench-bootstrap__line workbench-bootstrap__line--short"></span>
         </aside>
-        <main class="synech-bootstrap__content">
-          <div class="synech-bootstrap__topbar" aria-hidden="true"></div>
-          <div class="synech-bootstrap__canvas"></div>
+        <main class="workbench-bootstrap__content">
+          <div class="workbench-bootstrap__topbar" aria-hidden="true"></div>
+          <div class="workbench-bootstrap__canvas"></div>
         </main>
       </div>
       <!-- ordinary-screen-end -->

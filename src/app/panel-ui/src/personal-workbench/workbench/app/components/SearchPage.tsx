@@ -83,7 +83,7 @@ function resultIcon(type: ResultType) {
     case 'web':
       return <Globe size={14} style={{ color: '#4A8A6A' }} />
     case 'conversation':
-      return <MessageSquare size={14} style={{ color: 'var(--aa-lavender-mid)' }} />
+      return <MessageSquare size={14} style={{ color: 'var(--ui-lavender-mid)' }} />
   }
 }
 
@@ -231,7 +231,7 @@ export function SearchPage({ onNavigate, onOpenInSpace, onOpenConversation, spac
         <div className="mx-auto pt-8 pb-16" style={{ maxWidth: READING_WIDTH, paddingLeft: GUTTER, paddingRight: GUTTER }}>
           {/* 搜索框 */}
           <div className="flex items-center gap-3 px-4 py-3 mb-5" style={composerSurface(true)}>
-            <Search size={15} style={{ color: 'var(--aa-text-3)', flexShrink: 0 }} />
+            <Search size={15} style={{ color: 'var(--ui-text-3)', flexShrink: 0 }} />
             <input
               ref={inputRef}
               value={query}
@@ -239,13 +239,13 @@ export function SearchPage({ onNavigate, onOpenInSpace, onOpenConversation, spac
               placeholder="搜索笔记、材料、对话…"
               spellCheck={false}
               className="flex-1 text-sm outline-none"
-              style={{ color: 'var(--aa-text-1)', background: 'transparent' }}
+              style={{ color: 'var(--ui-text-1)', background: 'transparent' }}
             />
             {query && (
               <button
                 onClick={() => setQuery('')}
-                className="p-0.5 rounded shrink-0 transition-colors hover:bg-[var(--aa-hover-tint)]"
-                style={{ color: 'var(--aa-text-3)' }}
+                className="p-0.5 rounded shrink-0 transition-colors hover:bg-[var(--ui-hover-tint)]"
+                style={{ color: 'var(--ui-text-3)' }}
               >
                 <X size={14} />
               </button>
@@ -262,8 +262,8 @@ export function SearchPage({ onNavigate, onOpenInSpace, onOpenConversation, spac
                   onClick={() => setFilter(key)}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
                   style={{
-                    background: active ? 'var(--aa-accent-bg)' : 'var(--aa-surface-hover)',
-                    color: active ? 'var(--aa-accent)' : 'var(--aa-text-2)',
+                    background: active ? 'var(--ui-accent-bg)' : 'var(--ui-surface-hover)',
+                    color: active ? 'var(--ui-accent)' : 'var(--ui-text-2)',
                     border: active ? '1px solid rgba(104,101,167,0.2)' : '1px solid transparent',
                   }}
                 >
@@ -272,7 +272,7 @@ export function SearchPage({ onNavigate, onOpenInSpace, onOpenConversation, spac
                     className="rounded px-1 text-[10px]"
                     style={{
                       background: active ? 'rgba(104,101,167,0.15)' : 'rgba(45,40,34,0.07)',
-                      color: active ? 'var(--aa-accent)' : 'var(--aa-text-3)',
+                      color: active ? 'var(--ui-accent)' : 'var(--ui-text-3)',
                     }}
                   >
                     {counts[key]}
@@ -283,7 +283,7 @@ export function SearchPage({ onNavigate, onOpenInSpace, onOpenConversation, spac
           </div>
 
           {/* 结果计数 */}
-          <p className="text-xs mb-4" style={{ color: 'var(--aa-text-3)' }}>
+          <p className="text-xs mb-4" style={{ color: 'var(--ui-text-3)' }}>
             {debouncedQuery.trim() ? `找到 ${filtered.length} 条结果` : `共 ${filtered.length} 个项目`}
           </p>
 
@@ -293,7 +293,7 @@ export function SearchPage({ onNavigate, onOpenInSpace, onOpenConversation, spac
               <button
                 key={result.id}
                 className="w-full flex items-start gap-3 px-3 py-3 rounded-lg text-left transition-all"
-                style={{ background: hoveredId === result.id ? 'var(--aa-surface-hover)' : 'transparent' }}
+                style={{ background: hoveredId === result.id ? 'var(--ui-surface-hover)' : 'transparent' }}
                 onMouseEnter={() => setHoveredId(result.id)}
                 onMouseLeave={() => setHoveredId(null)}
                 onClick={() => void handleResultClick(result)}
@@ -301,24 +301,24 @@ export function SearchPage({ onNavigate, onOpenInSpace, onOpenConversation, spac
                 <div className="mt-0.5 shrink-0">{resultIcon(result.type)}</div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap mb-1">
-                    <span className="text-sm font-medium" style={{ color: 'var(--aa-text-1)' }}>
+                    <span className="text-sm font-medium" style={{ color: 'var(--ui-text-1)' }}>
                       {result.name}
                     </span>
                     <span
                       className="text-[10px] px-1.5 py-0.5 rounded shrink-0"
-                      style={{ background: 'rgba(45,40,34,0.05)', color: 'var(--aa-text-3)' }}
+                      style={{ background: 'rgba(45,40,34,0.05)', color: 'var(--ui-text-3)' }}
                     >
                       {typeLabel(result.type)}
                     </span>
                   </div>
-                  <p className="text-xs" style={{ color: 'var(--aa-text-3)', lineHeight: 1.65 }}>
+                  <p className="text-xs" style={{ color: 'var(--ui-text-3)', lineHeight: 1.65 }}>
                     {result.snippet}
                   </p>
-                  <p className="text-[10px] mt-1" style={{ color: 'var(--aa-text-3)' }}>{result.space}</p>
+                  <p className="text-[10px] mt-1" style={{ color: 'var(--ui-text-3)' }}>{result.space}</p>
                 </div>
                 <div
                   className="mt-0.5 shrink-0 transition-opacity"
-                  style={{ opacity: hoveredId === result.id ? 1 : 0, color: 'var(--aa-text-3)' }}
+                  style={{ opacity: hoveredId === result.id ? 1 : 0, color: 'var(--ui-text-3)' }}
                 >
                   <ArrowRight size={13} />
                 </div>
@@ -328,10 +328,10 @@ export function SearchPage({ onNavigate, onOpenInSpace, onOpenConversation, spac
 
           {filtered.length === 0 && (
             <div className="py-16 text-center">
-              <p className="text-sm mb-1" style={{ color: 'var(--aa-text-2)' }}>
+              <p className="text-sm mb-1" style={{ color: 'var(--ui-text-2)' }}>
                 没有找到匹配的内容
               </p>
-              <p className="text-xs" style={{ color: 'var(--aa-text-3)' }}>
+              <p className="text-xs" style={{ color: 'var(--ui-text-3)' }}>
                 试试其他关键词,或切换到「全部」类型
               </p>
             </div>

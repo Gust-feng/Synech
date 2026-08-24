@@ -1,7 +1,7 @@
 import { resolvePanelDesktopIconPath } from "../panel-server/panel-assets.js";
 import { DESKTOP_APP_NAME, PRODUCT_CHROMIUM_PARTITION } from "./panel-desktop-identity.js";
 import type { PanelLaunchArgs } from "../panel-server/panel-launch-args.js";
-import type { PanelContextAttachmentSelection, PanelExternalResourceTarget, PanelServerOptions, StartedPanelServer } from "../panel-server.js";
+import type { PanelContextAttachmentSelection, PanelExternalResourceTarget, PanelServerOptions, StartedPanelServer } from "../panel-server/index.js";
 
 export type PanelDesktopWindowOptions = {
   readonly title: string;
@@ -49,7 +49,7 @@ export type PanelDesktopDependencies = {
   readonly createWindow: (options: PanelDesktopWindowOptions) => PanelDesktopWindowHandle;
   readonly selectDirectory?: () => Promise<string | undefined>;
   readonly selectContextAttachment?: () => Promise<PanelContextAttachmentSelection | undefined>;
-  readonly selectSynechRestore?: () => Promise<string | undefined>;
+  readonly selectRestore?: () => Promise<string | undefined>;
   readonly openExternalResource?: (target: PanelExternalResourceTarget) => Promise<void>;
   readonly whenReady: () => Promise<void>;
   readonly onWindowAllClosed: (handler: () => void) => void;
@@ -68,7 +68,7 @@ export async function startPanelDesktopSession(
     productHome: args.productHome,
     directoryPicker: args.smoke ? undefined : dependencies.selectDirectory,
     contextAttachmentPicker: args.smoke ? undefined : dependencies.selectContextAttachment,
-    synechRestorePicker: args.smoke ? undefined : dependencies.selectSynechRestore,
+    restorePicker: args.smoke ? undefined : dependencies.selectRestore,
     externalResourceOpener: args.smoke ? undefined : dependencies.openExternalResource,
   });
   let closePromise: Promise<void> | undefined;

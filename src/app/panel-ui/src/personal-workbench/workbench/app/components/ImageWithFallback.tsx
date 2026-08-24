@@ -19,7 +19,7 @@ export function ImageWithFallback({
     return (
       <span
         className={`inline-flex items-center justify-center ${className ?? ''}`}
-        style={{ background: 'var(--aa-surface-hover, #eeebe6)', color: 'var(--aa-text-3, #aba39b)', ...style }}
+        style={{ background: 'var(--ui-surface-hover, #eeebe6)', color: 'var(--ui-text-3, #aba39b)', ...style }}
         role="img"
         aria-label={alt || '图片加载失败'}
       >

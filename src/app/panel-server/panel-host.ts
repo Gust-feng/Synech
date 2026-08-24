@@ -1,11 +1,7 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import type { ConversationOwner } from "../../domain/execution-scope/index.js";
-import { memoryOwnersForConversation } from "../../domain/memory/index.js";
 import {
   FileSystemAgentSessionRepository,
 } from "../../adapters/intelligence/index.js";
@@ -14,12 +10,9 @@ import {
   SqliteRuntimeDatabase,
 } from "../../adapters/runtime-storage/index.js";
 import type { ProductPaths } from "../../platform/storage/index.js";
-import { createOpenAITokenCounter } from "../context-maintenance/index.js";
 import { createRuntimeAgentDefinitionCatalog } from "../agent-definitions/agent-definition-catalog.js";
-import { agentDefinitionRefMatchesDefinition, runAgentDefinitionRefCacheKey } from "../agent-definitions/agent-definition-ref.js";
+import { runAgentDefinitionRefCacheKey } from "../agent-definitions/agent-definition-ref.js";
 import type { AgentDefinitionRegistry } from "../agent-definitions/agent-definition-registry.js";
-import { runAgentDefinitionRef } from "../agent-definitions/agent-definition-ref.js";
-import { ordinaryAgentDefinitionFromPromptConfig } from "../agent-prompts/ordinary-agent-configured-definition.js";
 import type { AgentDefinition } from "../agent-prompts/contracts.js";
 import { CapabilityCenter } from "../capability/capability-center.js";
 import {
@@ -29,10 +22,9 @@ import {
   reconcileKnowledgeAssets,
   removeKnowledgeAsset,
   stageKnowledgeAssetRemoval,
-} from "./knowledge-asset-store.js";
-import { updateLocalDocumentText } from "./local-document-preview.js";
+} from "./storage/knowledge-asset-store.js";
+import { updateLocalDocumentText } from "./storage/local-document-preview.js";
 import { ConfigCenter, createLocalConfigCenter } from "../config-center/index.js";
-import { resolveModelCapabilities } from "../model-runtime/model-capability-registry.js";
 import {
   createFileSystemOrdinaryConversationControlRepository,
 } from "../ordinary-agent/conversation-control-repository.js";
@@ -56,9 +48,6 @@ import {
 import {
   createFileSystemPathDependencyRepository,
   createPathDependencyFeature,
-  PATH_DEPENDENCY_DIRECTORY_MAX_ENTRIES,
-  renderPathDependencyDirectory,
-  type PathDependencyDirectoryEntry,
   type PathDependencyFeature,
 } from "../path-dependencies/index.js";
 import {
@@ -66,21 +55,16 @@ import {
   createSpaceRunPathAuthorization,
   createSpaceRevocationOverlay,
   createFileSystemSpaceReferenceDeletionJournal,
-  createSqliteSpaceRepository,
   createSpaceFeature,
   hasSpaceOwnerScope,
   inspectSpaceExternalSource,
-  inspectFileSystemSpaceReferenceDeletionJournal,
   spaceReferenceIdFromAttachmentId,
   spaceExternalReferenceStatus,
-  type SpaceEvent,
   type SpaceFeature,
 } from "../spaces/index.js";
 import {
   createPersonalKnowledgeFeature,
-  createSqlitePersonalKnowledgeRepository,
   PersonalKnowledgeError,
-  type PersonalKnowledgeEvent,
   type PersonalKnowledgeFeature,
 } from "../personal-knowledge/index.js";
 import {
@@ -88,32 +72,25 @@ import {
   createWorkspaceFeature,
   type WorkspaceFeature,
 } from "../workspaces/index.js";
-import { createWorkspaceDeletionCoordinator, type WorkspaceDeletionCoordinator } from "./workspace-deletion-coordinator.js";
+import { createWorkspaceDeletionCoordinator, type WorkspaceDeletionCoordinator } from "./spaces/workspace-deletion-coordinator.js";
 import {
-  applyPendingSynechRestore,
-  createSynechDataMaintenance,
-  hasUnappliedPendingSynechRestore,
-  SynechDataMaintenanceError,
-  type SynechDataMaintenance,
-} from "./synech-data-maintenance.js";
-import { createSpaceReferenceDeletionFilePort } from "./space-reference-deletion.js";
-import { synechDeletionLifecycleLockKey } from "./synech-deletion-lifecycle-lock.js";
+  applyPendingRestore,
+  createDataMaintenance,
+  type DataMaintenance,
+} from "./storage/data-maintenance.js";
+import { createSpaceReferenceDeletionFilePort } from "./spaces/space-reference-deletion.js";
+import { deletionLifecycleLockKey } from "./spaces/deletion-lifecycle-lock.js";
 import {
   createOrdinaryConversationTitleGenerator,
-} from "./ordinary-conversation-title.js";
+} from "./ordinary/ordinary-conversation-title.js";
 import {
   createPlatformProcessTerminator,
   InMemoryProcessRegistry,
   processCleanupHasUnresolvedStops,
-  type ProcessRegistryCleanupResult,
+  type ProcessCleanupResult,
   type ProcessTerminator,
 } from "../runtime-guard/index.js";
-import {
-  FileSystemSkillStateStore,
-  resolveSkillStateStorePath,
-  type SkillRootInput,
-  type SkillStateStore,
-} from "../skills/index.js";
+import type { SkillRootInput, SkillStateStore } from "../skills/index.js";
 import type { SubAgentRootInput } from "../sub-agents/sub-agent-loader.js";
 import type { ToolOutputStore } from "../tool-center/tool-output-store.js";
 import type {
@@ -124,34 +101,44 @@ import type {
   PanelProviderFetch,
   PanelServerOptions,
 } from "./types.js";
-import { ordinaryCapabilitySnapshotForRunStart } from "./ordinary-run-model-settings.js";
 import { PanelHttpError } from "./http-utils.js";
-import { createOrdinaryAgentRunResourceAcquirer } from "./ordinary-agent-run-resources.js";
-import { createHostFeatureAgentToolContributionResolver } from "./agent-tool-contributions.js";
-import { resolveTriggeredSkillContexts } from "./skill-service.js";
+import { createOrdinaryAgentRunResourceAcquirer } from "./ordinary/ordinary-agent-run-resources.js";
+import { createHostFeatureAgentToolContributionResolver } from "./ordinary/agent-tool-contributions.js";
+import { resolveTriggeredSkillContexts } from "./settings/skill-service.js";
 import type { PanelRunInput } from "./request-parsers.js";
 import { InMemoryLocalWorkspaceMutationCoordinator } from "../tool-center/adapters/local-workspace-mutation-coordinator.js";
 import type { LocalWorkspaceMutationCoordinator } from "../tool-center/adapters/local-workspace-mutation-coordinator.js";
-import { createInitialSynechDataInitializer, initializeInitialSynechData } from "./initial-synech-data.js";
+import { createDefaultSpaceInitializer, ensureDefaultSpace } from "./storage/default-space-initializer.js";
 import {
-  createSqliteManagedAssetRepository,
   createManagedAssetsFeature,
   type ManagedAssetRepository,
   type ManagedAssetsFeature,
 } from "../managed-assets/index.js";
 import {
-  createSynechProjectionChangeFeed,
-  type SynechProjectionChangeFeed,
-  type SynechProjectionChangeInput,
-} from "./synech-projection-change-feed.js";
+  createWorkbenchProjectionChangeFeed,
+  projectionChangeFromPersonalKnowledge,
+  projectionChangeFromSpace,
+  type WorkbenchProjectionChangeFeed,
+} from "./workbench/workbench-projection-change-feed.js";
 import {
   createSpaceConversationDeletionCoordinator,
   type SpaceConversationDeletionCoordinator,
   createConversationLifecycleCoordinator,
   type ConversationLifecycleCoordinator,
-} from "./space-conversation-coordinator.js";
-import { createSqliteSpaceConversationDeletionJournal } from "./space-conversation-deletion-journal.js";
-import { createSqliteConversationLifecycleJournal } from "./conversation-lifecycle-journal.js";
+} from "./spaces/space-conversation-coordinator.js";
+import { createSqliteSpaceConversationDeletionJournal } from "./spaces/space-conversation-deletion-journal.js";
+import { createSqliteConversationLifecycleJournal } from "./spaces/conversation-lifecycle-journal.js";
+import {
+  ensureSpaceManagedRoot,
+  prepareOrdinaryRunBirth,
+  reconstructFrozenOrdinaryDefinition,
+} from "./ordinary-run-birth.js";
+import { assertSpaceDeletionJournalIdle, openPanelStorage } from "./storage/panel-storage.js";
+import {
+  createSkillStateStore,
+  resolveSkillRoots,
+  resolveSubAgentRoots,
+} from "./storage/runtime-asset-roots.js";
 
 /**
  * The sole process-lifetime composition root for the local Panel host. Route
@@ -189,21 +176,21 @@ export type PanelHost = {
   readonly conversationLifecycle: ConversationLifecycleCoordinator;
   readonly spaceConversationDeletion: SpaceConversationDeletionCoordinator;
   readonly workspaceDeletion: WorkspaceDeletionCoordinator;
-  readonly personalKnowledgeFeature: PersonalKnowledgeFeature<import("../panel-api-contracts.js").DocumentPreview>;
-  readonly synechDataMaintenance: SynechDataMaintenance;
+  readonly personalKnowledgeFeature: PersonalKnowledgeFeature<import("../panel-api/workbench.js").DocumentPreview>;
+  readonly dataMaintenance: DataMaintenance;
   readonly prepareOrdinaryRunBirth: (input: PanelRunInput, conversationId?: string) => Promise<OrdinaryRunBirth>;
   readonly toolOutputStore: ToolOutputStore;
-  readonly synechDatabase: SqliteRuntimeDatabase;
+  readonly database: SqliteRuntimeDatabase;
   readonly managedAssets: ManagedAssetRepository;
   readonly managedAssetFeature: ManagedAssetsFeature;
   readonly fileMutationCoordinator: LocalWorkspaceMutationCoordinator;
-  readonly synechProjectionChanges: SynechProjectionChangeFeed;
-  readonly releaseSynechProjectionChanges: () => void;
+  readonly projectionChanges: WorkbenchProjectionChangeFeed;
+  readonly releaseProjectionChanges: () => void;
   readonly knowledgeAssetRoot?: string;
   /** Host-owned root for physical directories created from Space. */
   readonly managedSpaceFolderRoot: string;
   readonly knowledgeAssetsReady: Promise<void>;
-  readonly ensureInitialSynechData: () => Promise<void>;
+  readonly ensureDefaultSpace: () => Promise<void>;
   readonly flushSpaceKnowledgeSync: () => Promise<void>;
   readonly flushSpaceProcessCleanup: () => Promise<void>;
   readonly releaseAgentSessionStorage: () => Promise<void>;
@@ -237,13 +224,13 @@ export function createPanelHost(options: PanelHostOptions): PanelHost {
       modelCatalogFetch: options.modelCatalogFetch,
       directoryPicker: options.directoryPicker,
       contextAttachmentPicker: options.contextAttachmentPicker,
-      synechRestorePicker: options.synechRestorePicker,
+      restorePicker: options.restorePicker,
       externalResourceOpener: options.externalResourceOpener,
       skillRoots: resolveSkillRoots(options),
       resolveSkillRoots: (input) => resolveSkillRoots(options, input),
       subAgentRoots: resolveSubAgentRoots(options),
       resolveSubAgentRoots: (input) => resolveSubAgentRoots(options, input),
-      skillStateStore: resolveSkillStateStore(options.productPaths.configDirectory),
+      skillStateStore: createSkillStateStore(options.productPaths.configDirectory),
       processTerminator: options.processTerminator,
       productPaths: options.productPaths,
     });
@@ -258,72 +245,16 @@ export function createPanelHost(options: PanelHostOptions): PanelHost {
     modelCatalogFetch: options.modelCatalogFetch,
     directoryPicker: options.directoryPicker,
     contextAttachmentPicker: options.contextAttachmentPicker,
-    synechRestorePicker: options.synechRestorePicker,
+    restorePicker: options.restorePicker,
     externalResourceOpener: options.externalResourceOpener,
     skillRoots: resolveSkillRoots(options),
     resolveSkillRoots: (input) => resolveSkillRoots(options, input),
     subAgentRoots: resolveSubAgentRoots(options),
     resolveSubAgentRoots: (input) => resolveSubAgentRoots(options, input),
-    skillStateStore: resolveSkillStateStore(local.configDirectory),
+    skillStateStore: createSkillStateStore(local.configDirectory),
     processTerminator: options.processTerminator,
     productPaths: options.productPaths,
   });
-}
-
-export async function preparePanelHostStorageForStartup(productPaths: ProductPaths): Promise<void> {
-  const journalRoot = path.join(productPaths.state.journals, "space-reference-deletions");
-  if (!hasUnappliedPendingSynechRestore(productPaths) ||
-    inspectFileSystemSpaceReferenceDeletionJournal(journalRoot) === "idle") return;
-
-  const databasePath = productPaths.data.database;
-  try {
-    await fs.access(databasePath);
-  } catch (error) {
-    throw new SynechDataMaintenanceError(
-      "data_maintenance_failed",
-      "应用恢复前无法读取保存 Space 删除身份的当前数据库；恢复未修改任何数据。",
-      { cause: error },
-    );
-  }
-  const database = new SqliteRuntimeDatabase(databasePath);
-  let spaceFeature: SpaceFeature | undefined;
-  let startupError: unknown;
-  try {
-    const managedAssets = createSqliteManagedAssetRepository(database);
-    spaceFeature = createSpaceFeature({
-      repository: createSqliteSpaceRepository(database),
-      ownedAssetDeletion: {
-        deleteManagedAssets: async (assetIds) => await managedAssets.removeMany(assetIds),
-      },
-      referenceDeletion: {
-        journal: createFileSystemSpaceReferenceDeletionJournal(journalRoot),
-        files: createSpaceReferenceDeletionFilePort(path.join(productPaths.data.workbench.spaceFiles, "folders")),
-        leases: new InMemoryLocalWorkspaceMutationCoordinator(),
-        deleteOwnedAssets: async (assetIds) => await managedAssets.removeMany(assetIds),
-      },
-    });
-    await spaceFeature.ready();
-  } catch (error) {
-    startupError = error;
-  }
-
-  const cleanupErrors: unknown[] = [];
-  if (spaceFeature !== undefined) {
-    try { await spaceFeature.release(); } catch (error) { cleanupErrors.push(error); }
-  }
-  try { database.close(); } catch (error) { cleanupErrors.push(error); }
-  if (startupError !== undefined) {
-    if (cleanupErrors.length > 0) {
-      throw new AggregateError(
-        [startupError, ...cleanupErrors],
-        "Space deletion recovery before Synech restore and cleanup both failed.",
-      );
-    }
-    throw startupError;
-  }
-  if (cleanupErrors.length > 0) {
-    throw new AggregateError(cleanupErrors, "Space deletion recovery cleanup before Synech restore failed.");
-  }
 }
 
 function assemblePanelHost(input: {
@@ -335,7 +266,7 @@ function assemblePanelHost(input: {
   readonly modelCatalogFetch?: PanelModelCatalogFetch;
   readonly directoryPicker?: () => Promise<string | undefined>;
   readonly contextAttachmentPicker?: () => Promise<PanelContextAttachmentSelection | undefined>;
-  readonly synechRestorePicker?: () => Promise<string | undefined>;
+  readonly restorePicker?: () => Promise<string | undefined>;
   readonly externalResourceOpener?: (target: PanelExternalResourceTarget) => Promise<void>;
   readonly productPaths: ProductPaths;
   readonly skillRoots: readonly SkillRootInput[];
@@ -350,49 +281,49 @@ function assemblePanelHost(input: {
   const agentDefinitionOverrides = new Map<string, AgentDefinition>();
   const processRegistry = new InMemoryProcessRegistry();
   const fileMutationCoordinator = new InMemoryLocalWorkspaceMutationCoordinator();
-  const synechProjectionChanges = createSynechProjectionChangeFeed();
+  const projectionChanges = createWorkbenchProjectionChangeFeed();
   const productPaths = input.productPaths;
   const toolOutputStore = new FileSystemToolOutputStore(productPaths.data.agent.evidence);
   const processTerminator = input.processTerminator ?? createPlatformProcessTerminator();
   const productHome = productPaths.productHome;
-  const knowledgeAssetRoot = productPaths.data.workbench.knowledgeAssets;
-  const managedSpaceFolderRoot = path.join(productPaths.data.workbench.spaceFiles, "folders");
-  const managedSpaceRoot = productPaths.data.workbench.spaceFiles;
+  const knowledgeAssetRoot = productPaths.data.knowledge.assets;
+  const managedSpaceFolderRoot = path.join(productPaths.data.spaces.files, "folders");
+  const managedSpaceRoot = productPaths.data.spaces.files;
   let knowledgeAssetsReady = Promise.resolve();
-  applyPendingSynechRestore(productPaths, {
+  applyPendingRestore(productPaths, {
     assertSpaceDeletionIdle: () => assertSpaceDeletionJournalIdle(productPaths),
   });
   const {
-    database: synechDatabase,
+    database,
     managedAssets,
     spaceRepository,
     personalKnowledgeRepository,
-  } = openPanelSynechStorage(productPaths);
+  } = openPanelStorage(productPaths);
   const managedAssetFeature = createManagedAssetsFeature(managedAssets);
-  const spaceConversationDeletionJournal = createSqliteSpaceConversationDeletionJournal(synechDatabase);
-  const conversationLifecycleJournal = createSqliteConversationLifecycleJournal(synechDatabase);
-  let beforeSynechRestoreStage: (() => Promise<void>) | undefined;
-  const synechDataMaintenance = createSynechDataMaintenance({
-    database: synechDatabase,
+  const spaceConversationDeletionJournal = createSqliteSpaceConversationDeletionJournal(database);
+  const conversationLifecycleJournal = createSqliteConversationLifecycleJournal(database);
+  let beforeRestoreStage: (() => Promise<void>) | undefined;
+  const dataMaintenance = createDataMaintenance({
+    database,
     productPaths,
-    restorePicker: input.synechRestorePicker,
+    restorePicker: input.restorePicker,
     beforeRestoreStage: async () => {
-      if (beforeSynechRestoreStage === undefined) {
+      if (beforeRestoreStage === undefined) {
         throw new Error("Panel runtime restore preparation is not initialized.");
       }
-      await beforeSynechRestoreStage();
+      await beforeRestoreStage();
     },
     runOwnedStorageSnapshot: async (operation) => {
       await knowledgeAssetsReady;
       return await fileMutationCoordinator.runExclusive(productHome, async () => {
         if ((await spaceReferenceDeletionJournal.list()).length > 0) {
-          throw new Error("Synech storage cannot be snapshotted while a Space deletion journal is pending.");
+          throw new Error("Workbench storage cannot be snapshotted while a Space deletion journal is pending.");
         }
         if ((await spaceConversationDeletionJournal.list()).length > 0) {
-          throw new Error("Synech storage cannot be snapshotted while a Space deletion lifecycle is pending.");
+          throw new Error("Workbench storage cannot be snapshotted while a Space deletion lifecycle is pending.");
         }
         if ((await conversationLifecycleJournal.list()).length > 0) {
-          throw new Error("Synech storage cannot be snapshotted while a Conversation lifecycle is pending.");
+          throw new Error("Workbench storage cannot be snapshotted while a Conversation lifecycle is pending.");
         }
         return await operation();
       });
@@ -416,14 +347,14 @@ function assemblePanelHost(input: {
     }
   };
   const agentNotesFeature = createAgentNotesFeature({
-    repository: createFileSystemAgentNoteRepository(productPaths.data.workbench.notes),
+    repository: createFileSystemAgentNoteRepository(productPaths.data.memory.agentNotes),
   });
   // Path dependencies are durable methodology memories. They deliberately
   // live beside, rather than inside, Ordinary run snapshots: Ordinary owns
   // the run-bound read/adoption facts, while this feature owns the reusable
   // content and its revision history.
   const pathDependencyFeature = createPathDependencyFeature({
-    repository: createFileSystemPathDependencyRepository(productPaths.data.workbench.methodMemory),
+    repository: createFileSystemPathDependencyRepository(productPaths.data.memory.methods),
   });
   const ordinaryMemoryFactRepository = createFileSystemOrdinaryMemoryFactRepository(
     agentDataRoot,
@@ -456,7 +387,7 @@ function assemblePanelHost(input: {
     }
   };
   const workspaceFeature: WorkspaceFeature = createWorkspaceFeature({
-    repository: createSqliteWorkspaceRepository(synechDatabase),
+    repository: createSqliteWorkspaceRepository(database),
   });
   const personalKnowledgeFeature = createPersonalKnowledgeFeature({
     repository: personalKnowledgeRepository,
@@ -500,13 +431,10 @@ function assemblePanelHost(input: {
     readManagedKnowledgeAsset: async (input) =>
       await readManagedKnowledgeAsset(knowledgeAssetRoot, input.page, input),
   });
-  const initialSynechData = createInitialSynechDataInitializer(async () =>
-    await initializeInitialSynechData({
-      database: synechDatabase,
+  const defaultSpace = createDefaultSpaceInitializer(async () =>
+    await ensureDefaultSpace({
       spaceFeature,
-      personalKnowledgeFeature,
       managedSpaceRoot,
-      managedSpaceFolderRoot,
     }),
   );
   knowledgeAssetsReady = personalKnowledgeFeature.queries.snapshot().then(async (snapshot) => {
@@ -515,8 +443,8 @@ function assemblePanelHost(input: {
       new Set(snapshot.pages.filter((page) => page.asset?.status === "managed").map((page) => page.refId)),
     ));
   });
-  // Warm the formal initial dataset after owned storage reconciliation has started.
-  void initialSynechData.ensure().catch(() => undefined);
+  // Start the default Space initialization early; consumers await the same attempt.
+  void defaultSpace.ensure().catch(() => undefined);
   const spaceKnowledgeSync = Promise.resolve();
   const spaceRevocationOverlay = createSpaceRevocationOverlay(spaceFeature.events);
   const contextAttachmentReadAuthorization = {
@@ -535,7 +463,7 @@ function assemblePanelHost(input: {
   };
   const activeSpaceProcessCleanups = new Set<Promise<void>>();
   const trackSpaceProcessCleanup = (
-    cleanup: Promise<ProcessRegistryCleanupResult>,
+    cleanup: Promise<ProcessCleanupResult>,
     referenceId: string,
   ): void => {
     let tracked: Promise<void>;
@@ -543,7 +471,7 @@ function assemblePanelHost(input: {
       if (processCleanupHasUnresolvedStops(result)) {
         console.error(
           `[panel-server] Space reference ${referenceId} was revoked but one or more managed processes remain stop_pending`,
-          result.fact,
+          result,
         );
       }
     }, (error: unknown) => {
@@ -584,7 +512,6 @@ function assemblePanelHost(input: {
     resolveSubAgentRoots: input.resolveSubAgentRoots,
     fetch: input.providerFetch,
     toolOutputStore,
-    managedMcpBinDirectory: productPaths.state.runtimeTools.mcp.bin,
     resolveToolContributions: resolveFeatureToolContributions,
   });
   const agentSessionEnvironment = new NodeExecutionEnv({ cwd: agentDataRoot });
@@ -652,23 +579,23 @@ function assemblePanelHost(input: {
     memoryFactRepository: ordinaryMemoryFactRepository,
     onDiagnostic: (diagnostic) => {
       if (diagnostic.kind === "session_finalization_failed") {
-        console.error(`[panel-server] Ordinary run ${diagnostic.runId} Session finalization failed; the conversation queue stays paused until a retry succeeds`, diagnostic.error);
+        console.error(`[panel-server] Agent run ${diagnostic.runId} session finalization failed; the conversation queue remains paused`, diagnostic.error);
       } else if (diagnostic.kind === "conversation_unavailable") {
         console.error(`[panel-server] Ordinary conversation ${diagnostic.conversationId} is unavailable after startup recovery; its data remains on disk for diagnosis`, diagnostic.error);
       } else if (diagnostic.kind === "successor_activation_failed") {
         const activationOwner = diagnostic.predecessorRunId ?? diagnostic.conversationId;
-        console.error(`[panel-server] Ordinary successor activation attempt ${diagnostic.consecutiveFailures} failed for ${activationOwner}; retrying in ${diagnostic.retryDelayMs}ms`, diagnostic.error);
+        console.error(`[panel-server] Agent successor activation failed for ${activationOwner}; the queued run remains available`, diagnostic.error);
       } else if (diagnostic.kind === "cancellation_cleanup_failed") {
         console.error(`[panel-server] Ordinary run ${diagnostic.runId} cancellation cleanup failed during ${diagnostic.phase}; its durable cancelled fact remains authoritative`, diagnostic.error);
       } else if (diagnostic.kind === "conversation_cleanup_failed") {
         const resourceOwner = diagnostic.runId ?? diagnostic.conversationId;
-        console.error(`[panel-server] Ordinary conversation ${diagnostic.conversationId} cleanup failed during ${diagnostic.phase} for ${resourceOwner}; the durable state remains available for diagnosis or retry`, diagnostic.error);
+        console.error(`[panel-server] Agent conversation ${diagnostic.conversationId} cleanup failed during ${diagnostic.phase} for ${resourceOwner}; durable state remains authoritative`, diagnostic.error);
       } else if (diagnostic.kind === "managed_attachment_cleanup_failed") {
-        console.error(`[panel-server] Ordinary conversation ${diagnostic.conversationId} managed attachment cleanup failed; startup will retry`, diagnostic.error);
+        console.error(`[panel-server] Agent conversation ${diagnostic.conversationId} managed attachment cleanup failed`, diagnostic.error);
       } else if (diagnostic.kind === "managed_attachment_recovery_issue") {
         console.error(`[panel-server] Ordinary managed attachment ${diagnostic.identity ?? "storage"} recovery was isolated`, diagnostic.error);
       } else if (diagnostic.kind === "managed_attachment_claim_rollback_failed") {
-        console.error(`[panel-server] Ordinary run ${diagnostic.runId} could not roll back managed attachment claims; the feature will retry and startup reconciliation remains the final fallback`, diagnostic.error);
+        console.error(`[panel-server] Agent run ${diagnostic.runId} could not roll back managed attachment claims`, diagnostic.error);
       } else if (diagnostic.kind === "completion_commit_failed") {
         console.error(`[panel-server] Ordinary run ${diagnostic.runId} completed in Pi but its terminal snapshot could not be committed; the run remains blocked instead of being rewritten as failed`, diagnostic.error);
       } else if (diagnostic.kind === "conversation_title_generation_failed") {
@@ -687,8 +614,8 @@ function assemblePanelHost(input: {
   });
   // 三个删除 / 链接生命周期协调器共享同一把 sentinel 互斥键：彼此串行、与整仓备份互斥，
   // 但不独占 Product Home 本身，避免盖住 SpaceFeature 引用删除生命周期在同一协调器上申请的
-  // Product Home 子目录锁而自死锁（见 synech-deletion-lifecycle-lock.ts）。
-  const deletionLifecycleLockKey = synechDeletionLifecycleLockKey(productPaths.state.locks);
+  // Product Home 子目录锁而自死锁（见 deletion-lifecycle-lock.ts）。
+  const deletionLockKey = deletionLifecycleLockKey(productPaths.state.locks);
   const spaceConversationDeletion = createSpaceConversationDeletionCoordinator({
     spaces: spaceFeature,
     ordinary: ordinaryAgentFeature,
@@ -698,7 +625,7 @@ function assemblePanelHost(input: {
     processes: processRegistry,
     processTerminator,
     journal: spaceConversationDeletionJournal,
-    runExclusive: async (operation) => await fileMutationCoordinator.runExclusive(deletionLifecycleLockKey, operation),
+    runExclusive: async (operation) => await fileMutationCoordinator.runExclusive(deletionLockKey, operation),
   });
   const workspaceDeletion = createWorkspaceDeletionCoordinator({
     workspaces: {
@@ -717,7 +644,7 @@ function assemblePanelHost(input: {
     memory: pathDependencyFeature.commands,
     processes: processRegistry,
     processTerminator,
-    runExclusive: async (operation) => await fileMutationCoordinator.runExclusive(deletionLifecycleLockKey, operation),
+    runExclusive: async (operation) => await fileMutationCoordinator.runExclusive(deletionLockKey, operation),
   });
   const conversationLifecycle = createConversationLifecycleCoordinator({
     ordinary: ordinaryAgentFeature,
@@ -727,29 +654,28 @@ function assemblePanelHost(input: {
     processes: processRegistry,
     processTerminator,
     journal: conversationLifecycleJournal,
-    runExclusive: async (operation) => await fileMutationCoordinator.runExclusive(deletionLifecycleLockKey, operation),
+    runExclusive: async (operation) => await fileMutationCoordinator.runExclusive(deletionLockKey, operation),
   });
   const projectionChangeUnsubscribers = [
     spaceFeature.events.subscribe((event) => {
-      synechProjectionChanges.publish(projectionChangeFromSpace(event));
+      projectionChanges.publish(projectionChangeFromSpace(event));
       if (event.type === "space.created") {
-        // Each Space owns a managedRoot（ADR-0035 §2.3）。Directory creation is a
-        // Host mechanical step: missing roots are recreated lazily by the scope
-        // resolver, and failures are diagnostics that never block the Space command.
+        // Directory creation is a Host mechanical step. Missing roots are
+        // recreated lazily, and failures never roll back the Space command.
         void ensureSpaceManagedRoot(path.join(managedSpaceRoot, event.space.id, "files"))
           .catch((error) => console.error(`[panel-server] Could not create managedRoot for Space ${event.space.id}`, error));
       }
     }),
     personalKnowledgeFeature.events.subscribe((event) => {
-      synechProjectionChanges.publish(projectionChangeFromPersonalKnowledge(event));
+      projectionChanges.publish(projectionChangeFromPersonalKnowledge(event));
     }),
     fileMutationCoordinator.events.subscribe(() => {
-      synechProjectionChanges.publish({ owners: ["mounted_files"] });
+      projectionChanges.publish({ owners: ["mounted_files"] });
     }),
     ordinaryAgentFeature.events.subscribeStableTerminalRuns(() => {
       // A terminal run invalidates only the mounted-file projection. Missing Space sources are
       // reported by the actual preview/tool access and are never discovered by a background scan.
-      synechProjectionChanges.publish({ owners: ["mounted_files"] });
+      projectionChanges.publish({ owners: ["mounted_files"] });
     }),
   ];
 
@@ -786,24 +712,24 @@ function assemblePanelHost(input: {
     spaceConversationDeletion,
     workspaceDeletion,
     personalKnowledgeFeature,
-    synechDataMaintenance,
+    dataMaintenance,
     prepareOrdinaryRunBirth: (runInput, conversationId) => prepareOrdinaryRunBirth(host, runInput, conversationId),
     toolOutputStore,
-    synechDatabase,
+    database,
     managedAssets,
     managedAssetFeature,
     fileMutationCoordinator,
-    synechProjectionChanges,
-    releaseSynechProjectionChanges: () => {
+    projectionChanges,
+    releaseProjectionChanges: () => {
       for (const unsubscribe of projectionChangeUnsubscribers.splice(0)) unsubscribe();
       spaceProcessLifecycleUnsubscribe();
       spaceRevocationOverlay.dispose();
-      synechProjectionChanges.release();
+      projectionChanges.release();
     },
     knowledgeAssetRoot,
     managedSpaceFolderRoot,
     knowledgeAssetsReady,
-    ensureInitialSynechData: () => initialSynechData.ensure(),
+    ensureDefaultSpace: () => defaultSpace.ensure(),
     flushSpaceKnowledgeSync: () => spaceKnowledgeSync,
     flushSpaceProcessCleanup: async () => {
       while (activeSpaceProcessCleanups.size > 0) {
@@ -814,110 +740,15 @@ function assemblePanelHost(input: {
   };
 
   let restorePreparation: Promise<void> | undefined;
-  beforeSynechRestoreStage = () => restorePreparation ??= (async () => {
+  beforeRestoreStage = () => restorePreparation ??= (async () => {
     host.isQuiescing = true;
     await ordinaryAgentFeature.release();
     await pathDependencyFeature.release();
-    await initialSynechData.ensure();
+    await defaultSpace.ensure();
     await personalKnowledgeFeature.release();
     await spaceFeature.release();
   })();
   return host;
-}
-
-function openPanelSynechStorage(productPaths: ProductPaths) {
-  const database = new SqliteRuntimeDatabase(productPaths.data.database);
-  try {
-    return {
-      database,
-      managedAssets: createSqliteManagedAssetRepository(database),
-      spaceRepository: createSqliteSpaceRepository(database),
-      personalKnowledgeRepository: createSqlitePersonalKnowledgeRepository(database),
-    };
-  } catch (startupError) {
-    try {
-      database.close();
-    } catch (cleanupError) {
-      throw new AggregateError(
-        [startupError, cleanupError],
-        "Synech storage initialization and cleanup both failed.",
-      );
-    }
-    throw startupError;
-  }
-}
-
-function assertSpaceDeletionJournalIdle(productPaths: ProductPaths): void {
-  const status = inspectFileSystemSpaceReferenceDeletionJournal(
-    path.join(productPaths.state.journals, "space-reference-deletions"),
-  );
-  if (status !== "idle") throw new Error("Space deletion recovery is still pending.");
-}
-
-function projectionChangeFromSpace(event: SpaceEvent): SynechProjectionChangeInput {
-  switch (event.type) {
-    case "space.created":
-      return { owners: ["spaces"] as const, spaceIds: [event.space.id] };
-    case "space.deleted":
-      return {
-        owners: ["spaces"] as const,
-        spaceIds: [event.spaceId],
-        referenceIds: event.removedReferenceIds,
-      };
-    case "space.reference_added":
-      return {
-        owners: ["spaces"] as const,
-        spaceIds: [event.item.spaceId],
-        referenceIds: [event.item.id],
-      };
-    case "space.reference_annotation_updated":
-    case "space.reference_image_caption_updated":
-      return {
-        owners: ["spaces"] as const,
-        spaceIds: [event.item.spaceId],
-        referenceIds: [event.item.id],
-      };
-    case "space.renamed":
-      return {
-        owners: ["spaces"] as const,
-        spaceIds: [event.spaceId],
-        ...(event.target.kind === "reference" ? { referenceIds: [event.target.id] } : {}),
-      };
-    case "space.moved":
-      return {
-        owners: ["spaces"] as const,
-        spaceIds: [event.sourceSpaceId, event.destinationSpaceId],
-        referenceIds: [event.target.id],
-      };
-    case "space.reference_removed":
-      return {
-        owners: ["spaces"] as const,
-        spaceIds: [event.spaceId],
-        referenceIds: event.removedItemIds,
-      };
-  }
-}
-
-function projectionChangeFromPersonalKnowledge(event: PersonalKnowledgeEvent) {
-  switch (event.type) {
-    case "personal_knowledge.note_created":
-      return {
-        owners: ["personal_knowledge"] as const,
-        spaceIds: [event.spaceId],
-        noteIds: [event.noteId],
-      };
-    case "personal_knowledge.note_updated":
-    case "personal_knowledge.note_deleted":
-      return {
-        owners: ["personal_knowledge"] as const,
-        noteIds: [event.noteId],
-      };
-    case "personal_knowledge.changed":
-      return {
-        owners: ["personal_knowledge"] as const,
-        ...(event.refIds === undefined ? {} : { referenceIds: event.refIds }),
-      };
-  }
 }
 
 function managedKnowledgeAssetWriteError(error: unknown): unknown {
@@ -942,370 +773,9 @@ async function canonicalWorkspaceMountIdentity(value: string): Promise<string> {
   return await canonicalSpacePathIdentity(value, (target) => fs.realpath(target));
 }
 
-export function reconstructFrozenOrdinaryDefinition(
-  base: AgentDefinition,
-  ref: OrdinaryRunBirth["agentDefinitionRef"],
-  instructions: string,
-): AgentDefinition | undefined {
-  const candidate: AgentDefinition = {
-    ...base,
-    prompt: {
-      ...base.prompt,
-      promptRef: ref.promptRef,
-      version: ref.promptVersion,
-      systemPrompt: instructions,
-    },
-  };
-  return agentDefinitionRefMatchesDefinition(ref, candidate) ? candidate : undefined;
-}
-
-async function prepareOrdinaryRunBirth(
-  runtime: PanelHost,
-  input: PanelRunInput,
-  conversationId?: string,
-): Promise<OrdinaryRunBirth> {
-  // 先解析 owner 作用域：能力快照（Skill/Sub-Agent roots、工具 fallback）与
-  // execution root 与能力快照都要以 owner 根为准（ADR-0035 §3.1/§3.2）。
-  const scope = await resolveConversationExecutionScope(runtime, input, conversationId);
-  const [informationAccess, toolConfirmation, baseCapabilitySnapshot, ordinaryAgentPromptConfig] = await Promise.all([
-    runtime.configCenter.getInformationAccessConfig(),
-    runtime.configCenter.getToolConfirmationConfig(),
-    capabilitySnapshotForRun(runtime, input.modelOverride, scope.cwd, scope.owner),
-    runtime.configCenter.getOrdinaryAgentPromptConfig(),
-  ]);
-  const capabilitySnapshot = ordinaryCapabilitySnapshotForRunStart(
-    baseCapabilitySnapshot,
-    input.reasoningEffort,
-  );
-  const configuredDefinition = ordinaryAgentDefinitionFromPromptConfig(runtime.ordinaryAgentDefinition, ordinaryAgentPromptConfig);
-  const [ownerBlock, noteSnapshot, pathDependencyDirectory] = await Promise.all([
-    formatOwnerContext(runtime, scope),
-    runtime.agentNotesFeature.queries.startupSnapshot(scope.owner),
-    runtime.pathDependencyFeature.queries.directory({
-      owners: memoryOwnersForConversation(scope.owner),
-      limit: PATH_DEPENDENCY_DIRECTORY_MAX_ENTRIES,
-      excerptChars: 240,
-    }),
-  ]);
-  // Both memory injections are frozen with this run's definition. A restarted
-  // run therefore sees the exact directory and declarative notes available at
-  // birth; the following run sees any later revision deliberately.
-  const definition = definitionWithMemoryContext(
-    configuredDefinition,
-    noteSnapshot.injection,
-    pathDependencyDirectory,
-    createOpenAITokenCounter(capabilitySnapshot.activeModel.model ?? "gpt-4o").countText,
-  );
-  const agentDefinitionRef = runAgentDefinitionRef(definition);
-  runtime.agentDefinitionOverrides.set(runAgentDefinitionRefCacheKey(agentDefinitionRef), definition);
-  return {
-    instructions: definition.prompt.systemPrompt,
-    aiMode: input.aiMode ?? capabilitySnapshot.activeModel.defaultAiMode,
-    config: capabilitySnapshot.activeModel,
-    reasoningEffort: input.reasoningEffort,
-    agentDefinitionRef,
-    capabilitySnapshot,
-    agentNoteVersions: noteSnapshot.versions,
-    memoryOwner: scope.owner,
-    workspaceSelection: "explicit",
-    ownerContext: [ownerBlock, formatEnvironmentContext(capabilitySnapshot.commandShell)].join("\n\n"),
-    informationAccess,
-    toolConfirmationPolicy: input.toolConfirmationPolicy ?? toolConfirmation.policy,
-  };
-}
-
-/** 组装模型可见的 owner 区块（ADR-0035 §6.2）。引用列表由本轮 run context 承载。 */
-async function formatOwnerContext(
-  runtime: PanelHost,
-  scope: { readonly owner: ConversationOwner; readonly cwd: string; readonly managedRoot?: string },
-): Promise<string> {
-  if (scope.owner.kind === "workspace") {
-    const workspace = await runtime.workspaceFeature.queries.get(scope.owner.id);
-    return [
-      "[Current conversation owner]",
-      "kind=workspace",
-      `name=${workspace?.title ?? scope.owner.id}`,
-      `path=${scope.cwd}`,
-      "The path above is the user's own project folder and your root working directory. Create and edit files there as the task requires.",
-    ].join("\n");
-  }
-  const space = await runtime.spaceFeature.queries.getTree(scope.owner.id);
-  const managedRoot = scope.managedRoot ?? scope.cwd;
-  return [
-    "[Current conversation owner]",
-    "kind=space",
-    `name=${space?.space.title ?? scope.owner.id}`,
-    `managed_root=${managedRoot}`,
-    "The managed_root above is this space's own managed storage and your default working directory. Create new files and deliverables there with the file tools unless the user names another destination.",
-    "Referenced external workspaces in this conversation are the user's reference material. Read them as needed, but do not create general outputs or scratch files inside them; modify them only when the user explicitly asks for changes to that project.",
-  ].join("\n");
-}
-
-/**
- * 组装模型可见的环境区块：操作系统、shell 与当前本地时间。随 run birth 冻结，
- * 每次 run 重新生成，与 owner 区块一起进入当前用户回合。
- */
-function formatEnvironmentContext(
-  commandShell: { readonly kind: string; readonly syntax: string } | undefined,
-  now: Date = new Date(),
-): string {
-  return [
-    "[Environment]",
-    `os=${process.platform} ${os.release()} (${process.arch})`,
-    ...(commandShell === undefined ? [] : [`shell=${commandShell.kind} (${commandShell.syntax} syntax)`]),
-    `current_time=${formatLocalTimestampWithOffset(now)}`,
-  ].join("\n");
-}
-
-function formatLocalTimestampWithOffset(date: Date): string {
-  const pad = (value: number): string => String(Math.trunc(Math.abs(value))).padStart(2, "0");
-  const offsetMinutes = -date.getTimezoneOffset();
-  const sign = offsetMinutes >= 0 ? "+" : "-";
-  const offset = `${sign}${pad(offsetMinutes / 60)}:${pad(offsetMinutes % 60)}`;
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
-    `T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}${offset}`;
-}
-
-/**
- * Resolves the frozen execution scope for a run birth（ADR-0035 §3.1）。
- *
- * - New conversation: the requested owner decides the cwd（Space managedRoot /
- *   Workspace current mount root）。
- * - Existing conversation: the canonical owner stored on the Ordinary document.
- *
- * Missing owner is a contract violation. Production routes reject it before
- * run birth; this guard protects internal callers and restart paths.
- */
-async function resolveConversationExecutionScope(
-  runtime: PanelHost,
-  input: PanelRunInput,
-  conversationId: string | undefined,
-): Promise<{ readonly owner: ConversationOwner; readonly cwd: string; readonly managedRoot?: string }> {
-  const requestedOwner = input.owner;
-  const canonicalOwner = conversationId === undefined
-    ? undefined
-    : await runtime.ordinaryAgentFeature.queries.getConversationOwner(conversationId);
-  if (requestedOwner !== undefined && canonicalOwner !== undefined &&
-    (requestedOwner.kind !== canonicalOwner.kind || requestedOwner.id !== canonicalOwner.id)) {
-    throw new Error(`Conversation ${conversationId} owner cannot be changed after creation.`);
-  }
-  const owner = canonicalOwner ?? requestedOwner;
-  if (owner === undefined) {
-    throw new Error("Conversation owner is required before run birth.");
-  }
-  if (owner.kind === "workspace") {
-    // Run birth is also a host boundary (not only an HTTP route). Check both
-    // the in-process deletion gate and the durable status so a restart cannot
-    // birth a run for a Workspace whose cascade is still pending.
-    runtime.workspaceDeletion.assertAvailable(owner.id);
-    const workspace = await runtime.workspaceFeature.queries.get(owner.id);
-    if (workspace?.status !== "available") {
-      if (workspace === undefined) {
-        throw new PanelHttpError(404, "workspace_not_found", `工作区 ${owner.id} 不存在。`);
-      }
-      throw new PanelHttpError(409, "workspace_not_available", `工作区 ${owner.id} 当前不可用。`);
-    }
-    const mount = workspace?.mounts.find((entry) => entry.status === "active");
-    if (mount === undefined) {
-      throw new Error(`Workspace ${owner.id} has no active mount and cannot host a run.`);
-    }
-    return { owner, cwd: mount.rootPath };
-  }
-  // Run birth is a host boundary as well as an HTTP route. Reject a Space
-  // whose deletion journal is active before creating a frozen birth snapshot.
-  runtime.spaceConversationDeletion.assertAvailable(owner.id);
-  if (await runtime.spaceFeature.queries.getTree(owner.id) === undefined) {
-    throw new PanelHttpError(404, "space_not_found", `Space ${owner.id} was not found.`);
-  }
-  const managedRoot = path.join(runtime.productPaths.data.workbench.spaceFiles, owner.id, "files");
-  await ensureSpaceManagedRoot(managedRoot);
-  return { owner, cwd: managedRoot, managedRoot };
-}
-
-async function ensureSpaceManagedRoot(managedRoot: string): Promise<void> {
-  await fs.mkdir(managedRoot, { recursive: true });
-}
-
-function definitionWithMemoryContext(
-  definition: AgentDefinition,
-  noteInjection: string | undefined,
-  pathDependencyDirectory: readonly PathDependencyDirectoryEntry[],
-  countMemoryTokens: (text: string) => number,
-): AgentDefinition {
-  const directoryInjection = pathDependencyDirectoryInjection(pathDependencyDirectory, countMemoryTokens);
-  if (noteInjection === undefined && directoryInjection === undefined) return definition;
-  const systemPrompt = [
-    definition.prompt.systemPrompt,
-    ...(noteInjection === undefined ? [] : ["<agent_notes>", noteInjection, "</agent_notes>"]),
-    ...(directoryInjection === undefined ? [] : ["<path_dependency_directory>", directoryInjection, "</path_dependency_directory>"]),
-  ].join("\n\n");
-  const fingerprint = createHash("sha256").update(systemPrompt, "utf8").digest("hex").slice(0, 12);
-  const promptSuffix = noteInjection === undefined ? "path-dependencies" : "agent-notes";
-  const versionSuffix = noteInjection === undefined ? "path-dependencies" : "notes";
-  return {
-    ...definition,
-    prompt: {
-      ...definition.prompt,
-      promptRef: `${definition.prompt.promptRef}:${promptSuffix}`,
-      version: `${definition.prompt.version}:${versionSuffix}-${fingerprint}`,
-      systemPrompt,
-    },
-  };
-}
-
-/**
- * The prompt contains only a small directory, never a full methodology. The
- * model must choose whether a candidate warrants MemoryRead, then separately
- * record deliberate adoption with MemoryReference.
- */
-function pathDependencyDirectoryInjection(
-  entries: readonly PathDependencyDirectoryEntry[],
-  countMemoryTokens: (text: string) => number,
-): string | undefined {
-  return renderPathDependencyDirectory(entries, countMemoryTokens);
-}
-
 export async function cleanupPanelHostOwnedProcesses(
   runtime: PanelHost
-): Promise<ProcessRegistryCleanupResult> {
+): Promise<ProcessCleanupResult> {
   await runtime.flushSpaceProcessCleanup();
   return runtime.processRegistry.cleanupOwnedProcesses(runtime.processTerminator);
-}
-
-async function modelProviderConfigForRun(
-  runtime: PanelHost,
-  override: PanelRunInput["modelOverride"]
-): Promise<import("../../domain/config/index.js").SanitizedModelProviderConfig> {
-  if (override === undefined) {
-    return runtime.configCenter.getModelProviderConfig();
-  }
-  const profile = (await runtime.configCenter.listModelProviderProfiles())
-    .find((item) => item.profileId === override.profileId);
-  if (profile === undefined) {
-    throw new PanelHttpError(400, "model_profile_not_found", "未找到本次选择的模型服务。");
-  }
-  if (profile.enabled === false) {
-    throw new PanelHttpError(400, "model_profile_disabled", "本次选择的模型服务已停用。");
-  }
-  return { ...profile, model: override.model };
-}
-
-async function capabilitySnapshotForRun(
-  runtime: PanelHost,
-  override: PanelRunInput["modelOverride"],
-  executionRoot: string,
-  memoryOwner: ConversationOwner,
-): Promise<import("../../domain/config/index.js").OrdinaryCapabilitySnapshot> {
-  const snapshot = await runtime.capabilityCenter.snapshot({ executionRoot, memoryOwner });
-  if (override === undefined) {
-    return snapshot;
-  }
-  const activeModel = await modelProviderConfigForRun(runtime, override);
-  const overrides = await runtime.configCenter.listModelCapabilityOverrides();
-  return {
-    ...snapshot,
-    activeModel,
-    modelCapabilities: resolveModelCapabilities({ profile: activeModel, overrides }),
-  };
-}
-
-function resolveSkillRoots(
-  options: PanelServerOptions,
-  input: PanelSkillRootsInput = {}
-): readonly SkillRootInput[] {
-  if (options.skillRoots !== undefined) {
-    return options.skillRoots;
-  }
-  return [
-    ...resolveDefaultPanelSkillRoots({ executionRoot: input.executionRoot }),
-    ...(options.additionalSkillRoots ?? []),
-  ];
-}
-
-function resolveSubAgentRoots(
-  options: PanelServerOptions,
-  input: PanelSubAgentRootsInput = {}
-): readonly SubAgentRootInput[] {
-  if (options.subAgentRoots !== undefined) {
-    return options.subAgentRoots;
-  }
-  return [
-    ...resolveDefaultPanelSubAgentRoots({ executionRoot: input.executionRoot }),
-    ...(options.additionalSubAgentRoots ?? []),
-  ];
-}
-
-export function resolveDefaultPanelSkillRoots(input: {
-  readonly cwd?: string;
-  readonly home?: string;
-  readonly executionRoot?: string;
-} = {}): readonly SkillRootInput[] {
-  const projectBase = input.executionRoot ?? input.cwd ?? process.cwd();
-  const projectRoot = path.join(projectBase, ".agents", "skills");
-  const userRoot = path.join(input.home ?? homeDirectory(), ".agents", "skills");
-  if (path.resolve(projectRoot) === path.resolve(userRoot)) {
-    return [{
-      rootPath: projectRoot,
-      sourceKind: "project",
-      sourceRootId: "project",
-      precedence: 100,
-    }];
-  }
-  return [
-    {
-      rootPath: userRoot,
-      sourceKind: "user",
-      sourceRootId: "user",
-      precedence: 10,
-    },
-    {
-      rootPath: projectRoot,
-      sourceKind: "project",
-      sourceRootId: "project",
-      precedence: 100,
-    },
-  ];
-}
-
-export function resolveDefaultPanelSubAgentRoots(input: {
-  readonly cwd?: string;
-  readonly home?: string;
-  readonly builtinRoot?: string;
-  readonly executionRoot?: string;
-} = {}): readonly SubAgentRootInput[] {
-  const builtinRoot = input.builtinRoot ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "sub-agents", "builtin");
-  const projectBase = input.executionRoot ?? input.cwd ?? process.cwd();
-  const projectRoot = path.join(projectBase, ".agents", "sub-agents");
-  const userRoot = path.join(input.home ?? homeDirectory(), ".agents", "sub-agents");
-  const roots: SubAgentRootInput[] = [
-    {
-      rootPath: builtinRoot,
-      sourceKind: "builtin",
-      sourceRootId: "builtin",
-      precedence: 1,
-    },
-  ];
-  if (path.resolve(projectRoot) !== path.resolve(userRoot)) {
-    roots.push({
-      rootPath: userRoot,
-      sourceKind: "user",
-      sourceRootId: "user",
-      precedence: 10,
-    });
-  }
-  roots.push({
-    rootPath: projectRoot,
-    sourceKind: "project",
-    sourceRootId: "project",
-    precedence: 100,
-  });
-  return roots;
-}
-
-function homeDirectory(): string {
-  return process.env.USERPROFILE ?? process.env.HOME ?? process.cwd();
-}
-
-function resolveSkillStateStore(configDirectory: string): SkillStateStore {
-  return new FileSystemSkillStateStore(resolveSkillStateStorePath(configDirectory));
 }

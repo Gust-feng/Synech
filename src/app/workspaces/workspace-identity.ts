@@ -1,5 +1,5 @@
 /**
- * Workspace 路径身份与唯一性校验（ADR-0035 §4.2）。
+ * Workspace 路径身份与唯一性校验。
  *
  * 注册 Workspace 前必须对规范化路径、realpath、大小写、junction 和 symlink 做唯一性
  * 检查：拒绝重复目录和父子嵌套目录；同一物理对象（sourceIdentity）只能登记一个

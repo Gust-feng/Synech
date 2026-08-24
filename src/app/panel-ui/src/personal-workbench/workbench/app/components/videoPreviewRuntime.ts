@@ -1,4 +1,4 @@
-import type { DocumentPreview } from '../../../../../../panel-api-contracts'
+import type { DocumentPreview } from '../../../../../../panel-api/workbench'
 
 const MAX_CACHED_VIDEO_POSTERS = 12
 const MAX_POSTER_WIDTH = 960

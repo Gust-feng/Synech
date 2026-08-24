@@ -10,7 +10,7 @@ import {
 } from './home-ambient-copy'
 import { HomeBackdrop } from './HomeBackdrop'
 import { type HomeOwnerSelection, HomeOwnerPicker } from './HomeOwnerPicker'
-import { panelStorageKey } from '../../../../app-local-preferences'
+import { panelStorageKey } from '../../../../shell/local-preferences'
 import './home-page.css'
 
 const AMBIENT_COPY_MEMORY_KEY = panelStorageKey('home.ambient-copy-memory')
@@ -69,13 +69,13 @@ export function HomePage({
   }
 
   return (
-    <div className="aa-agent-home">
+    <div className="ui-agent-home">
       <HomeBackdrop />
-      <section className="aa-agent-home__stage" aria-label="开始任务">
-        <div className="aa-agent-home__field">
+      <section className="ui-agent-home__stage" aria-label="开始任务">
+        <div className="ui-agent-home__field">
           <HomeAmbientCopy copy={ambientCopy} hasDraft={hasDraft} />
 
-          <div className="aa-agent-home__composer">
+          <div className="ui-agent-home__composer">
             <ConversationComposer
               key={focusRequest}
               input={homeInput}
@@ -83,7 +83,7 @@ export function HomePage({
             />
           </div>
 
-          <div className="aa-agent-home__context">
+          <div className="ui-agent-home__context">
             <HomeOwnerPicker
               spaces={spaces}
               workspaces={workspaces}

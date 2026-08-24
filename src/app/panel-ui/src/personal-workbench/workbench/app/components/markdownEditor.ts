@@ -16,7 +16,7 @@ export function createMarkdownEditorExtensions(placeholder?: string, resolveImag
     },
   })
   return [
-    StarterKit.configure({ heading: { levels: [1, 2, 3, 4] }, codeBlock: { HTMLAttributes: { class: 'aa-code-block' } }, link: false }),
+    StarterKit.configure({ heading: { levels: [1, 2, 3, 4] }, codeBlock: { HTMLAttributes: { class: 'ui-code-block' } }, link: false }),
     Link.configure({ openOnClick: false, autolink: true }),
     TaskList,
     TaskItem.configure({ nested: true }),

@@ -1,6 +1,5 @@
 import type { ConfirmationRequest } from "../../domain/confirmation/index.js";
 import type {
-  OrdinaryRunCapabilityResolution,
   RunAgentDefinitionRef,
 } from "../../domain/config/index.js";
 import type { ModelUsage } from "../../domain/intelligence/index.js";
@@ -45,7 +44,6 @@ export type OrdinaryPanelRun = {
   readonly title: string;
   readonly goalSummary: string;
   readonly status: OrdinaryPanelTaskStatus;
-  readonly runMode: "agent";
   readonly agentDefinitionRef?: RunAgentDefinitionRef;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -184,7 +182,9 @@ export type OrdinaryPanelWorkView = {
   };
 };
 
-export type OrdinaryPanelCapabilityResolution = OrdinaryRunCapabilityResolution;
+export type OrdinaryPanelCapabilityResolution = {
+  readonly modelContextWindowTokens: number;
+};
 
 export type OrdinaryPanelReplayCursor = {
   readonly token: string;

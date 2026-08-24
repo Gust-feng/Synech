@@ -24,7 +24,7 @@ import {
   SidebarSectionLabel,
 } from './SidebarRows'
 import { ActionConfirmationDialog } from './ActionConfirmationDialog'
-import { conversationStatusMarker } from '../../../../conversation-status-marker'
+import { conversationStatusMarker } from '../../../../features/conversations/conversation-status-marker'
 import type { ConversationSummary } from '../../../../contracts/conversation'
 import type { PersonalSpaceProjection } from '../../../space'
 import type { PersonalWorkspaceProjection } from '../../../workspace'
@@ -214,9 +214,9 @@ export function Sidebar({
       style={{
         width:    collapsed ? SIDEBAR_COLLAPSED_W : SIDEBAR_W,
         minWidth: collapsed ? SIDEBAR_COLLAPSED_W : SIDEBAR_W,
-        background:  'var(--aa-surface)',
+        background:  'var(--ui-surface)',
         // 收起后连边框都不留,做到真正意义上的「消失」。
-        borderRight: collapsed ? 'none' : '1px solid var(--aa-border)',
+        borderRight: collapsed ? 'none' : '1px solid var(--ui-border)',
         // Only the outer rail width animates. The inner column stays a fixed
         // width and is simply clipped, so no descendant ever reflows / drifts
         // while the rail glides between states.
@@ -224,8 +224,8 @@ export function Sidebar({
       }}
     >
       <style>{`
-        .aa-conversation-scroll { scrollbar-width: none; -ms-overflow-style: none; }
-        .aa-conversation-scroll::-webkit-scrollbar { display: none; }
+        .ui-conversation-scroll { scrollbar-width: none; -ms-overflow-style: none; }
+        .ui-conversation-scroll::-webkit-scrollbar { display: none; }
       `}</style>
       {/* Full-height line-art backdrop — sits behind everything (山雾远岫 · 水月孤舟).
           Kept faint so nav labels stay legible; clipped by the rail when collapsed. */}
@@ -287,8 +287,8 @@ export function Sidebar({
               onClick={addSpace}
               disabled={onCreateSpace === undefined || spaceLoadState?.mutationPending === true}
               aria-label="新建空间"
-              className="flex items-center justify-center rounded transition-opacity hover:bg-[var(--aa-hover-tint)] opacity-0 group-hover/spaces:opacity-50 hover:!opacity-100"
-              style={{ width: 18, height: 18, color: 'var(--aa-text-3)', marginRight: -3 }}
+              className="flex items-center justify-center rounded transition-opacity hover:bg-[var(--ui-hover-tint)] opacity-0 group-hover/spaces:opacity-50 hover:!opacity-100"
+              style={{ width: 18, height: 18, color: 'var(--ui-text-3)', marginRight: -3 }}
             >
               <Plus size={12}/>
             </button>
@@ -331,8 +331,8 @@ export function Sidebar({
               onClick={() => void onAddWorkspace?.()}
               disabled={onAddWorkspace === undefined || workspaceLoadState?.mutationPending === true}
               aria-label="添加工作区"
-              className="flex items-center justify-center rounded transition-opacity hover:bg-[var(--aa-hover-tint)] opacity-0 group-hover/workspaces:opacity-50 hover:!opacity-100"
-              style={{ width: 18, height: 18, color: 'var(--aa-text-3)', marginRight: -3 }}
+              className="flex items-center justify-center rounded transition-opacity hover:bg-[var(--ui-hover-tint)] opacity-0 group-hover/workspaces:opacity-50 hover:!opacity-100"
+              style={{ width: 18, height: 18, color: 'var(--ui-text-3)', marginRight: -3 }}
             >
               <Plus size={12}/>
             </button>
@@ -423,8 +423,8 @@ export function Sidebar({
 function SpaceLoadingRows() {
   return (
     <div className="space-y-2 px-3 py-1" role="status" aria-label="正在加载空间">
-      <span className="block h-2.5 w-24 animate-pulse rounded" style={{ background: 'var(--aa-surface-hover)' }} />
-      <span className="block h-2.5 w-16 animate-pulse rounded" style={{ background: 'var(--aa-surface-hover)' }} />
+      <span className="block h-2.5 w-24 animate-pulse rounded" style={{ background: 'var(--ui-surface-hover)' }} />
+      <span className="block h-2.5 w-16 animate-pulse rounded" style={{ background: 'var(--ui-surface-hover)' }} />
     </div>
   )
 }
@@ -432,8 +432,8 @@ function SpaceLoadingRows() {
 function WorkspaceLoadingRows() {
   return (
     <div className="space-y-2 px-3 py-1" role="status" aria-label="正在加载工作区">
-      <span className="block h-2.5 w-24 animate-pulse rounded" style={{ background: 'var(--aa-surface-hover)' }} />
-      <span className="block h-2.5 w-16 animate-pulse rounded" style={{ background: 'var(--aa-surface-hover)' }} />
+      <span className="block h-2.5 w-24 animate-pulse rounded" style={{ background: 'var(--ui-surface-hover)' }} />
+      <span className="block h-2.5 w-16 animate-pulse rounded" style={{ background: 'var(--ui-surface-hover)' }} />
     </div>
   )
 }
@@ -476,12 +476,12 @@ function WorkspaceRow(props: {
         meta={
           <span className="flex items-center gap-1">
             {props.workspace.status === 'disconnected' && (
-              <AlertCircle size={9} style={{ color: 'var(--aa-status-warning)' }} />
+              <AlertCircle size={9} style={{ color: 'var(--ui-status-warning)' }} />
             )}
             <ChevronRight
               size={11}
               style={{
-                color: 'var(--aa-text-3)',
+                color: 'var(--ui-text-3)',
                 transform: expanded ? 'rotate(90deg)' : undefined,
                 transition: 'transform 160ms ease',
               }}
@@ -492,7 +492,7 @@ function WorkspaceRow(props: {
       {expanded && (
         <SidebarConversationScrollArea maxHeight={220}>
           {props.conversations.length === 0 && (
-            <div className="px-3 py-1.5 text-[11px]" style={{ color: 'var(--aa-text-3)' }}>
+            <div className="px-3 py-1.5 text-[11px]" style={{ color: 'var(--ui-text-3)' }}>
               暂无对话
             </div>
           )}
@@ -532,8 +532,8 @@ function WorkspaceRow(props: {
                   && pinnedCount > 0
                   && pinnedCount < props.conversations.length && (
                   <div
-                    className="aa-conversation-divider my-1 border-t"
-                    style={{ borderColor: 'var(--aa-border)' }}
+                    className="ui-conversation-divider my-1 border-t"
+                    style={{ borderColor: 'var(--ui-border)' }}
                     aria-hidden="true"
                   />
                 )}
@@ -552,14 +552,14 @@ function SpaceLoadFailure(props: {
 }) {
   return (
     <div className="flex items-center gap-2 px-3 py-1.5" role="alert" title={props.message}>
-      <AlertCircle size={12} className="shrink-0" style={{ color: 'var(--aa-status-error)' }} />
-      <span className="min-w-0 flex-1 truncate text-[11px]" style={{ color: 'var(--aa-text-3)' }}>空间同步失败</span>
+      <AlertCircle size={12} className="shrink-0" style={{ color: 'var(--ui-status-error)' }} />
+      <span className="min-w-0 flex-1 truncate text-[11px]" style={{ color: 'var(--ui-text-3)' }}>空间同步失败</span>
       <button
         type="button"
         aria-label="重新加载空间"
         onClick={() => void props.onRetry()}
-        className="flex h-5 w-5 shrink-0 items-center justify-center rounded hover:bg-[var(--aa-hover-tint)]"
-        style={{ color: 'var(--aa-text-3)' }}
+        className="flex h-5 w-5 shrink-0 items-center justify-center rounded hover:bg-[var(--ui-hover-tint)]"
+        style={{ color: 'var(--ui-text-3)' }}
       >
         <RotateCcw size={11} />
       </button>
@@ -576,13 +576,13 @@ function ConversationStatusIndicator({ conversation }: { readonly conversation: 
   const marker = conversationStatusMarker(conversation)
   if (marker === undefined) return null
   const content = marker.kind === 'working' ? (
-    <span aria-hidden="true" className="block animate-spin" style={{ width: 11, height: 11, borderRadius: '50%', border: '1.5px solid var(--aa-accent, #6865a7)', borderTopColor: 'transparent' }} />
+    <span aria-hidden="true" className="block animate-spin" style={{ width: 11, height: 11, borderRadius: '50%', border: '1.5px solid var(--ui-accent, #6865a7)', borderTopColor: 'transparent' }} />
   ) : marker.kind === 'attention' ? (
-    <span aria-hidden="true" className="block" style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--aa-status-wait, #D49020)' }} />
+    <span aria-hidden="true" className="block" style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--ui-status-wait, #D49020)' }} />
   ) : marker.kind === 'failed' ? (
-    <AlertTriangle size={12} aria-hidden="true" style={{ color: 'var(--aa-status-error, #C84040)' }} />
+    <AlertTriangle size={12} aria-hidden="true" style={{ color: 'var(--ui-status-error, #C84040)' }} />
   ) : (
-    <span aria-hidden="true" className="block" style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--aa-text-3, #aba39b)' }} />
+    <span aria-hidden="true" className="block" style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--ui-text-3, #aba39b)' }} />
   )
   return (
     <span role="img" aria-label={marker.label}>

@@ -2,8 +2,8 @@ import type { ObservationRef } from "../ordinary/observation.js";
 import type { ToolCallRequest, ToolDefinition } from "../tools/contracts.js";
 export type { ModelOutputKind } from "./model-output-contracts.js";
 import type { ModelOutputKind } from "./model-output-contracts.js";
-export type { ModelInputAttachment, ModelInputAttachmentRef, ModelInputAttachmentSource } from "./model-input-attachments.js";
-import type { ModelInputAttachment } from "./model-input-attachments.js";
+export type { ModelInputAttachment, ModelInputAttachmentRef, ModelInputAttachmentSource } from "../model-input/index.js";
+import type { ModelInputAttachment } from "../model-input/index.js";
 export type { ModelCallRef } from "./model-call-ref.js";
 
 export const MODEL_PROTOCOL_KINDS = [

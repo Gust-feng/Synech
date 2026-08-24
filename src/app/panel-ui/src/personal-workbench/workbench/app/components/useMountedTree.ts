@@ -11,7 +11,7 @@ import {
   subscribeReferencePreviewCache,
   type DocumentPreview,
 } from './referencePreviewClient'
-import { subscribeSynechProjectionChanges } from '../../../../app-synech-projection-changes'
+import { subscribeWorkbenchProjectionChanges } from '../../../../workbench/projection-changes'
 import { warmReferenceDirectoryPreviews } from './space-reference-preview-warmup'
 import { ApiError } from '../../../../api'
 
@@ -509,7 +509,7 @@ export function useMountedTree(options: UseMountedTreeOptions): UseMountedTreeRe
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expandedIds, tree])
 
-  useEffect(() => subscribeSynechProjectionChanges((change) => {
+  useEffect(() => subscribeWorkbenchProjectionChanges((change) => {
     if (change.owners.includes('mounted_files')) {
       invalidateDocumentPreviews()
       refreshAllExpanded()

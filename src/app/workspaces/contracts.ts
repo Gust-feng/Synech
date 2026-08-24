@@ -1,11 +1,11 @@
 /**
- * WorkspaceFeature（ADR-0035 阶段二）。
+ * Workspace 功能契约。
  *
  * Workspace 是用户文件系统中的真实文件夹及其软件登记身份。WorkspaceFeature 拥有
  * Workspace 元数据、mount（mountVersion + sourceIdentity）、Space-Workspace link
  * （linkId）、唯一性校验和连接状态；不拥有 Conversation/Run、外部文件内容或 Space 树。
  *
- * 三层身份（ADR-0035 §4.1）：
+ * 三层身份：
  * - workspaceId：Workspace 的长期逻辑身份。
  * - mountVersion：某次真实目录绑定的版本，重新连接时生成新版本。
  * - linkId：某个 Space 对 Workspace 的一次引用关系，重新引用必须产生新 linkId。

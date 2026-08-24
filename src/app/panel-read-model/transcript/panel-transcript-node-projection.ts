@@ -156,54 +156,9 @@ function isMergeableModelActivityNode(node: ProjectableTranscriptNode): boolean 
 export function isFileReadNode(node: ProjectableTranscriptNode): boolean {
   if (node.kind !== "tool") return false;
   if (node.display?.kind === "read_result") return node.display.url === undefined;
-  if (node.display !== undefined && node.display.kind !== "generic_tool_summary") {
-    return false;
-  }
   const toolName = normalizedToolName(node.toolName);
-  const action = node.display?.kind === "generic_tool_summary"
-    ? node.display.action?.toLowerCase() ?? ""
-    : "";
-  const genericText = node.display?.kind === "generic_tool_summary"
-    ? [node.display.action, ...(node.display.items ?? [])].filter((value): value is string => value !== undefined).join(" ").toLowerCase()
-    : "";
-  if (isFileMutationToolName(toolName) || mentionsFileMutation(genericText) || mentionsFileMutation(node.title.toLowerCase())) {
-    return false;
-  }
-  return toolName === "Read" ||
-    toolName === "ResearchRead" ||
-    toolName.startsWith("read_") ||
-    action === "read" ||
-    action.includes("读取文件") ||
-    node.title.includes("读取文件");
-}
-
-function isFileMutationToolName(toolName: string): boolean {
-  return toolName === "Write" ||
-    toolName === "Delete" ||
-    toolName === "Edit" ||
-    toolName.includes("write") ||
-    toolName.includes("create") ||
-    toolName.includes("delete") ||
-    toolName.includes("remove_file") ||
-    toolName.includes("edit") ||
-    toolName.includes("patch") ||
-    toolName.includes("replace");
-}
-
-function mentionsFileMutation(value: string): boolean {
-  return value.includes("写入文件") ||
-    value.includes("创建文件") ||
-    value.includes("删除文件") ||
-    value.includes("编辑文件") ||
-    value.includes("修改文件") ||
-    value.includes("write") ||
-    value.includes("create") ||
-    value.includes("delete") ||
-    value.includes("edit") ||
-    value.includes("write file") ||
-    value.includes("create file") ||
-    value.includes("delete file") ||
-    value.includes("edit file");
+  if (toolName === "read" || toolName === "researchread") return true;
+  return node.display?.kind === "generic_tool_summary" && node.display.action === "读取文件";
 }
 
 export function isLowValueUserDecisionNode(node: ProjectableTranscriptNode): boolean {

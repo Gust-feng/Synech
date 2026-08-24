@@ -1,4 +1,5 @@
 import { asOptionalRecord, stringOrUndefined } from "../../../kernel/values/index.js";
+import type { WebSearchRuntimeConfig } from "../../../domain/config/index.js";
 import type { ToolExecutor, ToolExecutionContext } from "../../../domain/tools/index.js";
 
 export type FetchLike = (
@@ -18,24 +19,15 @@ export type FetchLikeResponse = {
   readonly text?: () => Promise<string>;
 };
 
-export type WebSearchProvider = "tavily" | "exa" | "zai" | "metaso" | "google" | "bing" | "none";
+export type WebSearchProvider = WebSearchRuntimeConfig["provider"];
 
-export type WebSearchToolOptions = {
-  readonly provider?: WebSearchProvider;
-  readonly apiKey?: string;
-  readonly maxResults?: number;
-  readonly endpoint?: string;
-  readonly googleEngineId?: string;
-  readonly tavilySearchDepth?: string;
-  readonly exaSearchType?: string;
-  readonly zaiSearchEngine?: string;
-  readonly bingMarket?: string;
+export type WebSearchToolOptions = WebSearchRuntimeConfig & {
   readonly fetch?: FetchLike;
 };
 
 export type WebSearchToolOutput = {
   readonly provider: WebSearchProvider;
-  readonly status: "completed" | "no_search_provider" | "invalid_input" | "provider_failed";
+  readonly status: "completed" | "invalid_input" | "provider_failed";
   readonly searched: boolean;
   readonly query: string;
   readonly results: readonly {
@@ -56,11 +48,11 @@ const GOOGLE_CUSTOM_SEARCH_ENDPOINT = "https://www.googleapis.com/customsearch/v
 const BING_WEB_SEARCH_ENDPOINT = "https://api.bing.microsoft.com/v7.0/search";
 const DEFAULT_MAX_RESULTS = 5;
 
-export function createWebSearchTool(options: WebSearchToolOptions = {}): ToolExecutor {
+export function createWebSearchTool(options: WebSearchToolOptions): ToolExecutor {
   return {
     definition: {
       name: "WebSearch",
-      description: "Search the web for current information only when a real provider is configured. Without a provider, returns no_search_provider and does not claim a search occurred.",
+      description: "Search the web for current information using the configured search provider.",
       metadata: {
         category: "web",
         riskLevel: "low",
@@ -87,7 +79,7 @@ async function executeWebSearch(
   const query = queryFromInput(input);
   if (_context.abortSignal?.aborted === true) {
     return {
-      provider: "none",
+      provider: options.provider,
       status: "provider_failed",
       searched: false,
       query: "",
@@ -97,7 +89,7 @@ async function executeWebSearch(
   }
   if (query === undefined) {
     return {
-      provider: "none",
+      provider: options.provider,
       status: "invalid_input",
       searched: false,
       query: "",
@@ -107,26 +99,13 @@ async function executeWebSearch(
   }
 
   const fetchImpl = options.fetch ?? resolveGlobalFetch();
-  const apiKey = normalizeOptionalString(options.apiKey);
-  const provider = normalizeProvider(options.provider);
-  const requiredMissing = requiredProviderConfigurationMissing(provider, options);
-  if (provider === "none" || apiKey === undefined || fetchImpl === undefined || requiredMissing !== undefined) {
-    return {
-      provider: "none",
-      status: "no_search_provider",
-      searched: false,
-      query,
-      results: [],
-      message: requiredMissing ?? `No configured ${providerLabel(provider)} search provider; no live web search was performed.`,
-    };
-  }
-
+  const provider = options.provider;
   const maxResults = maxResultsForProvider(provider, options.maxResults);
   try {
     return await executeProviderSearch({
       provider,
       query,
-      apiKey,
+      apiKey: options.apiKey,
       maxResults,
       fetch: fetchImpl,
       signal: _context.abortSignal,
@@ -145,7 +124,7 @@ async function executeWebSearch(
 }
 
 async function executeProviderSearch(input: {
-  readonly provider: Exclude<WebSearchProvider, "none">;
+  readonly provider: WebSearchProvider;
   readonly query: string;
   readonly apiKey: string;
   readonly maxResults: number;
@@ -181,7 +160,7 @@ async function searchTavily(input: ProviderSearchInput): Promise<WebSearchToolOu
       api_key: input.apiKey,
       query: input.query,
       max_results: input.maxResults,
-      search_depth: input.options.tavilySearchDepth ?? "basic",
+      search_depth: input.options.searchDepth ?? "basic",
     }),
     signal: input.signal,
   });
@@ -208,7 +187,7 @@ async function searchExa(input: ProviderSearchInput): Promise<WebSearchToolOutpu
     body: JSON.stringify({
       query: input.query,
       numResults: input.maxResults,
-      type: input.options.exaSearchType ?? "auto",
+      type: input.options.searchType ?? "auto",
       contents: {
         highlights: true,
       },
@@ -236,7 +215,7 @@ async function searchZai(input: ProviderSearchInput): Promise<WebSearchToolOutpu
       "content-type": "application/json",
     },
     body: JSON.stringify({
-      search_engine: input.options.zaiSearchEngine ?? "search-prime",
+      search_engine: input.options.searchEngine ?? "search-prime",
       search_query: input.query,
       count: input.maxResults,
     }),
@@ -284,7 +263,7 @@ async function searchMetaso(input: ProviderSearchInput): Promise<WebSearchToolOu
 async function searchGoogle(input: ProviderSearchInput): Promise<WebSearchToolOutput> {
   const url = new URL(input.options.endpoint ?? GOOGLE_CUSTOM_SEARCH_ENDPOINT);
   url.searchParams.set("key", input.apiKey);
-  url.searchParams.set("cx", normalizeOptionalString(input.options.googleEngineId) ?? "");
+  url.searchParams.set("cx", input.options.engineId ?? "");
   url.searchParams.set("q", input.query);
   url.searchParams.set("num", String(Math.min(10, input.maxResults)));
   const response = await input.fetch(url.toString(), {
@@ -312,7 +291,7 @@ async function searchBing(input: ProviderSearchInput): Promise<WebSearchToolOutp
   url.searchParams.set("q", input.query);
   url.searchParams.set("count", String(input.maxResults));
   url.searchParams.set("responseFilter", "Webpages");
-  const market = normalizeOptionalString(input.options.bingMarket);
+  const market = normalizeOptionalString(input.options.market);
   if (market !== undefined) {
     url.searchParams.set("mkt", market);
   }
@@ -338,7 +317,7 @@ async function searchBing(input: ProviderSearchInput): Promise<WebSearchToolOutp
 }
 
 type ProviderSearchInput = {
-  readonly provider: Exclude<WebSearchProvider, "none">;
+  readonly provider: WebSearchProvider;
   readonly query: string;
   readonly apiKey: string;
   readonly maxResults: number;
@@ -486,37 +465,15 @@ function compactSearchResult(input: {
   };
 }
 
-function resolveGlobalFetch(): FetchLike | undefined {
+function resolveGlobalFetch(): FetchLike {
   const fetchImpl = (globalThis as { fetch?: FetchLike }).fetch;
-  return typeof fetchImpl === "function" ? fetchImpl : undefined;
-}
-
-function normalizeProvider(value: WebSearchProvider | undefined): WebSearchProvider {
-  if (
-    value === "none" ||
-    value === "tavily" ||
-    value === "exa" ||
-    value === "zai" ||
-    value === "metaso" ||
-    value === "google" ||
-    value === "bing"
-  ) {
-    return value;
+  if (typeof fetchImpl !== "function") {
+    throw new Error("WebSearch requires fetch support.");
   }
-  return "tavily";
+  return fetchImpl;
 }
 
-function requiredProviderConfigurationMissing(
-  provider: WebSearchProvider,
-  options: WebSearchToolOptions
-): string | undefined {
-  if (provider === "google" && normalizeOptionalString(options.googleEngineId) === undefined) {
-    return "Google Custom Search requires a Programmable Search Engine ID.";
-  }
-  return undefined;
-}
-
-function maxResultsForProvider(provider: Exclude<WebSearchProvider, "none">, value: number | undefined): number {
+function maxResultsForProvider(provider: WebSearchProvider, value: number | undefined): number {
   const requested = Math.max(1, Math.floor(value ?? DEFAULT_MAX_RESULTS));
   if (provider === "google") {
     return Math.min(10, requested);
@@ -536,7 +493,6 @@ function providerLabel(provider: WebSearchProvider): string {
   if (provider === "metaso") return "秘塔搜索";
   if (provider === "google") return "Google Custom Search";
   if (provider === "bing") return "Bing Web Search";
-  if (provider === "none") return "configured";
   return "Tavily";
 }
 

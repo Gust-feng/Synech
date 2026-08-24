@@ -186,7 +186,7 @@ async function mapAgentLoopResult(
   await releaseWithoutReplacingOutcome(lease, onReleaseError);
   if (result.status === "completed") {
     if (result.session === undefined) {
-      throw new Error("A completed Ordinary Agent Session loop must return durable Session refs.");
+      throw new Error("A completed Agent session loop must return durable session refs.");
     }
     return { ...facts, session: result.session, status: "completed", answer: result.finalText };
   }

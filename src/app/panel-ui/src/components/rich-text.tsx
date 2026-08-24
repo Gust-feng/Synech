@@ -2,8 +2,8 @@ import React from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { CopyActionButton } from "./copy-action-button";
-import { splitStreamingMarkdownWithOffsets, stabilizeStreamingMarkdown } from "../streaming-text";
-import { useStreamingText } from "../use-streaming-text";
+import { splitStreamingMarkdownWithOffsets, stabilizeStreamingMarkdown } from "../features/conversations/transcript/streaming-text";
+import { useStreamingText } from "../features/conversations/transcript/use-streaming-text";
 import "../styles/rich-text.css";
 
 export const RichText = React.memo(function RichText({ text }: { readonly text: string }): React.ReactElement {

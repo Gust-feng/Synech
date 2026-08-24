@@ -1,7 +1,7 @@
 import { requestJson } from '../../../../api'
-import type { DocumentCaptionUpdateInput, DocumentPreview, DocumentTextUpdateInput } from '../../../../../../panel-api-contracts'
+import type { DocumentCaptionUpdateInput, DocumentPreview, DocumentTextUpdateInput } from '../../../../../../panel-api/workbench'
 
-export type { DocumentPreview } from '../../../../../../panel-api-contracts'
+export type { DocumentPreview } from '../../../../../../panel-api/workbench'
 
 const MAX_CACHED_PREVIEWS = 64
 const previewCache = new Map<string, DocumentPreview>()

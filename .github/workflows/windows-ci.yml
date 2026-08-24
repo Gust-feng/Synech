@@ -39,11 +39,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build application
-        run: pnpm build
+      - name: Test application
+        run: pnpm test
 
-      - name: Test product storage
-        run: pnpm test:storage
+      - name: Build panel
+        run: pnpm copy:sub-agents && pnpm typecheck:panel && pnpm build:panel
 
       - name: Check changed-file whitespace
         env:

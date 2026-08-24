@@ -317,39 +317,9 @@ function capabilityResolutionWithVisibleTools(input: {
     allowedTools: input.allowedTools,
     toolExposures: input.toolExposures,
   });
-  const visibleTools = input.toolExposures.filter((tool) => tool.modelVisible);
-  const visibleToolNames = visibleTools.map((tool) => tool.name);
   return {
     ...input.resolution,
     allowedTools: input.allowedTools,
-    capabilityPlan: {
-      ...input.resolution.capabilityPlan,
-      tools: input.resolution.capabilityPlan.tools === undefined
-        ? undefined
-        : {
-            ...input.resolution.capabilityPlan.tools,
-            allowedTools: input.allowedTools,
-          },
-      fileOperations: {
-        canReadWorkspace: visibleTools.some((tool) =>
-          tool.operationType === "read-only" ||
-          tool.operationType === "read-write" ||
-          tool.operationType === "execute"
-        ),
-        canWriteWorkspace: visibleTools.some((tool) => tool.operationType === "read-write"),
-        canDeleteWorkspace: visibleTools.some((tool) => tool.fileOperation === "delete"),
-        canExecuteCommands: visibleTools.some((tool) => tool.operationType === "execute"),
-      },
-      uiDisplay: {
-        canShowStreamingOutput:
-          input.resolution.capabilityPlan.uiDisplay?.canShowStreamingOutput ??
-          input.resolution.capabilityPlan.modelCapabilities.supportsStreaming,
-        canShowToolCards: visibleToolNames.length > 0,
-        visibleToolNames,
-      },
-      allowedTools: input.allowedTools,
-      warnings,
-    },
     toolExposures: input.toolExposures,
     warnings,
   };

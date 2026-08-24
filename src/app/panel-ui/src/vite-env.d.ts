@@ -21,7 +21,7 @@ declare module "*.png" {
 }
 
 interface Window {
-  readonly synechHost?: {
+  readonly desktopHost?: {
     readonly getLocalPreference: (key: string) => string | undefined;
     readonly setLocalPreference: (key: string, value: string) => boolean;
     readonly getWindowState: () => Promise<{

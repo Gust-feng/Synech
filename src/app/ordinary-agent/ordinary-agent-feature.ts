@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { ConfirmationDecision } from "../../domain/confirmation/index.js";
 import { memoryOwnerKey, memoryOwnersForConversation } from "../../domain/memory/index.js";
 import {
@@ -11,7 +10,6 @@ import { createId, nowIso, type IdFactory } from "../../kernel/id.js";
 import type {
   DecideOrdinaryApprovalInput,
   OrdinaryAgentFeature,
-  OrdinaryStableTerminalRunFacts,
   OrdinaryConversationControlDocument,
   OrdinaryConversationControlRepository,
   OrdinaryConversationControlState,
@@ -21,8 +19,6 @@ import type {
   OrdinaryExecutionPort,
   OrdinaryFeatureDiagnostic,
   OrdinaryRunActivity,
-  OrdinaryRunActivityCursor,
-  OrdinaryRunActivityReplay,
   OrdinaryRunEvent,
   OrdinaryRunRepository,
   OrdinaryRunRecoveryInventory,
@@ -55,16 +51,28 @@ import {
   transitionOrdinaryRun,
   type OrdinaryRunTransition,
 } from "./state.js";
-import {
-  OrdinaryManagedAttachmentRepositoryError,
-  type OrdinaryManagedAttachmentRecord,
-  type OrdinaryManagedAttachmentRepository,
-} from "./managed-attachment-repository.js";
-import {
-  managedUploadAttachmentId,
-  managedUploadAttachmentRef,
-} from "../context/attachments.js";
+import type { OrdinaryManagedAttachmentRepository } from "./managed-attachment-repository.js";
+import { createManagedAttachmentLifecycle, managedAttachmentIds } from "./attachment-lifecycle.js";
 import { createInMemoryOrdinaryMemoryFactRepository } from "./memory-fact-repository.js";
+import {
+  durableOrdinaryRunReplayFromState,
+  ordinaryRunActivityCursor,
+} from "./activity-replay.js";
+import {
+  isSchedulingBarrierCleared,
+  nextEligibleQueuedRun,
+  orderedConversationRuns,
+  type OrdinaryRunSchedulingFacts,
+} from "./conversation-scheduler.js";
+import {
+  conversationCleanupJobIsIdle,
+  createConversationCleanupJob,
+  prepareConversationCleanup,
+  recordConversationCleanupSuccess,
+  type ConversationCleanupDisposition,
+  type ConversationCleanupJob,
+} from "./conversation-cleanup.js";
+import { createTerminalSettlement, projectStableTerminalRunFacts } from "./terminal-settlement.js";
 
 export function createOrdinaryAgentFeature(input: {
   readonly repository: OrdinaryRunRepository;
@@ -95,9 +103,22 @@ export function createOrdinaryAgentFeature(input: {
   const now = input.now ?? nowIso;
   const idFactory = input.idFactory ?? createId;
   const memoryFactRepository = input.memoryFactRepository ?? createInMemoryOrdinaryMemoryFactRepository();
-  if ((input.managedAttachmentRepository === undefined) !== (input.managedAttachmentInstanceId === undefined)) {
-    throw new Error("Ordinary managed attachment repository and instance identity must be configured together.");
-  }
+  const managedAttachments = createManagedAttachmentLifecycle({
+    repository: input.managedAttachmentRepository,
+    instanceId: input.managedAttachmentInstanceId,
+    now,
+    idFactory,
+    onRecoveryIssue(identity, error) {
+      emitDiagnostic({
+        kind: "managed_attachment_recovery_issue",
+        ...(identity === undefined ? {} : { identity }),
+        error,
+      });
+    },
+    onRollbackFailure(rollback, error) {
+      emitDiagnostic({ kind: "managed_attachment_claim_rollback_failed", ...rollback, error });
+    },
+  });
   const documents = new Map<string, OrdinaryRunSnapshotDocument>();
   const conversationDocuments = new Map<string, OrdinaryConversationControlDocument>();
   const unavailableConversationIds = new Set<string>();
@@ -105,44 +126,19 @@ export function createOrdinaryAgentFeature(input: {
   const approvalReservations = new Map<string, string>();
   const controllers = new Map<string, AbortController>();
   const executions = new Map<string, Promise<void>>();
-  const acceptedToolResults = new Map<string, Map<string, ToolCallResult>>();
   const postExecutionTasks = new Set<Promise<void>>();
   const mutationQueues = new Map<string, Promise<void>>();
   const activityStreams = new Map<string, { streamId: string; nextSequence: number; activities: OrdinaryRunActivity[] }>();
   const listeners = new Map<string, Set<(activity: OrdinaryRunActivity) => void>>();
-  const stableTerminalListeners = new Set<(runId: string) => void>();
   const activeModelRequestIds = new Map<string, string>();
   const reasoningBuffers = new Map<string, { readonly modelRequestId: string; content: string }>();
-  const sessionsAwaitingFinalization = new Set<string>();
-  const sessionFinalizationPending = new Set<string>();
-  const sessionFinalizationFailures = new Map<string, unknown>();
-  const sessionFinalizationRetries = new Map<string, Promise<void>>();
-  const completionCommitRetryTimers = new Map<string, NodeJS.Timeout>();
-  const completionCommitRetryCounts = new Map<string, number>();
-  const successorActivationPumps = new Map<string, {
-    diagnosticRunId: string;
-    inFlight?: Promise<void>;
-    retryTimer?: NodeJS.Timeout;
-    consecutiveFailures: number;
-  }>();
+  const successorActivationTasks = new Map<string, Promise<void>>();
   const cancellationCleanupTasks = new Map<string, Promise<void>>();
   const cancellationCleanupContinuations = new Map<string, OrdinaryExecutionContinuation>();
-  const cancellationCleanupRetryTimers = new Map<string, NodeJS.Timeout>();
-  const cancellationCleanupFailureCounts = new Map<string, number>();
-  const conversationCleanupTasks = new Map<string, Promise<void>>();
-  const conversationCleanupRetryTimers = new Map<string, NodeJS.Timeout>();
-  const conversationCleanupFailureCounts = new Map<string, number>();
-  const pendingUncommittedConversationCleanups = new Map<string, {
-    readonly control: OrdinaryConversationControlDocument;
-    readonly runIds: readonly string[];
-  }>();
+  const conversationCleanupJobs = new Map<string, ConversationCleanupJob>();
   const pendingUncommittedConversationBirths = new Map<string, {
     readonly sessionRef: AgentSessionRef;
   }>();
-  const managedAttachmentClaimRollbacks = new Map<string, ManagedAttachmentClaimRollback>();
-  const managedAttachmentClaimRollbackTasks = new Map<string, Promise<void>>();
-  const managedAttachmentClaimRollbackRetryTimers = new Map<string, NodeJS.Timeout>();
-  const managedAttachmentClaimRollbackFailureCounts = new Map<string, number>();
   const visibleAssistantBuffers = new Map<string, string>();
   const visibleAssistantCheckpointTimers = new Map<string, NodeJS.Timeout>();
   // 每次会话只有一次生成机会：无论成败都记录，重启后首轮已完成也不会再触发。
@@ -157,6 +153,27 @@ export function createOrdinaryAgentFeature(input: {
    * never repeat across restarts.
    */
   const streamEpoch = idFactory("ordinary-activity-stream");
+  const terminalSettlement = createTerminalSettlement({
+    finalizeSession: input.execution.finalizeSession,
+    loadRun: load,
+    cachedRun: (runId) => documents.get(runId),
+    persistToolResult,
+    reconcilePendingToolRound,
+    reconcileLostApprovalResults,
+    externalSettlementCleared: (runId) =>
+      !approvalReservations.has(runId) &&
+      !continuations.has(runId) &&
+      !cancellationCleanupContinuations.has(runId) &&
+      !controllers.has(runId) &&
+      !executions.has(runId),
+    isHiddenRun,
+    hasActivitySubscribers: (runId) => (listeners.get(runId)?.size ?? 0) > 0,
+    releaseActivityStream: (runId) => { activityStreams.delete(runId); },
+    emitDiagnostic,
+    onStable(runId) {
+      trackPostExecutionTask(requestAutoConversationTitleIfMissing(runId));
+    },
+  });
 
   const readyPromise = recoverFeatureState();
   // Observe eager recovery immediately; public calls still await the original rejected promise.
@@ -347,7 +364,6 @@ export function createOrdinaryAgentFeature(input: {
   }
 
   async function recoverManagedAttachments(): Promise<void> {
-    if (input.managedAttachmentRepository === undefined || input.managedAttachmentInstanceId === undefined) return;
     const attachmentIdsByConversation = new Map<string, Set<string>>();
     const preserveConversationIds = new Set(unavailableConversationIds);
     if (startupRunEnumerationFailed) {
@@ -365,25 +381,13 @@ export function createOrdinaryAgentFeature(input: {
       for (const attachmentId of managedAttachmentIds(document.state.input)) ids.add(attachmentId);
       attachmentIdsByConversation.set(conversationId, ids);
     }
-    try {
-      const recovered = await input.managedAttachmentRepository.recoverAtStartup({
-        activeInstanceId: input.managedAttachmentInstanceId,
-        durableClaims: [...attachmentIdsByConversation].map(([conversationId, attachmentIds]) => ({
-          conversationId,
-          attachmentIds: [...attachmentIds],
-        })),
-        preserveConversationIds: [...preserveConversationIds],
-      });
-      for (const issue of recovered.issues) {
-        emitDiagnostic({
-          kind: "managed_attachment_recovery_issue",
-          identity: issue.identity,
-          error: issue.error,
-        });
-      }
-    } catch (error) {
-      emitDiagnostic({ kind: "managed_attachment_recovery_issue", error });
-    }
+    await managedAttachments.recover({
+      durableClaims: [...attachmentIdsByConversation].map(([conversationId, attachmentIds]) => ({
+        conversationId,
+        attachmentIds: [...attachmentIds],
+      })),
+      preserveConversationIds: [...preserveConversationIds],
+    });
   }
 
   function markConversationUnavailable(conversationId: string, error?: unknown): void {
@@ -786,51 +790,6 @@ export function createOrdinaryAgentFeature(input: {
       toolCallFactId(result) === factId && result.status !== "approval_required") === true;
   }
 
-  function rememberToolResults(runId: string, results: readonly ToolCallResult[]): void {
-    const accepted = acceptedToolResults.get(runId) ?? new Map<string, ToolCallResult>();
-    for (const result of results) {
-      const factId = toolCallFactId(result);
-      const existing = accepted.get(factId);
-      if (existing !== undefined && existing.status !== "approval_required" &&
-          JSON.stringify(existing) !== JSON.stringify(result)) {
-        throw new OrdinaryFeatureError(
-          "ordinary_tool_result_conflict",
-          `Ordinary run ${runId} observed different results for tool fact ${factId}`,
-        );
-      }
-      accepted.set(factId, clone(result));
-    }
-    if (accepted.size > 0) acceptedToolResults.set(runId, accepted);
-  }
-
-  function forgetPersistedToolResults(runId: string, results: readonly ToolCallResult[]): void {
-    const accepted = acceptedToolResults.get(runId);
-    const state = documents.get(runId)?.state;
-    if (accepted === undefined || state === undefined) return;
-    for (const result of results) {
-      const factId = toolCallFactId(result);
-      const persisted = state.toolCalls.find((item) => toolCallFactId(item) === factId);
-      if (persisted !== undefined && JSON.stringify(persisted) === JSON.stringify(result)) {
-        accepted.delete(factId);
-      }
-    }
-    if (accepted.size === 0) acceptedToolResults.delete(runId);
-  }
-
-  function forgetReconciledApprovalResults(runId: string): void {
-    const accepted = acceptedToolResults.get(runId);
-    const state = documents.get(runId)?.state;
-    if (accepted === undefined || state === undefined) return;
-    for (const [factId, result] of accepted) {
-      if (result.status === "approval_required" &&
-          state.toolCalls.some((persisted) => toolCallFactId(persisted) === factId &&
-            persisted.status !== "approval_required")) {
-        accepted.delete(factId);
-      }
-    }
-    if (accepted.size === 0) acceptedToolResults.delete(runId);
-  }
-
   async function persistToolResult(runId: string, result: ToolCallResult): Promise<void> {
     await enqueue(runId, async () => {
       const current = await load(runId);
@@ -841,7 +800,7 @@ export function createOrdinaryAgentFeature(input: {
       // abort. Once accepted, the fact remains feature-owned after the controller
       // is released so terminal settlement can finish its durable write.
       if (current.state.status.kind !== "running" && !controllers.has(runId) &&
-          !acceptedToolResults.get(runId)?.has(factId)) return;
+          !terminalSettlement.hasAcceptedToolResult(runId, factId)) return;
       const existing = current.state.toolCalls.find((item) => toolCallFactId(item) === factId);
       if (existing !== undefined) {
         if (existing.status !== "approval_required") {
@@ -1110,16 +1069,16 @@ export function createOrdinaryAgentFeature(input: {
           { cause: error },
         );
       }
-      await finalizeExecutionSession(runId, state, false);
+      await terminalSettlement.finalizeSession(runId, state, false);
       return;
     }
     if (outcome.status === "cancelled") {
       const state = await mutate(runId, { type: "cancel", reason: outcome.reason, session: outcome.session, toolCalls: outcome.toolCalls, usage: outcome.usage, toolMetrics: outcome.toolMetrics, capabilityResolution: outcome.capabilityResolution });
-      await finalizeExecutionSession(runId, state, true);
+      await terminalSettlement.finalizeSession(runId, state, true);
       return;
     }
     const state = await mutate(runId, { type: "fail", error: outcome.error, session: outcome.session, toolCalls: outcome.toolCalls, usage: outcome.usage, toolMetrics: outcome.toolMetrics, capabilityResolution: outcome.capabilityResolution });
-    await finalizeExecutionSession(runId, state, true);
+    await terminalSettlement.finalizeSession(runId, state, true);
   }
 
   async function handleCompletedCommitFailure(
@@ -1157,12 +1116,11 @@ export function createOrdinaryAgentFeature(input: {
       // The repository may have committed before reporting a transport error.
       // Never rewrite an already-terminal fact in that case.
       if (latest?.state.status.kind === "completed") {
-        await finalizeExecutionSession(runId, latest.state, false).catch(() => undefined);
+        await terminalSettlement.finalizeSession(runId, latest.state, false).catch(() => undefined);
       }
-      clearCompletedCommitRetry(runId);
       if (latest !== undefined) {
         await activateSuccessor(runId);
-        notifyStableTerminal(runId);
+        terminalSettlement.notifyStable(runId);
       }
       return true;
     }
@@ -1182,83 +1140,12 @@ export function createOrdinaryAgentFeature(input: {
       });
       // The Session already contains the completed assistant response. Keep that
       // leaf even though the Ordinary terminal snapshot had to record a block.
-      await finalizeExecutionSession(runId, blocked, false).catch(() => undefined);
-      clearCompletedCommitRetry(runId);
+      await terminalSettlement.finalizeSession(runId, blocked, false).catch(() => undefined);
       await activateSuccessor(runId);
     } catch (blockError) {
       emitDiagnostic({ kind: "completion_commit_failed", runId, error: blockError });
-      scheduleCompletedCommitRetry(runId, outcome, blockError);
     }
     return true;
-  }
-
-  function scheduleCompletedCommitRetry(
-    runId: string,
-    outcome: OrdinaryExecutionOutcome,
-    error: unknown,
-  ): void {
-    if (released || completionCommitRetryTimers.has(runId)) return;
-    const retryError = error instanceof OrdinaryFeatureError &&
-      error.code === "ordinary_completion_commit_failed"
-      ? error
-      : new OrdinaryFeatureError(
-          "ordinary_completion_commit_failed",
-          "Model execution completed, but the terminal Ordinary snapshot could not be committed.",
-          { cause: error },
-        );
-    const attempt = (completionCommitRetryCounts.get(runId) ?? 0) + 1;
-    completionCommitRetryCounts.set(runId, attempt);
-    const delayMs = Math.min(30_000, 250 * (2 ** Math.min(attempt - 1, 7)));
-    const timer = setTimeout(() => {
-      completionCommitRetryTimers.delete(runId);
-      const retry = handleCompletedCommitFailure(runId, outcome, retryError);
-      trackPostExecutionTask(retry.then(() => undefined, () => undefined));
-    }, delayMs);
-    timer.unref?.();
-    completionCommitRetryTimers.set(runId, timer);
-  }
-
-  function clearCompletedCommitRetry(runId: string): void {
-    const timer = completionCommitRetryTimers.get(runId);
-    if (timer !== undefined) clearTimeout(timer);
-    completionCommitRetryTimers.delete(runId);
-    completionCommitRetryCounts.delete(runId);
-  }
-
-  async function finalizeExecutionSession(
-    runId: string,
-    state: OrdinaryRunState,
-    restoreSafeLeaf: boolean,
-  ): Promise<void> {
-    const finalize = input.execution.finalizeSession;
-    if (finalize === undefined) return;
-    sessionFinalizationPending.add(runId);
-    const target = restoreSafeLeaf
-      ? rollbackLeafRef(state)
-      : undefined;
-    let firstFailure: unknown;
-    for (let attempt = 1; attempt <= 2; attempt += 1) {
-      try {
-        await finalize(runId, target);
-        sessionsAwaitingFinalization.delete(runId);
-        sessionFinalizationPending.delete(runId);
-        sessionFinalizationFailures.delete(runId);
-        return;
-      } catch (error) {
-        if (state.session.phase === "not_started" && errorMessage(error).includes("has no active Session control")) {
-          sessionsAwaitingFinalization.delete(runId);
-          sessionFinalizationPending.delete(runId);
-          sessionFinalizationFailures.delete(runId);
-          return;
-        }
-        firstFailure ??= error;
-      }
-    }
-    sessionFinalizationFailures.set(runId, firstFailure);
-    // The run itself is already terminal; a stuck finalization pauses the
-    // conversation queue, so the operator must be able to see why.
-    emitDiagnostic({ kind: "session_finalization_failed", runId, error: firstFailure });
-    throw firstFailure;
   }
 
   function emitDiagnostic(diagnostic: OrdinaryFeatureDiagnostic): void {
@@ -1275,7 +1162,7 @@ export function createOrdinaryAgentFeature(input: {
     const sessionRef = document.state.sessionRef;
     const controller = new AbortController();
     controllers.set(runId, controller);
-    if (input.execution.finalizeSession !== undefined) sessionsAwaitingFinalization.add(runId);
+    terminalSettlement.markSessionAwaitingFinalization(runId);
     let outcome: OrdinaryExecutionOutcome | undefined;
     try {
       recordModelRequest(runId, "initial");
@@ -1316,18 +1203,18 @@ export function createOrdinaryAgentFeature(input: {
           });
         },
         onToolResult: async (result) => {
-          rememberToolResults(runId, [result]);
+          terminalSettlement.rememberToolResults(runId, [result]);
           await persistToolResult(runId, result);
-          forgetPersistedToolResults(runId, [result]);
+          terminalSettlement.forgetPersistedToolResults(runId, [result]);
           if (result.status !== "approval_required" && result.parentToolCallFactId === undefined) {
             recordModelRequest(runId, "after_tool");
           }
         },
       });
       await completeReasoning(runId);
-      rememberToolResults(runId, outcome.toolCalls);
+      terminalSettlement.rememberToolResults(runId, outcome.toolCalls);
       await applyOutcome(runId, outcome);
-      forgetPersistedToolResults(runId, outcome.toolCalls);
+      terminalSettlement.forgetPersistedToolResults(runId, outcome.toolCalls);
     } catch (error) {
       if (await handleCompletedCommitFailure(runId, outcome, error)) return;
       let failure = error;
@@ -1353,11 +1240,11 @@ export function createOrdinaryAgentFeature(input: {
                 capabilityResolution: outcome.capabilityResolution,
               }),
         } as OrdinaryRunTransition, { keepTerminal: controller.signal.aborted });
-        await finalizeExecutionSession(runId, terminal, true);
+        await terminalSettlement.finalizeSession(runId, terminal, true);
       }
     } finally {
       try {
-        await settleExecution(runId);
+        await terminalSettlement.settleExecution(runId);
       } finally {
         // A live approval continuation resumes the same Pi harness. Keep its
         // original controller so cancellation and late tool facts remain tied
@@ -1369,99 +1256,6 @@ export function createOrdinaryAgentFeature(input: {
     }
   }
 
-  async function settleExecution(runId: string): Promise<void> {
-    let resultPersistenceFailure: unknown;
-    for (const result of [...(acceptedToolResults.get(runId)?.values() ?? [])]) {
-      try {
-        await persistToolResult(runId, result);
-        forgetPersistedToolResults(runId, [result]);
-      } catch (error) {
-        resultPersistenceFailure ??= error;
-      }
-    }
-    let current = await load(runId);
-    if (current === undefined) return;
-    if (current.state.status.kind === "awaiting_approval") {
-      if (resultPersistenceFailure !== undefined) throw resultPersistenceFailure;
-      return;
-    }
-    if (current.state.pendingToolRound !== undefined ||
-        current.state.pendingNestedToolCalls !== undefined) {
-      try {
-        await reconcilePendingToolRound(runId);
-      } catch (error) {
-        throw resultPersistenceFailure === undefined
-          ? error
-          : new AggregateError(
-              [resultPersistenceFailure, error],
-              `Ordinary run ${runId} could not reconcile its terminal tool round`,
-            );
-      }
-      current = await load(runId) ?? current;
-      // The durable reconciliation now owns every call in the closed round.
-      // Buffered results that failed its identity contract must not block the successor.
-      if (current.state.pendingToolRound === undefined &&
-          current.state.pendingNestedToolCalls === undefined) acceptedToolResults.delete(runId);
-      resultPersistenceFailure = undefined;
-    }
-    if (isTerminal(current.state) && current.state.toolCalls.some((result) => result.status === "approval_required")) {
-      await reconcileLostApprovalResults(runId);
-      current = await load(runId) ?? current;
-      forgetReconciledApprovalResults(runId);
-    }
-    if (resultPersistenceFailure !== undefined) throw resultPersistenceFailure;
-  }
-
-  /**
-   * Terminal facts are stable only after every accepted tool result reached a
-   * durable final fact and the live execution fully settled. Cancellation is
-   * deliberately stricter here than for scheduling: memory consumers must not
-   * observe a cancelled run whose abort-ignoring harness may still append facts.
-   */
-  function isStableTerminalState(state: OrdinaryRunState): boolean {
-    return isTerminal(state) &&
-      state.pendingToolRound === undefined &&
-      state.pendingNestedToolCalls === undefined &&
-      !state.toolCalls.some((result) => result.status === "approval_required") &&
-      !acceptedToolResults.has(state.runId) &&
-      !approvalReservations.has(state.runId) &&
-      !continuations.has(state.runId) &&
-      !cancellationCleanupContinuations.has(state.runId) &&
-      !controllers.has(state.runId) &&
-      !executions.has(state.runId);
-  }
-
-  function notifyStableTerminal(runId: string): void {
-    const document = documents.get(runId);
-    if (document === undefined || isHiddenRun(document.state) || !isStableTerminalState(document.state)) return;
-    for (const listener of [...stableTerminalListeners]) {
-      try {
-        listener(runId);
-      } catch {
-        // A memory or audit consumer cannot roll back committed Ordinary facts.
-      }
-    }
-    maybeReleaseTerminalStream(runId);
-    // 标题生成与用户消息展示无关，失败时列表继续使用首条消息截断回退。
-    trackPostExecutionTask(requestAutoConversationTitleIfMissing(runId));
-  }
-
-  /**
-   * Drops the in-memory activity stream of a settled terminal run once nobody
-   * is subscribed. The stream duplicates the persisted timeline (every durable
-   * activity wraps a cloned run event), so keeping it alive for finished runs
-   * doubles the memory footprint of the whole run history for the process
-   * lifetime. Replay rebuilds the stream on demand from the persisted state;
-   * the fresh streamId then invalidates old cursors through the existing
-   * `reset` protocol, which panel consumers already handle.
-   */
-  function maybeReleaseTerminalStream(runId: string): void {
-    if ((listeners.get(runId)?.size ?? 0) > 0) return;
-    const document = documents.get(runId);
-    if (document === undefined || isHiddenRun(document.state) || !isStableTerminalState(document.state)) return;
-    activityStreams.delete(runId);
-  }
-
   /**
    * 首轮 run 稳定终态后，用第一条用户消息请求一次模型标题（Host 端口）。
    * 每次会话只有一次生成机会：失败不重试、用户重命名后让位、落盘前二次
@@ -1471,7 +1265,7 @@ export function createOrdinaryAgentFeature(input: {
     const generator = input.generateConversationTitle;
     if (generator === undefined) return;
     const document = documents.get(runId);
-    if (document === undefined || isHiddenRun(document.state) || !isStableTerminalState(document.state)) return;
+    if (document === undefined || isHiddenRun(document.state) || !terminalSettlement.isStable(document.state)) return;
     // 只在首轮触发；旧会话不会批量回填。
     if (document.state.turn.predecessorRunId !== undefined) return;
     const conversationId = document.state.turn.conversationId;
@@ -1509,63 +1303,23 @@ export function createOrdinaryAgentFeature(input: {
     }
   }
 
-  function projectStableTerminalRunFacts(
-    document: OrdinaryRunSnapshotDocument,
-  ): OrdinaryStableTerminalRunFacts {
-    const state = document.state;
-    const status = state.status;
-    if (status.kind !== "completed" && status.kind !== "failed" &&
-        status.kind !== "cancelled" && status.kind !== "blocked") {
-      throw new OrdinaryFeatureError(
-        "ordinary_run_state_conflict",
-        `Ordinary run ${state.runId} is not terminal`,
-      );
-    }
-    return clone({
-      runId: state.runId,
-      sourceRevision: document.revision,
-      turn: state.turn,
-      userMessage: state.input.userMessage,
-      taskContextRefs: (state.input.context?.contextRefs ?? []).map((contextRef) => contextRef.ref),
-      workspaceRoot: state.birth.capabilitySnapshot.executionRoot,
-      workspaceSelection: state.birth.workspaceSelection ?? "default",
-      executionStarted: state.timeline.some((event) => event.type === "run.started"),
-      toolFacts: state.toolCalls
-        .filter((result): result is ToolCallResult & { readonly status: "completed" | "failed" | "cancelled" } =>
-          result.status === "completed" || result.status === "failed" || result.status === "cancelled")
-        .map((result) => ({
-          toolFactId: toolCallFactId(result),
-          ...(result.parentToolCallFactId === undefined ? {} : { parentToolFactId: result.parentToolCallFactId }),
-          toolName: result.toolName,
-          status: result.status,
-          durationMs: result.durationMs,
-          ...(result.error === undefined ? {} : {
-            error: {
-              ...(result.errorDomain === undefined ? {} : { domain: result.errorDomain }),
-              ...(typeof result.errorFacts?.code === "string" ? { code: result.errorFacts.code } : {}),
-              message: result.error,
-            },
-          }),
-        })),
-      status,
-      createdAt: state.timestamps.createdAt,
-      terminalAt: state.timestamps.terminalAt!,
-    });
+function schedulingFacts(runId: string): OrdinaryRunSchedulingFacts {
+    return {
+      unsettledToolWork: approvalReservations.has(runId) ||
+        continuations.has(runId) ||
+        cancellationCleanupContinuations.has(runId) ||
+        terminalSettlement.hasAcceptedToolResults(runId),
+      sessionFinalizationPending: terminalSettlement.isFinalizationPending(runId),
+      executionActive: controllers.has(runId) || executions.has(runId),
+    };
   }
 
-  function isSchedulingBarrierCleared(state: OrdinaryRunState): boolean {
-    if (!isTerminal(state) || state.pendingToolRound !== undefined ||
-        state.pendingNestedToolCalls !== undefined ||
-        approvalReservations.has(state.runId) || continuations.has(state.runId) ||
-        cancellationCleanupContinuations.has(state.runId) || acceptedToolResults.has(state.runId) ||
-        sessionFinalizationPending.has(state.runId)) {
-      return false;
-    }
-    // Cancellation stops admission before it commits. A pure model call that
-    // ignores abort cannot hold the conversation queue; an accepted tool round
-    // above still keeps the barrier closed until its outcome is reconciled.
-    return state.status.kind === "cancelled" ||
-      (!controllers.has(state.runId) && !executions.has(state.runId));
+  function schedulingBarrierCleared(state: OrdinaryRunState): boolean {
+    return isSchedulingBarrierCleared(state, schedulingFacts(state.runId));
+  }
+
+  function nextQueuedRun(runs: readonly OrdinaryRunState[]): OrdinaryRunState | undefined {
+    return nextEligibleQueuedRun(runs, schedulingFacts);
   }
 
   function track(runId: string, operation: Promise<void>): void {
@@ -1573,7 +1327,7 @@ export function createOrdinaryAgentFeature(input: {
     const postExecution = operation.then(() => undefined, () => undefined).then(async () => {
       if (executions.get(runId) === operation) executions.delete(runId);
       await activateSuccessor(runId);
-      notifyStableTerminal(runId);
+      terminalSettlement.notifyStable(runId);
     });
     trackPostExecutionTask(postExecution);
   }
@@ -1586,31 +1340,6 @@ export function createOrdinaryAgentFeature(input: {
     );
   }
 
-  /**
-   * A terminal run whose Session finalize failed keeps the scheduling barrier
-   * closed. Retrying at every scheduling event turns a transient finalize
-   * failure into a short pause instead of a silent, permanent queue deadlock.
-   */
-  async function retryFailedSessionFinalization(runId: string): Promise<void> {
-    if (!sessionFinalizationPending.has(runId) || !sessionFinalizationFailures.has(runId)) return;
-    const existing = sessionFinalizationRetries.get(runId);
-    if (existing !== undefined) {
-      await existing;
-      return;
-    }
-    const attempt = (async () => {
-      const document = await load(runId);
-      if (document === undefined || !isTerminal(document.state)) return;
-      await finalizeExecutionSession(runId, document.state, document.state.status.kind !== "completed");
-    })().catch(() => undefined);
-    sessionFinalizationRetries.set(runId, attempt);
-    try {
-      await attempt;
-    } finally {
-      if (sessionFinalizationRetries.get(runId) === attempt) sessionFinalizationRetries.delete(runId);
-    }
-  }
-
   async function activateSuccessor(predecessorRunId: string): Promise<void> {
     if (released) return;
     const predecessor = await load(predecessorRunId);
@@ -1620,102 +1349,78 @@ export function createOrdinaryAgentFeature(input: {
 
   async function requestConversationActivation(conversationId: string, diagnosticRunId: string): Promise<void> {
     if (released) return;
-    const pump = successorActivationPumps.get(conversationId) ?? { diagnosticRunId, consecutiveFailures: 0 };
-    pump.diagnosticRunId = diagnosticRunId;
-    successorActivationPumps.set(conversationId, pump);
-    if (pump.retryTimer !== undefined) {
-      clearTimeout(pump.retryTimer);
-      pump.retryTimer = undefined;
-    }
-    if (pump.inFlight !== undefined) {
-      await pump.inFlight;
+    const active = successorActivationTasks.get(conversationId);
+    if (active !== undefined) {
+      await active;
       return;
     }
-    let activationFailure: { readonly error: unknown } | undefined;
+    const activation = { diagnosticRunId };
     const attempt = (async () => {
       try {
-        await activateConversationOnce(conversationId, pump);
+        await activateConversationOnce(conversationId, activation);
       } catch (error) {
-        activationFailure = { error };
+        emitDiagnostic({
+          kind: "successor_activation_failed",
+          conversationId,
+          predecessorRunId: activation.diagnosticRunId,
+          error,
+        });
       }
     })();
-    pump.inFlight = attempt;
+    successorActivationTasks.set(conversationId, attempt);
     try {
       await attempt;
     } finally {
-      if (pump.inFlight === attempt) pump.inFlight = undefined;
-    }
-    if (activationFailure === undefined) {
-      pump.consecutiveFailures = 0;
-      if (successorActivationPumps.get(conversationId) === pump &&
-          pump.retryTimer === undefined && pump.inFlight === undefined) {
-        successorActivationPumps.delete(conversationId);
+      if (successorActivationTasks.get(conversationId) === attempt) {
+        successorActivationTasks.delete(conversationId);
       }
-      return;
     }
-    if (released || successorActivationPumps.get(conversationId) !== pump) return;
-    pump.consecutiveFailures += 1;
-    const retryDelayMs = successorActivationRetryDelayMs(pump.consecutiveFailures);
-    emitDiagnostic({
-      kind: "successor_activation_failed",
-      conversationId,
-      predecessorRunId: pump.diagnosticRunId,
-      consecutiveFailures: pump.consecutiveFailures,
-      retryDelayMs,
-      error: activationFailure.error,
-    });
-    const retryTimer = setTimeout(() => {
-      if (pump.retryTimer !== retryTimer) return;
-      pump.retryTimer = undefined;
-      const retry = requestConversationActivation(conversationId, pump.diagnosticRunId);
-      trackPostExecutionTask(retry);
-    }, retryDelayMs);
-    retryTimer.unref?.();
-    pump.retryTimer = retryTimer;
   }
 
   async function activateConversationOnce(
     conversationId: string,
-    pump: { diagnosticRunId: string },
+    activation: { diagnosticRunId: string },
   ): Promise<void> {
     const control = await loadConversationControl(conversationId);
     if (control?.state.deletedAt !== undefined) return;
     let runs = await schedulingRuns(conversationId, control);
-    let candidate = nextEligibleQueuedRun(runs);
+    let candidate = nextQueuedRun(runs);
     if (candidate === undefined) {
       const settlementBlocker = runs.find((run) =>
         isTerminal(run) && run.status.kind !== "cancelled" &&
-        acceptedToolResults.has(run.runId) &&
+        terminalSettlement.hasAcceptedToolResults(run.runId) &&
         !executions.has(run.runId) && !controllers.has(run.runId));
       if (settlementBlocker !== undefined) {
-        pump.diagnosticRunId = settlementBlocker.runId;
-        await settleExecution(settlementBlocker.runId);
-        notifyStableTerminal(settlementBlocker.runId);
+        activation.diagnosticRunId = settlementBlocker.runId;
+        await terminalSettlement.settleExecution(settlementBlocker.runId);
+        terminalSettlement.notifyStable(settlementBlocker.runId);
         runs = await schedulingRuns(conversationId, await loadConversationControl(conversationId));
-        candidate = nextEligibleQueuedRun(runs);
+        candidate = nextQueuedRun(runs);
       }
     }
     if (candidate === undefined) {
       const finalizationBlocker = runs.find((run) =>
-        isTerminal(run) && !isSchedulingBarrierCleared(run) &&
-        sessionFinalizationPending.has(run.runId) && sessionFinalizationFailures.has(run.runId));
+        isTerminal(run) && !schedulingBarrierCleared(run) &&
+        terminalSettlement.isFinalizationPending(run.runId) &&
+        terminalSettlement.finalizationFailure(run.runId) !== undefined);
       if (finalizationBlocker === undefined) return;
-      pump.diagnosticRunId = finalizationBlocker.runId;
-      await retryFailedSessionFinalization(finalizationBlocker.runId);
-      if (sessionFinalizationPending.has(finalizationBlocker.runId) && sessionFinalizationFailures.has(finalizationBlocker.runId)) {
-        throw sessionFinalizationFailures.get(finalizationBlocker.runId);
+      activation.diagnosticRunId = finalizationBlocker.runId;
+      await terminalSettlement.retryFinalization(finalizationBlocker.runId);
+      if (terminalSettlement.isFinalizationPending(finalizationBlocker.runId) &&
+          terminalSettlement.finalizationFailure(finalizationBlocker.runId) !== undefined) {
+        throw terminalSettlement.finalizationFailure(finalizationBlocker.runId);
       }
       runs = await schedulingRuns(conversationId, await loadConversationControl(conversationId));
-      candidate = nextEligibleQueuedRun(runs);
+      candidate = nextQueuedRun(runs);
     }
     if (candidate === undefined) return;
     const predecessorRunId = candidate.turn.predecessorRunId;
     if (predecessorRunId !== undefined) {
       const predecessor = runs.find((run) => run.runId === predecessorRunId);
-      if (predecessor === undefined || !isSchedulingBarrierCleared(predecessor)) return;
-      pump.diagnosticRunId = predecessorRunId;
+      if (predecessor === undefined || !schedulingBarrierCleared(predecessor)) return;
+      activation.diagnosticRunId = predecessorRunId;
     } else {
-      pump.diagnosticRunId = candidate.runId;
+      activation.diagnosticRunId = candidate.runId;
     }
     const activated = await enqueue(candidate.runId, async () => {
       if (released) return undefined;
@@ -1724,11 +1429,11 @@ export function createOrdinaryAgentFeature(input: {
       const latestControl = await loadConversationControl(current.state.turn.conversationId);
       if (latestControl?.state.deletedAt !== undefined) return undefined;
       const latestRuns = await schedulingRuns(current.state.turn.conversationId, latestControl);
-      const latestCandidate = nextEligibleQueuedRun(latestRuns);
+      const latestCandidate = nextQueuedRun(latestRuns);
       if (released || latestCandidate?.runId !== current.state.runId) return undefined;
       if (current.state.turn.predecessorRunId !== undefined) {
         const latestPredecessor = latestRuns.find((run) => run.runId === current.state.turn.predecessorRunId);
-        if (latestPredecessor === undefined || !isSchedulingBarrierCleared(latestPredecessor)) return undefined;
+        if (latestPredecessor === undefined || !schedulingBarrierCleared(latestPredecessor)) return undefined;
       }
       return commitTransition(current.state.runId, { type: "start" });
     });
@@ -1741,18 +1446,10 @@ export function createOrdinaryAgentFeature(input: {
   ): Promise<readonly OrdinaryRunState[]> {
     if (unavailableConversationIds.has(conversationId)) return [];
     if (control !== undefined) return visibleRuns(control);
-    return [...documents.values()]
-      .map((document) => document.state)
-      .filter((run) => run.turn.conversationId === conversationId)
-      .sort((left, right) => left.turn.ordinal - right.turn.ordinal);
-  }
-
-  function nextEligibleQueuedRun(runs: readonly OrdinaryRunState[]): OrdinaryRunState | undefined {
-    for (const run of runs) {
-      if (run.status.kind === "queued") return run;
-      if (!isSchedulingBarrierCleared(run)) return undefined;
-    }
-    return undefined;
+    return orderedConversationRuns(
+      conversationId,
+      [...documents.values()].map((document) => document.state),
+    );
   }
 
   async function activateRootQueued(runId: string): Promise<void> {
@@ -1760,189 +1457,6 @@ export function createOrdinaryAgentFeature(input: {
     const queued = await load(runId);
     if (queued === undefined || queued.state.status.kind !== "queued" || queued.state.turn.predecessorRunId !== undefined) return;
     await requestConversationActivation(queued.state.turn.conversationId, runId);
-  }
-
-  async function claimRunManagedAttachments(
-    runInput: OrdinaryRunInput,
-    conversationId: string,
-    runId: string,
-  ): Promise<{
-    readonly runInput: OrdinaryRunInput;
-    readonly newlyClaimedAttachmentIds: readonly string[];
-    readonly claimReservations: readonly ManagedAttachmentClaimReservation[];
-  }> {
-    const attachmentIds = managedAttachmentIds(runInput);
-    if (attachmentIds.length === 0) return { runInput, newlyClaimedAttachmentIds: [], claimReservations: [] };
-    const claimReservations = reserveManagedAttachmentClaimRollbacks(conversationId, runId, attachmentIds);
-    try {
-      const claimed = await requireManagedAttachmentRepository().claimForConversation({
-        attachmentIds,
-        instanceId: input.managedAttachmentInstanceId!,
-        conversationId,
-        claimedAt: now(),
-      });
-      return {
-        runInput: canonicalManagedAttachmentInput(runInput, claimed.records),
-        newlyClaimedAttachmentIds: claimed.newlyClaimedAttachmentIds,
-        claimReservations,
-      };
-    } catch (error) {
-      releaseManagedAttachmentClaimReservations(claimReservations, runId);
-      if (error instanceof OrdinaryManagedAttachmentRepositoryError && error.partialClaim !== undefined) {
-        await releaseRunManagedAttachmentClaims(runId, conversationId, error.partialClaim.attachmentIds);
-      }
-      if (error instanceof OrdinaryManagedAttachmentRepositoryError && (
-        error.code === "ordinary_managed_attachment_not_found" ||
-        error.code === "ordinary_managed_attachment_ownership_conflict" ||
-        error.code === "ordinary_managed_attachment_invalid_id" ||
-        error.code === "ordinary_managed_attachment_invalid_input"
-      )) {
-        throw new OrdinaryFeatureError(
-          "ordinary_managed_attachment_unavailable",
-          "One or more uploaded attachments are unavailable or owned by another conversation.",
-          { cause: error },
-        );
-      }
-      throw error;
-    }
-  }
-
-  function reserveManagedAttachmentClaimRollbacks(
-    conversationId: string,
-    runId: string,
-    attachmentIds: readonly string[],
-  ): readonly ManagedAttachmentClaimReservation[] {
-    // A failed birth can leave a conversation-owned claim awaiting rollback.
-    // Protect overlapping claims until this birth either persists or fails;
-    // retries and the rollback itself are serialized by the same conversation key.
-    const requested = new Set(attachmentIds);
-    const reservations: ManagedAttachmentClaimReservation[] = [];
-    for (const rollback of managedAttachmentClaimRollbacks.values()) {
-      if (rollback.conversationId !== conversationId || rollback.protectedByRunId !== undefined) continue;
-      const protectedAttachmentIds = rollback.attachmentIds.filter((attachmentId) => requested.has(attachmentId));
-      if (protectedAttachmentIds.length === 0) continue;
-      managedAttachmentClaimRollbacks.set(rollback.runId, { ...rollback, protectedByRunId: runId });
-      reservations.push({ rollbackRunId: rollback.runId, protectedAttachmentIds });
-    }
-    return reservations;
-  }
-
-  function releaseManagedAttachmentClaimReservations(
-    reservations: readonly ManagedAttachmentClaimReservation[],
-    runId: string,
-  ): void {
-    for (const reservation of reservations) {
-      const rollback = managedAttachmentClaimRollbacks.get(reservation.rollbackRunId);
-      if (rollback?.protectedByRunId !== runId) continue;
-      managedAttachmentClaimRollbacks.set(rollback.runId, { ...rollback, protectedByRunId: undefined });
-    }
-  }
-
-  function commitManagedAttachmentClaimReservations(
-    reservations: readonly ManagedAttachmentClaimReservation[],
-    runId: string,
-  ): void {
-    for (const reservation of reservations) {
-      const rollback = managedAttachmentClaimRollbacks.get(reservation.rollbackRunId);
-      if (rollback?.protectedByRunId !== runId) continue;
-      const protectedIds = new Set(reservation.protectedAttachmentIds);
-      const remainingAttachmentIds = rollback.attachmentIds.filter((attachmentId) => !protectedIds.has(attachmentId));
-      if (remainingAttachmentIds.length === 0) {
-        managedAttachmentClaimRollbacks.delete(rollback.runId);
-        const retryTimer = managedAttachmentClaimRollbackRetryTimers.get(rollback.runId);
-        if (retryTimer !== undefined) clearTimeout(retryTimer);
-        managedAttachmentClaimRollbackRetryTimers.delete(rollback.runId);
-        managedAttachmentClaimRollbackFailureCounts.delete(rollback.runId);
-      } else {
-        managedAttachmentClaimRollbacks.set(rollback.runId, {
-          ...rollback,
-          attachmentIds: remainingAttachmentIds,
-          protectedByRunId: undefined,
-        });
-      }
-    }
-  }
-
-  async function releaseRunManagedAttachmentClaims(
-    runId: string,
-    conversationId: string,
-    attachmentIds: readonly string[],
-  ): Promise<void> {
-    if (attachmentIds.length === 0) return;
-    const rollback = { runId, conversationId, attachmentIds: [...attachmentIds] } satisfies ManagedAttachmentClaimRollback;
-    managedAttachmentClaimRollbacks.set(runId, rollback);
-    const succeeded = await attemptManagedAttachmentClaimRollback(runId);
-    if (!succeeded) {
-      const current = managedAttachmentClaimRollbacks.get(runId);
-      if (current !== undefined) scheduleManagedAttachmentClaimRollback(current);
-    }
-  }
-
-  async function attemptManagedAttachmentClaimRollback(rollbackRunId: string): Promise<boolean> {
-    const rollback = managedAttachmentClaimRollbacks.get(rollbackRunId);
-    if (rollback === undefined || rollback.protectedByRunId !== undefined) return true;
-    try {
-      await requireManagedAttachmentRepository().releaseConversationClaim({
-        attachmentIds: rollback.attachmentIds,
-        instanceId: input.managedAttachmentInstanceId!,
-        conversationId: rollback.conversationId,
-        releasedAt: now(),
-      });
-      if (managedAttachmentClaimRollbacks.get(rollback.runId) === rollback) {
-        managedAttachmentClaimRollbacks.delete(rollback.runId);
-      }
-      managedAttachmentClaimRollbackFailureCounts.delete(rollback.runId);
-      return true;
-    } catch (error) {
-      emitDiagnostic({
-        kind: "managed_attachment_claim_rollback_failed",
-        runId: rollback.runId,
-        conversationId: rollback.conversationId,
-        attachmentIds: rollback.attachmentIds,
-        error,
-      });
-      return false;
-    }
-  }
-
-  function scheduleManagedAttachmentClaimRollback(rollback: ManagedAttachmentClaimRollback): void {
-    const current = managedAttachmentClaimRollbacks.get(rollback.runId);
-    if (current === undefined || current.protectedByRunId !== undefined || released ||
-        managedAttachmentClaimRollbackTasks.has(rollback.runId) ||
-        managedAttachmentClaimRollbackRetryTimers.has(rollback.runId)) return;
-    const consecutiveFailures = (managedAttachmentClaimRollbackFailureCounts.get(rollback.runId) ?? 0) + 1;
-    managedAttachmentClaimRollbackFailureCounts.set(rollback.runId, consecutiveFailures);
-    const retryDelayMs = managedAttachmentClaimRollbackRetryDelayMs(consecutiveFailures);
-    const retryTimer = setTimeout(() => {
-      if (managedAttachmentClaimRollbackRetryTimers.get(rollback.runId) !== retryTimer) return;
-      managedAttachmentClaimRollbackRetryTimers.delete(rollback.runId);
-      let task!: Promise<void>;
-      task = enqueue(`conversation:${rollback.conversationId}`, async () => {
-        const succeeded = await attemptManagedAttachmentClaimRollback(rollback.runId);
-        if (!succeeded) {
-          if (managedAttachmentClaimRollbackTasks.get(rollback.runId) === task) {
-            managedAttachmentClaimRollbackTasks.delete(rollback.runId);
-          }
-          const currentRollback = managedAttachmentClaimRollbacks.get(rollback.runId);
-          if (currentRollback !== undefined) scheduleManagedAttachmentClaimRollback(currentRollback);
-        }
-      });
-      managedAttachmentClaimRollbackTasks.set(rollback.runId, task);
-      void task.then(
-        () => {
-          if (managedAttachmentClaimRollbackTasks.get(rollback.runId) === task) {
-            managedAttachmentClaimRollbackTasks.delete(rollback.runId);
-          }
-        },
-        () => {
-          if (managedAttachmentClaimRollbackTasks.get(rollback.runId) === task) {
-            managedAttachmentClaimRollbackTasks.delete(rollback.runId);
-          }
-        },
-      );
-    }, retryDelayMs);
-    retryTimer.unref?.();
-    managedAttachmentClaimRollbackRetryTimers.set(rollback.runId, retryTimer);
   }
 
   async function startWithinConversation(startInput: StartOrdinaryRunInput): Promise<OrdinaryRunState> {
@@ -1980,11 +1494,11 @@ export function createOrdinaryAgentFeature(input: {
         `Ordinary predecessor run ${predecessor.state.runId} already has a queued successor`,
       );
     }
-    const claim = await claimRunManagedAttachments(
-      startInput.input,
-      startInput.turn.conversationId,
-      startInput.runId,
-    );
+    const claim = await managedAttachments.claimForRun({
+      runInput: startInput.input,
+      conversationId: startInput.turn.conversationId,
+      runId: startInput.runId,
+    });
     const initial = createInitialOrdinaryRunState({
       runId: startInput.runId,
       sessionRef: startInput.sessionRef,
@@ -1998,15 +1512,10 @@ export function createOrdinaryAgentFeature(input: {
     try {
       created = await input.repository.save(initial, 0);
     } catch (error) {
-      releaseManagedAttachmentClaimReservations(claim.claimReservations, startInput.runId);
-      await releaseRunManagedAttachmentClaims(
-        startInput.runId,
-        startInput.turn.conversationId,
-        claim.newlyClaimedAttachmentIds,
-      );
+      await claim.rollback();
       throw error;
     }
-    commitManagedAttachmentClaimReservations(claim.claimReservations, startInput.runId);
+    await claim.commit();
     documents.set(initial.runId, created);
     recordTransition(initial.timeline[0]);
     if (predecessor === undefined) {
@@ -2218,7 +1727,7 @@ export function createOrdinaryAgentFeature(input: {
         );
       }
     }
-    const pending = pendingUncommittedConversationCleanups.get(conversationId);
+    const pending = conversationCleanupJobs.get(conversationId)?.pendingUncommitted;
     if (pending === undefined) return;
     await scheduleConversationCleanup(
       conversationId,
@@ -2226,7 +1735,7 @@ export function createOrdinaryAgentFeature(input: {
       pending.runIds,
       "delete_uncommitted",
     );
-    if (pendingUncommittedConversationCleanups.has(conversationId)) {
+    if (conversationCleanupJobs.get(conversationId)?.pendingUncommitted !== undefined) {
       throw new OrdinaryFeatureError(
         "ordinary_conversation_cleanup_pending",
         `Ordinary conversation ${conversationId} is still being cleaned up; retry this operation.`,
@@ -2372,53 +1881,39 @@ export function createOrdinaryAgentFeature(input: {
       };
     });
     if (cleanup !== undefined) {
-      void scheduleConversationCleanup(conversationId, cleanup.tombstone, cleanup.runIds);
+      const cleaned = await scheduleConversationCleanup(conversationId, cleanup.tombstone, cleanup.runIds);
+      if (!cleaned) {
+        throw new OrdinaryFeatureError(
+          "ordinary_conversation_cleanup_pending",
+          `Ordinary conversation ${conversationId} cleanup failed; retry DELETE.`,
+        );
+      }
     }
   }
 
-  function scheduleConversationCleanup(
+  async function scheduleConversationCleanup(
     conversationId: string,
     control: OrdinaryConversationControlDocument,
     runIds: readonly string[],
-    controlDisposition: "retain_tombstone" | "delete_uncommitted" = "retain_tombstone",
-  ): Promise<void> | undefined {
-    if (released) return undefined;
-    let cleanupControl = control;
-    let scheduledRunIds = runIds;
-    let pendingState: {
-      readonly control: OrdinaryConversationControlDocument;
-      readonly runIds: readonly string[];
-    } | undefined;
-    if (controlDisposition === "delete_uncommitted") {
-      const existing = pendingUncommittedConversationCleanups.get(conversationId);
-      pendingState = {
-        control: existing === undefined || control.revision >= existing.control.revision
-          ? control
-          : existing.control,
-        runIds: [...new Set([...(existing?.runIds ?? []), ...runIds])],
-      };
-      pendingUncommittedConversationCleanups.set(conversationId, pendingState);
-      cleanupControl = pendingState.control;
-      scheduledRunIds = pendingState.runIds;
-    }
-    const pendingRetry = conversationCleanupRetryTimers.get(conversationId);
-    if (pendingRetry !== undefined) {
-      clearTimeout(pendingRetry);
-      conversationCleanupRetryTimers.delete(conversationId);
-    }
-    const activeCleanup = conversationCleanupTasks.get(conversationId);
-    if (activeCleanup !== undefined) return activeCleanup;
-    let retryNeeded = false;
+    disposition: ConversationCleanupDisposition = "retain_tombstone",
+  ): Promise<boolean> {
+    if (released) return false;
+    const existingJob = conversationCleanupJobs.get(conversationId);
+    const job = existingJob ?? createConversationCleanupJob();
+    if (existingJob === undefined) conversationCleanupJobs.set(conversationId, job);
+    const request = prepareConversationCleanup(job, control, runIds, disposition);
+    if (job.activeTask !== undefined) return job.activeTask;
+    let cleanupFailed = false;
     const cleanup = (async () => {
-      const cleanupRunIds = new Set(scheduledRunIds);
-      if (controlDisposition === "retain_tombstone") {
+      const cleanupRunIds = new Set(request.runIds);
+      if (request.disposition === "retain_tombstone") {
         try {
           const persisted = await input.repository.list(Number.MAX_SAFE_INTEGER);
           for (const summary of persisted) {
             if (summary.conversationId === conversationId) cleanupRunIds.add(summary.runId);
           }
         } catch (error) {
-          retryNeeded = true;
+          cleanupFailed = true;
           emitDiagnostic({
             kind: "conversation_cleanup_failed",
             conversationId,
@@ -2433,9 +1928,9 @@ export function createOrdinaryAgentFeature(input: {
         const cancellationCleanup = cancellationCleanupTasks.get(runId);
         if (cancellationCleanup !== undefined) await cancellationCleanup.catch(() => undefined);
         try {
-          await settleExecution(runId);
+          await terminalSettlement.settleExecution(runId);
         } catch (error) {
-          retryNeeded = true;
+          cleanupFailed = true;
           emitDiagnostic({ kind: "conversation_cleanup_failed", conversationId, phase: "terminal_settlement", runId, error });
           continue;
         }
@@ -2443,7 +1938,7 @@ export function createOrdinaryAgentFeature(input: {
           try {
             await input.releaseToolEvidenceOwner(runId);
           } catch (error) {
-            retryNeeded = true;
+            cleanupFailed = true;
             emitDiagnostic({ kind: "conversation_cleanup_failed", conversationId, phase: "tool_evidence", runId, error });
             continue;
           }
@@ -2451,73 +1946,59 @@ export function createOrdinaryAgentFeature(input: {
         try {
           await memoryFactRepository.deleteByRunIds([runId]);
         } catch (error) {
-          retryNeeded = true;
+          cleanupFailed = true;
           emitDiagnostic({ kind: "conversation_cleanup_failed", conversationId, phase: "memory_facts", runId, error });
           continue;
         }
         try {
           await input.repository.delete(runId);
         } catch (error) {
-          retryNeeded = true;
+          cleanupFailed = true;
           emitDiagnostic({ kind: "conversation_cleanup_failed", conversationId, phase: "run_snapshot", runId, error });
           continue;
         }
         documents.delete(runId);
-        acceptedToolResults.delete(runId);
+        terminalSettlement.clearAcceptedToolResults(runId);
         activityStreams.delete(runId);
         listeners.delete(runId);
       }
-      if ((controlDisposition === "retain_tombstone" || (!retryNeeded && cleanupRunIds.size > 0)) &&
-          input.managedAttachmentRepository !== undefined) {
+      if (request.disposition === "retain_tombstone" || (!cleanupFailed && cleanupRunIds.size > 0)) {
         try {
-          await input.managedAttachmentRepository.deleteConversation(conversationId);
+          await managedAttachments.deleteConversation(conversationId);
         } catch (error) {
-          retryNeeded = true;
+          cleanupFailed = true;
           emitDiagnostic({ kind: "managed_attachment_cleanup_failed", conversationId, error });
         }
       }
-      if (controlDisposition === "retain_tombstone" || !retryNeeded) {
+      if (request.disposition === "retain_tombstone" || !cleanupFailed) {
         try {
-          await input.sessionRepository.delete(cleanupControl.state.sessionRef);
+          await input.sessionRepository.delete(request.control.state.sessionRef);
         } catch (error) {
-          retryNeeded = true;
+          cleanupFailed = true;
           emitDiagnostic({ kind: "conversation_cleanup_failed", conversationId, phase: "session", error });
         }
       }
-      if (!retryNeeded && controlDisposition === "delete_uncommitted") {
+      if (!cleanupFailed && request.disposition === "delete_uncommitted") {
         try {
-          await input.conversationRepository.delete(conversationId, cleanupControl.revision);
+          await input.conversationRepository.delete(conversationId, request.control.revision);
           conversationDocuments.delete(conversationId);
           unavailableConversationIds.delete(conversationId);
         } catch (error) {
-          retryNeeded = true;
+          cleanupFailed = true;
           emitDiagnostic({ kind: "conversation_cleanup_failed", conversationId, phase: "conversation_control", error });
         }
       }
     })();
-    const tracked = cleanup.finally(() => {
-      if (conversationCleanupTasks.get(conversationId) === tracked) conversationCleanupTasks.delete(conversationId);
-      if (!retryNeeded) {
-        if (controlDisposition === "delete_uncommitted" &&
-            pendingUncommittedConversationCleanups.get(conversationId) === pendingState) {
-          pendingUncommittedConversationCleanups.delete(conversationId);
-        }
-        conversationCleanupFailureCounts.delete(conversationId);
-        return;
-      }
-      if (released) return;
-      const consecutiveFailures = (conversationCleanupFailureCounts.get(conversationId) ?? 0) + 1;
-      conversationCleanupFailureCounts.set(conversationId, consecutiveFailures);
-      const retryDelayMs = conversationCleanupRetryDelayMs(consecutiveFailures);
-      const retryTimer = setTimeout(() => {
-        if (conversationCleanupRetryTimers.get(conversationId) !== retryTimer) return;
-        conversationCleanupRetryTimers.delete(conversationId);
-        void scheduleConversationCleanup(conversationId, cleanupControl, scheduledRunIds, controlDisposition);
-      }, retryDelayMs);
-      retryTimer.unref?.();
-      conversationCleanupRetryTimers.set(conversationId, retryTimer);
-    });
-    conversationCleanupTasks.set(conversationId, tracked);
+    const tracked = cleanup
+      .then(() => {
+        if (!cleanupFailed) recordConversationCleanupSuccess(job, request);
+        return !cleanupFailed;
+      })
+      .finally(() => {
+        if (job.activeTask === tracked) job.activeTask = undefined;
+        if (conversationCleanupJobIsIdle(job)) conversationCleanupJobs.delete(conversationId);
+      });
+    job.activeTask = tracked;
     return tracked;
   }
 
@@ -2530,59 +2011,13 @@ export function createOrdinaryAgentFeature(input: {
   }) {
     assertLive();
     await readyPromise;
-    const repository = requireManagedAttachmentRepository();
-    const attachmentId = managedAttachmentDraftId(
-      draftInput.uploadRequestId,
-      draftInput.uploadFileIndex,
-      idFactory,
-    );
-    try {
-      return await repository.createDraft({
-        attachmentId,
-        instanceId: input.managedAttachmentInstanceId!,
-        originalName: draftInput.originalName,
-        ...(draftInput.mimeType === undefined ? {} : { mimeType: draftInput.mimeType }),
-        content: draftInput.content,
-        createdAt: now(),
-      });
-    } catch (error) {
-      if (error instanceof OrdinaryManagedAttachmentRepositoryError && (
-        error.code === "ordinary_managed_attachment_ownership_conflict" ||
-        error.code === "ordinary_managed_attachment_invalid_id" ||
-        error.code === "ordinary_managed_attachment_invalid_input"
-      )) {
-        throw new OrdinaryFeatureError(
-          "ordinary_managed_attachment_unavailable",
-          error.message,
-          { cause: error },
-        );
-      }
-      throw error;
-    }
+    return managedAttachments.createDraft(draftInput);
   }
 
   async function discardManagedAttachmentDraft(attachmentId: string): Promise<void> {
     assertLive();
     await readyPromise;
-    try {
-      await requireManagedAttachmentRepository().discardDraft({
-        attachmentId,
-        instanceId: input.managedAttachmentInstanceId!,
-      });
-    } catch (error) {
-      if (error instanceof OrdinaryManagedAttachmentRepositoryError && (
-        error.code === "ordinary_managed_attachment_ownership_conflict" ||
-        error.code === "ordinary_managed_attachment_invalid_id" ||
-        error.code === "ordinary_managed_attachment_invalid_input"
-      )) {
-        throw new OrdinaryFeatureError(
-          "ordinary_managed_attachment_unavailable",
-          error.message,
-          { cause: error },
-        );
-      }
-      throw error;
-    }
+    await managedAttachments.discardDraft(attachmentId);
   }
 
   async function visibleRuns(control: OrdinaryConversationControlDocument): Promise<readonly OrdinaryRunState[]> {
@@ -2642,7 +2077,7 @@ export function createOrdinaryAgentFeature(input: {
       return {
         state,
         continuation,
-        finalizeSession: !wasTerminal || sessionFinalizationPending.has(runId),
+        finalizeSession: !wasTerminal || terminalSettlement.isFinalizationPending(runId),
       };
     });
     scheduleCancellationCleanup(runId, cancellation.state, cancellation.finalizeSession, cancellation.continuation);
@@ -2657,20 +2092,13 @@ export function createOrdinaryAgentFeature(input: {
   ): void {
     if (continuation !== undefined) cancellationCleanupContinuations.set(runId, continuation);
     if (released) return;
-    const pendingRetry = cancellationCleanupRetryTimers.get(runId);
-    if (pendingRetry !== undefined) {
-      clearTimeout(pendingRetry);
-      cancellationCleanupRetryTimers.delete(runId);
-    }
     if (cancellationCleanupTasks.has(runId)) return;
-    let retryNeeded = false;
     const cleanup = (async () => {
       const pendingContinuation = cancellationCleanupContinuations.get(runId);
       if (pendingContinuation !== undefined) {
         try {
           await pendingContinuation.release();
         } catch (error) {
-          retryNeeded = true;
           emitDiagnostic({ kind: "cancellation_cleanup_failed", runId, phase: "continuation_release", error });
           return;
         }
@@ -2683,11 +2111,8 @@ export function createOrdinaryAgentFeature(input: {
       }
       if (finalizeSession) {
         try {
-          await finalizeExecutionSession(runId, state, state.status.kind !== "completed");
+          await terminalSettlement.finalizeSession(runId, state, state.status.kind !== "completed");
         } catch {
-          // Keep owning the post-commit cleanup even when no new scheduling
-          // event arrives to trigger the Session finalization retry path.
-          retryNeeded = true;
           return;
         }
       }
@@ -2695,33 +2120,17 @@ export function createOrdinaryAgentFeature(input: {
         controllers.has(runId);
       if (!stillHasLiveExecution) {
         try {
-          await settleExecution(runId);
+          await terminalSettlement.settleExecution(runId);
         } catch (error) {
-          retryNeeded = true;
           emitDiagnostic({ kind: "cancellation_cleanup_failed", runId, phase: "terminal_settlement", error });
           return;
         }
       }
       await activateSuccessor(runId);
-      notifyStableTerminal(runId);
+      terminalSettlement.notifyStable(runId);
     })();
     const tracked = cleanup.finally(() => {
       if (cancellationCleanupTasks.get(runId) === tracked) cancellationCleanupTasks.delete(runId);
-      if (!retryNeeded) {
-        cancellationCleanupFailureCounts.delete(runId);
-        return;
-      }
-      if (released) return;
-      const consecutiveFailures = (cancellationCleanupFailureCounts.get(runId) ?? 0) + 1;
-      cancellationCleanupFailureCounts.set(runId, consecutiveFailures);
-      const retryDelayMs = cancellationCleanupRetryDelayMs(consecutiveFailures);
-      const retryTimer = setTimeout(() => {
-        if (cancellationCleanupRetryTimers.get(runId) !== retryTimer) return;
-        cancellationCleanupRetryTimers.delete(runId);
-        scheduleCancellationCleanup(runId, state, finalizeSession, undefined);
-      }, retryDelayMs);
-      retryTimer.unref?.();
-      cancellationCleanupRetryTimers.set(runId, retryTimer);
     });
     cancellationCleanupTasks.set(runId, tracked);
     trackPostExecutionTask(tracked);
@@ -2793,7 +2202,7 @@ export function createOrdinaryAgentFeature(input: {
           message: "The live confirmation continuation is no longer available.",
       });
       await activateSuccessor(ownerRunId);
-      notifyStableTerminal(ownerRunId);
+      terminalSettlement.notifyStable(ownerRunId);
       return blocked;
     }
     const operation = (async () => {
@@ -2802,9 +2211,9 @@ export function createOrdinaryAgentFeature(input: {
         recordModelRequest(ownerRunId, "after_approval");
         outcome = await continuation!.decide({ decision, abortSignal: controller!.signal });
         await completeReasoning(ownerRunId);
-        rememberToolResults(ownerRunId, outcome.toolCalls);
+        terminalSettlement.rememberToolResults(ownerRunId, outcome.toolCalls);
         await applyOutcome(ownerRunId, outcome);
-        forgetPersistedToolResults(ownerRunId, outcome.toolCalls);
+        terminalSettlement.forgetPersistedToolResults(ownerRunId, outcome.toolCalls);
       } catch (error) {
         if (await handleCompletedCommitFailure(ownerRunId, outcome, error)) return;
         let failure = error;
@@ -2829,11 +2238,11 @@ export function createOrdinaryAgentFeature(input: {
                   capabilityResolution: outcome.capabilityResolution,
                 }),
           } as OrdinaryRunTransition, { keepTerminal: controller!.signal.aborted });
-          await finalizeExecutionSession(ownerRunId, terminal, true);
+          await terminalSettlement.finalizeSession(ownerRunId, terminal, true);
         }
       } finally {
         try {
-          await settleExecution(ownerRunId);
+          await terminalSettlement.settleExecution(ownerRunId);
         } finally {
           if (outcome?.status !== "approval_required" && controllers.get(ownerRunId) === controller) {
             controllers.delete(ownerRunId);
@@ -2863,7 +2272,7 @@ export function createOrdinaryAgentFeature(input: {
   function assertLive(): void {
 
     if (released) {
-      throw new OrdinaryFeatureError("ordinary_feature_released", "Ordinary Agent is shutting down");
+      throw new OrdinaryFeatureError("ordinary_feature_released", "Agent is shutting down");
     }
   }
 
@@ -2877,16 +2286,6 @@ export function createOrdinaryAgentFeature(input: {
 
   function isHiddenRun(state: OrdinaryRunState): boolean {
     return isHiddenConversation(state.turn.conversationId);
-  }
-
-  function requireManagedAttachmentRepository(): OrdinaryManagedAttachmentRepository {
-    if (input.managedAttachmentRepository === undefined || input.managedAttachmentInstanceId === undefined) {
-      throw new OrdinaryFeatureError(
-        "ordinary_managed_attachment_unavailable",
-        "Ordinary managed attachment storage is unavailable.",
-      );
-    }
-    return input.managedAttachmentRepository;
   }
 
   async function recordMemoryRead(
@@ -3007,12 +2406,8 @@ export function createOrdinaryAgentFeature(input: {
       },
       async getManagedAttachment(attachmentId) {
         await readyPromise;
-        try {
-          return clone(await requireManagedAttachmentRepository().get(attachmentId));
-        } catch (error) {
-          if (isManagedAttachmentNotFound(error)) return undefined;
-          throw error;
-        }
+        const record = await managedAttachments.get(attachmentId);
+        return record === undefined ? undefined : clone(record);
       },
       async listMemoryFacts(query) {
         await readyPromise;
@@ -3023,7 +2418,7 @@ export function createOrdinaryAgentFeature(input: {
         // closed their lost continuations, pending tool rounds and approvals.
         await readyPromise;
         const document = await load(runId);
-        if (document === undefined || isHiddenRun(document.state) || !isStableTerminalState(document.state)) return undefined;
+        if (document === undefined || isHiddenRun(document.state) || !terminalSettlement.isStable(document.state)) return undefined;
         return projectStableTerminalRunFacts(document);
       },
     },
@@ -3047,7 +2442,7 @@ export function createOrdinaryAgentFeature(input: {
         );
         const afterSequence = cursor === undefined || reset ? 0 : cursor.sequence;
         return {
-          cursor: activityCursor(stream),
+          cursor: ordinaryRunActivityCursor(stream),
           reset,
           activities: clone(stream.activities
             .filter((activity) => activity.sequence > afterSequence)
@@ -3065,16 +2460,13 @@ export function createOrdinaryAgentFeature(input: {
             listeners.delete(runId);
             // The last live consumer left; a settled terminal run no longer
             // needs its in-memory stream (replay rebuilds it on demand).
-            maybeReleaseTerminalStream(runId);
+            terminalSettlement.releaseStableResources(runId);
           }
         };
       },
       subscribeStableTerminalRuns(listener) {
         assertLive();
-        stableTerminalListeners.add(listener);
-        return () => {
-          stableTerminalListeners.delete(listener);
-        };
+        return terminalSettlement.subscribeStable(listener);
       },
     },
     async release() {
@@ -3097,59 +2489,36 @@ export function createOrdinaryAgentFeature(input: {
     await readyPromise.catch(() => undefined);
     for (const timer of visibleAssistantCheckpointTimers.values()) clearTimeout(timer);
     visibleAssistantCheckpointTimers.clear();
-    for (const pump of successorActivationPumps.values()) {
-      if (pump.retryTimer !== undefined) clearTimeout(pump.retryTimer);
+    for (const job of conversationCleanupJobs.values()) {
+      job.pendingUncommitted = undefined;
     }
-    successorActivationPumps.clear();
-    for (const timer of conversationCleanupRetryTimers.values()) clearTimeout(timer);
-    conversationCleanupRetryTimers.clear();
-    conversationCleanupFailureCounts.clear();
-    pendingUncommittedConversationCleanups.clear();
     pendingUncommittedConversationBirths.clear();
-    for (const timer of cancellationCleanupRetryTimers.values()) clearTimeout(timer);
-    cancellationCleanupRetryTimers.clear();
-    cancellationCleanupFailureCounts.clear();
-    for (const timer of managedAttachmentClaimRollbackRetryTimers.values()) clearTimeout(timer);
-    managedAttachmentClaimRollbackRetryTimers.clear();
-    for (const timer of completionCommitRetryTimers.values()) clearTimeout(timer);
-    completionCommitRetryTimers.clear();
-    completionCommitRetryCounts.clear();
     await Promise.allSettled([...visibleAssistantBuffers.keys()].map(persistVisibleAssistantCheckpoint));
     for (const controller of controllers.values()) controller.abort("ordinary_feature_released");
     await releaseContinuations();
     await Promise.allSettled(executions.values());
-    await Promise.allSettled(conversationCleanupTasks.values());
+    await Promise.allSettled(successorActivationTasks.values());
+    await Promise.allSettled(
+      [...conversationCleanupJobs.values()].flatMap((job) =>
+        job.activeTask === undefined ? [] : [job.activeTask]),
+    );
     await Promise.allSettled(postExecutionTasks);
     await Promise.allSettled(mutationQueues.values());
-    await Promise.allSettled(managedAttachmentClaimRollbackTasks.values());
-    await Promise.allSettled([...managedAttachmentClaimRollbacks.values()].map(async (rollback) => {
-      await attemptManagedAttachmentClaimRollback(rollback.runId);
-    }));
     // An abort-ignoring execution may have returned an approval while release awaited it.
     await releaseContinuations();
-    await finalizeRemainingSessions();
-    if (input.managedAttachmentRepository !== undefined && input.managedAttachmentInstanceId !== undefined) {
-      await input.managedAttachmentRepository.removeDraftsOwnedBy(input.managedAttachmentInstanceId);
-    }
+    await terminalSettlement.release();
+    await managedAttachments.release();
     listeners.clear();
-    stableTerminalListeners.clear();
     activityStreams.clear();
     activeModelRequestIds.clear();
     reasoningBuffers.clear();
-    sessionsAwaitingFinalization.clear();
-    sessionFinalizationPending.clear();
-    sessionFinalizationFailures.clear();
-    sessionFinalizationRetries.clear();
+    successorActivationTasks.clear();
     cancellationCleanupTasks.clear();
     cancellationCleanupContinuations.clear();
-    conversationCleanupTasks.clear();
-    managedAttachmentClaimRollbackTasks.clear();
-    managedAttachmentClaimRollbacks.clear();
-    managedAttachmentClaimRollbackFailureCounts.clear();
+    conversationCleanupJobs.clear();
     visibleAssistantBuffers.clear();
     visibleAssistantCheckpointTimers.clear();
     approvalReservations.clear();
-    acceptedToolResults.clear();
     documents.clear();
     conversationDocuments.clear();
   }
@@ -3179,180 +2548,6 @@ export function createOrdinaryAgentFeature(input: {
     }
   }
 
-  async function finalizeRemainingSessions(): Promise<void> {
-    const failures: unknown[] = [];
-    for (const runId of [...sessionsAwaitingFinalization]) {
-      const document = await load(runId);
-      if (document === undefined) continue;
-      try {
-        await finalizeExecutionSession(
-          runId,
-          document.state,
-          document.state.status.kind !== "completed",
-        );
-      } catch (error) {
-        failures.push(sessionFinalizationFailures.get(runId) ?? error);
-      }
-    }
-    if (failures.length > 0) {
-      throw new AggregateError(failures, "Failed to finalize one or more Ordinary Agent Sessions.");
-    }
-  }
-
-  function activityCursor(stream: { readonly streamId: string; readonly nextSequence: number }): OrdinaryRunActivityCursor {
-    return { streamId: stream.streamId, sequence: stream.nextSequence - 1 };
-  }
-}
-
-function durableActivities(
-  runId: string,
-  events: readonly OrdinaryRunEvent[],
-  toolResults: readonly ToolCallResult[],
-  toolResultRecordedAt: Readonly<Record<string, string>>,
-  assistantTextByEntryId: ReadonlyMap<string, string>,
-): OrdinaryRunActivity[] {
-  const pending: Array<{
-    readonly recordedAt: string;
-    readonly priority: number;
-    readonly insertion: number;
-    readonly activity: OrdinaryRunActivity;
-  }> = [];
-  for (const [insertion, event] of events.entries()) {
-    if (event.type === "model.output.completed") {
-      const content = assistantTextByEntryId.get(sessionEntryKey(event.assistantEntryRef));
-      if (content === undefined) continue;
-      pending.push({
-        recordedAt: event.recordedAt,
-        priority: 1,
-        insertion,
-        activity: {
-          activityId: `transition:${event.eventId}`,
-          runId,
-          sequence: 0,
-          recordedAt: event.recordedAt,
-          type: "model.output.completed",
-          durability: "durable",
-          modelRequestId: event.modelRequestId,
-          assistantEntryRef: clone(event.assistantEntryRef),
-          content,
-        },
-      });
-      continue;
-    }
-    pending.push({
-      recordedAt: event.recordedAt,
-      priority: 1,
-      insertion,
-      activity: {
-      activityId: `transition:${event.eventId}`,
-      runId,
-      sequence: 0,
-      recordedAt: event.recordedAt,
-      type: "run.transition",
-      durability: "durable",
-      event: clone(event),
-      },
-    });
-  }
-  for (const [insertion, result] of toolResults.entries()) {
-    if (result.status === "approval_required") continue;
-    const recordedAt = toolResultRecordedAt[ordinaryToolResultKey(result)];
-    if (recordedAt === undefined) continue;
-    pending.push({
-      recordedAt,
-      priority: 0,
-      insertion,
-      activity: {
-        activityId: toolActivityId(result),
-        runId,
-        sequence: 0,
-        recordedAt,
-        type: "tool.result",
-        durability: "durable",
-        result: clone(result),
-      },
-    });
-  }
-
-  // A reasoning/output pair is one semantic unit for replay. Anchoring both
-  // activities to the earlier timestamp makes the precedence deterministic
-  // even when persistence records the pair out of time order.
-  const messageStartAtByRequest = new Map<string, string>();
-  for (const item of pending) {
-    if (durableMessagePhase(item.activity) === undefined) continue;
-    const requestId = durableModelRequestId(item.activity);
-    if (requestId === undefined) continue;
-    const current = messageStartAtByRequest.get(requestId);
-    if (current === undefined || item.recordedAt.localeCompare(current) < 0) {
-      messageStartAtByRequest.set(requestId, item.recordedAt);
-    }
-  }
-
-  return pending
-    .map((item) => {
-      const phase = durableMessagePhase(item.activity);
-      const requestId = durableModelRequestId(item.activity);
-      return {
-        item,
-        sortAt: phase === undefined || requestId === undefined
-          ? item.recordedAt
-          : messageStartAtByRequest.get(requestId) ?? item.recordedAt,
-        phase: phase ?? 0,
-      };
-    })
-    .sort((left, right) => left.sortAt.localeCompare(right.sortAt) ||
-      left.phase - right.phase ||
-      left.item.priority - right.item.priority ||
-      left.item.insertion - right.item.insertion)
-    .map(({ item }, index) => ({ ...item.activity, sequence: index + 1 }));
-}
-
-/** Returns the semantic phase within one model request's replay unit. */
-function durableMessagePhase(activity: OrdinaryRunActivity): 0 | 1 | undefined {
-  if (durableReasoningCompletedActivity(activity)) return 0;
-  if (durableOutputCompletedActivity(activity)) return 1;
-  return undefined;
-}
-
-function durableModelRequestId(activity: OrdinaryRunActivity): string | undefined {
-  if (activity.type === "run.transition") {
-    return "modelRequestId" in activity.event ? activity.event.modelRequestId : undefined;
-  }
-  return "modelRequestId" in activity ? activity.modelRequestId : undefined;
-}
-
-function durableReasoningCompletedActivity(activity: OrdinaryRunActivity): boolean {
-  return activity.type === "run.transition" &&
-    activity.event.type === "model.reasoning.completed";
-}
-
-function durableOutputCompletedActivity(activity: OrdinaryRunActivity): boolean {
-  return activity.type === "model.output.completed";
-}
-
-export function durableOrdinaryRunReplayFromState(
-  run: OrdinaryRunState,
-  assistantEntries: readonly import("../model-runtime/agent-session.js").AgentSessionAssistantEntry[],
-): OrdinaryRunActivityReplay {
-  const assistantTextByEntryId = new Map(assistantEntries.map((entry) =>
-    [sessionEntryKey(entry.entryRef), entry.text] as const));
-  const activities = durableActivities(
-    run.runId,
-    run.timeline,
-    run.toolCalls,
-    run.toolResultRecordedAt,
-    assistantTextByEntryId,
-  );
-  const lastEventId = run.timeline.at(-1)?.eventId ?? "initial";
-  return {
-    cursor: {
-      // Command responses are durable snapshots, not subscriptions to the live stream generation.
-      streamId: `ordinary-command-response:${run.runId}:${lastEventId}`,
-      sequence: activities.length,
-    },
-    reset: false,
-    activities,
-  };
 }
 
 function sessionEntryKey(ref: import("../model-runtime/agent-session.js").AgentSessionEntryRef): string {
@@ -3424,88 +2619,12 @@ function sameSessionEntryRef(left: AgentSessionEntryRef | null, right: AgentSess
     ? left === right
     : left.sessionId === right.sessionId && left.entryId === right.entryId;
 }
-type ManagedAttachmentClaimRollback = {
-  readonly runId: string;
-  readonly conversationId: string;
-  readonly attachmentIds: readonly string[];
-  readonly protectedByRunId?: string;
-};
-type ManagedAttachmentClaimReservation = {
-  readonly rollbackRunId: string;
-  readonly protectedAttachmentIds: readonly string[];
-};
-function conversationCleanupRetryDelayMs(consecutiveFailures: number): number {
-  return Math.min(30_000, 250 * (2 ** Math.min(7, Math.max(0, consecutiveFailures - 1))));
-}
-function cancellationCleanupRetryDelayMs(consecutiveFailures: number): number {
-  return Math.min(30_000, 250 * (2 ** Math.min(7, Math.max(0, consecutiveFailures - 1))));
-}
-function managedAttachmentClaimRollbackRetryDelayMs(consecutiveFailures: number): number {
-  return Math.min(30_000, 250 * (2 ** Math.min(7, Math.max(0, consecutiveFailures - 1))));
-}
 function cancellationReason(value: unknown): string { return typeof value === "string" ? value : "cancelled"; }
-function successorActivationRetryDelayMs(consecutiveFailures: number): number {
-  return Math.min(2_000, 25 * (2 ** Math.min(6, Math.max(0, consecutiveFailures - 1))));
-}
 function ordinaryExecutionFailureFacts(value: unknown): { readonly code: string; readonly message: string } {
   const explicit = executionErrorFacts(value);
   if (explicit !== undefined) return explicit;
   if (value instanceof OrdinaryFeatureError) return { code: value.code, message: value.message };
   return { code: "ordinary_execution_failed", message: errorMessage(value) };
-}
-function isManagedAttachmentNotFound(value: unknown): boolean {
-  return value instanceof OrdinaryManagedAttachmentRepositoryError &&
-    value.code === "ordinary_managed_attachment_not_found";
-}
-function managedAttachmentIds(input: OrdinaryRunInput): readonly string[] {
-  return [...new Set((input.context?.contextRefs ?? []).flatMap((ref) => {
-    const attachmentId = managedUploadAttachmentId(ref.ref);
-    return ref.kind === "file" && attachmentId !== undefined ? [attachmentId] : [];
-  }))];
-}
-function canonicalManagedAttachmentInput(
-  input: OrdinaryRunInput,
-  records: readonly OrdinaryManagedAttachmentRecord[],
-): OrdinaryRunInput {
-  if (input.context === undefined || records.length === 0) return input;
-  const byId = new Map(records.map((record) => [record.attachmentId, record] as const));
-  const contextRefs = (input.context.contextRefs ?? []).map((ref) => {
-    const attachmentId = managedUploadAttachmentId(ref.ref);
-    if (attachmentId === undefined) return ref;
-    const record = byId.get(attachmentId);
-    if (record === undefined) {
-      throw new OrdinaryFeatureError(
-        "ordinary_managed_attachment_unavailable",
-        `Managed attachment ${attachmentId} was not claimed for this run.`,
-      );
-    }
-    return {
-      attachmentId: record.attachmentId,
-      ref: managedUploadAttachmentRef(record.attachmentId),
-      kind: "file" as const,
-      title: record.originalName,
-      summary: `上传附件：${record.originalName} · ${record.byteLength} bytes`,
-      metadata: {
-        byteLength: record.byteLength,
-        ...(record.mimeType === undefined ? {} : { mimeType: record.mimeType }),
-        available: true,
-        truncated: false,
-      },
-    };
-  });
-  const permissionBoundaryRefs = [
-    ...(input.context.permissionBoundaryRefs ?? []).filter((ref) =>
-      !ref.startsWith("read:uploaded-attachment:")),
-    ...records.map((record) => `read:uploaded-attachment:${record.attachmentId}`),
-  ];
-  return {
-    ...input,
-    context: {
-      ...input.context,
-      contextRefs,
-      permissionBoundaryRefs: [...new Set(permissionBoundaryRefs)],
-    },
-  };
 }
 function normalizedSubmissionId(value: string | undefined): string | undefined {
   if (value === undefined) return undefined;
@@ -3513,31 +2632,6 @@ function normalizedSubmissionId(value: string | undefined): string | undefined {
     throw new OrdinaryFeatureError("ordinary_submission_conflict", "Ordinary submission id is invalid.");
   }
   return value;
-}
-function managedAttachmentDraftId(
-  uploadRequestId: string | undefined,
-  uploadFileIndex: number | undefined,
-  idFactory: IdFactory,
-): string {
-  if (uploadRequestId === undefined && uploadFileIndex === undefined) {
-    return idFactory("ordinary-managed-attachment");
-  }
-  if (uploadRequestId === undefined || uploadFileIndex === undefined ||
-    uploadRequestId.trim().length === 0 || uploadRequestId.length > 200 || uploadRequestId.includes("\0") ||
-    !Number.isSafeInteger(uploadFileIndex) || uploadFileIndex < 0 || uploadFileIndex > 10_000) {
-    throw new OrdinaryFeatureError(
-      "ordinary_managed_attachment_unavailable",
-      "Managed attachment upload identity is invalid.",
-    );
-  }
-  const digest = createHash("sha256")
-    .update("ordinary-managed-upload/v1\0")
-    .update(uploadRequestId)
-    .update("\0")
-    .update(String(uploadFileIndex))
-    .digest("base64url")
-    .slice(0, 32);
-  return `ordinary-managed-attachment-${digest}`;
 }
 function sameSubmissionInput(left: OrdinaryRunInput, right: OrdinaryRunInput): boolean {
   const identity = (value: OrdinaryRunInput) => ({

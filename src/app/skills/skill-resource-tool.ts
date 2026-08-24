@@ -1,9 +1,6 @@
-import { stringOrUndefined } from "../../kernel/values/index.js";
 import path from "node:path";
 import type { SkillDefinition } from "./contracts.js";
 import type { ToolExecutor } from "../../domain/tools/index.js";
-import type { AgentToolRegistryContribution } from "../tool-center/factory.js";
-import type { ToolRegistry, ToolRegistryScope } from "../tool-center/tool-registry.js";
 import {
   DEFAULT_SKILL_RESOURCE_MAX_CHARS,
   readSkillResource,
@@ -12,8 +9,8 @@ import type { SkillRuntimeResourceType } from "./skill-loader.js";
 import {
   asRecord,
   positiveInteger,
-  stringOrFallback,
-} from "../tool-center/adapters/local-workspace-common.js";
+  stringOrUndefined,
+} from "../../kernel/values/index.js";
 
 const DEFAULT_MAX_CHARS = DEFAULT_SKILL_RESOURCE_MAX_CHARS;
 const MAX_MAX_CHARS = 64_000;
@@ -56,8 +53,8 @@ export function createReadSkillResourceTool(
         throw new Error("skill_read cancelled.");
       }
       const record = asRecord(input);
-      const skillId = stringOrFallback(record.skillId, "");
-      const relativePath = stringOrFallback(record.path, "");
+      const skillId = stringOrUndefined(record.skillId) ?? "";
+      const relativePath = stringOrUndefined(record.path) ?? "";
       const type = resourceTypeOrUndefined(record.type);
       if (skillId.length === 0) {
         throw new Error("skill_read requires skillId.");
@@ -150,40 +147,6 @@ export function hasReadableSelectedSkillResources(
   return selectedSkillResources(skillContexts).size > 0;
 }
 
-export function registerSkillResourceTool(
-  registry: ToolRegistry,
-  skillContexts: readonly SkillToolContext[],
-  options: {
-    readonly includeWhenEmpty?: boolean;
-    readonly scopes?: readonly ToolRegistryScope[];
-  } = {},
-): void {
-  if (options.includeWhenEmpty !== true && !hasReadableSelectedSkillResources(skillContexts)) {
-    return;
-  }
-  registry.register({
-    executor: createReadSkillResourceTool(skillContexts),
-    scopes: options.scopes ?? ["agent-basic"],
-    enabledByDefault: true,
-  });
-}
-
-export function createSkillToolRegistryContribution(
-  skillContexts: readonly SkillToolContext[],
-  scopes: readonly ToolRegistryScope[] = ["agent-basic"],
-): AgentToolRegistryContribution {
-  return (register) => {
-    if (!hasReadableSelectedSkillResources(skillContexts)) {
-      return;
-    }
-    register({
-      executor: createReadSkillResourceTool(skillContexts),
-      scopes,
-      enabledByDefault: true,
-    });
-  };
-}
-
 type SelectedSkillResource = {
   readonly skillId: string;
   readonly type: SkillRuntimeResourceType;
@@ -258,7 +221,7 @@ function resourceIndexForSkill(skill: SkillDefinition): readonly {
         readonly contentHash?: string;
       } | undefined => {
         const record = asRecord(item);
-        const relativePath = stringOrFallback(record.relativePath, "");
+        const relativePath = stringOrUndefined(record.relativePath) ?? "";
         const type = resourceTypeOrUndefined(record.type);
         if (relativePath.length === 0 || type === undefined) {
           return undefined;
@@ -289,8 +252,8 @@ function resourceIndexForSkill(skill: SkillDefinition): readonly {
       readonly contentHash?: string;
     } | undefined => {
       const record = asRecord(item);
-      const sourcePath = stringOrFallback(record.sourcePath, "");
-      const relativePath = stringOrFallback(record.relativePath, "") || resourceRelativePathFromSource(skill, sourcePath) || "";
+      const sourcePath = stringOrUndefined(record.sourcePath) ?? "";
+      const relativePath = (stringOrUndefined(record.relativePath) ?? "") || resourceRelativePathFromSource(skill, sourcePath) || "";
       const type = resourceTypeOrUndefined(record.kind);
       if (relativePath.length === 0 || type === undefined) {
         return undefined;

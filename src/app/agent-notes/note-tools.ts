@@ -1,6 +1,5 @@
 import type { ToolExecutionContext, ToolExecutor } from "../../domain/tools/index.js";
 import { asRecord, stringOrUndefined } from "../../kernel/values/index.js";
-import type { AgentToolRegistryContribution } from "../tool-center/factory.js";
 import {
   AGENT_NOTE_MAX_CHARS,
   AgentNotesError,
@@ -24,20 +23,8 @@ export type NoteToolOptions = {
   readonly initialVersions?: AgentNoteVersions;
 };
 
-export function createAgentNotesToolRegistryContribution(
-  options: NoteToolOptions,
-): AgentToolRegistryContribution {
-  return (register) => {
-    register({
-      executor: createNoteWriteTool(options),
-      scopes: ["agent-basic"],
-      enabledByDefault: true,
-    });
-  };
-}
-
 /**
- * NoteWrite：模型主动沉淀记忆的工具（ADR-0033）。
+ * NoteWrite：模型主动沉淀记忆的工具。
  *
  * 设计要点：
  * - 全量替换而不是追加：整理、合并、删旧对模型来说就是普通的编辑动作，

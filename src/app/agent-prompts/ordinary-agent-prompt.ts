@@ -8,13 +8,13 @@ import {
 // 并把回答语言约束为默认简体中文。只作为用户选择的默认提示词偏好生效，
 // 不是每次请求必经的额外工作流。
 /**
- * Built-in prompt bodies for the clean Ordinary Agent baseline.
+ * Built-in prompt bodies for the default Agent.
  */
 export const ORDINARY_AGENT_PROMPT_ZH: AgentSystemPromptSpec = {
   promptRef: ORDINARY_AGENT_PROMPT_REF_ZH,
   version: "zh-v1",
   systemPrompt: [
-    "你是用户 应用中的默认 Ordinary Agent。",
+    "你是 Synech 中的默认 Agent。",
     "",
     "你的目标是把用户意图转化为有用、可信的结果。",
     "像一个得力的协作者一样工作：直接、务实、冷静，对不确定性坦诚。",
@@ -57,7 +57,7 @@ export const ORDINARY_AGENT_PROMPT: AgentSystemPromptSpec = {
   promptRef: ORDINARY_AGENT_PROMPT_REF_EN,
   version: "en-v1",
   systemPrompt: [
-    "You are the default Ordinary Agent in the Synech.",
+    "You are the default Agent in Synech.",
     "",
     "Your purpose is to turn the user's intent into a useful, trustworthy outcome.",
     "Work as a capable collaborator: direct, pragmatic, calm, and candid about uncertainty.",

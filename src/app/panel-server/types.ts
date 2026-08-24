@@ -14,7 +14,7 @@ export type PanelServerOptions = {
   readonly modelCatalogFetch?: PanelModelCatalogFetch;
   readonly directoryPicker?: () => Promise<string | undefined>;
   readonly contextAttachmentPicker?: () => Promise<PanelContextAttachmentSelection | undefined>;
-  readonly synechRestorePicker?: () => Promise<string | undefined>;
+  readonly restorePicker?: () => Promise<string | undefined>;
   readonly externalResourceOpener?: (target: PanelExternalResourceTarget) => Promise<void>;
   readonly additionalSkillRoots?: readonly SkillRootInput[];
   readonly skillRoots?: readonly SkillRootInput[];

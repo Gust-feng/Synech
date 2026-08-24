@@ -13,7 +13,6 @@ export type AgentSystemPromptSpec = {
 
 export type AgentToolVisibilityProfile = {
   readonly profileId: string;
-  readonly runMode: "agent";
   readonly visibleToolScopes?: readonly CapabilityToolScope[];
   readonly hiddenToolScopes?: readonly CapabilityToolScope[];
   readonly hiddenToolNames?: readonly string[];

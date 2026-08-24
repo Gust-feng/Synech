@@ -2,23 +2,6 @@ import { promises as fs } from "node:fs";
 
 import { isTransientRenameError } from "../values/error.js";
 
-/**
- * 原子写入中「重试 rename」这一段的唯一事实源。
- *
- * 收敛范围说明：全仓有 6 处原子写实现，但它们在临时文件布局与持久化强度上存在
- * 真实差异，且这些差异被现有测试断言覆盖：
- *
- * - `file-system-config-store` 把临时文件放在目标同级目录并以 `.` 前缀命名；
- *   其测试断言临时文件名匹配 `^\.settings\.json\..+\.tmp$`。
- * - `conversation-control-repository` 与 Ordinary `file-system-repository` 把临时文件
- *   放进独立的 `.tmp/` 子目录，因为它们的枚举逻辑按 `entry.isDirectory()` 遍历同级目录，
- *   临时文件混入同级会污染枚举；其测试断言 `.tmp` 目录写后为空。
- * - `run-snapshot-store` 额外调用 `handle.sync()` 做 fsync，持久化强度高于其余实现。
- *
- * 因此这里不强行合并出一个带大量开关的「万能原子写」，只收敛各实现中逐字重复、
- * 且曾经出现语义分歧的重试段。临时文件布局与 fsync 策略仍由各 store 自己决定。
- */
-
 /** rename 重试的默认次数，覆盖 Windows 上常见的瞬时占用窗口。 */
 const DEFAULT_MAX_ATTEMPTS = 6;
 

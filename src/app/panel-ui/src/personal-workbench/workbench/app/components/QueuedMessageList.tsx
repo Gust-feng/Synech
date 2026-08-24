@@ -39,11 +39,11 @@ export function QueuedMessageList({ messages, onRemove, onUpdate, onGuide }: Que
   return (
     <div
       className="border-b px-3 pb-2.5 pt-3"
-      style={{ borderColor: "var(--aa-border)" }}
+      style={{ borderColor: "var(--ui-border)" }}
       role="list"
       aria-label="待发送消息队列"
     >
-      <div className="mb-1.5 flex items-center justify-between px-0.5 text-[11px]" style={{ color: "var(--aa-text-3)" }}>
+      <div className="mb-1.5 flex items-center justify-between px-0.5 text-[11px]" style={{ color: "var(--ui-text-3)" }}>
         <span>待发送</span>
         <span aria-label={`${messages.length} 条待发送消息`}>{messages.length}</span>
       </div>
@@ -56,9 +56,9 @@ export function QueuedMessageList({ messages, onRemove, onUpdate, onGuide }: Que
               role="listitem"
               className="flex items-start gap-2 rounded-md border px-2.5 py-2 text-xs"
               style={{
-                borderColor: "var(--aa-border)",
-                background: "var(--aa-surface-hover)",
-                color: "var(--aa-text-2)",
+                borderColor: "var(--ui-border)",
+                background: "var(--ui-surface-hover)",
+                color: "var(--ui-text-2)",
               }}
             >
               {editing ? (
@@ -87,8 +87,8 @@ export function QueuedMessageList({ messages, onRemove, onUpdate, onGuide }: Que
                     <button
                       type="button"
                       onClick={() => commitEditing(message.id)}
-                      className="flex h-5 w-5 items-center justify-center rounded transition-colors hover:bg-[var(--aa-hover-tint)]"
-                      style={{ color: "var(--aa-accent)" }}
+                      className="flex h-5 w-5 items-center justify-center rounded transition-colors hover:bg-[var(--ui-hover-tint)]"
+                      style={{ color: "var(--ui-accent)" }}
                       aria-label="保存待发送消息"
                     >
                       <Check size={12} />
@@ -96,8 +96,8 @@ export function QueuedMessageList({ messages, onRemove, onUpdate, onGuide }: Que
                     <button
                       type="button"
                       onClick={cancelEditing}
-                      className="flex h-5 w-5 items-center justify-center rounded transition-colors hover:bg-[var(--aa-hover-tint)]"
-                      style={{ color: "var(--aa-text-3)" }}
+                      className="flex h-5 w-5 items-center justify-center rounded transition-colors hover:bg-[var(--ui-hover-tint)]"
+                      style={{ color: "var(--ui-text-3)" }}
                       aria-label="取消编辑待发送消息"
                     >
                       <X size={12} />
@@ -108,8 +108,8 @@ export function QueuedMessageList({ messages, onRemove, onUpdate, onGuide }: Que
                     <button
                       type="button"
                       onClick={() => void onGuide(message.id)}
-                      className="flex h-5 items-center gap-1 rounded px-1.5 text-[10px] font-medium transition-colors hover:bg-[var(--aa-hover-tint)]"
-                      style={{ color: "var(--aa-accent)" }}
+                      className="flex h-5 items-center gap-1 rounded px-1.5 text-[10px] font-medium transition-colors hover:bg-[var(--ui-hover-tint)]"
+                      style={{ color: "var(--ui-accent)" }}
                       aria-label={`引导待发送消息：${message.content}`}
                     >
                       <ArrowUpRight size={11} />
@@ -118,8 +118,8 @@ export function QueuedMessageList({ messages, onRemove, onUpdate, onGuide }: Que
                     <button
                       type="button"
                       onClick={() => beginEditing(message)}
-                      className="flex h-5 w-5 items-center justify-center rounded transition-colors hover:bg-[var(--aa-hover-tint)]"
-                      style={{ color: "var(--aa-text-3)" }}
+                      className="flex h-5 w-5 items-center justify-center rounded transition-colors hover:bg-[var(--ui-hover-tint)]"
+                      style={{ color: "var(--ui-text-3)" }}
                       aria-label="编辑待发送消息"
                     >
                       <PencilLine size={12} />
@@ -127,8 +127,8 @@ export function QueuedMessageList({ messages, onRemove, onUpdate, onGuide }: Que
                     <button
                       type="button"
                       onClick={() => onRemove(message.id)}
-                      className="flex h-5 w-5 items-center justify-center rounded transition-colors hover:bg-[var(--aa-hover-tint)]"
-                      style={{ color: "var(--aa-text-3)" }}
+                      className="flex h-5 w-5 items-center justify-center rounded transition-colors hover:bg-[var(--ui-hover-tint)]"
+                      style={{ color: "var(--ui-text-3)" }}
                       aria-label="撤回待发送消息"
                     >
                       <X size={12} />

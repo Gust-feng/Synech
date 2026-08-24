@@ -6,7 +6,7 @@ import type { LocalDevSecretStore, LocalSettings, SecretMetadata, SettingsStore 
 import type { ModelUsage } from "../../domain/intelligence/index.js";
 import type { ToolCallResult } from "../../domain/tools/index.js";
 import { ConfigCenter } from "../config-center/index.js";
-import { startLocalPanelServer } from "../panel-server.js";
+import { startLocalPanelServer } from "../panel-server/index.js";
 import type { PanelProviderFetch } from "../panel-server/types.js";
 
 type RealAiSmokeEnvironment = Readonly<Record<string, string | undefined>>;
@@ -127,7 +127,7 @@ export async function runRealAiSmoke(
         runtime: "ordinary_agent",
         protocol: configuration.protocol,
         runId: submitted.run.runId,
-        message: view.view.detail.error?.message ?? `Ordinary Agent ended with status ${view.view.run.status}.`,
+        message: view.view.detail.error?.message ?? `Agent ended with status ${view.view.run.status}.`,
       };
     }
     if (view.view.detail.toolResults.length === 0) {
@@ -136,7 +136,7 @@ export async function runRealAiSmoke(
         runtime: "ordinary_agent",
         protocol: configuration.protocol,
         runId: submitted.run.runId,
-        message: "Ordinary Agent completed without a persisted tool fact.",
+        message: "Agent completed without a persisted tool fact.",
       };
     }
     if (!hasReportedUsage(view.view.detail.usage)) {
@@ -145,7 +145,7 @@ export async function runRealAiSmoke(
         runtime: "ordinary_agent",
         protocol: configuration.protocol,
         runId: submitted.run.runId,
-        message: "Ordinary Agent completed without valid provider usage.",
+        message: "Agent completed without valid provider usage.",
       };
     }
     return {
@@ -213,7 +213,7 @@ function smokeConfiguration(env: RealAiSmokeEnvironment):
   | { readonly status: "ready"; readonly protocol: SmokeProtocol; readonly baseUrl: string; readonly model: string; readonly apiKey: string }
   | Extract<RealAiSmokeSummary, { readonly status: "skipped" }> {
   if (env.SYNECH_AI_MODE?.trim().toLowerCase() === "none") {
-    return skipped("ai_disabled", "AI is disabled; the Ordinary Agent smoke was not started.");
+    return skipped("ai_disabled", "AI is disabled; the Agent smoke was not started.");
   }
   const apiKey = env.SYNECH_MODEL_API_KEY?.trim() || env.OPENAI_API_KEY?.trim();
   if (apiKey === undefined || apiKey.length === 0) {
@@ -251,7 +251,7 @@ async function waitForTerminalView(baseUrl: string, runId: string, timeoutMs: nu
       new URL(`api/ordinary/runs/${encodeURIComponent(runId)}/view`, baseUrl),
     ));
     if (["completed", "failed", "cancelled", "blocked", "approval_needed"].includes(view.view.run.status)) return view;
-    if (Date.now() >= deadline) throw new Error(`Ordinary Agent smoke timed out after ${timeoutMs} ms.`);
+    if (Date.now() >= deadline) throw new Error(`Agent smoke timed out after ${timeoutMs} ms.`);
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
 }

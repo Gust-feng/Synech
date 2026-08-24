@@ -3,6 +3,7 @@ import type {
   ModelCapabilities,
   SanitizedCommandShellConfig,
   ToolStateSettings,
+  WebSearchRuntimeConfig,
 } from "../../domain/config/index.js";
 import type { ToolExecutionGateway } from "../../domain/tools/index.js";
 import {
@@ -31,6 +32,7 @@ export type AgentToolRegistryContribution = (
 export type CreateAgentToolCenterOptions = {
   readonly env?: AgentToolEnvironment;
   readonly fetch?: AgentToolProviderFetch;
+  readonly webSearch?: WebSearchRuntimeConfig;
   readonly workspaceRoot?: string;
   readonly playwrightAvailable?: boolean;
   readonly toolStates?: readonly ToolStateSettings[];
@@ -64,18 +66,22 @@ export async function createConfiguredToolCenter(
   configCenter: ConfigCenter,
   input: CreateAgentToolCenterOptions = {}
 ): Promise<ToolExecutionGateway> {
-  return createToolCenter({
-    ...input,
-    env: input.env ?? await configCenter.createModelRuntimeEnvironment(),
-  });
+  const [env, webSearch] = await Promise.all([
+    input.env === undefined ? configCenter.createModelRuntimeEnvironment() : input.env,
+    input.webSearch === undefined ? configCenter.resolveWebSearchRuntimeConfig() : input.webSearch,
+  ]);
+  return createToolCenter({ ...input, env, webSearch });
 }
 
 export async function createConfiguredToolCenterFactory(
   configCenter: ConfigCenter,
   input: CreateAgentToolCenterOptions = {}
 ): Promise<() => ToolExecutionGateway> {
-  const env = input.env ?? await configCenter.createModelRuntimeEnvironment();
-  return () => createToolCenter({ ...input, env });
+  const [env, webSearch] = await Promise.all([
+    input.env === undefined ? configCenter.createModelRuntimeEnvironment() : input.env,
+    input.webSearch === undefined ? configCenter.resolveWebSearchRuntimeConfig() : input.webSearch,
+  ]);
+  return () => createToolCenter({ ...input, env, webSearch });
 }
 
 function createToolCenter(input: CreateAgentToolCenterOptions): ToolExecutionGateway {

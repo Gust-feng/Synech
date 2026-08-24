@@ -31,24 +31,24 @@ export const READING_WIDTH = 680
 
 /** A tinted content card: quiet surface, hairline border, no shadow. */
 export const contentCard: CSSProperties = {
-  background: 'var(--aa-surface, #faf9f7)',
-  border: '1px solid var(--aa-border, rgba(45,40,34,0.09))',
+  background: 'var(--ui-surface, #faf9f7)',
+  border: '1px solid var(--ui-border, rgba(45,40,34,0.09))',
   borderRadius: RADII.lg,
 }
 
 /** The composer / input surface — the one element allowed a whisper of lift. */
 export function composerSurface(focused = false): CSSProperties {
   return {
-    background: 'var(--aa-composer, #ffffff)',
+    background: 'var(--ui-composer, #ffffff)',
     border: `1px solid ${
       focused
-        ? 'color-mix(in srgb, var(--aa-accent, #6865a7) 42%, var(--aa-border, rgba(45,40,34,0.09)))'
-        : 'var(--aa-border, rgba(45,40,34,0.09))'
+        ? 'color-mix(in srgb, var(--ui-accent, #6865a7) 42%, var(--ui-border, rgba(45,40,34,0.09)))'
+        : 'var(--ui-border, rgba(45,40,34,0.09))'
     }`,
     borderRadius: RADII.lg,
     boxShadow: focused
-      ? 'var(--aa-composer-shadow-focus, 0 2px 12px rgba(45,40,34,0.05))'
-      : 'var(--aa-composer-shadow, 0 1px 3px rgba(45,40,34,0.03))',
+      ? 'var(--ui-composer-shadow-focus, 0 2px 12px rgba(45,40,34,0.05))'
+      : 'var(--ui-composer-shadow, 0 1px 3px rgba(45,40,34,0.03))',
     transition: 'border-color 120ms ease, box-shadow 120ms ease',
   }
 }

@@ -515,7 +515,7 @@ function clampRatio(value: number): number {
 
 function compactionAgentDisplayName(input: { readonly displayName: string } | undefined): string {
   const displayName = input?.displayName.replace(/\s+/g, " ").trim();
-  return displayName === undefined || displayName.length === 0 ? "Ordinary Agent" : displayName;
+  return displayName === undefined || displayName.length === 0 ? "Agent" : displayName;
 }
 
 function indentBlock(value: string): string {

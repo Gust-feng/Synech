@@ -1,5 +1,5 @@
 import type { ConfirmationDecision } from "../../domain/confirmation/index.js";
-import { compactOrdinaryText } from "../tool-projection/safe-projection.js";
+import { sanitizeAssistantVisibleText } from "./visible-text-safety.js";
 
 export function cleanConfirmationSummary(value: string): string {
   const cleaned = value
@@ -57,7 +57,7 @@ export function basicConfirmationDecisionSummary(
 }
 
 function compactSafeText(value: string, maxLength: number): string {
-  const normalized = compactOrdinaryText(value, maxLength).replace(/\s+/g, " ").trim();
+  const normalized = sanitizeAssistantVisibleText(value).replace(/\s+/g, " ").trim();
   if (normalized.length <= maxLength) {
     return normalized;
   }
