@@ -1,6 +1,5 @@
 @import 'tailwindcss' source(none);
 @source '../workbench.tsx';
-@source '../app/App.tsx';
-@source '../app/components/*.tsx';
+@source '../app';
 
 @import 'tw-animate-css';

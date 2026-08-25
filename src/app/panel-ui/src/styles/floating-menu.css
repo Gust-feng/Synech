@@ -1,12 +1,13 @@
 .ui-floating-menu {
   position: relative;
+  z-index: 1;
   flex-shrink: 0;
 }
 
 .ui-floating-menu__trigger {
   display: flex;
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   align-items: center;
   justify-content: center;
   border: 0;

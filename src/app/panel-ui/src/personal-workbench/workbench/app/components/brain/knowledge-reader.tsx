@@ -31,6 +31,7 @@ export function KnowledgeReader({
         <header className="shrink-0 flex items-center gap-2 px-5" style={{ height: 44 }}>
           <div className="flex-1" />
           <button
+            type="button"
             onClick={() => {
               brain.uncollect(page.refId)
               onBack()
@@ -91,8 +92,15 @@ export function KnowledgeReader({
                 <span className="text-xs" style={{ color: 'var(--ui-text-3, #aba39b)' }}>
                   链接到…
                 </span>
-                <button onClick={() => setLinkPickerOpen(false)} style={{ color: 'var(--ui-text-3, #aba39b)' }}>
-                  <X size={12} />
+                <button
+                  type="button"
+                  aria-label="关闭链接选择"
+                  title="关闭"
+                  onClick={() => setLinkPickerOpen(false)}
+                  className="flex h-6 w-6 items-center justify-center rounded hover:bg-[var(--ui-hover-tint)]"
+                  style={{ color: 'var(--ui-text-3, #aba39b)' }}
+                >
+                  <X aria-hidden="true" size={12} />
                 </button>
               </div>
               <div className="max-h-48 overflow-y-auto">
@@ -103,6 +111,7 @@ export function KnowledgeReader({
                 ) : (
                   linkableTargets.map((p) => (
                     <button
+                      type="button"
                       key={p.refId}
                       onClick={() => {
                         brain.addLink(page.refId, p.refId)
@@ -120,6 +129,7 @@ export function KnowledgeReader({
             </div>
           ) : (
             <button
+              type="button"
               onClick={() => setLinkPickerOpen(true)}
               className="mt-2 w-full flex items-center gap-1.5 px-2 py-1.5 rounded-md text-xs transition-colors hover:bg-[var(--ui-hover-tint)]"
               style={{ color: 'var(--ui-accent, #6865a7)' }}
@@ -205,25 +215,39 @@ function LinkChip({ page, onClick, onRemove }: { page: ResolvedPage; onClick: ()
   const [hovered, setHovered] = useState(false)
   return (
     <div
-      className="flex items-center gap-2 rounded-md px-2 py-1.5 cursor-pointer transition-colors"
+      className="relative flex items-center gap-2 rounded-md px-2 py-1.5 cursor-pointer transition-colors"
       style={{ background: hovered ? 'var(--ui-surface-hover, #eeebe6)' : 'transparent' }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      onClick={onClick}
+      onFocusCapture={() => setHovered(true)}
+      onBlurCapture={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setHovered(false)
+      }}
     >
+      <button
+        type="button"
+        aria-label={`打开${page.title}`}
+        title={page.title}
+        onClick={onClick}
+        className="absolute inset-0 z-0 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset"
+      />
       {knowledgePageIcon(page, 12)}
       <span className="flex-1 text-xs truncate" style={{ color: 'var(--ui-text-1, #292722)' }}>
         {page.title}
       </span>
       {onRemove && hovered && (
         <button
+          type="button"
+          aria-label={`移除指向${page.title}的链接`}
+          title="移除链接"
           onClick={(e) => {
             e.stopPropagation()
             onRemove()
           }}
+          className="relative z-[1] flex h-6 w-6 shrink-0 items-center justify-center rounded hover:bg-[var(--ui-hover-tint)]"
           style={{ color: 'var(--ui-text-3, #aba39b)' }}
         >
-          <X size={11} />
+          <X aria-hidden="true" size={11} />
         </button>
       )}
     </div>

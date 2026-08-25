@@ -185,7 +185,7 @@ export function BrainPage({
                 <div className="mx-auto w-full px-10 py-10" style={{ maxWidth: 860 }}>
                   {/* 搜索框:任何时候都能盖过导航直接取用 */}
                   <div
-                    className="flex items-center gap-3 px-4 rounded-2xl mb-9"
+                    className="flex items-center gap-3 px-4 rounded-2xl mb-9 focus-within:ring-2 focus-within:ring-[var(--ui-accent)]"
                     style={{
                       height: 48,
                       background: 'var(--ui-surface, #fff)',
@@ -194,18 +194,25 @@ export function BrainPage({
                       transition: 'all .15s',
                     }}
                   >
-                    <Search size={17} style={{ color: searching ? 'var(--ui-accent, #6865a7)' : 'var(--ui-text-3, #aba39b)' }} />
+                    <Search aria-hidden="true" size={17} style={{ color: searching ? 'var(--ui-accent, #6865a7)' : 'var(--ui-text-3, #aba39b)' }} />
                     <input
                       value={query}
                       onChange={(e) => setQuery(e.target.value)}
-                      placeholder="想找点什么?搜标题、正文,或直接问……"
+                      aria-label="搜索知识库"
+                      placeholder="搜索标题或正文……"
                       spellCheck={false}
                       className="flex-1 bg-transparent outline-none text-sm"
                       style={{ color: 'var(--ui-text-1, #292722)' }}
                     />
                     {searching && (
-                      <button onClick={() => setQuery('')} className="p-1 rounded-full hover:bg-[var(--ui-hover-tint)]">
-                        <X size={15} style={{ color: 'var(--ui-text-3, #aba39b)' }} />
+                      <button
+                        type="button"
+                        aria-label="清除搜索"
+                        title="清除搜索"
+                        onClick={() => setQuery('')}
+                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full hover:bg-[var(--ui-hover-tint)]"
+                      >
+                        <X aria-hidden="true" size={15} style={{ color: 'var(--ui-text-3, #aba39b)' }} />
                       </button>
                     )}
                   </div>

@@ -307,11 +307,14 @@ export function KnowledgeNavigation({
                 主题
               </span>
               <button
+                type="button"
+                aria-label="新建主题"
+                title="新建主题"
                 onClick={() => setAdding(true)}
-                className="p-0.5 rounded hover:bg-[var(--ui-hover-tint)]"
+                className="flex h-7 w-7 items-center justify-center rounded hover:bg-[var(--ui-hover-tint)]"
                 style={{ color: 'var(--ui-text-3, #aba39b)' }}
               >
-                <Plus size={13} />
+                <Plus aria-hidden="true" size={13} />
               </button>
             </div>
             <div className="space-y-0.5">
@@ -339,6 +342,7 @@ export function KnowledgeNavigation({
                   autoFocus
                   value={name}
                   onChange={(e) => setName(e.target.value)}
+                  aria-label="主题名称"
                   onBlur={() => {
                     if (name.trim()) {
                       const id = themeApi.createTheme(name)
@@ -471,9 +475,11 @@ function NavItem({
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
       aria-current={active ? 'page' : undefined}
-      className="relative isolate flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-[var(--ui-hover-tint)]"
+      title={label}
+      className="relative isolate flex min-h-8 w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-[var(--ui-hover-tint)]"
       style={{
         color: active ? 'var(--ui-accent-fg, #fff)' : 'var(--ui-text-1, #292722)',
       }}
@@ -491,9 +497,9 @@ function NavItem({
       <span className="relative z-[1] shrink-0 flex items-center justify-center" style={{ width: 15, opacity: active ? 1 : 0.7 }}>
         {icon}
       </span>
-      <span className="relative z-[1] flex-1 truncate text-sm">{label}</span>
+      <span className="relative z-[1] min-w-0 flex-1 truncate text-sm">{label}</span>
       {count != null && (
-        <span className="relative z-[1] text-xs" style={{ opacity: 0.6 }}>
+        <span className="relative z-[1] shrink-0 text-xs tabular-nums" style={{ opacity: 0.68 }}>
           {count}
         </span>
       )}
@@ -523,6 +529,7 @@ export function ThemeHeader({
           autoFocus
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
+          aria-label={`重命名主题${theme.name}`}
           onBlur={() => {
             themeApi.renameTheme(theme.id, draft)
             setEditing(false)
@@ -535,16 +542,19 @@ export function ThemeHeader({
             }
           }}
           spellCheck={false}
-          className="text-base font-semibold bg-transparent outline-none border-b"
+          className="min-w-0 flex-1 text-base font-semibold bg-transparent outline-none border-b"
           style={{ color: 'var(--ui-text-1, #292722)', borderColor: theme.color }}
         />
       ) : (
-        <h2
-          className="m-0 text-base font-semibold cursor-text"
-          style={{ color: 'var(--ui-text-1, #292722)' }}
-          onClick={() => (setDraft(theme.name), setEditing(true))}
-        >
-          {theme.name}
+        <h2 className="m-0 min-w-0" style={{ color: 'var(--ui-text-1, #292722)' }}>
+          <button
+            type="button"
+            className="block max-w-full truncate text-left text-base font-semibold"
+            title={`重命名主题${theme.name}`}
+            onClick={() => (setDraft(theme.name), setEditing(true))}
+          >
+            {theme.name}
+          </button>
         </h2>
       )}
       <span className="text-xs" style={{ color: 'var(--ui-text-3, #aba39b)' }}>
@@ -552,14 +562,17 @@ export function ThemeHeader({
       </span>
       <div className="flex-1" />
       <button
+        type="button"
+        aria-label={`删除主题${theme.name}`}
+        title={`删除主题${theme.name}`}
         onClick={() => {
           themeApi.deleteTheme(theme.id)
           onDeleted()
         }}
-        className="p-1 rounded hover:bg-[var(--ui-hover-tint)]"
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded hover:bg-[var(--ui-hover-tint)]"
         style={{ color: 'var(--ui-text-3, #aba39b)' }}
       >
-        <Trash2 size={14} />
+        <Trash2 aria-hidden="true" size={14} />
       </button>
     </div>
   )

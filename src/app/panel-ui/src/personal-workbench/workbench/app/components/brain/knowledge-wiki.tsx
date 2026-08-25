@@ -49,6 +49,7 @@ function StartPicker({
     const degree = brain.outgoing(id).length + brain.backlinks(id).length
     return (
       <button
+        type="button"
         key={id}
         data-wiki-start-item
         onClick={() => onPick(id)}
@@ -314,6 +315,7 @@ function Pane({
     >
       {/* 竖书脊:收起时露出的就是它 */}
       <button
+        type="button"
         onClick={onReveal}
         aria-label={`展开${page.title}`}
         className="shrink-0 flex flex-col items-center gap-3 pt-4 pb-4 transition-colors hover:bg-[var(--ui-hover-tint)]"
@@ -362,12 +364,14 @@ function Pane({
           <div className="flex-1" />
           {onClose && (
             <button
+              type="button"
               onClick={onClose}
               aria-label={`关闭${page.title}`}
-              className="p-1 rounded hover:bg-[var(--ui-hover-tint)] shrink-0"
+              title={`关闭${page.title}`}
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded hover:bg-[var(--ui-hover-tint)]"
               style={{ color: 'var(--ui-text-3, #aba39b)' }}
             >
-              <X size={15} />
+              <X aria-hidden="true" size={15} />
             </button>
           )}
         </header>
@@ -461,6 +465,7 @@ function RelRow({
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
       className="group flex min-h-10 w-full min-w-0 items-center gap-2.5 border-b px-3 py-2 text-left transition-colors last:border-b-0 hover:bg-[var(--ui-hover-tint)] focus-visible:bg-[var(--ui-hover-tint)]"
       style={{ borderColor: 'var(--ui-border, rgba(45,40,34,0.08))' }}

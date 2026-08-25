@@ -145,8 +145,7 @@ function SpaceConversationRow(props: {
 
   return (
     <div
-      role="button"
-      className="group/row flex items-center gap-2 rounded-lg cursor-pointer text-sm transition-colors"
+      className="group/row flex items-center gap-2 rounded-lg text-sm transition-colors"
       style={{
         height: 30,
         paddingLeft: 10,
@@ -154,12 +153,14 @@ function SpaceConversationRow(props: {
         color: 'var(--ui-text-2, #6b655d)',
         background: props.selected || hovered ? 'var(--ui-surface-hover, #eeebe6)' : 'transparent',
       }}
-      aria-current={props.selected ? 'true' : undefined}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      onClick={() => { if (!props.renaming) props.onOpen() }}
+      onFocusCapture={() => setHovered(true)}
+      onBlurCapture={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setHovered(false)
+      }}
     >
-      <span style={{
+      <span aria-hidden="true" style={{
         width: 8,
         height: 8,
         borderRadius: 2,
@@ -174,7 +175,15 @@ function SpaceConversationRow(props: {
           onCancel={props.onCancelRename}
         />
       ) : (
-        <span className="flex-1 truncate">{props.conversation.title}</span>
+        <button
+          type="button"
+          aria-current={props.selected ? 'page' : undefined}
+          title={props.conversation.title}
+          onClick={props.onOpen}
+          className="min-w-0 flex-1 truncate rounded text-left"
+        >
+          {props.conversation.title}
+        </button>
       )}
       {!props.renaming && (
         <FloatingMenu

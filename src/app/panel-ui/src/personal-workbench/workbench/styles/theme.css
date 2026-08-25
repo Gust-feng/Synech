@@ -7,7 +7,7 @@
   --personal-paper: #f4f2ef;
   --personal-panel: #faf9f7;
   --personal-ink: #292722;
-  --personal-muted: #87827c;
+  --personal-muted: #5f5a53;
   --personal-line: rgba(45, 40, 34, 0.09);
   --personal-accent: #6865a7;
 
@@ -21,8 +21,8 @@
   --ui-composer-shadow-focus: 0 2px 12px rgba(45, 40, 34, 0.05);
   --ui-border: rgba(45, 40, 34, 0.09);
   --ui-text-1: #292722;
-  --ui-text-2: #87827c;
-  --ui-text-3: #aba39b;
+  --ui-text-2: #5f5a53;
+  --ui-text-3: #756f68;
   --ui-accent: #6865a7;
   --ui-accent-bg: rgba(104, 101, 167, 0.08);
   --ui-accent-fg: #ffffff;
@@ -122,7 +122,7 @@ html[data-style="default"][data-color="dark"] {
   --ui-border: rgba(232, 229, 226, 0.1);
   --ui-text-1: #e8e5e2;
   --ui-text-2: #aaa6a6;
-  --ui-text-3: #7e7b7c;
+  --ui-text-3: #989495;
   --ui-accent: #9892b0;
   --ui-accent-bg: rgba(152, 146, 176, 0.13);
   --ui-accent-fg: #1b1b20;
@@ -316,6 +316,11 @@ html[data-style="default"][data-color="dark"] .ui-sidebar-animation__scene--dark
     font-size: var(--text-base);
     font-weight: var(--font-weight-medium);
     line-height: 1.5;
+  }
+
+  button:focus-visible {
+    outline: 2px solid var(--ui-accent, #6865a7);
+    outline-offset: 2px;
   }
 
   input {
