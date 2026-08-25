@@ -51,8 +51,14 @@ function sourceFiles(directory) {
 }
 
 function resolveSourceImport(importer, specifier) {
-  if (!specifier.startsWith(".")) return undefined;
-  const base = path.resolve(path.dirname(importer), specifier);
+  const base = specifier.startsWith("@ui/")
+    ? path.resolve(sourceRoot, "app/panel-ui/src", specifier.slice("@ui/".length))
+    : specifier.startsWith("@panel-api/")
+      ? path.resolve(sourceRoot, "app/panel-api", specifier.slice("@panel-api/".length))
+      : specifier.startsWith(".")
+        ? path.resolve(path.dirname(importer), specifier)
+        : undefined;
+  if (base === undefined) return undefined;
   const candidates = base.endsWith(".js")
     ? [base.slice(0, -3) + ".ts", base.slice(0, -3) + ".tsx", base.slice(0, -3) + ".cts"]
     : [base + ".ts", base + ".tsx", base + ".cts", path.join(base, "index.ts"), path.join(base, "index.tsx")];
