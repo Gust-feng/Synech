@@ -105,7 +105,15 @@ export type CreateLocalConfigCenterOptions = {
 };
 
 export class ConfigCenter {
+  private mutationTail: Promise<void> = Promise.resolve();
+
   constructor(private readonly options: ConfigCenterOptions) {}
+
+  private runMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.mutationTail.then(operation, operation);
+    this.mutationTail = result.then(() => undefined, () => undefined);
+    return result;
+  }
 
   async getModelProviderConfig(): Promise<SanitizedModelProviderConfig> {
     const settings = await this.readOrCreateSettings();
@@ -128,10 +136,12 @@ export class ConfigCenter {
   }
 
   async updateModelProviderOrder(order: readonly string[]): Promise<readonly string[]> {
-    const current = await this.readOrCreateSettings();
-    const change = changeModelProviderOrder(current, order, new Date().toISOString());
-    await this.options.settingsStore.writeSettings(change.settings);
-    return change.result;
+    return this.runMutation(async () => {
+      const current = await this.readOrCreateSettings();
+      const change = changeModelProviderOrder(current, order, new Date().toISOString());
+      await this.options.settingsStore.writeSettings(change.settings);
+      return change.result;
+    });
   }
 
   async listModelProviderModelCatalogs(): Promise<readonly ModelProviderModelCatalog[]> {
@@ -140,60 +150,70 @@ export class ConfigCenter {
   }
 
   async upsertModelProviderModelCatalog(catalog: ModelProviderModelCatalog): Promise<ModelProviderModelCatalog> {
-    const current = await this.readOrCreateSettings();
-    const change = changeModelProviderModelCatalog(current, catalog, new Date().toISOString());
-    await this.options.settingsStore.writeSettings(change.settings);
-    return change.result;
+    return this.runMutation(async () => {
+      const current = await this.readOrCreateSettings();
+      const change = changeModelProviderModelCatalog(current, catalog, new Date().toISOString());
+      await this.options.settingsStore.writeSettings(change.settings);
+      return change.result;
+    });
   }
 
   async createModelProviderProfile(input: CreateModelProviderProfileInput): Promise<SanitizedModelProviderConfig> {
-    const current = await this.readOrCreateSettings();
-    const change = await createModelProviderProfileSettings(
-      current,
-      this.options.secretStore,
-      input,
-      new Date().toISOString(),
-    );
-    await this.options.settingsStore.writeSettings(change.settings);
-    return change.result;
+    return this.runMutation(async () => {
+      const current = await this.readOrCreateSettings();
+      const change = await createModelProviderProfileSettings(
+        current,
+        this.options.secretStore,
+        input,
+        new Date().toISOString(),
+      );
+      await this.options.settingsStore.writeSettings(change.settings);
+      return change.result;
+    });
   }
 
   async activateModelProviderProfile(profileId: string): Promise<SanitizedModelProviderConfig> {
-    const current = await this.readOrCreateSettings();
-    const change = await activateModelProviderProfileSettings(
-      current,
-      this.options.secretStore,
-      profileId,
-      new Date().toISOString(),
-    );
-    await this.options.settingsStore.writeSettings(change.settings);
-    return change.result;
+    return this.runMutation(async () => {
+      const current = await this.readOrCreateSettings();
+      const change = await activateModelProviderProfileSettings(
+        current,
+        this.options.secretStore,
+        profileId,
+        new Date().toISOString(),
+      );
+      await this.options.settingsStore.writeSettings(change.settings);
+      return change.result;
+    });
   }
 
   async deleteModelProviderProfile(profileId: string): Promise<readonly SanitizedModelProviderConfig[]> {
-    const current = await this.readOrCreateSettings();
-    const change = await deleteModelProviderProfileSettings(
-      current,
-      this.options.secretStore,
-      profileId,
-      new Date().toISOString(),
-    );
-    await this.options.settingsStore.writeSettings(change.settings);
-    return change.result;
+    return this.runMutation(async () => {
+      const current = await this.readOrCreateSettings();
+      const change = await deleteModelProviderProfileSettings(
+        current,
+        this.options.secretStore,
+        profileId,
+        new Date().toISOString(),
+      );
+      await this.options.settingsStore.writeSettings(change.settings);
+      return change.result;
+    });
   }
 
   async updateModelProviderConfig(
     input: UpdateModelProviderConfigInput
   ): Promise<SanitizedModelProviderConfig> {
-    const current = await this.readOrCreateSettings();
-    const change = await changeModelProviderConfig(
-      current,
-      this.options.secretStore,
-      input,
-      new Date().toISOString(),
-    );
-    await this.options.settingsStore.writeSettings(change.settings);
-    return change.result;
+    return this.runMutation(async () => {
+      const current = await this.readOrCreateSettings();
+      const change = await changeModelProviderConfig(
+        current,
+        this.options.secretStore,
+        input,
+        new Date().toISOString(),
+      );
+      await this.options.settingsStore.writeSettings(change.settings);
+      return change.result;
+    });
   }
 
   async listModelCapabilityOverrides(): Promise<readonly ModelCapabilityOverrideSettings[]> {
@@ -207,10 +227,12 @@ export class ConfigCenter {
     readonly providerKind?: ConfiguredModelProviderKind;
     readonly capabilities: Partial<ModelCapabilities>;
   }): Promise<readonly ModelCapabilityOverrideSettings[]> {
-    const current = await this.readOrCreateSettings();
-    const change = changeModelCapabilityOverride(current, input, new Date().toISOString());
-    await this.options.settingsStore.writeSettings(change.settings);
-    return change.result;
+    return this.runMutation(async () => {
+      const current = await this.readOrCreateSettings();
+      const change = changeModelCapabilityOverride(current, input, new Date().toISOString());
+      await this.options.settingsStore.writeSettings(change.settings);
+      return change.result;
+    });
   }
 
   async listToolStates(): Promise<readonly ToolStateSettings[]> {
@@ -219,19 +241,21 @@ export class ConfigCenter {
   }
 
   async updateToolState(input: UpdateToolStateInput): Promise<readonly ToolStateSettings[]> {
-    const current = await this.readOrCreateSettings();
-    const now = new Date().toISOString();
-    const name = normalizeRequiredConfigString(input.name, "tool name");
-    const nextState: ToolStateSettings = { name, enabled: input.enabled, updatedAt: now };
-    const existing = current.toolStates ?? [];
-    const next = normalizeLocalSettings({
-      ...current,
-      version: 1,
-      toolStates: [...existing.filter((state) => state.name !== name), nextState],
-      updatedAt: now,
+    return this.runMutation(async () => {
+      const current = await this.readOrCreateSettings();
+      const now = new Date().toISOString();
+      const name = normalizeRequiredConfigString(input.name, "tool name");
+      const nextState: ToolStateSettings = { name, enabled: input.enabled, updatedAt: now };
+      const existing = current.toolStates ?? [];
+      const next = normalizeLocalSettings({
+        ...current,
+        version: 1,
+        toolStates: [...existing.filter((state) => state.name !== name), nextState],
+        updatedAt: now,
+      });
+      await this.options.settingsStore.writeSettings(next);
+      return next.toolStates ?? [];
     });
-    await this.options.settingsStore.writeSettings(next);
-    return next.toolStates ?? [];
   }
 
   async listMcpServers(): Promise<readonly McpServerSettings[]> {
@@ -240,31 +264,39 @@ export class ConfigCenter {
   }
 
   async upsertMcpServer(input: UpsertMcpServerInput): Promise<readonly McpServerSettings[]> {
-    const current = await this.readOrCreateSettings();
-    const change = changeMcpServer(current, input, new Date().toISOString());
-    await this.options.settingsStore.writeSettings(change.settings);
-    return change.result;
+    return this.runMutation(async () => {
+      const current = await this.readOrCreateSettings();
+      const change = changeMcpServer(current, input, new Date().toISOString());
+      await this.options.settingsStore.writeSettings(change.settings);
+      return change.result;
+    });
   }
 
   async deleteMcpServer(serverId: string): Promise<readonly McpServerSettings[]> {
-    const current = await this.readOrCreateSettings();
-    const change = deleteMcpServerSettings(current, serverId, new Date().toISOString());
-    await this.options.settingsStore.writeSettings(change.settings);
-    return change.result;
+    return this.runMutation(async () => {
+      const current = await this.readOrCreateSettings();
+      const change = deleteMcpServerSettings(current, serverId, new Date().toISOString());
+      await this.options.settingsStore.writeSettings(change.settings);
+      return change.result;
+    });
   }
 
   async updateMcpServerConnectionState(
     input: UpdateMcpServerConnectionStateInput,
   ): Promise<readonly McpServerSettings[]> {
-    const current = await this.readOrCreateSettings();
-    const change = changeMcpServerConnectionState(current, input, new Date().toISOString());
-    await this.options.settingsStore.writeSettings(change.settings);
-    return change.result;
+    return this.runMutation(async () => {
+      const current = await this.readOrCreateSettings();
+      const change = changeMcpServerConnectionState(current, input, new Date().toISOString());
+      await this.options.settingsStore.writeSettings(change.settings);
+      return change.result;
+    });
   }
 
   async writeMcpServerSecretValue(input: McpServerSecretValueInput): Promise<SanitizedMcpServerSecretMetadata> {
-    const settings = await this.readOrCreateSettings();
-    return saveMcpServerSecretValue(settings, this.options.secretStore, input);
+    return this.runMutation(async () => {
+      const settings = await this.readOrCreateSettings();
+      return saveMcpServerSecretValue(settings, this.options.secretStore, input);
+    });
   }
 
   async getInformationAccessConfig(): Promise<SanitizedInformationAccessConfig> {
@@ -287,86 +319,19 @@ export class ConfigCenter {
   async updateInformationAccessConfig(
     input: UpdateInformationAccessConfigInput
   ): Promise<SanitizedInformationAccessConfig> {
-    const current = await this.readOrCreateSettings();
-    const now = new Date().toISOString();
-    const currentInformation = normalizeInformationAccessSettings(current.informationAccess, now);
-    const apiKey = normalizeOptionalString(input.apiKey);
-    const provider =
-      normalizeWebSearchProvider(input.provider) ??
-      (apiKey === undefined ? currentInformation.webSearch.provider : "tavily");
-    const nextInformation: InformationAccessSettings = {
-      webSearch: {
-        provider,
-        updatedAt: now,
-      },
-      tavily: currentInformation.tavily,
-      exa: currentInformation.exa,
-      zai: currentInformation.zai,
-      metaso: currentInformation.metaso,
-      google: currentInformation.google,
-      bing: currentInformation.bing,
-    };
-    const updatedInformation = updateSelectedWebSearchProviderSettings(nextInformation, {
-      provider,
-      now,
-      maxResults: normalizePositiveInteger(input.maxResults),
-      engineId: normalizeOptionalString(input.engineId),
-    });
-    const providerSettings = webSearchProviderSettings(updatedInformation, provider);
-    if (apiKey !== undefined && providerSettings !== undefined) {
-      await this.options.secretStore.writeSecret(providerSettings.secretRef, apiKey);
-    }
-    await this.options.settingsStore.writeSettings({
-      ...current,
-      version: 1,
-      informationAccess: updatedInformation,
-      updatedAt: now,
-    });
-    return toSanitizedInformationAccessConfig({
-      settings: { ...current, informationAccess: updatedInformation, updatedAt: now },
-      secretStore: this.options.secretStore,
+    return this.runMutation(async () => {
+      const settings = await this.writeInformationAccessConfig(input);
+      return toSanitizedInformationAccessConfig({
+        settings,
+        secretStore: this.options.secretStore,
+      });
     });
   }
 
   async updateWebSearchConfig(input: UpdateWebSearchConfigInput): Promise<SanitizedWebSearchConfig> {
-    const current = await this.readOrCreateSettings();
-    const now = new Date().toISOString();
-    const currentInformation = normalizeInformationAccessSettings(current.informationAccess, now);
-    const apiKey = normalizeOptionalString(input.apiKey);
-    const provider =
-      normalizeWebSearchProvider(input.provider) ??
-      (apiKey === undefined ? currentInformation.webSearch.provider : "tavily");
-    const nextInformation: InformationAccessSettings = {
-      webSearch: {
-        provider,
-        updatedAt: now,
-      },
-      tavily: currentInformation.tavily,
-      exa: currentInformation.exa,
-      zai: currentInformation.zai,
-      metaso: currentInformation.metaso,
-      google: currentInformation.google,
-      bing: currentInformation.bing,
-    };
-    const updatedInformation = updateSelectedWebSearchProviderSettings(nextInformation, {
-      provider,
-      now,
-      maxResults: normalizePositiveInteger(input.maxResults),
-      engineId: normalizeOptionalString(input.engineId),
-    });
-    const providerSettings = webSearchProviderSettings(updatedInformation, provider);
-    if (apiKey !== undefined && providerSettings !== undefined) {
-      await this.options.secretStore.writeSecret(providerSettings.secretRef, apiKey);
-    }
-    await this.options.settingsStore.writeSettings({
-      ...current,
-      version: 1,
-      informationAccess: updatedInformation,
-      updatedAt: now,
-    });
-    return toSanitizedWebSearchConfig({
-      settings: { ...current, informationAccess: updatedInformation, updatedAt: now },
-      secretStore: this.options.secretStore,
+    return this.runMutation(async () => {
+      const settings = await this.writeInformationAccessConfig(input);
+      return toSanitizedWebSearchConfig({ settings, secretStore: this.options.secretStore });
     });
   }
 
@@ -391,59 +356,67 @@ export class ConfigCenter {
   }
 
   async updateCommandShellConfig(input: UpdateCommandShellConfigInput): Promise<SanitizedCommandShellConfig> {
-    const current = await this.readOrCreateSettings();
-    const now = new Date().toISOString();
-    const commandShell = normalizeCommandShellUpdate(input, now);
-    const next: LocalSettings = {
-      ...current,
-      version: 1,
-      commandShell,
-      updatedAt: now,
-    };
-    await this.options.settingsStore.writeSettings(next);
-    return toSanitizedCommandShellConfig(commandShell, { now });
+    return this.runMutation(async () => {
+      const current = await this.readOrCreateSettings();
+      const now = new Date().toISOString();
+      const commandShell = normalizeCommandShellUpdate(input, now);
+      const next: LocalSettings = {
+        ...current,
+        version: 1,
+        commandShell,
+        updatedAt: now,
+      };
+      await this.options.settingsStore.writeSettings(next);
+      return toSanitizedCommandShellConfig(commandShell, { now });
+    });
   }
 
   async updateToolConfirmationConfig(input: UpdateToolConfirmationConfigInput): Promise<SanitizedToolConfirmationConfig> {
-    const current = await this.readOrCreateSettings();
-    const now = new Date().toISOString();
-    const toolConfirmation = normalizeToolConfirmationUpdate(input, now);
-    const next: LocalSettings = {
-      ...current,
-      version: 1,
-      toolConfirmation,
-      updatedAt: now,
-    };
-    await this.options.settingsStore.writeSettings(next);
-    return toSanitizedToolConfirmationConfig(toolConfirmation, { now });
+    return this.runMutation(async () => {
+      const current = await this.readOrCreateSettings();
+      const now = new Date().toISOString();
+      const toolConfirmation = normalizeToolConfirmationUpdate(input, now);
+      const next: LocalSettings = {
+        ...current,
+        version: 1,
+        toolConfirmation,
+        updatedAt: now,
+      };
+      await this.options.settingsStore.writeSettings(next);
+      return toSanitizedToolConfirmationConfig(toolConfirmation, { now });
+    });
   }
 
   async updateOrdinaryAgentPromptConfig(input: UpdateOrdinaryAgentPromptConfigInput): Promise<SanitizedOrdinaryAgentPromptConfig> {
-    const current = await this.readOrCreateSettings();
-    const now = new Date().toISOString();
-    const promptSettings = normalizeOrdinaryAgentPromptUpdate(input, current.ordinaryAgent, now);
-    const next = normalizeLocalSettings({
-      ...current,
-      version: 1,
-      ordinaryAgent: promptSettings,
-      updatedAt: now,
+    return this.runMutation(async () => {
+      const current = await this.readOrCreateSettings();
+      const now = new Date().toISOString();
+      const promptSettings = normalizeOrdinaryAgentPromptUpdate(input, current.ordinaryAgent, now);
+      const next = normalizeLocalSettings({
+        ...current,
+        version: 1,
+        ordinaryAgent: promptSettings,
+        updatedAt: now,
+      });
+      await this.options.settingsStore.writeSettings(next);
+      return toSanitizedOrdinaryAgentPromptConfig(next);
     });
-    await this.options.settingsStore.writeSettings(next);
-    return toSanitizedOrdinaryAgentPromptConfig(next);
   }
 
   async updateSkillTriggerConfig(input: UpdateSkillTriggerConfigInput): Promise<SanitizedSkillTriggerConfig> {
-    const current = await this.readOrCreateSettings();
-    const now = new Date().toISOString();
-    const skillTrigger = normalizeSkillTriggerUpdate(input, now);
-    const next: LocalSettings = {
-      ...current,
-      version: 1,
-      skillTrigger,
-      updatedAt: now,
-    };
-    await this.options.settingsStore.writeSettings(next);
-    return toSanitizedSkillTriggerConfig(skillTrigger, { now });
+    return this.runMutation(async () => {
+      const current = await this.readOrCreateSettings();
+      const now = new Date().toISOString();
+      const skillTrigger = normalizeSkillTriggerUpdate(input, now);
+      const next: LocalSettings = {
+        ...current,
+        version: 1,
+        skillTrigger,
+        updatedAt: now,
+      };
+      await this.options.settingsStore.writeSettings(next);
+      return toSanitizedSkillTriggerConfig(skillTrigger, { now });
+    });
   }
 
   async createModelRuntimeEnvironment(
@@ -458,6 +431,43 @@ export class ConfigCenter {
   ): Promise<ModelRuntimeConfigEnvironment> {
     const settings = await this.readOrCreateSettings();
     return projectMcpRuntimeEnvironment(settings, this.options.secretStore, input);
+  }
+
+  private async writeInformationAccessConfig(
+    input: UpdateInformationAccessConfigInput | UpdateWebSearchConfigInput,
+  ): Promise<LocalSettings> {
+    const current = await this.readOrCreateSettings();
+    const now = new Date().toISOString();
+    const currentInformation = normalizeInformationAccessSettings(current.informationAccess, now);
+    const apiKey = normalizeOptionalString(input.apiKey);
+    const provider = normalizeWebSearchProvider(input.provider) ??
+      (apiKey === undefined ? currentInformation.webSearch.provider : "tavily");
+    const informationAccess: InformationAccessSettings = updateSelectedWebSearchProviderSettings({
+      webSearch: { provider, updatedAt: now },
+      tavily: currentInformation.tavily,
+      exa: currentInformation.exa,
+      zai: currentInformation.zai,
+      metaso: currentInformation.metaso,
+      google: currentInformation.google,
+      bing: currentInformation.bing,
+    }, {
+      provider,
+      now,
+      maxResults: normalizePositiveInteger(input.maxResults),
+      engineId: normalizeOptionalString(input.engineId),
+    });
+    const providerSettings = webSearchProviderSettings(informationAccess, provider);
+    if (apiKey !== undefined && providerSettings !== undefined) {
+      await this.options.secretStore.writeSecret(providerSettings.secretRef, apiKey);
+    }
+    const next: LocalSettings = {
+      ...current,
+      version: 1,
+      informationAccess,
+      updatedAt: now,
+    };
+    await this.options.settingsStore.writeSettings(next);
+    return next;
   }
 
   private async readOrCreateSettings(): Promise<LocalSettings> {

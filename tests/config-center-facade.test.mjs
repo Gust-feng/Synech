@@ -9,9 +9,14 @@ import {
 class MemorySettingsStore {
   value;
   writes = 0;
+  readDelayMs = 0;
 
   async readSettings() {
-    return this.value === undefined ? undefined : structuredClone(this.value);
+    const snapshot = this.value === undefined ? undefined : structuredClone(this.value);
+    if (this.readDelayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, this.readDelayMs));
+    }
+    return snapshot;
   }
 
   async writeSettings(settings) {
@@ -143,4 +148,23 @@ test("ConfigCenter projects model runtime values without exposing the settings s
   assert.equal(runtime.SYNECH_MODEL_API_KEY, "model-secret");
   assert.equal(runtime.SYNECH_MODEL_BUILTIN_WEB_SEARCH, "true");
   assert.equal(runtime.OPENAI_API_KEY, undefined);
+});
+
+test("ConfigCenter serializes concurrent read-modify-write mutations", async () => {
+  const { configCenter, settingsStore } = await createCenter();
+  settingsStore.readDelayMs = 20;
+
+  await Promise.all([
+    configCenter.updateToolState({ name: "Read", enabled: false }),
+    configCenter.updateSkillTriggerConfig({ mode: "keyword" }),
+  ]);
+
+  assert.deepEqual(await configCenter.listToolStates(), [
+    {
+      name: "Read",
+      enabled: false,
+      updatedAt: settingsStore.value.toolStates[0].updatedAt,
+    },
+  ]);
+  assert.equal((await configCenter.getSkillTriggerConfig()).mode, "keyword");
 });
