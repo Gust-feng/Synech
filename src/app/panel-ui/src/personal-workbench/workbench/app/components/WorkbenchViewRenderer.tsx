@@ -8,8 +8,8 @@ import { HomePage } from "./HomePage";
 import { MemoryPage } from "./MemoryPage";
 import { SearchPage } from "./SearchPage";
 import { SpacePage } from "./SpacePage";
-import { ConversationSurface, type ConversationSurfaceProjection } from "./ConversationSurface";
-import type { LiveConversationState } from "./conversation-surface-state";
+import { ConversationSurface } from "./ConversationSurface";
+import type { ConversationSurfaceProjection, LiveConversationState } from "./conversation-surface-state";
 import type {
   ConversationOwnerSelection,
   ConversationSurfaceRequest,

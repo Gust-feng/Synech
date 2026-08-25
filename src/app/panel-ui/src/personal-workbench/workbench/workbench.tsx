@@ -16,10 +16,10 @@ import { SurfaceErrorBoundary } from "./app/components/SurfaceErrorBoundary";
 import { Sidebar } from "./app/components/Sidebar";
 
 import { TopBar } from "./app/components/TopBar";
-import type { ConversationSurfaceProjection } from "./app/components/ConversationSurface";
+import type { ConversationSurfaceProjection } from "./app/components/conversation-surface-state";
 import { WorkbenchViewRenderer } from "./app/components/WorkbenchViewRenderer";
 import { WorkbenchStatusNotice } from "./app/components/WorkbenchStatusNotice";
-import type { LiveConversationState } from "./app/components/conversation-surface-state";
+import { projectLiveConversationState } from "./app/components/conversation-surface-state";
 import { resolveById } from "./app/components/brainStore";
 import {
   type ConversationOwnerSelection,
@@ -111,7 +111,11 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
   const pendingSurfaceSpaceRef = useRef<string | null>(null);
   const activeConversation = props.conversation;
   const conversationProjection = projectConversationSurface(props, activeConversation);
-  const conversationState = projectLiveConversationState(conversationProjection, props);
+  const conversationState = projectLiveConversationState({
+    projection: conversationProjection,
+    error: props.error,
+    runStatus: props.currentRun.run?.status,
+  });
   const workspaceProjection = useWorkspaceProjection(true);
   const { knowledgeLoadState, knowledgeError, retryKnowledge, refreshKnowledge, dismissKnowledgeError } = useWorkbenchEnvironment({
     rootRef,
@@ -436,16 +440,6 @@ function projectConversationSurface(
   });
 }
 
-function projectLiveConversationState(
-  active: ConversationSurfaceProjection,
-  props: PersonalWorkbenchProps,
-): LiveConversationState {
-  if (active.pending !== undefined) return "attention";
-  if (active.running) return "working";
-  if (props.error !== undefined || isFailedRun(props.currentRun.run?.status)) return "failed";
-  return active.hasVisibleContent ? "completed" : "initial";
-}
-
 function isKnowledgeView(view: WorkbenchView): boolean {
   return view === "space" || view === "brain" || view === "search";
 }
@@ -453,8 +447,4 @@ function isKnowledgeView(view: WorkbenchView): boolean {
 function requiresImmediateConversationView(props: Pick<PersonalWorkbenchProps, "currentRun" | "pendingConfirmation">): boolean {
   return props.pendingConfirmation !== undefined
     || props.currentRun.run?.status === "running";
-}
-
-function isFailedRun(status: string | undefined): boolean {
-  return status === "failed" || status === "blocked" || status === "cancelled";
 }

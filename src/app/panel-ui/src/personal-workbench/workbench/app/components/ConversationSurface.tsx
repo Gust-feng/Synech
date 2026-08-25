@@ -2,19 +2,12 @@ import type { ReactElement } from "react";
 import type { ChatInputProps } from "../../../../contracts/composer";
 import type { Conversation } from "../../../../contracts/conversation";
 import type { CurrentRunProjection } from "../../../../features/conversations/run/projection";
-import { projectChatActiveView } from "../../../../features/conversations/transcript/live-view";
 import type { AgentDeliverable, OrdinaryWorkView, PendingConfirmation, TranscriptNode } from "../../../../contracts/run";
 import { ConversationPage } from "./ConversationPage";
 import { ConversationTranscript } from "./ConversationTranscript";
 import { SurfaceErrorBoundary } from "./SurfaceErrorBoundary";
 import type { ConfirmationProjection } from "./ConfirmationCard";
-import type { LiveConversationState } from "./conversation-surface-state";
-
-type ConversationPendingConfirmation = NonNullable<OrdinaryWorkView["pendingConfirmation"]> | PendingConfirmation;
-
-export type ConversationSurfaceProjection = ReturnType<
-  typeof projectChatActiveView<AgentDeliverable, ConversationPendingConfirmation, TranscriptNode>
->;
+import type { ConversationSurfaceProjection, LiveConversationState } from "./conversation-surface-state";
 
 export type ConversationSurfaceProps = {
   readonly conversation?: Conversation;
