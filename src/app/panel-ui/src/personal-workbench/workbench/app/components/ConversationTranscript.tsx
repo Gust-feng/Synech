@@ -343,13 +343,13 @@ function ConversationActivitySegment(props: {
   >;
   readonly onDecision?: (decision: "approve_once" | "deny" | "guidance", guidance?: string) => void;
   readonly confirmationBusy: boolean;
-  readonly toolResultsByRunId: Readonly<Record<string, readonly ToolCallResult[]>>;
   readonly developerModeEnabled: boolean;
+  readonly toolResultsByRunId: Readonly<Record<string, readonly ToolCallResult[]>>;
 }) {
   const { thinkingItems, processTimeline } = splitThinkingTimeline(props.segment.timeline);
   return (
     <>
-      {thinkingItems.length > 0 && <ConversationThinkingBlock items={thinkingItems} />}
+      {props.developerModeEnabled && thinkingItems.length > 0 && <ConversationThinkingBlock items={thinkingItems} />}
       <ConversationActivityTimeline
         timeline={processTimeline}
         collapsed={props.segment.collapsed}
@@ -411,7 +411,7 @@ function ConversationThinkingBlock(props: { readonly items: readonly ActivityIte
         style={{ color: "var(--ui-text-2)" }}
       >
         <Brain size={12} className="shrink-0" style={{ color: "var(--ui-text-3)" }} />
-        <span className="text-[12px] font-medium tracking-wide">思考</span>
+        <span className="text-[12px] font-medium tracking-wide">过程</span>
         <span className="ml-auto" style={{ color: "var(--ui-text-3)" }}>
           {open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
         </span>
@@ -459,12 +459,12 @@ function ConversationActivityTimeline(props: {
         ? "failed"
         : "settled";
   const summaryLabel = summaryState === "attention"
-    ? "等待你的确认"
+    ? "需要确认"
     : summaryState === "running"
-      ? `正在处理 ${doneCount}/${visibleItems.length}`
+      ? "正在处理"
       : summaryState === "failed"
-        ? `${failedCount} 项操作未完成`
-        : `完成 ${visibleItems.length} 项操作`;
+        ? "有操作未完成"
+        : "查看执行过程";
   const summaryColor = summaryState === "running"
     ? "var(--ui-accent)"
     : summaryState === "attention"
