@@ -60,7 +60,9 @@ export type SpaceReferenceRouteDependencies = {
     readonly commands: Pick<WorkspaceFeature["commands"], "invalidateMount">;
     readonly queries: Pick<WorkspaceFeature["queries"], "get">;
   };
-  readonly workbenchCoordination: Pick<WorkbenchCoordination, "commands">;
+  readonly workbenchCoordination: {
+    readonly commands: Pick<WorkbenchCoordination["commands"], "attachWorkspaceToSpace">;
+  };
   readonly managedSpaceFolderApplication: ManagedSpaceFolderApplication<SpaceReferenceItem>;
   readonly unlinkExternalReference: (referenceId: string) => Promise<void>;
   readonly spaceConversationDeletion: Pick<SpaceConversationDeletionCoordinator, "assertAvailable">;

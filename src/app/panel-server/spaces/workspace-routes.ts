@@ -19,7 +19,9 @@ export type WorkspaceRouteDependencies = {
     readonly commands: Pick<WorkspaceFeature["commands"], "ensureWorkspace" | "setVisibility" | "reconnectWorkspace">;
     readonly queries: Pick<WorkspaceFeature["queries"], "list" | "get">;
   };
-  readonly workbenchCoordination: Pick<WorkbenchCoordination, "commands">;
+  readonly workbenchCoordination: {
+    readonly commands: Pick<WorkbenchCoordination["commands"], "reconnectWorkspace" | "hideWorkspace" | "deleteWorkspace">;
+  };
 };
 
 /**

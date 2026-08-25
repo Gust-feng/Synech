@@ -15,7 +15,9 @@ export type SpaceMetadataRouteDependencies = {
     readonly queries: Pick<OrdinaryAgentFeature["queries"], "listConversationsByOwner" | "getConversation">;
   };
   readonly workspaceFeature: { readonly queries: Pick<WorkspaceFeature["queries"], "get"> };
-  readonly workbenchCoordination: Pick<WorkbenchCoordination, "commands">;
+  readonly workbenchCoordination: {
+    readonly commands: Pick<WorkbenchCoordination["commands"], "deleteSpace">;
+  };
   readonly ensureDefaultSpace: () => Promise<void>;
   readonly flushSpaceKnowledgeSync: () => Promise<void>;
 };

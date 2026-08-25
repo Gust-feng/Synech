@@ -105,3 +105,64 @@ test("Knowledge detach has a serialized retry boundary and remains idempotent", 
   await coordination.commands.detachKnowledgeFromSpace({ spaceId: "space-1", referenceIds: ["reference-1"] });
   assert.equal(attempts, 3);
 });
+
+test("independent Space and Knowledge commands remain on one coordination lane", async () => {
+  let releaseAttachment;
+  const attachmentGate = new Promise((resolve) => { releaseAttachment = resolve; });
+  let attachmentStarted = false;
+  let detachStarted = false;
+  const coordination = createWorkbenchCoordination({
+    spaces: {
+      commands: {
+        async addReference() {
+          attachmentStarted = true;
+          await attachmentGate;
+          return { id: "reference-1", spaceId: "space-1", title: "Workspace", reference: { kind: "workspace", workspaceId: "workspace-1" } };
+        },
+        async unlinkReference() {},
+      },
+      queries: {
+        async getTree() { return { space: { id: "space-1" }, entries: [] }; },
+        async getReference() { return undefined; },
+        async listReferencesByWorkspace() { return []; },
+      },
+    },
+    workspaces: {
+      commands: {
+        async ensureWorkspace() {
+          return {
+            created: false,
+            workspace: { id: "workspace-1", title: "Workspace", status: "available", visibility: "implicit" },
+            mount: { rootPath: "C:/projects/root", sourceIdentity: "source-1", mountVersion: "mount-1" },
+          };
+        },
+        async reconnectWorkspace() { throw new Error("not used"); },
+        async setVisibility() { throw new Error("not used"); },
+        async discardImplicitWorkspace() { throw new Error("not used"); },
+      },
+    },
+    async inspectDirectory() { return { kind: "folder", identity: "source-1" }; },
+    assertSpaceAvailable() {},
+    async listWorkspaceConversationIds() { return []; },
+    async withWorkspaceAdmission(_workspaceId, operation) { return await operation(); },
+    async withWorkspacePathLease(_workspaceId, operation) { return await operation(); },
+    async withWorkspaceMountTransitionLease(_workspaceId, _rootPath, operation) { return await operation(); },
+    async deleteWorkspace() {},
+    async deleteSpace() {},
+    async detachKnowledgeFromSpace() { detachStarted = true; },
+  });
+
+  const attach = coordination.commands.attachWorkspaceToSpace({
+    spaceId: "space-1",
+    rootPath: "C:/projects/root",
+    actor: { kind: "user" },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(attachmentStarted, true);
+  const detach = coordination.commands.detachKnowledgeFromSpace({ spaceId: "space-1", referenceIds: [] });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(detachStarted, false);
+  releaseAttachment();
+  await Promise.all([attach, detach]);
+  assert.equal(detachStarted, true);
+});

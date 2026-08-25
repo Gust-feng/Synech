@@ -32,6 +32,14 @@ export function createWorkbenchCoordination(input: {
     readonly referenceIds: readonly string[];
   }) => Promise<void>;
 }): WorkbenchCoordination {
+  // Keep one FIFO lane for the Workbench command surface intentionally. A
+  // resource-keyed lane is not sufficient here: attach can create/reuse a
+  // Workspace before writing Space membership, while deleteWorkspace/deleteSpace
+  // capture and clean those same relationships; reconnect also changes the
+  // Workspace mount identity that an in-flight attach or detach may observe.
+  // Path leases protect filesystem I/O, but they cannot serialize these
+  // cross-owner relationship snapshots or their compensation. Split lanes
+  // only after a transaction-level owner/admission protocol exists.
   let tail = Promise.resolve();
   const serialize = <T>(operation: () => Promise<T>): Promise<T> => {
     const result = tail.then(operation, operation);

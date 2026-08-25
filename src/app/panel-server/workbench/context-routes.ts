@@ -12,6 +12,7 @@ import { PanelHttpError, readJsonBody, writeJson } from "../http-utils.js";
 import { parseContextAttachmentPreviewRequest } from "../request-parsers.js";
 import type { PanelContextAttachmentMediaEntry, PanelContextAttachmentSelection } from "../types.js";
 import type { OrdinaryAgentFeature } from "../../ordinary-agent/index.js";
+import type { ContextAttachmentUploadApplication } from "../../application/context-attachment-application.js";
 import { parseContextReference } from "../../../domain/ordinary/index.js";
 
 export type PanelContextRouteRuntime = {
@@ -20,8 +21,9 @@ export type PanelContextRouteRuntime = {
   readonly contextAttachmentMedia: Map<string, PanelContextAttachmentMediaEntry>;
   /** Host-selected root for relative context preview requests. */
   readonly contextPreviewRoot: string;
+  readonly contextAttachmentUploadApplication: ContextAttachmentUploadApplication;
   readonly ordinaryAgentFeature: {
-    readonly commands: Pick<OrdinaryAgentFeature["commands"], "discardManagedAttachmentDraft" | "createManagedAttachmentDraft">;
+    readonly commands: Pick<OrdinaryAgentFeature["commands"], "discardManagedAttachmentDraft">;
     readonly queries: Pick<OrdinaryAgentFeature["queries"], "getManagedAttachment">;
   };
   readonly resolveManagedAttachmentPath: (attachmentId: string) => Promise<string | undefined>;
@@ -78,23 +80,10 @@ export async function handlePanelContextRoute(
     if (files.length > MAX_ATTACHMENT_UPLOAD_FILES) {
       throw new PanelHttpError(413, "too_many_attachment_files", `一次最多上传 ${MAX_ATTACHMENT_UPLOAD_FILES} 个附件。`);
     }
-    const attachments: ContextAttachment[] = [];
-    const createdAttachmentIds: string[] = [];
-    try {
-      for (const [uploadFileIndex, file] of files.entries()) {
-        const draft = await runtime.ordinaryAgentFeature.commands.createManagedAttachmentDraft({
-          originalName: file.filename,
-          ...(file.contentType === undefined ? {} : { mimeType: file.contentType }),
-          content: file.body,
-          uploadRequestId,
-          uploadFileIndex,
-        });
-        const record = draft.record;
-        if (draft.created) createdAttachmentIds.push(record.attachmentId);
-        const savedPath = await runtime.resolveManagedAttachmentPath(record.attachmentId);
-        if (savedPath === undefined) {
-          throw new PanelHttpError(500, "uploaded_attachment_missing", "上传附件保存失败。");
-        }
+    const attachments = await runtime.contextAttachmentUploadApplication.upload({
+      uploadRequestId,
+      files,
+      createPreview: async ({ record, path: savedPath }) => {
         const attachment = await createUploadedContextAttachment({
           attachmentId: record.attachmentId,
           path: savedPath,
@@ -106,13 +95,9 @@ export async function handlePanelContextRoute(
           }
           throw error;
         });
-        attachments.push(await attachMediaPreview(runtime, attachment));
-      }
-    } catch (error) {
-      await Promise.allSettled(createdAttachmentIds.map((attachmentId) =>
-        runtime.ordinaryAgentFeature.commands.discardManagedAttachmentDraft(attachmentId)));
-      throw error;
-    }
+        return await attachMediaPreview(runtime, attachment);
+      },
+    });
     writeJson(response, 200, {
       ok: true,
       attachments,

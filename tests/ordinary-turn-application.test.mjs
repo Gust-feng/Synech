@@ -15,6 +15,17 @@ test("ordinary route delegates turn orchestration to one application command", a
   assert.doesNotMatch(source, /resolveConversationSpaceAccess|prepareOrdinaryRunBirth/u);
 });
 
+test("Panel routes expose only the coordination commands they use", async () => {
+  const [space, workspace, metadata] = await Promise.all([
+    fs.readFile("src/app/panel-server/spaces/space-routes.ts", "utf8"),
+    fs.readFile("src/app/panel-server/spaces/workspace-routes.ts", "utf8"),
+    fs.readFile("src/app/panel-server/spaces/space-metadata-routes.ts", "utf8"),
+  ]);
+  assert.match(space, /Pick<WorkbenchCoordination\["commands"\], "attachWorkspaceToSpace">/u);
+  assert.match(workspace, /Pick<WorkbenchCoordination\["commands"\], "reconnectWorkspace" \| "hideWorkspace" \| "deleteWorkspace">/u);
+  assert.match(metadata, /Pick<WorkbenchCoordination\["commands"\], "deleteSpace">/u);
+});
+
 test("existing conversation uses canonical Space owner and deletion admission", async () => {
   const fixture = createFixture({
     conversationId: "conversation-1",

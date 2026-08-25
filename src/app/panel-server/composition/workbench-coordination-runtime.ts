@@ -129,8 +129,6 @@ export function createWorkbenchCoordinationRuntime(input: {
 
   const ordinaryTurnApplication = createOrdinaryTurnApplication({
     ordinaryAgentFeature: input.ordinaryAgentFeature,
-    spaceFeature: input.spaceFeature,
-    workspaceFeature: input.workspaceFeature,
     conversationLifecycle,
     spaceConversationDeletion,
     workspaceDeletion,

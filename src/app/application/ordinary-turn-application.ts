@@ -8,8 +8,6 @@ import type {
   OrdinaryRunBirth,
   SubmitOrdinaryTurnResult,
 } from "../ordinary-agent/index.js";
-import type { SpaceFeature } from "../spaces/index.js";
-import type { WorkspaceFeature } from "../workspaces/index.js";
 
 export type OrdinaryTurnInput = {
   readonly goal: string;
@@ -60,13 +58,6 @@ export type OrdinaryTurnApplicationDependencies = {
   readonly ordinaryAgentFeature: {
     readonly commands: Pick<OrdinaryAgentFeature["commands"], "submitTurn">;
     readonly queries: Pick<OrdinaryAgentFeature["queries"], "getConversationOwner">;
-  };
-  readonly spaceFeature: {
-    readonly queries: Pick<SpaceFeature["queries"], "getTree">;
-  };
-  readonly workspaceFeature: {
-    readonly commands: Pick<WorkspaceFeature["commands"], "invalidateMount">;
-    readonly queries: Pick<WorkspaceFeature["queries"], "get">;
   };
   readonly conversationLifecycle: {
     assertConversationAvailable(conversationId: string): void;

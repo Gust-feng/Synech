@@ -147,6 +147,10 @@ import {
 } from "./storage/runtime-asset-roots.js";
 import { createWorkbenchCoordinationRuntime } from "./composition/workbench-coordination-runtime.js";
 import type { ManagedSpaceFolderApplication } from "../../domain/managed-space-folder.js";
+import {
+  createContextAttachmentUploadApplication,
+  type ContextAttachmentUploadApplication,
+} from "../application/context-attachment-application.js";
 
 /**
  * The sole process-lifetime composition root for the local Panel host. Route
@@ -177,6 +181,7 @@ export type PanelHost = {
   readonly skillStateStore?: SkillStateStore;
   readonly ordinaryAgentFeature: OrdinaryAgentFeature;
   readonly resolveManagedAttachmentPath: (attachmentId: string) => Promise<string | undefined>;
+  readonly contextAttachmentUploadApplication: ContextAttachmentUploadApplication;
   readonly agentNotesFeature: AgentNotesFeature;
   readonly pathDependencyFeature: PathDependencyFeature;
   readonly spaceFeature: SpaceFeature;
@@ -696,6 +701,10 @@ function assemblePanelHost(input: {
       configCenter: input.configCenter,
     }),
   });
+  const contextAttachmentUploadApplication = createContextAttachmentUploadApplication({
+    ordinaryAgentFeature,
+    resolveManagedAttachmentPath,
+  });
   let host!: PanelHost;
   const coordinationRuntime = createWorkbenchCoordinationRuntime({
     productPaths,
@@ -805,6 +814,7 @@ function assemblePanelHost(input: {
     skillStateStore: input.skillStateStore,
     ordinaryAgentFeature,
     resolveManagedAttachmentPath,
+    contextAttachmentUploadApplication,
     agentNotesFeature,
     pathDependencyFeature,
     spaceFeature,

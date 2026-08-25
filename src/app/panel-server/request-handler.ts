@@ -30,6 +30,9 @@ import { handlePanelOrdinaryRoute } from "./ordinary/ordinary-routes.js";
 import {
   OrdinaryTurnApplicationError,
 } from "../application/ordinary-turn-application.js";
+import {
+  ContextAttachmentUploadApplicationError,
+} from "../application/context-attachment-application.js";
 import { agentMemoryHttpError, handlePanelAgentMemoryRoute } from "./ordinary/agent-memory-routes.js";
 import { AgentNotesError } from "../agent-notes/index.js";
 import { PathDependencyFeatureError } from "../path-dependencies/index.js";
@@ -187,6 +190,10 @@ function createPanelRequestHandler(runtime: PanelHost): (request: IncomingMessag
         writePanelError(response, ordinaryTurnApplicationHttpError(error));
         return;
       }
+      if (error instanceof ContextAttachmentUploadApplicationError) {
+        writePanelError(response, contextAttachmentUploadApplicationHttpError(error));
+        return;
+      }
       if (error instanceof OrdinaryFeatureError) {
         writePanelError(response, ordinaryFeatureHttpError(error));
         return;
@@ -234,6 +241,14 @@ export function ordinaryTurnApplicationHttpError(error: OrdinaryTurnApplicationE
       return new PanelHttpError(409, "conversation_owner_conflict", error.message);
     case "conversation_space_not_found":
       return new PanelHttpError(404, "conversation_space_not_found", error.message);
+  }
+}
+
+export function contextAttachmentUploadApplicationHttpError(error: ContextAttachmentUploadApplicationError): PanelHttpError {
+  switch (error.code) {
+    case "uploaded_attachment_missing":
+    case "attachment_upload_compensation_failed":
+      return new PanelHttpError(500, error.code, error.message);
   }
 }
 
@@ -304,6 +319,7 @@ async function handlePanelRequest(
     contextAttachmentPicker: runtime.contextAttachmentPicker,
     contextAttachmentMedia: runtime.contextAttachmentMedia,
     contextPreviewRoot: process.cwd(),
+    contextAttachmentUploadApplication: runtime.contextAttachmentUploadApplication,
     ordinaryAgentFeature: runtime.ordinaryAgentFeature,
     resolveManagedAttachmentPath: runtime.resolveManagedAttachmentPath,
   }, request, response, url)) {
