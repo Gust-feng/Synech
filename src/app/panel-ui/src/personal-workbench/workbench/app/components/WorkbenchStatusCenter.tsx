@@ -1,5 +1,7 @@
 import { useState, type ReactElement } from "react";
+import { AnimatePresence, motion } from "motion/react";
 import { AlertCircle, ChevronDown, RotateCcw, X } from "lucide-react";
+import { MOTION_EASING, MOTION_TIMING, useMotionEnabled } from "../../../../shell/motion-system";
 
 export type WorkbenchStatusNotice = {
   readonly id: string;
@@ -13,16 +15,27 @@ export function WorkbenchStatusCenter(props: {
   readonly notices: readonly WorkbenchStatusNotice[];
 }): ReactElement | null {
   const [expanded, setExpanded] = useState(false);
+  const motionEnabled = useMotionEnabled();
   const primary = props.notices[0];
   if (primary === undefined) return null;
 
   return (
     <div className="ui-workbench-status-center" role="status" aria-live="polite">
-      <div className="ui-workbench-status-notice" role="alert">
-        <AlertCircle className="ui-workbench-status-notice__icon" size={14} aria-hidden="true" />
-        <span className="ui-workbench-status-notice__message">{primary.message}</span>
-        <NoticeActions notice={primary} />
-      </div>
+      <AnimatePresence initial={false} mode="wait">
+        <motion.div
+          key={primary.id}
+          className="ui-workbench-status-notice"
+          role="alert"
+          initial={motionEnabled ? { opacity: 0, y: 8 } : false}
+          animate={{ opacity: 1, y: 0 }}
+          exit={motionEnabled ? { opacity: 0, y: -4 } : undefined}
+          transition={{ duration: MOTION_TIMING.panel, ease: MOTION_EASING.premium }}
+        >
+          <AlertCircle className="ui-workbench-status-notice__icon" size={14} aria-hidden="true" />
+          <span className="ui-workbench-status-notice__message">{primary.message}</span>
+          <NoticeActions notice={primary} />
+        </motion.div>
+      </AnimatePresence>
       {props.notices.length > 1 && (
         <>
           <button
@@ -34,17 +47,25 @@ export function WorkbenchStatusCenter(props: {
             <span>{expanded ? "收起其他问题" : `还有 ${props.notices.length - 1} 个问题`}</span>
             <ChevronDown size={12} aria-hidden="true" />
           </button>
-          {expanded && (
-            <div className="ui-workbench-status-center__details">
-              {props.notices.slice(1).map((notice) => (
-                <div key={notice.id} className="ui-workbench-status-center__detail">
-                  <AlertCircle className="ui-workbench-status-notice__icon" size={13} aria-hidden="true" />
-                  <span className="ui-workbench-status-notice__message">{notice.message}</span>
-                  <NoticeActions notice={notice} />
-                </div>
-              ))}
-            </div>
-          )}
+          <AnimatePresence initial={false}>
+            {expanded && (
+              <motion.div
+                className="ui-workbench-status-center__details"
+                initial={motionEnabled ? { opacity: 0, height: 0 } : false}
+                animate={{ opacity: 1, height: 'auto' }}
+                exit={motionEnabled ? { opacity: 0, height: 0 } : undefined}
+                transition={{ duration: MOTION_TIMING.interaction, ease: MOTION_EASING.standard }}
+              >
+                {props.notices.slice(1).map((notice) => (
+                  <div key={notice.id} className="ui-workbench-status-center__detail">
+                    <AlertCircle className="ui-workbench-status-notice__icon" size={13} aria-hidden="true" />
+                    <span className="ui-workbench-status-notice__message">{notice.message}</span>
+                    <NoticeActions notice={notice} />
+                  </div>
+                ))}
+              </motion.div>
+            )}
+          </AnimatePresence>
         </>
       )}
     </div>

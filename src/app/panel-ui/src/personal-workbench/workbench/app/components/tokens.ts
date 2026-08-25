@@ -49,6 +49,6 @@ export function composerSurface(focused = false): CSSProperties {
     boxShadow: focused
       ? 'var(--ui-composer-shadow-focus, 0 2px 12px rgba(45,40,34,0.05))'
       : 'var(--ui-composer-shadow, 0 1px 3px rgba(45,40,34,0.03))',
-    transition: 'border-color 120ms ease, box-shadow 120ms ease',
+    transition: 'border-color var(--motion-duration-interaction, 180ms) var(--motion-ease-standard, cubic-bezier(0.2, 0, 0, 1)), box-shadow var(--motion-duration-interaction, 180ms) var(--motion-ease-standard, cubic-bezier(0.2, 0, 0, 1))',
   }
 }

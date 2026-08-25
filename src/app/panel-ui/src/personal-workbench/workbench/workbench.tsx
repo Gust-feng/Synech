@@ -18,6 +18,7 @@ import { Sidebar } from "./app/components/Sidebar";
 import { TopBar } from "./app/components/TopBar";
 import type { ConversationSurfaceProjection } from "./app/components/conversation-surface-state";
 import { WorkbenchViewRenderer } from "./app/components/WorkbenchViewRenderer";
+import { WorkbenchViewTransition } from "./app/components/WorkbenchViewTransition";
 import { WorkbenchStatusCenter, type WorkbenchStatusNotice } from "./app/components/WorkbenchStatusCenter";
 import { projectLiveConversationState } from "./app/components/conversation-surface-state";
 import { resolveById } from "./app/components/brainStore";
@@ -361,10 +362,7 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
           aria-label={viewLabel(view)}
           className="ui-workbench-main flex min-h-0 flex-1 flex-col overflow-hidden"
         >
-          <div
-            className={`${view === "space" ? "" : "view-enter "}flex min-h-0 flex-1 flex-col overflow-hidden`}
-            key={view}
-          >
+          <WorkbenchViewTransition view={view}>
             {showLoadingFallback ? <WorkbenchBootstrapLoading /> : (
               <SurfaceErrorBoundary resetKey={view} label="这个视图暂时无法打开">
                   <WorkbenchViewRenderer
@@ -413,7 +411,7 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
                   />
               </SurfaceErrorBoundary>
             )}
-          </div>
+          </WorkbenchViewTransition>
         </main>
       </div>
 
