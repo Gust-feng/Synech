@@ -30,6 +30,6 @@ test("a build refuses to run against a newer feature schema", async () => {
     );
   } finally {
     database.close();
-    await rm(directory, { recursive: true, force: true });
+    await rm(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
   }
 });
