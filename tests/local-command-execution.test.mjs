@@ -5,6 +5,7 @@ import test from "node:test";
 import { runBackgroundProgramCommand } from "../dist/app/tool-center/adapters/background-process.js";
 import {
   COMMAND_CANCELLED_EXIT_CODE,
+  markCommandProcessStopPending,
   normalizeShellCommandInput,
   runForegroundProgramCommand,
 } from "../dist/app/tool-center/adapters/command-execution.js";
@@ -153,6 +154,21 @@ test("command log refs resolve only product-created log identities", async () =>
   } finally {
     await removeCommandLog(target);
   }
+});
+
+test("an unconfirmed termination keeps the foreground process eligible for later cleanup", () => {
+  const updates = [];
+  const registry = {
+    register() {},
+    update(processId, patch) { updates.push({ processId, patch }); },
+  };
+
+  markCommandProcessStopPending(processFacts(registry), "process-1");
+
+  assert.deepEqual(updates, [{
+    processId: "process-1",
+    patch: { status: "unknown", permissionState: "stop_pending" },
+  }]);
 });
 
 function processFacts(registry) {

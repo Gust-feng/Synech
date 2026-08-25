@@ -210,6 +210,21 @@ export function markCommandProcessExited(
   }
 }
 
+export function markCommandProcessStopPending(
+  facts: CommandProcessFacts | undefined,
+  processId: string | undefined,
+): void {
+  if (facts === undefined || processId === undefined) return;
+  try {
+    facts.registry.update?.(processId, {
+      status: "unknown",
+      permissionState: "stop_pending",
+    });
+  } catch {
+    // Registry observation does not change command execution facts.
+  }
+}
+
 export function appendCommandPortFact(
   registry: LocalCommandProcessRegistry | undefined,
   processId: string | undefined,
@@ -378,7 +393,7 @@ async function runSpawnedCommand(input: {
       signal: signal ?? undefined,
       truncated: stdout.truncated() || stderr.truncated(),
     });
-    const finish = (value: CommandExecutionResult) => {
+    const finish = (value: CommandExecutionResult, processExitConfirmed = true) => {
       if (settled) return;
       settled = true;
       if (timer !== undefined) clearTimeout(timer);
@@ -386,10 +401,14 @@ async function runSpawnedCommand(input: {
       if (abortHandler !== undefined) input.abortSignal?.removeEventListener("abort", abortHandler);
       closeLog();
       input.progress.flush();
-      markCommandProcessExited(input.processFacts, processId, {
-        exitCode: typeof value.exitCode === "number" ? value.exitCode : undefined,
-        signal: value.signal,
-      });
+      if (processExitConfirmed) {
+        markCommandProcessExited(input.processFacts, processId, {
+          exitCode: typeof value.exitCode === "number" ? value.exitCode : undefined,
+          signal: value.signal,
+        });
+      } else {
+        markCommandProcessStopPending(input.processFacts, processId);
+      }
       if (value.truncated === true) {
         resolve({ result: { ...value, logRef: logTarget.ref, logPath: logTarget.path }, processId });
         return;
@@ -408,7 +427,7 @@ async function runSpawnedCommand(input: {
         appendStderrText(
           `Command process did not close within ${COMMAND_TERMINATION_GRACE_MS}ms after termination was requested.`,
         );
-        finish(resultFromClose(null, undefined));
+        finish(resultFromClose(null, undefined), false);
       }, COMMAND_TERMINATION_GRACE_MS);
       terminationTimer.unref?.();
     };
@@ -468,7 +487,13 @@ async function runSpawnedCommand(input: {
       reject(error);
     });
     child.once("close", (code, signal) => {
-      if (settled) return;
+      if (settled) {
+        markCommandProcessExited(input.processFacts, processId, {
+          exitCode: typeof code === "number" ? code : undefined,
+          signal: signal ?? undefined,
+        });
+        return;
+      }
       flushOutputDecoders();
       appendTerminationDiagnostic();
       finish(resultFromClose(code, signal));
