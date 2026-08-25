@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { flushSync } from "react-dom";
 import type { CurrentRunProjection } from "../../features/conversations/run/projection";
 import { projectChatActiveView } from "../../features/conversations/transcript/live-view";
@@ -21,7 +21,6 @@ import type { ConversationSurfaceProjection } from "./app/components/Conversatio
 import { WorkbenchViewRenderer } from "./app/components/WorkbenchViewRenderer";
 import { WorkbenchStatusNotice } from "./app/components/WorkbenchStatusNotice";
 import type { LiveConversationState } from "./app/components/conversation-surface-state";
-import { runFocusModeTransition, type FocusModeTransitionHandle } from "./app/components/focus-mode-transition";
 import { resolveById } from "./app/components/brainStore";
 import { warmStartupReferencePreviews } from "./app/components/space-reference-preview-warmup";
 import { applyPrefs, handleReadingSizeWheel, loadPrefs } from "../../shell/reading-preferences";
@@ -36,10 +35,10 @@ import {
 } from "./app/components/personalKnowledgeClient";
 import {
   type ConversationOwnerSelection,
-  type ConversationSurfaceRequest,
   type WorkbenchView,
 } from "../../workbench/navigation-state";
 import { useWorkbenchNavigation } from "../../workbench/use-workbench-navigation";
+import { useConversationMode } from "../../workbench/use-conversation-mode";
 
 export type PersonalWorkbenchProps = {
   readonly personalKnowledgePersistenceEnabled?: boolean;
@@ -109,10 +108,8 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
     homeFocusRequest,
     conversationSurfaceRequest,
   } = navigationState;
-  const [conversationMode, setConversationModeState] = useState<ConversationMode>("normal");
   const observedViewRef = useRef(view);
   const navigationIntentRef = useRef(view);
-  const focusTransitionRef = useRef<FocusModeTransitionHandle | null>(null);
   // 异步提交/打开会话的 .then 可能晚于本次 render 执行，这里始终镜像最新事实，
   // 避免闭包读到旧的 conversation / spaces / activeSpaceId。
   const conversationRef = useRef(props.conversation);
@@ -176,10 +173,8 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
     void refreshPersonalKnowledge().catch(() => undefined);
   }, [knowledgeLoadState.status, props.personalKnowledgePersistenceEnabled, view]);
 
-  useEffect(() => () => {
-    focusTransitionRef.current?.cancel();
-    focusTransitionRef.current = null;
-  }, []);
+
+
 
   useEffect(() => {
     applyPrefs(loadPrefs());
@@ -195,21 +190,9 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
     return () => root.removeEventListener("wheel", onWheel);
   }, []);
 
-  const setConversationMode = (next: ConversationMode, after?: () => void): void => {
-    if (next === conversationMode) {
-      after?.();
-      return;
-    }
-    focusTransitionRef.current?.cancel();
-    focusTransitionRef.current = runFocusModeTransition({
-      root: rootRef.current,
-      direction: next === "focus" ? "enter" : "exit",
-      update: () => flushSync(() => {
-        setConversationModeState(next);
-        after?.();
-      }),
-    });
-  };
+
+  const { mode: conversationMode, setMode: setConversationMode } = useConversationMode(rootRef);
+
 
   /** Resolve the active Conversation projection and its current Synech surface. */
   const surfaceConversation = (
