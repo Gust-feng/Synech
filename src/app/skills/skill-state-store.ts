@@ -1,6 +1,8 @@
 import { promises as fs } from "node:fs";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { isFileNotFound } from "../../kernel/values/index.js";
+import { renameWithRetry } from "../../kernel/fs/atomic-write.js";
 import { z } from "zod";
 import type { SkillDefinition } from "./contracts.js";
 import { nowIso } from "../../kernel/id.js";
@@ -29,65 +31,100 @@ export interface SkillStateStore {
   markUsed(stateKey: string, usedAt?: string, target?: SkillStateTarget): Promise<SkillStateRecord>;
 }
 
+export class SkillStateStoreError extends Error {
+  readonly code = "skill_state_invalid" as const;
+
+  constructor(readonly filePath: string, cause?: unknown) {
+    super(`Skill state file ${filePath} is invalid and was left unchanged.`, { cause });
+    this.name = "SkillStateStoreError";
+  }
+}
+
 export class FileSystemSkillStateStore implements SkillStateStore {
+  private mutationTail: Promise<void> = Promise.resolve();
+
   constructor(private readonly filePath: string) {}
 
   async readStates(): Promise<ReadonlyMap<string, SkillStateRecord>> {
+    await this.mutationTail;
+    return this.readStatesUnlocked();
+  }
+
+  private async readStatesUnlocked(): Promise<ReadonlyMap<string, SkillStateRecord>> {
     const raw = await fs.readFile(this.filePath, "utf8").catch((error: unknown) => {
       if (isFileNotFound(error)) {
         return undefined;
       }
       throw error;
     });
-    if (raw === undefined || raw.trim().length === 0) {
+    if (raw === undefined) {
       return new Map();
     }
-    const parsed = parseSkillStateFile(raw);
-    return parsed === undefined
-      ? new Map()
-      : new Map(parsed.skills.map((record) => [record.stateKey, record] as const));
+    const parsed = parseSkillStateFile(raw, this.filePath);
+    return new Map(parsed.skills.map((record) => [record.stateKey, record] as const));
   }
 
   private async writeStates(states: ReadonlyMap<string, SkillStateRecord>): Promise<void> {
-    await fs.mkdir(path.dirname(this.filePath), { recursive: true });
+    const directory = path.dirname(this.filePath);
+    const temporary = path.join(directory, `.${path.basename(this.filePath)}.${process.pid}.${randomUUID()}.tmp`);
     const skills = [...states.values()].sort((left, right) =>
       requiredStateKey(left).localeCompare(requiredStateKey(right))
     );
-    await fs.writeFile(this.filePath, `${JSON.stringify({ version: 1, skills }, null, 2)}\n`, "utf8");
+    await fs.mkdir(directory, { recursive: true });
+    try {
+      await fs.writeFile(temporary, `${JSON.stringify({ version: 1, skills }, null, 2)}\n`, {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+      await renameWithRetry(temporary, this.filePath);
+    } catch (error) {
+      await fs.rm(temporary, { force: true }).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private runMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.mutationTail.then(operation, operation);
+    this.mutationTail = result.then(() => undefined, () => undefined);
+    return result;
   }
 
   async setEnabled(stateKey: string, enabled: boolean, target?: SkillStateTarget): Promise<SkillStateRecord> {
-    const states = new Map(await this.readStates());
-    const previous = states.get(stateKey);
-    const next: SkillStateRecord = {
-      skillId: target?.skillId ?? previous?.skillId ?? stateKey,
-      stateKey,
-      sourceKind: target?.sourceKind ?? previous?.sourceKind,
-      sourceRootId: target?.sourceRootId ?? previous?.sourceRootId,
-      sourcePrecedence: target?.sourcePrecedence ?? previous?.sourcePrecedence,
-      enabled,
-      lastUsedAt: previous?.lastUsedAt,
-    };
-    states.set(stateKey, next);
-    await this.writeStates(states);
-    return next;
+    return this.runMutation(async () => {
+      const states = new Map(await this.readStatesUnlocked());
+      const previous = states.get(stateKey);
+      const next: SkillStateRecord = {
+        skillId: target?.skillId ?? previous?.skillId ?? stateKey,
+        stateKey,
+        sourceKind: target?.sourceKind ?? previous?.sourceKind,
+        sourceRootId: target?.sourceRootId ?? previous?.sourceRootId,
+        sourcePrecedence: target?.sourcePrecedence ?? previous?.sourcePrecedence,
+        enabled,
+        lastUsedAt: previous?.lastUsedAt,
+      };
+      states.set(stateKey, next);
+      await this.writeStates(states);
+      return next;
+    });
   }
 
   async markUsed(stateKey: string, usedAt = nowIso(), target?: SkillStateTarget): Promise<SkillStateRecord> {
-    const states = new Map(await this.readStates());
-    const previous = states.get(stateKey);
-    const next: SkillStateRecord = {
-      skillId: target?.skillId ?? previous?.skillId ?? stateKey,
-      stateKey,
-      sourceKind: target?.sourceKind ?? previous?.sourceKind,
-      sourceRootId: target?.sourceRootId ?? previous?.sourceRootId,
-      sourcePrecedence: target?.sourcePrecedence ?? previous?.sourcePrecedence,
-      enabled: previous?.enabled,
-      lastUsedAt: usedAt,
-    };
-    states.set(stateKey, next);
-    await this.writeStates(states);
-    return next;
+    return this.runMutation(async () => {
+      const states = new Map(await this.readStatesUnlocked());
+      const previous = states.get(stateKey);
+      const next: SkillStateRecord = {
+        skillId: target?.skillId ?? previous?.skillId ?? stateKey,
+        stateKey,
+        sourceKind: target?.sourceKind ?? previous?.sourceKind,
+        sourceRootId: target?.sourceRootId ?? previous?.sourceRootId,
+        sourcePrecedence: target?.sourcePrecedence ?? previous?.sourcePrecedence,
+        enabled: previous?.enabled,
+        lastUsedAt: usedAt,
+      };
+      states.set(stateKey, next);
+      await this.writeStates(states);
+      return next;
+    });
   }
 }
 
@@ -130,15 +167,16 @@ export function skillStateKeyForFacts(input: {
 
 type SourceQualifiedSkillStateRecord = SkillStateRecord & { readonly stateKey: string };
 
-function parseSkillStateFile(raw: string): { readonly skills: readonly SourceQualifiedSkillStateRecord[] } | undefined {
+function parseSkillStateFile(raw: string, filePath: string): { readonly skills: readonly SourceQualifiedSkillStateRecord[] } {
   let value: unknown;
   try {
     value = JSON.parse(raw) as unknown;
-  } catch {
-    return undefined;
+  } catch (error) {
+    throw new SkillStateStoreError(filePath, error);
   }
   const parsed = SKILL_STATE_FILE_SCHEMA.safeParse(value);
-  return parsed.success ? parsed.data : undefined;
+  if (!parsed.success) throw new SkillStateStoreError(filePath, parsed.error);
+  return parsed.data;
 }
 
 function safeStateKeySegment(value: string): string {
