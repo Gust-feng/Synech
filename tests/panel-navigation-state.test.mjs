@@ -103,6 +103,27 @@ test("an explicit Space target is applied after navigation clears stale targets"
   assert.equal(result.spaceTargetId, "reference-2");
 });
 
+test("unchanged context synchronization returns the same state object", () => {
+  const result = runStripTypes(`
+    import {
+      createInitialWorkbenchNavigationState,
+      reduceWorkbenchNavigation,
+    } from ${JSON.stringify(moduleUrl)};
+    let state = createInitialWorkbenchNavigationState();
+    state = reduceWorkbenchNavigation(state, {
+      type: "sync-context-selection",
+      spaceIds: ["space-1"],
+      workspaceIds: [],
+    });
+    const next = reduceWorkbenchNavigation(state, {
+      type: "sync-context-selection",
+      spaceIds: ["space-1"],
+      workspaceIds: [],
+    });
+    console.log(JSON.stringify({ same: next === state }));
+  `);
+  assert.deepEqual(result, { same: true });
+});
 function runStripTypes(source) {
   const result = spawnSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", source], {
     cwd: process.cwd(),

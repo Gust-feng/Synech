@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
-import { flushSync } from "react-dom";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { CurrentRunProjection } from "../../features/conversations/run/projection";
 import { projectChatActiveView } from "../../features/conversations/transcript/live-view";
 import type { ChatInputProps } from "../../contracts/composer";
@@ -22,23 +21,13 @@ import { WorkbenchViewRenderer } from "./app/components/WorkbenchViewRenderer";
 import { WorkbenchStatusNotice } from "./app/components/WorkbenchStatusNotice";
 import type { LiveConversationState } from "./app/components/conversation-surface-state";
 import { resolveById } from "./app/components/brainStore";
-import { warmStartupReferencePreviews } from "./app/components/space-reference-preview-warmup";
-import { applyPrefs, handleReadingSizeWheel, loadPrefs } from "../../shell/reading-preferences";
-import {
-  initializePersonalKnowledge,
-  getPersonalKnowledgeError,
-  getPersonalKnowledgeLoadState,
-  refreshPersonalKnowledge,
-  subscribePersonalKnowledge,
-  setPersonalKnowledgePersistenceEnabled,
-  clearPersonalKnowledgeError,
-} from "./app/components/personalKnowledgeClient";
 import {
   type ConversationOwnerSelection,
   type WorkbenchView,
 } from "../../workbench/navigation-state";
 import { useWorkbenchNavigation } from "../../workbench/use-workbench-navigation";
 import { useConversationMode } from "../../workbench/use-conversation-mode";
+import { useWorkbenchEnvironment } from "../../workbench/use-workbench-environment";
 
 export type PersonalWorkbenchProps = {
   readonly personalKnowledgePersistenceEnabled?: boolean;
@@ -108,7 +97,6 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
     homeFocusRequest,
     conversationSurfaceRequest,
   } = navigationState;
-  const observedViewRef = useRef(view);
   const navigationIntentRef = useRef(view);
   // 异步提交/打开会话的 .then 可能晚于本次 render 执行，这里始终镜像最新事实，
   // 避免闭包读到旧的 conversation / spaces / activeSpaceId。
@@ -121,75 +109,23 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
   // 会话 id 尚未确定（如首页提交后响应未落地）时，先记录承载空间，等真实会话
   // 落地（带 owner）后再由 landing effect 补写 conversationSurfaceRequest。
   const pendingSurfaceSpaceRef = useRef<string | null>(null);
-  const knowledgeLoadState = useSyncExternalStore(
-    subscribePersonalKnowledge,
-    getPersonalKnowledgeLoadState,
-    getPersonalKnowledgeLoadState,
-  );
-  const knowledgeError = useSyncExternalStore(
-    subscribePersonalKnowledge,
-    getPersonalKnowledgeError,
-    getPersonalKnowledgeError,
-  );
-
   const activeConversation = props.conversation;
   const conversationProjection = projectConversationSurface(props, activeConversation);
   const conversationState = projectLiveConversationState(conversationProjection, props);
   const workspaceProjection = useWorkspaceProjection(true);
+  const { knowledgeLoadState, knowledgeError, retryKnowledge, refreshKnowledge, dismissKnowledgeError } = useWorkbenchEnvironment({
+    rootRef,
+    personalKnowledgePersistenceEnabled: props.personalKnowledgePersistenceEnabled === true,
+    spaceLoadStateLoading: props.spaceLoadState?.loading === true,
+    spaces: props.spaces ?? [],
+    workspaceIds: workspaceProjection.workspaces.map((workspace) => workspace.workspaceId),
+    view,
+    syncContextSelection,
+  });
   const surfaceTitle = view === "space"
     ? props.spaces?.find((space) => space.spaceId === activeSpaceId)?.title ?? "空间"
     : undefined;
   const surfaceOwner = undefined;
-
-  useEffect(() => {
-    setPersonalKnowledgePersistenceEnabled(props.personalKnowledgePersistenceEnabled === true);
-  }, [props.personalKnowledgePersistenceEnabled]);
-
-  useEffect(() => {
-    const spaces = props.spaces ?? [];
-    syncContextSelection({
-      spaceIds: spaces.map((space) => space.spaceId),
-      workspaceIds: workspaceProjection.workspaces.map((workspace) => workspace.workspaceId),
-    });
-    if (props.personalKnowledgePersistenceEnabled && props.spaceLoadState?.loading !== true) {
-      void initializePersonalKnowledge().catch(() => undefined);
-    }
-  }, [props.personalKnowledgePersistenceEnabled, props.spaceLoadState?.loading, props.spaces, workspaceProjection.workspaces]);
-
-  useEffect(() => {
-    if (props.spaceLoadState?.loading === true) return undefined;
-    return warmStartupReferencePreviews(props.spaces ?? []);
-  }, [props.spaceLoadState?.loading, props.spaces]);
-
-  useEffect(() => {
-    const viewChanged = observedViewRef.current !== view;
-    observedViewRef.current = view;
-    if (
-      !viewChanged
-      || !props.personalKnowledgePersistenceEnabled
-      || !isKnowledgeView(view)
-      || knowledgeLoadState.status !== "ready"
-    ) return;
-    void refreshPersonalKnowledge().catch(() => undefined);
-  }, [knowledgeLoadState.status, props.personalKnowledgePersistenceEnabled, view]);
-
-
-
-
-  useEffect(() => {
-    applyPrefs(loadPrefs());
-  }, []);
-
-  useEffect(() => {
-    const root = rootRef.current;
-    if (root === null) return undefined;
-    const onWheel = (event: WheelEvent): void => {
-      handleReadingSizeWheel(event);
-    };
-    root.addEventListener("wheel", onWheel, { passive: false });
-    return () => root.removeEventListener("wheel", onWheel);
-  }, []);
-
 
   const { mode: conversationMode, setMode: setConversationMode } = useConversationMode(rootRef);
 
@@ -451,15 +387,15 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
       {props.bootstrapState.status === "ready" && knowledgeLoadState.status === "error" && (
         <WorkbenchStatusNotice
           message={knowledgeLoadState.message}
-          onRetry={() => void initializePersonalKnowledge().catch(() => undefined)}
+          onRetry={() => void retryKnowledge().catch(() => undefined)}
         />
       )}
 
       {props.bootstrapState.status === "ready" && knowledgeLoadState.status === "ready" && knowledgeError !== undefined && (
         <WorkbenchStatusNotice
           message={knowledgeError}
-          onRetry={() => void refreshPersonalKnowledge().catch(() => undefined)}
-          onDismiss={clearPersonalKnowledgeError}
+          onRetry={() => void refreshKnowledge().catch(() => undefined)}
+          onDismiss={dismissKnowledgeError}
         />
       )}
 

@@ -84,14 +84,18 @@ export function reduceWorkbenchNavigation(
           ? action.spaceIds.includes(owner.id)
           : action.workspaceIds.includes(owner.id)
       );
+      const homeOwnerSelection = ownerStillExists
+        ? owner
+        : firstSpaceId === undefined
+          ? null
+          : { kind: "space" as const, id: firstSpaceId };
+      const ownerUnchanged = state.homeOwnerSelection?.kind === homeOwnerSelection?.kind
+        && state.homeOwnerSelection?.id === homeOwnerSelection?.id;
+      if (state.activeSpaceId === activeSpaceId && ownerUnchanged) return state;
       return {
         ...state,
         activeSpaceId,
-        homeOwnerSelection: ownerStillExists
-          ? owner
-          : firstSpaceId === undefined
-            ? null
-            : { kind: "space", id: firstSpaceId },
+        homeOwnerSelection,
       };
     }
   }
