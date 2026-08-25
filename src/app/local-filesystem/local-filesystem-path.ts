@@ -8,6 +8,18 @@
 import path from "node:path";
 import { promises as fs } from "node:fs";
 
+export type LocalFilesystemPathErrorCode = "root_missing" | "path_escape";
+
+export class LocalFilesystemPathError extends Error {
+  readonly code: LocalFilesystemPathErrorCode;
+
+  constructor(code: LocalFilesystemPathErrorCode, message: string) {
+    super(message);
+    this.name = "LocalFilesystemPathError";
+    this.code = code;
+  }
+}
+
 /**
  * 规范化相对路径，拒绝 `..` 段。
  * @throws Error 当路径包含 `..` 段时。
@@ -77,11 +89,13 @@ export async function resolveWithinRoot(rootDir: string, relativePath: string): 
 export async function resolveDestinationWithinRoot(rootDir: string, relativePath: string): Promise<string> {
   const normalized = normalizeRelativePath(relativePath);
   const root = await fs.realpath(rootDir).catch(() => undefined);
-  if (root === undefined) throw new Error("Root directory does not exist.");
+  if (root === undefined) {
+    throw new LocalFilesystemPathError("root_missing", "Root directory does not exist.");
+  }
   const parentPath = path.resolve(root, path.dirname(normalized));
   const realParent = await fs.realpath(parentPath).catch(() => undefined);
   if (realParent === undefined || !isWithinRoot(root, realParent)) {
-    throw new Error("Resolved path escapes the root directory.");
+    throw new LocalFilesystemPathError("path_escape", "Resolved path escapes the root directory.");
   }
   return path.join(realParent, path.basename(normalized));
 }

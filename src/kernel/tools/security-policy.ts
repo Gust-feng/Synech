@@ -7,7 +7,7 @@ import type {
   ToolSecurityDecision,
   ToolSecurityEvaluationContext,
 } from "../../domain/tools/index.js";
-import { commandTextFromValue, toolCallFactId, toolPresentationForDefinition } from "../../domain/tools/index.js";
+import { commandTextFromValue, toolInvocationId, toolPresentationForDefinition } from "../../domain/tools/index.js";
 import { nowIso } from "../id.js";
 
 export function evaluateToolCallSecurity(input: {
@@ -21,7 +21,7 @@ export function evaluateToolCallSecurity(input: {
     return urlDecision;
   }
 
-  const confirmationId = confirmationIdForToolCall(toolCallFactId(input.request));
+  const confirmationId = confirmationIdForToolCall(toolInvocationId(input.request));
   if (input.context.approvedConfirmationIds?.includes(confirmationId) === true) {
     return { decision: "allow", reason: "Matching confirmation id was approved for this tool call." };
   }
@@ -49,8 +49,8 @@ export function confirmationRequestFromSecurityDecision(input: {
   readonly decision: Extract<ToolSecurityDecision, { readonly decision: "approval_required" }>;
 }): ConfirmationRequest {
   return {
-    confirmationId: confirmationIdForToolCall(toolCallFactId(input.request)),
-    toolCallFactId: toolCallFactId(input.request),
+    confirmationId: confirmationIdForToolCall(toolInvocationId(input.request)),
+    invocationId: toolInvocationId(input.request),
     title: input.decision.title,
     actionSummary: input.decision.actionSummary,
     consequence: input.decision.consequence,
@@ -89,7 +89,7 @@ function approvalDecision(input: {
     consequence,
     affectedResources,
     riskLevel: input.metadata.riskLevel,
-    sourceRefs: [`tool:${toolCallFactId(input.request)}`],
+    sourceRefs: [`tool:${toolInvocationId(input.request)}`],
   };
 }
 
@@ -126,7 +126,7 @@ function evaluateUrlSupport(request: ToolCallRequest): ToolSecurityDecision | un
       code: "url_protocol_blocked",
       reason: "Only HTTP and HTTPS URLs are allowed.",
       affectedResources: [compactPolicyText(url, 220)],
-      sourceRefs: [`tool:${toolCallFactId(request)}`],
+      sourceRefs: [`tool:${toolInvocationId(request)}`],
     };
   }
   return undefined;

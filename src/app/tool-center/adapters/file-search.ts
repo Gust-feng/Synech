@@ -113,7 +113,7 @@ export async function globLocalFiles(input: SearchInput): Promise<unknown> {
     truncated: hasMoreAfter,
     nextOffset,
     continuation: globFilesContinuation({ pattern, path: target.absolutePath, offset: nextOffset, limit }),
-  }, "Glob", input.outputTokenCounter, input.context.toolCallId);
+  }, "Glob", input.outputTokenCounter, input.context.providerCallId ?? input.context.invocationId);
 }
 
 export async function grepLocalFiles(input: SearchInput & {
@@ -200,7 +200,8 @@ export async function grepLocalFiles(input: SearchInput & {
     return {
       kind: "tool_call_result",
       result: {
-        callId: input.context.toolCallId ?? "Grep",
+        providerCallId: input.context.providerCallId ?? "Grep",
+        invocationId: input.context.invocationId ?? throwMissingInvocation(input.context, "Grep"),
         toolName: "Grep",
         input: input.value as ToolFactValue,
         output: { ...observation, matchesPreview: returnedMatches, searchComplete: false },
@@ -218,7 +219,7 @@ export async function grepLocalFiles(input: SearchInput & {
     truncated: hasMoreAfter,
     nextOffset,
     continuation: grepFilesContinuation({ query, path: target.absolutePath, limit, nextOffset }),
-  }, "Grep", input.outputTokenCounter, input.context.toolCallId);
+  }, "Grep", input.outputTokenCounter, input.context.providerCallId ?? input.context.invocationId);
 }
 
 async function grepPath(
@@ -429,7 +430,8 @@ function modelOutputFits(
 ): boolean {
   if (counter.countText(JSON.stringify(output)) > DEFAULT_TARGET_INLINE_TOOL_BODY_TOKENS) return false;
   const message = toolResultMessage({
-    callId: callId ?? toolName,
+    providerCallId: callId ?? toolName,
+    invocationId: callId ?? throwMissingInvocationForInlineBudget(toolName),
     toolName,
     input: undefined,
     output: output as ToolFactValue,
@@ -556,4 +558,17 @@ function parseJsonOrUndefined(value: string): unknown {
   } catch {
     return undefined;
   }
+}
+
+function throwMissingInvocation(context: ToolExecutionContext, toolName: string): never {
+  throw new Error(
+    `Tool adapter for ${toolName} cannot construct a ToolCallResult without an upstream-bound invocationId.`
+    + ` providerCallId=${context.providerCallId ?? "undefined"}.`,
+  );
+}
+
+function throwMissingInvocationForInlineBudget(toolName: string): never {
+  throw new Error(
+    `Tool adapter for ${toolName} cannot measure an inline tool result without an upstream-bound invocationId.`,
+  );
 }

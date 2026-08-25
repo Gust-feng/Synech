@@ -3,8 +3,8 @@ export type ConfirmationRiskLevel = "low" | "medium" | "high";
 
 export type ConfirmationRequest = {
   readonly confirmationId: string;
-  /** Stable ToolCenter fact identity for the exact call the user reviewed. */
-  readonly toolCallFactId: string;
+  /** Stable Synech invocation identity for the exact call the user reviewed. */
+  readonly invocationId: string;
   readonly conversationId?: string;
   readonly title: string;
   readonly actionSummary: string;

@@ -1,4 +1,4 @@
-import { normalizedToolName, type ProjectableTranscriptNode } from "./panel-transcript-node-projection.js";
+import type { ProjectableTranscriptNode } from "./panel-transcript-node-projection.js";
 import type {
   ActivityBadge,
   ActivityExpandedItem,
@@ -31,7 +31,7 @@ export function fileActivityVerb(node: ProjectableTranscriptNode): string | unde
   if (display?.kind === "file_search_results") return "搜索";
   if (display?.kind === "directory_listing") return "查看";
   if (display?.kind === "read_result") return "读取";
-  const mutation = fileMutationVerbForTool(normalizedToolName(node.toolName), display);
+  const mutation = fileMutationVerbForTool(display);
   if (mutation !== undefined) return mutation;
   return undefined;
 }
@@ -215,7 +215,6 @@ export function fileActivityLineDelta(
 }
 
 function fileMutationVerbForTool(
-  toolName: string,
   display: ProjectableTranscriptNode["display"],
 ): "写入" | "创建" | "删除" | "编辑" | undefined {
   if (display?.kind === "file_change_group") {
@@ -239,11 +238,6 @@ function fileMutationVerbForTool(
     if (operation === "edit") return "编辑";
     if (operation === "append" || operation === "write") return "写入";
   }
-  if (display !== undefined) return undefined;
-  if (toolName === "delete" || toolName.includes("delete") || toolName.includes("remove_file")) return "删除";
-  if (toolName === "create" || toolName.includes("create")) return "创建";
-  if (toolName === "edit" || toolName.includes("edit") || toolName.includes("patch") || toolName.includes("replace")) return "编辑";
-  if (toolName === "write" || toolName.includes("write")) return "写入";
   return undefined;
 }
 

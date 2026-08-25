@@ -1,6 +1,7 @@
+import { isDeepStrictEqual } from "node:util";
 import type { ModelUsage } from "../../domain/intelligence/index.js";
 import type { RunCapabilityResolution } from "../../domain/config/index.js";
-import { toolCallFactId, type ToolCallRequest, type ToolCallResult } from "../../domain/tools/index.js";
+import { toolInvocationId, sameResultForIdempotency, type ProviderToolCall, type ToolCallRequest, type ToolCallResult } from "../../domain/tools/index.js";
 import type {
   AgentSessionExecutionRefs,
   AgentSessionEntryRef,
@@ -28,7 +29,7 @@ export type OrdinaryRunTransition =
       /** Ephemeral projection material read from the committed Session entry. */
       readonly assistantText?: string;
     }
-  | { readonly type: "record_reasoning"; readonly modelRequestId: string; readonly content: string }
+  | { readonly type: "record_reasoning"; readonly modelRequestId: string; readonly contentIndex: number; readonly content: string }
   | {
       readonly type: "request_approval";
       readonly status: Extract<OrdinaryRunStatus, { readonly kind: "awaiting_approval" }>;
@@ -391,15 +392,17 @@ function assertAwaitingApprovalFacts(state: OrdinaryRunState): void {
     [request.confirmationId, request] as const));
   const factsByConfirmationId = new Map(approvalFacts.flatMap((result) => {
     const request = result.confirmationRequest;
-    if (request === undefined || request.toolCallFactId !== toolCallFactId(result)) return [];
+    if (request === undefined || request.invocationId !== toolInvocationId(result)) return [];
     return [[request.confirmationId, request] as const];
   }));
   const decidedConfirmationIds = new Set(state.timeline.flatMap((event) =>
     event.type === "run.approval_decided" ? [event.decision.confirmationId] : []));
   if (requestsById.size !== state.status.confirmationRequests.length ||
       factsByConfirmationId.size !== approvalFacts.length ||
-      [...requestsById].some(([confirmationId, request]) =>
-        JSON.stringify(request) !== JSON.stringify(factsByConfirmationId.get(confirmationId))) ||
+      [...requestsById].some(([confirmationId, request]) => {
+        const fact = factsByConfirmationId.get(confirmationId);
+        return fact === undefined || !sameConfirmationRequestShape(request, fact);
+      }) ||
       [...factsByConfirmationId.keys()].some((confirmationId) =>
         !requestsById.has(confirmationId) && !decidedConfirmationIds.has(confirmationId))) {
     throw new OrdinaryFeatureError(
@@ -459,18 +462,21 @@ function pendingToolRoundAfter(
     return acceptedOrdinaryToolRound({
       state,
       assistantEntryRef: checkpoint.assistantEntryRef,
-      toolCallIds: checkpoint.toolCallIds,
+      providerCallIds: checkpoint.providerCallIds,
+      invocationIds: checkpoint.invocationIds,
     });
   }
   if (checkpoint.kind !== "tool_result_entries_committed") return state.pendingToolRound;
   const pending = state.pendingToolRound;
-  if (pending === undefined || JSON.stringify(pending.toolCallIds) !== JSON.stringify(checkpoint.toolCallIds)) {
+  if (pending === undefined ||
+      !sameOrderedIds(pending.providerCallIds, checkpoint.providerCallIds) ||
+      !sameOrderedIds(pending.invocationIds, checkpoint.invocationIds)) {
     throw new OrdinaryFeatureError(
       "ordinary_run_state_conflict",
-      "Ordinary Session tool result checkpoint does not match its pending provider order",
+      "Ordinary Session tool result checkpoint does not match its pending invocation order",
     );
   }
-  const results = pending.toolCallIds.map((callId) => rootToolResultByCallId(state.toolCalls, callId));
+  const results = pending.invocationIds.map((invocationId) => rootToolResultByInvocationId(state.toolCalls, invocationId));
   if (results.some((result) => result === undefined || result.status === "approval_required")) {
     throw new OrdinaryFeatureError(
       "ordinary_run_state_conflict",
@@ -512,7 +518,8 @@ function toolResultRecordedAtAfter(
 export function acceptOrdinaryToolRound(input: {
   readonly state: OrdinaryRunState;
   readonly assistantEntryRef: AgentSessionEntryRef;
-  readonly toolCallIds: readonly string[];
+  readonly providerCallIds: readonly string[];
+  readonly invocationIds: readonly string[];
 }): OrdinaryRunState {
   if (input.state.status.kind !== "running") {
     throw new OrdinaryFeatureError(
@@ -522,7 +529,7 @@ export function acceptOrdinaryToolRound(input: {
   }
   const pendingToolRound = acceptedOrdinaryToolRound(input);
   if (input.state.pendingToolRound !== undefined) {
-    if (JSON.stringify(input.state.pendingToolRound) === JSON.stringify(pendingToolRound)) {
+    if (samePendingToolRound(input.state.pendingToolRound, pendingToolRound)) {
       return input.state;
     }
     throw new OrdinaryFeatureError(
@@ -530,7 +537,7 @@ export function acceptOrdinaryToolRound(input: {
       `Ordinary run ${input.state.runId} already has an unresolved tool round`,
     );
   }
-  if (pendingToolRound.toolCallIds.some((callId) => rootToolResultByCallId(input.state.toolCalls, callId) !== undefined)) {
+  if (pendingToolRound.invocationIds.some((invocationId) => rootToolResultByInvocationId(input.state.toolCalls, invocationId) !== undefined)) {
     throw new OrdinaryFeatureError(
       "ordinary_tool_result_conflict",
       `Ordinary run ${input.state.runId} cannot reuse a committed root tool call identity`,
@@ -547,7 +554,8 @@ export function acceptOrdinaryToolRound(input: {
 function acceptedOrdinaryToolRound(input: {
   readonly state: OrdinaryRunState;
   readonly assistantEntryRef: AgentSessionEntryRef;
-  readonly toolCallIds: readonly string[];
+  readonly providerCallIds: readonly string[];
+  readonly invocationIds: readonly string[];
 }): NonNullable<OrdinaryRunState["pendingToolRound"]> {
   if (input.state.session.phase !== "rollbackable") {
     throw new OrdinaryFeatureError(
@@ -561,13 +569,20 @@ function acceptedOrdinaryToolRound(input: {
       "An Ordinary pending tool round cannot reference a different Session",
     );
   }
-  if (input.toolCallIds.length === 0) throw new Error("An Ordinary pending tool round requires tool call identities");
-  if (new Set(input.toolCallIds).size !== input.toolCallIds.length) {
-    throw new Error("An Ordinary pending tool round cannot contain duplicate tool call identities");
+  if (input.invocationIds.length === 0) throw new Error("An Ordinary pending tool round requires tool invocation identities");
+  if (input.providerCallIds.length !== input.invocationIds.length) {
+    throw new Error("An Ordinary pending tool round requires matching provider and invocation identity counts");
+  }
+  if (new Set(input.providerCallIds).size !== input.providerCallIds.length) {
+    throw new Error("An Ordinary pending tool round cannot contain duplicate provider call identities");
+  }
+  if (new Set(input.invocationIds).size !== input.invocationIds.length) {
+    throw new Error("An Ordinary pending tool round cannot contain duplicate tool invocation identities");
   }
   return {
     assistantEntryRef: cloneJson(input.assistantEntryRef),
-    toolCallIds: [...input.toolCallIds],
+    providerCallIds: [...input.providerCallIds],
+    invocationIds: [...input.invocationIds],
   };
 }
 
@@ -585,27 +600,27 @@ export function recordOrdinaryNestedToolRequests(input: {
     );
   }
   const accepted = input.requests.map(requirePendingNestedToolCall);
-  const acceptedFactIds = accepted.map((request) => request.factId);
-  if (new Set(acceptedFactIds).size !== acceptedFactIds.length) {
+  const acceptedInvocationIds = accepted.map((request) => request.invocationId);
+  if (new Set(acceptedInvocationIds).size !== acceptedInvocationIds.length) {
     throw new OrdinaryFeatureError(
       "ordinary_tool_result_conflict",
-      `Ordinary run ${input.state.runId} received duplicate nested tool facts in one batch`,
+      `Ordinary run ${input.state.runId} received duplicate nested tool invocations in one batch`,
     );
   }
   const pending = [...(input.state.pendingNestedToolCalls ?? [])];
   for (const request of accepted) {
-    const existing = pending.find((item) => item.factId === request.factId);
+    const existing = pending.find((item) => item.invocationId === request.invocationId);
     if (existing !== undefined) {
-      if (JSON.stringify(existing) === JSON.stringify(request)) continue;
+      if (sameScopedToolCallIdentity(existing, request) && sameToolCallContent(existing, request)) continue;
       throw new OrdinaryFeatureError(
         "ordinary_tool_result_conflict",
-        `Ordinary run ${input.state.runId} already accepted a different nested request for ${request.factId}`,
+        `Ordinary run ${input.state.runId} already accepted a different nested request for ${request.invocationId}`,
       );
     }
-    if (input.state.toolCalls.some((result) => toolCallFactId(result) === request.factId)) {
+    if (input.state.toolCalls.some((result) => toolInvocationId(result) === request.invocationId)) {
       throw new OrdinaryFeatureError(
         "ordinary_tool_result_conflict",
-        `Ordinary run ${input.state.runId} cannot reuse committed nested tool fact ${request.factId}`,
+        `Ordinary run ${input.state.runId} cannot reuse committed nested tool invocation ${request.invocationId}`,
       );
     }
     pending.push(request);
@@ -627,26 +642,26 @@ export function recordOrdinaryToolResult(input: {
   readonly recordedAt: string;
 }): OrdinaryRunState {
   const key = ordinaryToolResultKey(input.result);
-  const factId = toolCallFactId(input.result);
+  const invocationId = toolInvocationId(input.result);
   const existing = input.state.toolCalls.find((result) =>
-    toolCallFactId(result) === factId);
+    toolInvocationId(result) === invocationId);
   const pendingNested = input.state.pendingNestedToolCalls ?? [];
-  const pendingRequest = pendingNested.find((request) => request.factId === factId);
+  const pendingRequest = pendingNested.find((request) => request.invocationId === invocationId);
   if (pendingRequest !== undefined && !toolResultMatchesPendingNestedCall(input.result, pendingRequest)) {
     throw new OrdinaryFeatureError(
       "ordinary_tool_result_conflict",
-      `Ordinary nested tool result ${factId} does not match its accepted request`,
+      `Ordinary nested tool result ${invocationId} does not match its accepted request`,
     );
   }
   const nextPendingNested = input.result.status === "approval_required"
     ? pendingNested
-    : pendingNested.filter((request) => request.factId !== factId);
+    : pendingNested.filter((request) => request.invocationId !== invocationId);
   assertOrdinaryToolFactGraph({
     ...input.state,
     pendingNestedToolCalls: nextPendingNested.length === 0 ? undefined : nextPendingNested,
     toolCalls: [...input.state.toolCalls, input.result],
   });
-  if (existing !== undefined && JSON.stringify(existing) === JSON.stringify(input.result) &&
+  if (existing !== undefined && sameResultForIdempotency(existing, input.result) &&
       nextPendingNested.length === pendingNested.length) {
     return input.state;
   }
@@ -674,11 +689,11 @@ export function reconcileInterruptedOrdinaryNestedToolCalls(input: {
 }): OrdinaryRunState {
   let state = input.state;
   for (const request of input.state.pendingNestedToolCalls ?? []) {
-    const existing = state.toolCalls.find((result) => toolCallFactId(result) === request.factId);
+    const existing = state.toolCalls.find((result) => toolInvocationId(result) === request.invocationId);
     if (existing !== undefined && !toolResultMatchesPendingNestedCall(existing, request)) {
       throw new OrdinaryFeatureError(
         "ordinary_tool_result_conflict",
-        `Interrupted nested tool result ${request.factId} does not match its accepted request`,
+        `Interrupted nested tool result ${request.invocationId} does not match its accepted request`,
       );
     }
     if (existing !== undefined && existing.status !== "approval_required") {
@@ -704,36 +719,48 @@ export function reconcileInterruptedOrdinaryNestedToolCalls(input: {
 /**
  * Closes a durable write-ahead round after its live execution owner is gone.
  * Missing results are explicitly unknown and therefore must never be replayed.
+ *
+ * `orderedToolCalls` is the provider-side view of the assistant round; the
+ * authoritative invocation ids come from the already-accepted
+ * `pendingToolRound.invocationIds`, not from anything derived here.
  */
 export function reconcileInterruptedOrdinaryToolRound(input: {
   readonly state: OrdinaryRunState;
-  readonly orderedToolCalls: readonly ToolCallRequest[];
+  readonly orderedToolCalls: readonly ProviderToolCall[];
   readonly recordedAt: string;
 }): OrdinaryRunState {
   const pending = input.state.pendingToolRound;
   if (pending === undefined) return input.state;
-  if (JSON.stringify(input.orderedToolCalls.map((call) => call.callId)) !== JSON.stringify(pending.toolCallIds)) {
+  if (!sameOrderedIds(input.orderedToolCalls.map((call) => call.providerCallId), pending.providerCallIds)) {
     throw new OrdinaryFeatureError(
       "ordinary_run_state_conflict",
       "Interrupted tool reconciliation does not match its provider-ordered Session tool calls",
     );
   }
   let state = input.state;
-  for (const call of input.orderedToolCalls) {
-    const existing = rootToolResultByCallId(state.toolCalls, call.callId);
+  for (let index = 0; index < input.orderedToolCalls.length; index += 1) {
+    const call = input.orderedToolCalls[index]!;
+    const invocationId = pending.invocationIds[index];
+    if (invocationId === undefined) {
+      throw new OrdinaryFeatureError(
+        "ordinary_run_state_conflict",
+        "Interrupted tool reconciliation is missing an invocation id.",
+      );
+    }
+    const existing = rootToolResultByInvocationId(state.toolCalls, invocationId);
     if (existing !== undefined && !toolResultMatchesAcceptedCall(existing, call)) {
       throw new OrdinaryFeatureError(
         "ordinary_tool_result_conflict",
-        `Ordinary root tool result ${existing.callId} does not match its accepted assistant call`,
+        `Ordinary root tool result ${existing.providerCallId} does not match its accepted assistant call`,
       );
     }
     if (existing !== undefined && existing.status !== "approval_required") continue;
     const result: ToolCallResult = existing?.status === "approval_required"
       ? interruptedOrdinaryApprovalResult(input.state, existing)
       : {
-          callId: existing?.callId ?? call.callId,
-          ...(existing?.factId === undefined ? {} : { factId: existing.factId }),
-          toolName: existing?.toolName ?? call.toolName,
+          providerCallId: call.providerCallId,
+          invocationId,
+          toolName: call.toolName,
           input: cloneJson(existing?.input ?? call.input),
           output: undefined,
           status: "failed",
@@ -789,23 +816,22 @@ function approvalFactWasNotExecuted(
     decision.decision.decision !== "approve_once";
 }
 
-function rootToolResultByCallId(
+function rootToolResultByInvocationId(
   results: readonly ToolCallResult[],
-  callId: string,
+  invocationId: string,
 ): ToolCallResult | undefined {
   return [...results].reverse().find((result) =>
-    result.callId === callId && isRootOrdinaryToolResult(result));
+    toolInvocationId(result) === invocationId && isRootOrdinaryToolResult(result));
 }
 
 function isRootOrdinaryToolResult(
-  result: Pick<ToolCallResult, "callId" | "factId" | "parentToolCallFactId">,
+  result: Pick<ToolCallResult, "invocationId" | "parentInvocationId">,
 ): boolean {
-  return result.parentToolCallFactId === undefined &&
-    (result.factId === undefined || result.factId === result.callId);
+  return result.parentInvocationId === undefined;
 }
 
-function toolResultMatchesAcceptedCall(result: ToolCallResult, call: ToolCallRequest): boolean {
-  return result.toolName === call.toolName && JSON.stringify(result.input) === JSON.stringify(call.input);
+function toolResultMatchesAcceptedCall(result: ToolCallResult, call: ProviderToolCall): boolean {
+  return sameToolInvocationIdentity(result, call) && sameToolCallContent(result, call);
 }
 
 /**
@@ -817,126 +843,108 @@ export function assertOrdinaryToolFactGraph(
   state: {
     readonly runId: string;
     readonly pendingToolRound?: {
-      readonly toolCallIds: readonly string[];
+      readonly invocationIds: readonly string[];
     };
     readonly pendingNestedToolCalls?: readonly {
-      readonly callId: string;
-      readonly factId: string;
-      readonly parentToolCallFactId: string;
+      readonly invocationId: string;
+      readonly parentInvocationId: string;
     }[];
     readonly toolCalls: readonly {
-      readonly callId: string;
-      readonly factId?: string;
-      readonly parentToolCallFactId?: string;
+      readonly invocationId: string;
+      readonly parentInvocationId?: string;
     }[];
   },
 ): void {
-  const pendingRootFactIds = new Set(state.pendingToolRound?.toolCallIds ?? []);
-  const rootFactIds = new Set<string>(pendingRootFactIds);
+  const pendingRootInvocationIds = new Set(state.pendingToolRound?.invocationIds ?? []);
+  const rootInvocationIds = new Set<string>(pendingRootInvocationIds);
 
   const nestedResults: Array<{
-    readonly callId: string;
-    readonly factId: string;
-    readonly parentToolCallFactId: string;
+    readonly invocationId: string;
+    readonly parentInvocationId: string;
   }> = [];
   for (const result of state.toolCalls) {
-    if (result.parentToolCallFactId === undefined) {
-      if (result.factId !== undefined && result.factId !== result.callId) {
-        throw new OrdinaryFeatureError(
-          "ordinary_tool_result_conflict",
-          `Ordinary nested tool fact ${result.factId} must reference its parent root tool fact`,
-        );
-      }
-      rootFactIds.add(toolCallFactId(result));
+    if (result.parentInvocationId === undefined) {
+      rootInvocationIds.add(result.invocationId);
       continue;
     }
-    if (result.factId === undefined || result.factId === result.callId) {
+    if (result.invocationId === result.parentInvocationId) {
       throw new OrdinaryFeatureError(
         "ordinary_tool_result_conflict",
-        `Ordinary nested tool result ${result.callId} must have a factId different from its provider callId`,
+        `Ordinary nested tool result ${result.invocationId} must have an invocation id distinct from its parent`,
       );
     }
     nestedResults.push({
-      callId: result.callId,
-      factId: result.factId,
-      parentToolCallFactId: result.parentToolCallFactId,
+      invocationId: result.invocationId,
+      parentInvocationId: result.parentInvocationId,
     });
   }
 
-  const nestedFactIds = new Set(nestedResults.map((result) => result.factId));
-  const pendingNestedFactIds = new Set<string>();
+  const nestedInvocationIds = new Set(nestedResults.map((result) => result.invocationId));
+  const pendingNestedInvocationIds = new Set<string>();
   for (const request of state.pendingNestedToolCalls ?? []) {
-    if (request.factId === request.callId) {
+    if (pendingNestedInvocationIds.has(request.invocationId)) {
       throw new OrdinaryFeatureError(
         "ordinary_tool_result_conflict",
-        `Ordinary pending nested tool ${request.callId} must have a distinct fact identity`,
+        `Ordinary pending nested tool invocation ${request.invocationId} is duplicated`,
       );
     }
-    if (pendingNestedFactIds.has(request.factId)) {
-      throw new OrdinaryFeatureError(
-        "ordinary_tool_result_conflict",
-        `Ordinary pending nested tool fact ${request.factId} is duplicated`,
-      );
-    }
-    pendingNestedFactIds.add(request.factId);
+    pendingNestedInvocationIds.add(request.invocationId);
   }
-  const allNestedFactIds = new Set([...nestedFactIds, ...pendingNestedFactIds]);
+  const allNestedInvocationIds = new Set([...nestedInvocationIds, ...pendingNestedInvocationIds]);
   for (const result of nestedResults) {
-    if (rootFactIds.has(result.factId)) {
+    if (rootInvocationIds.has(result.invocationId)) {
       throw new OrdinaryFeatureError(
         "ordinary_tool_result_conflict",
-        `Ordinary nested tool fact ${result.factId} identity conflicts with a root tool fact`,
+        `Ordinary nested tool invocation ${result.invocationId} identity conflicts with a root tool invocation`,
       );
     }
-    if (allNestedFactIds.has(result.parentToolCallFactId)) {
+    if (allNestedInvocationIds.has(result.parentInvocationId)) {
       throw new OrdinaryFeatureError(
         "ordinary_tool_result_conflict",
-        `Ordinary nested tool fact ${result.factId} cannot reference nested tool fact ${result.parentToolCallFactId} as its parent`,
+        `Ordinary nested tool invocation ${result.invocationId} cannot reference nested tool invocation ${result.parentInvocationId} as its parent`,
       );
     }
-    if (!rootFactIds.has(result.parentToolCallFactId)) {
+    if (!rootInvocationIds.has(result.parentInvocationId)) {
       throw new OrdinaryFeatureError(
         "ordinary_tool_result_conflict",
-        `Ordinary nested tool fact ${result.factId} references unknown root tool fact ${result.parentToolCallFactId} in run ${state.runId}`,
+        `Ordinary nested tool invocation ${result.invocationId} references unknown root tool invocation ${result.parentInvocationId} in run ${state.runId}`,
       );
     }
   }
   for (const request of state.pendingNestedToolCalls ?? []) {
-    if (rootFactIds.has(request.factId)) {
+    if (rootInvocationIds.has(request.invocationId)) {
       throw new OrdinaryFeatureError(
         "ordinary_tool_result_conflict",
-        `Ordinary pending nested tool fact ${request.factId} conflicts with a root tool fact`,
+        `Ordinary pending nested tool invocation ${request.invocationId} conflicts with a root tool invocation`,
       );
     }
-    if (allNestedFactIds.has(request.parentToolCallFactId)) {
+    if (allNestedInvocationIds.has(request.parentInvocationId)) {
       throw new OrdinaryFeatureError(
         "ordinary_tool_result_conflict",
-        `Ordinary pending nested tool fact ${request.factId} cannot reference nested parent ${request.parentToolCallFactId}`,
+        `Ordinary pending nested tool invocation ${request.invocationId} cannot reference nested parent ${request.parentInvocationId}`,
       );
     }
-    if (!pendingRootFactIds.has(request.parentToolCallFactId)) {
+    if (!pendingRootInvocationIds.has(request.parentInvocationId)) {
       throw new OrdinaryFeatureError(
         "ordinary_tool_result_conflict",
-        `Ordinary pending nested tool fact ${request.factId} references inactive root ${request.parentToolCallFactId}`,
+        `Ordinary pending nested tool invocation ${request.invocationId} references inactive root ${request.parentInvocationId}`,
       );
     }
-    const result = nestedResults.find((item) => item.factId === request.factId);
-    if (result !== undefined &&
-        (result.callId !== request.callId || result.parentToolCallFactId !== request.parentToolCallFactId)) {
+    const result = nestedResults.find((item) => item.invocationId === request.invocationId);
+    if (result !== undefined && result.parentInvocationId !== request.parentInvocationId) {
       throw new OrdinaryFeatureError(
         "ordinary_tool_result_conflict",
-        `Ordinary nested tool fact ${request.factId} has conflicting request and result identities`,
+        `Ordinary nested tool invocation ${request.invocationId} has conflicting request and result identities`,
       );
     }
   }
 }
 
 function requirePendingNestedToolCall(request: ToolCallRequest): OrdinaryPendingNestedToolCall {
-  if (request.factId === undefined || request.parentToolCallFactId === undefined ||
-      request.factId === request.callId) {
+  if (request.parentInvocationId === undefined) {
     throw new OrdinaryFeatureError(
       "ordinary_tool_result_conflict",
-      `Ordinary nested tool request ${request.callId} is missing its scoped fact identity`,
+      `Ordinary nested tool request ${request.providerCallId} is missing its parent invocation identity`,
     );
   }
   return cloneJson(request) as OrdinaryPendingNestedToolCall;
@@ -946,9 +954,30 @@ function toolResultMatchesPendingNestedCall(
   result: ToolCallResult,
   request: OrdinaryPendingNestedToolCall,
 ): boolean {
-  return result.callId === request.callId && result.factId === request.factId &&
-    result.parentToolCallFactId === request.parentToolCallFactId && result.toolName === request.toolName &&
-    JSON.stringify(result.input) === JSON.stringify(request.input);
+  return sameScopedToolCallIdentity(result, request) && sameToolCallContent(result, request);
+}
+
+function sameToolInvocationIdentity(
+  left: Pick<ToolCallRequest, "toolName">,
+  right: Pick<ToolCallRequest, "toolName">,
+): boolean {
+  return left.toolName === right.toolName;
+}
+
+function sameScopedToolCallIdentity(
+  left: Pick<ToolCallRequest, "providerCallId" | "invocationId" | "parentInvocationId" | "toolName">,
+  right: Pick<ToolCallRequest, "providerCallId" | "invocationId" | "parentInvocationId" | "toolName">,
+): boolean {
+  return sameToolInvocationIdentity(left, right) && left.providerCallId === right.providerCallId
+    && left.invocationId === right.invocationId
+    && left.parentInvocationId === right.parentInvocationId;
+}
+
+function sameToolCallContent(
+  left: Pick<ToolCallRequest, "input">,
+  right: Pick<ToolCallRequest, "input">,
+): boolean {
+  return isDeepStrictEqual(left.input, right.input);
 }
 
 function withoutConfirmationRequest(
@@ -959,7 +988,7 @@ function withoutConfirmationRequest(
 }
 
 export function ordinaryToolResultKey(result: ToolCallResult): string {
-  return `${toolCallFactId(result)}:${result.status}`;
+  return `${toolInvocationId(result)}:${result.status}`;
 }
 
 function mergeOrdinaryToolResults(
@@ -967,37 +996,37 @@ function mergeOrdinaryToolResults(
   incoming: readonly ToolCallResult[],
 ): readonly ToolCallResult[] {
   const merged = existing.map(cloneJson);
-  const indexes = new Map(merged.map((result, index) => [toolCallFactId(result), index] as const));
+  const indexes = new Map(merged.map((result, index) => [toolInvocationId(result), index] as const));
   const normalizedIncoming: ToolCallResult[] = [];
   const incomingIndexes = new Map<string, number>();
   for (const result of incoming) {
     const stored = cloneJson(result);
-    const factId = toolCallFactId(stored);
-    const duplicateIndex = incomingIndexes.get(factId);
+    const invocationId = toolInvocationId(stored);
+    const duplicateIndex = incomingIndexes.get(invocationId);
     if (duplicateIndex === undefined) {
-      incomingIndexes.set(factId, normalizedIncoming.length);
+      incomingIndexes.set(invocationId, normalizedIncoming.length);
       normalizedIncoming.push(stored);
     } else {
       normalizedIncoming[duplicateIndex] = stored;
     }
   }
   for (const stored of normalizedIncoming) {
-    const factId = toolCallFactId(stored);
-    const index = indexes.get(factId);
+    const invocationId = toolInvocationId(stored);
+    const index = indexes.get(invocationId);
     if (index === undefined) {
-      indexes.set(factId, merged.length);
+      indexes.set(invocationId, merged.length);
       merged.push(stored);
       continue;
     }
     const current = merged[index]!;
-    if (JSON.stringify(current) === JSON.stringify(stored)) continue;
+    if (sameResultForIdempotency(current, stored)) continue;
     if (current.status === "approval_required" && stored.status !== "approval_required") {
       merged[index] = stored;
       continue;
     }
     throw new OrdinaryFeatureError(
       "ordinary_tool_result_conflict",
-      `Ordinary tool call ${stored.callId} already has a different resolved result`,
+      `Ordinary tool call ${stored.providerCallId} already has a different resolved result`,
     );
   }
   return merged;
@@ -1033,31 +1062,32 @@ function eventForTransition(
       ...base,
       type: "model.reasoning.completed",
       modelRequestId: transition.modelRequestId,
+      contentIndex: transition.contentIndex,
       content: transition.content,
     };
     case "request_approval": return {
       ...base,
       type: "run.approval_requested",
       confirmationRequests: cloneJson(transition.status.confirmationRequests),
-      toolCallIds: transition.toolCalls.map(toolCallFactId),
+      invocationIds: transition.toolCalls.map(toolInvocationId),
     };
     case "approval_decided": return {
       ...base,
       type: "run.approval_decided",
       decision: cloneJson(transition.decision),
     };
-    case "complete": return { ...base, type: "run.completed", toolCallIds: transition.toolCalls.map(toolCallFactId) };
+    case "complete": return { ...base, type: "run.completed", invocationIds: transition.toolCalls.map(toolInvocationId) };
     case "fail": return {
       ...base,
       type: "run.failed",
       code: transition.error.code,
-      toolCallIds: (transition.toolCalls ?? []).map(toolCallFactId),
+      invocationIds: (transition.toolCalls ?? []).map(toolInvocationId),
     };
     case "cancel": return {
       ...base,
       type: "run.cancelled",
       reason: transition.reason,
-      toolCallIds: (transition.toolCalls ?? []).map(toolCallFactId),
+      invocationIds: (transition.toolCalls ?? []).map(toolInvocationId),
     };
     case "block": return { ...base, type: "run.blocked", code: transition.reason.code };
   }
@@ -1104,4 +1134,49 @@ function nextSequence(events: readonly OrdinaryRunEvent[]): number {
 
 function cloneJson<T>(value: T): T {
   return globalThis.structuredClone(value);
+}
+
+function sameOrderedIds(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
+}
+
+function samePendingToolRound(
+  left: NonNullable<OrdinaryRunState["pendingToolRound"]>,
+  right: NonNullable<OrdinaryRunState["pendingToolRound"]>,
+): boolean {
+  return left.assistantEntryRef.sessionId === right.assistantEntryRef.sessionId
+    && left.assistantEntryRef.entryId === right.assistantEntryRef.entryId
+    && sameOrderedIds(left.providerCallIds, right.providerCallIds)
+    && sameOrderedIds(left.invocationIds, right.invocationIds);
+}
+
+function sameConfirmationRequestShape(
+  left: import("../../domain/confirmation/index.js").ConfirmationRequest,
+  right: import("../../domain/confirmation/index.js").ConfirmationRequest,
+): boolean {
+  return left.confirmationId === right.confirmationId
+    && left.invocationId === right.invocationId
+    && left.title === right.title
+    && left.actionSummary === right.actionSummary
+    && left.consequence === right.consequence
+    && left.riskLevel === right.riskLevel
+    && left.requestedAt === right.requestedAt
+    && left.expiresAt === right.expiresAt
+    && left.resumeAvailability === right.resumeAvailability
+    && sameStringList(left.affectedResources, right.affectedResources)
+    && sameStringList(left.sourceRefs, right.sourceRefs)
+    && left.conversationId === right.conversationId;
+}
+
+function sameStringList(left: readonly string[], right: readonly string[]): boolean {
+  if (left === right) return true;
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
 }

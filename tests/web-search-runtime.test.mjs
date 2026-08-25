@@ -41,7 +41,7 @@ test("configured external search is catalogued and executable", async () => {
 
   const center = registry.createToolCenter("agent-basic");
   const result = await center.execute(
-    { callId: "call-search", toolName: "WebSearch", input: { query: "Synech" } },
+    { providerCallId: "call-search", invocationId: "invocation-search", toolName: "WebSearch", input: { query: "Synech" } },
     { callerAgentId: "ordinary", traceId: "trace", goalId: "goal" },
     { callerAgentId: "ordinary", allowedTools: ["WebSearch"] },
   );

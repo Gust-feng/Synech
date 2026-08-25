@@ -18,7 +18,6 @@ import {
   isLowValueUserDecisionNode,
   nodesForRun,
 } from "./panel-transcript-node-projection.js";
-import { isGenericApprovalDecisionText } from "../../../text-projection/confirmation-copy.js";
 
 export type AssistantTranscriptRunLike = {
   readonly runId: string;
@@ -208,9 +207,6 @@ function canUseTurnContentAsAnswer<TTurn extends WorklineConversationTurn, TPend
     return true;
   }
   if (input.run.status !== "running" || input.turn.content.trim().length === 0) {
-    return false;
-  }
-  if (isGenericApprovalDecisionText(input.turn.content)) {
     return false;
   }
   return !input.nodes.some((node) =>

@@ -43,6 +43,7 @@ function projectToolDisplayCore(request: ToolCallRequest, output: ToolFactValue 
   if (request.toolName === "ResearchRead" && Array.isArray(record.items)) {
     return {
       kind: "generic_tool_summary",
+      category: "read",
       action: toolDisplayName(request.toolName),
       summary: `${record.items.length} 个来源`,
       items: record.items.slice(0, 8).map(batchReadDisplayItem).filter(isString),

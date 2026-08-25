@@ -65,10 +65,11 @@ export type OrdinaryPanelRunEvent = {
   readonly title: string;
   readonly summary?: string;
   readonly delta?: string;
+  readonly contentIndex?: number;
   readonly status: OrdinaryPanelTaskStatus;
   readonly timestamp: string;
   readonly toolName?: string;
-  readonly parentToolCallFactId?: string;
+  readonly parentInvocationId?: string;
   readonly refs: readonly PanelObservationRef[];
   readonly visibility: "compact" | "expanded" | "debug";
   readonly detail?: {
@@ -97,11 +98,12 @@ export type OrdinaryPanelTranscriptNode = {
   readonly title: string;
   readonly summary?: string;
   readonly text?: string;
+  readonly contentIndex?: number;
   readonly timestamp: string;
   readonly toolName?: string;
   readonly failureAttribution?: ToolFailureAttribution;
   readonly error?: string;
-  readonly parentToolCallFactId?: string;
+  readonly parentInvocationId?: string;
   readonly delegatedExecution?: DelegatedAgentExecutionMetadata;
   readonly display?: ToolDisplayProjection;
   readonly confirmation?: OrdinaryPanelConfirmationRequest;

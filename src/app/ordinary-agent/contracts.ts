@@ -243,7 +243,10 @@ export type OrdinaryRunStatus =
 export type OrdinaryPendingToolRound = {
   /** Pi Session entry containing the provider-ordered root tool calls. */
   readonly assistantEntryRef: AgentSessionEntryRef;
-  readonly toolCallIds: readonly string[];
+  /** Provider call identities in the exact assistant-message order. */
+  readonly providerCallIds: readonly string[];
+  /** Synech invocation identities of the root tool calls in provider order. */
+  readonly invocationIds: readonly string[];
 };
 
 /** Durable positions for one run without copying Pi's transcript or branch tree. */
@@ -282,17 +285,17 @@ export type OrdinaryRunEvent = OrdinaryRunEventBase & (
       readonly modelRequestId: string;
       readonly assistantEntryRef: AgentSessionEntryRef;
     }
-  | { readonly type: "model.reasoning.completed"; readonly modelRequestId: string; readonly content: string }
+  | { readonly type: "model.reasoning.completed"; readonly modelRequestId: string; readonly contentIndex: number; readonly content: string }
   | {
       readonly type: "context.compaction.completed";
       readonly compactionEntryRef: AgentSessionEntryRef;
       readonly tokensBefore: number;
     }
-  | { readonly type: "run.approval_requested"; readonly confirmationRequests: readonly ConfirmationRequest[]; readonly toolCallIds: readonly string[] }
+  | { readonly type: "run.approval_requested"; readonly confirmationRequests: readonly ConfirmationRequest[]; readonly invocationIds: readonly string[] }
   | { readonly type: "run.approval_decided"; readonly decision: ConfirmationDecision }
-  | { readonly type: "run.completed"; readonly toolCallIds: readonly string[] }
-  | { readonly type: "run.failed"; readonly code: string; readonly toolCallIds: readonly string[] }
-  | { readonly type: "run.cancelled"; readonly reason: string; readonly toolCallIds: readonly string[] }
+  | { readonly type: "run.completed"; readonly invocationIds: readonly string[] }
+  | { readonly type: "run.failed"; readonly code: string; readonly invocationIds: readonly string[] }
+  | { readonly type: "run.cancelled"; readonly reason: string; readonly invocationIds: readonly string[] }
   | { readonly type: "run.blocked"; readonly code: string }
 );
 
@@ -331,8 +334,8 @@ export type OrdinaryRunState = {
 };
 
 export type OrdinaryPendingNestedToolCall = ToolCallRequest & {
-  readonly factId: string;
-  readonly parentToolCallFactId: string;
+  readonly invocationId: string;
+  readonly parentInvocationId: string;
 };
 
 export type OrdinaryRunSnapshotDocument = {
@@ -443,9 +446,23 @@ export type OrdinaryExecutionInput = {
   /** Durable user input, including attachment refs that must be resolved per request. */
   readonly runInput: OrdinaryRunInput;
   readonly abortSignal: AbortSignal;
-  readonly onTextDelta?: (delta: string) => void;
-  readonly onReasoningDelta?: (delta: string) => void;
-  readonly onReasoningCompleted?: (content: string) => Promise<void>;
+  readonly onModelContent?: (event: import("../model-runtime/agent-loop.js").ModelContentBlockEvent) => void | Promise<void>;
+  /**
+   * Owner identity binding for one root tool batch. Ordinary mints the
+   * authoritative invocationId for each provider-issued call; the model
+   * adapter must not invent its own.
+   */
+  readonly acceptToolInvocations: (
+    calls: readonly import("../model-runtime/agent-loop.js").ProviderToolCall[],
+  ) => Promise<readonly import("../model-runtime/agent-loop.js").AcceptedToolInvocation[]>;
+  /**
+   * Owner identity binding for one provider-emitted nested tool batch. Each
+   * nested call gets a fresh invocationId whose parent is the delegated
+   * AgentTool invocation already accepted by Ordinary.
+   */
+  readonly acceptNestedToolInvocations: (
+    calls: readonly import("../model-runtime/agent-loop.js").ProviderToolCall[],
+  ) => Promise<readonly import("../model-runtime/agent-loop.js").AcceptedToolInvocation[]>;
   readonly onToolRequested?: (request: ToolCallRequest) => void;
   /** Must settle before a provider-emitted nested tool batch can preflight or execute. */
   readonly onNestedToolRequestsAccepted?: (requests: readonly ToolCallRequest[]) => Promise<void>;
@@ -482,9 +499,16 @@ export type OrdinaryRunActivity = OrdinaryRunActivityBase & (
       readonly type: "model.output.delta";
       readonly durability: "live_only";
       readonly modelRequestId: string;
+      readonly contentIndex: number;
       readonly delta: string;
     }
-  | { readonly type: "model.reasoning.delta"; readonly durability: "live_only"; readonly modelRequestId: string; readonly delta: string }
+  | {
+      readonly type: "model.reasoning.delta";
+      readonly durability: "live_only";
+      readonly modelRequestId: string;
+      readonly contentIndex: number;
+      readonly delta: string;
+    }
   | { readonly type: "tool.requested"; readonly durability: "live_only"; readonly request: ToolCallRequest }
   | {
       readonly type: "tool.progress";

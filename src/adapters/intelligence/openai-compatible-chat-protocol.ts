@@ -9,10 +9,6 @@ import { asRecord, isPlainRecord } from "./provider-value-utils.js";
 export type OpenAICompatibleChatDialect = {
   readonly profileId: ProviderProtocolProfileId;
   readonly reasoningControl: ModelReasoningControlKind;
-  readonly preserveFullAssistantMessage: boolean;
-  readonly supportsStreaming: boolean;
-  readonly supportsStreamUsage: boolean;
-  readonly streamDeltaMode: "incremental" | "cumulative";
 };
 
 export function resolveOpenAICompatibleChatDialect(input: {
@@ -26,76 +22,43 @@ export function resolveOpenAICompatibleChatDialect(input: {
       return {
         profileId,
         reasoningControl: "openai_chat_reasoning_effort",
-        preserveFullAssistantMessage: false,
-        supportsStreaming: true,
-        supportsStreamUsage: true,
-        streamDeltaMode: "incremental",
       };
     case "deepseek":
       return {
         profileId,
         reasoningControl: "deepseek_reasoning_effort",
-        preserveFullAssistantMessage: true,
-        supportsStreaming: true,
-        supportsStreamUsage: true,
-        streamDeltaMode: "incremental",
       };
     case "moonshot":
       if (isKimiK3Model(input.model)) {
         return {
           profileId,
           reasoningControl: "kimi_k3_reasoning_effort",
-          preserveFullAssistantMessage: true,
-          supportsStreaming: true,
-          supportsStreamUsage: true,
-          streamDeltaMode: "incremental",
         };
       }
       return {
         profileId,
         reasoningControl: "thinking_enabled_disabled",
-        preserveFullAssistantMessage: true,
-        supportsStreaming: true,
-        supportsStreamUsage: true,
-        streamDeltaMode: "incremental",
       };
     case "glm":
       if (isModernGLMThinkingModel(input.model)) {
         return {
           profileId,
           reasoningControl: "thinking_enabled_disabled",
-          preserveFullAssistantMessage: true,
-          supportsStreaming: true,
-          // Z.AI includes usage on the terminal chunk without stream_options.
-          supportsStreamUsage: false,
-          streamDeltaMode: "incremental",
         };
       }
       return {
         profileId,
         reasoningControl: "thinking_disabled",
-        preserveFullAssistantMessage: true,
-        supportsStreaming: false,
-        supportsStreamUsage: false,
-        streamDeltaMode: "incremental",
       };
     case "minimax":
       return {
         profileId,
         reasoningControl: "reasoning_split",
-        preserveFullAssistantMessage: true,
-        supportsStreaming: true,
-        supportsStreamUsage: true,
-        streamDeltaMode: "cumulative",
       };
     default:
       return {
         profileId: "openai_compatible",
         reasoningControl: "none",
-        preserveFullAssistantMessage: false,
-        supportsStreaming: true,
-        supportsStreamUsage: false,
-        streamDeltaMode: "incremental",
       };
   }
 }

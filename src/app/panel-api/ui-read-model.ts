@@ -67,4 +67,4 @@ export {
   assistantTerminalStatus,
 } from "./read-model/assistant/panel-assistant-failure.js";
 export type { AssistantFailureParts, AssistantTerminalStatus } from "./read-model/assistant/panel-assistant-failure.js";
-export { cleanConfirmationSummary, isGenericApprovalDecisionText } from "../text-projection/confirmation-copy.js";
+export { cleanConfirmationSummary } from "../text-projection/confirmation-copy.js";

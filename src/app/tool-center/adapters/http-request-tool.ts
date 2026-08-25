@@ -259,8 +259,8 @@ async function executeHttpRequest(
           mediaType: "text/plain",
           content: bodyResult.fullBody,
           sourceToolName: "HttpRequest",
-          sourceCallId: context.toolCallId ?? "HttpRequest",
-          sourceFactId: context.toolCallId,
+          sourceCallId: context.providerCallId ?? context.invocationId ?? "HttpRequest",
+          sourceFactId: context.invocationId,
           ownerId: context.traceId,
         })
       : undefined;
@@ -294,7 +294,8 @@ async function executeHttpRequest(
       return {
         kind: "tool_call_result",
         result: {
-          callId: context.toolCallId ?? "HttpRequest",
+          providerCallId: context.providerCallId ?? "HttpRequest",
+          invocationId: context.invocationId ?? throwMissingInvocation(context, "HttpRequest"),
           toolName: "HttpRequest",
           input: input as ToolFactValue | undefined,
           output: incompleteHttpResponseOutput(output),
@@ -780,4 +781,11 @@ function booleanOrUndefined(value: unknown): boolean | undefined {
 
 function isString(value: unknown): value is string {
   return typeof value === "string";
+}
+
+function throwMissingInvocation(context: ToolExecutionContext, toolName: string): never {
+  throw new Error(
+    `Tool adapter for ${toolName} cannot construct a ToolCallResult without an upstream-bound invocationId.`
+    + ` providerCallId=${context.providerCallId ?? "undefined"}.`,
+  );
 }

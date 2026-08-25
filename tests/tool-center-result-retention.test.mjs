@@ -34,7 +34,8 @@ test("oversized output is retained exactly and its continuation reads every char
   let reconstructed = "";
   while (nextInput !== undefined) {
     const page = await center.execute({
-      callId: `read-${reconstructed.length}`,
+      providerCallId: `read-${reconstructed.length}`,
+      invocationId: `read-${reconstructed.length}`,
       toolName: "ReadOutput",
       input: nextInput,
     }, context, permission());
@@ -108,7 +109,7 @@ function toolCenter(store, execute) {
 }
 
 function request() {
-  return { callId: "call-echo", toolName: "Echo", input: {} };
+  return { providerCallId: "call-echo", invocationId: "call-echo", toolName: "Echo", input: {} };
 }
 
 function permission() {

@@ -6,7 +6,7 @@
  * - 文件读取（MIME 识别、文本解码、指纹计算、目录列表、文本预览）
  * - 文件写入（CAS 原子写入、排他创建、重命名、递归删除）
  *
- * 所有操作返回 FsResult 或抛出 plain Error（路径逃逸），
+ * 所有操作返回 FsResult；路径解析失败时抛出带 code 的路径错误，
  * 调用方负责将结果映射为各自的业务错误。
  */
 export type {
@@ -18,6 +18,7 @@ export type {
 } from "./local-filesystem-types.js";
 
 export {
+  LocalFilesystemPathError,
   normalizeRelativePath,
   joinRelativePath,
   isWithinRoot,

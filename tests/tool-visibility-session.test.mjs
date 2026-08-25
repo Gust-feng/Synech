@@ -182,6 +182,7 @@ function agentTool(name) {
 function visibilityHost({ accepted, abortSignal = new AbortController().signal }) {
   return {
     abortSignal,
+    resolveInvocationId: (providerCallId) => ({ invocationId: `inv:${providerCallId}` }),
     onToolRequested: () => {},
     acceptResult: async (result) => {
       accepted.push(structuredClone(result));

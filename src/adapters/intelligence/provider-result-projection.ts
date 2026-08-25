@@ -1,13 +1,23 @@
 import { isContextOverflow, type AssistantMessage, type ImageContent, type Usage } from "@earendil-works/pi-ai";
-import type { ModelInputAttachment, ModelMessage, ModelUsage } from "../../domain/intelligence/index.js";
+import type { ModelInputAttachment, ModelMessage, ModelToolCall, ModelUsage } from "../../domain/intelligence/index.js";
 import { normalizeToolFactValue } from "../../domain/tools/index.js";
 import { modelFailureKindFromError } from "../../kernel/intelligence/failures.js";
 
+/**
+ * Convert a Pi AssistantMessage to the neutral ModelMessage. The provider-side
+ * tool calls are exposed without a Synech invocation id; the calling loop is
+ * responsible for binding them through the owning feature's acceptToolInvocations
+ * hook and adding the per-message roundId before dispatching the model.
+ */
 export function modelMessageFromAssistant(message: AssistantMessage): ModelMessage {
   const text = message.content.filter((block) => block.type === "text").map((block) => block.text).join("");
-  const toolCalls = message.content
+  const toolCalls: ModelToolCall[] = message.content
     .filter((block) => block.type === "toolCall")
-    .map((call) => ({ callId: call.id, toolName: call.name, input: normalizeToolFactValue(call.arguments) }));
+    .map((call) => ({
+      providerCallId: call.id,
+      toolName: call.name,
+      input: normalizeToolFactValue(call.arguments),
+    }));
   return {
     role: "assistant",
     content: text,

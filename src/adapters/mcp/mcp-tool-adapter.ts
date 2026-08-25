@@ -135,7 +135,8 @@ async function executeMcpToolForExecutor(
     return {
       kind: "tool_call_result",
       result: {
-        callId: context.toolCallId ?? canonicalName,
+        providerCallId: context.providerCallId ?? canonicalName,
+        invocationId: context.invocationId ?? throwMissingInvocation(context, canonicalName),
         toolName: canonicalName,
         input: input as ToolFactValue | undefined,
         output: {
@@ -179,7 +180,8 @@ async function executeMcpToolForExecutor(
   return {
     kind: "tool_call_result",
     result: {
-      callId: context.toolCallId ?? canonicalName,
+      providerCallId: context.providerCallId ?? canonicalName,
+      invocationId: context.invocationId ?? throwMissingInvocation(context, canonicalName),
       toolName: canonicalName,
       input: input as ToolFactValue | undefined,
       output: output as ToolFactValue,
@@ -590,7 +592,8 @@ function mcpPostExecutionDeliveryFailure(input: {
   return {
     kind: "tool_call_result",
     result: {
-      callId: input.context.toolCallId ?? input.canonicalName,
+      providerCallId: input.context.providerCallId ?? input.canonicalName,
+      invocationId: input.context.invocationId ?? throwMissingInvocation(input.context, input.canonicalName),
       toolName: input.canonicalName,
       input: normalizeFactWithoutThrowing(input.input),
       output,
@@ -742,4 +745,11 @@ function extensionForMimeType(mimeType: string): string {
     default:
       return ".bin";
   }
+}
+
+function throwMissingInvocation(context: ToolExecutionContext, canonicalName: string): never {
+  throw new Error(
+    `MCP tool adapter cannot construct a ToolCallResult for ${canonicalName}: ToolExecutionContext is missing an invocationId.`
+    + ` providerCallId=${context.providerCallId ?? "undefined"}; the owning feature must pass the bound id.`,
+  );
 }

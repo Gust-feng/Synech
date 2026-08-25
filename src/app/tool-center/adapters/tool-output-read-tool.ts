@@ -102,7 +102,7 @@ export function createReadToolOutputTool(store: ToolOutputStore, options: {
         outputTokenCounter: options.outputTokenCounter,
         targetInlineBodyTokens: options.targetInlineBodyTokens ?? DEFAULT_TARGET_INLINE_TOOL_BODY_TOKENS,
         maxInlineOutputTokens: options.maxInlineOutputTokens ?? DEFAULT_MAX_INLINE_TOOL_RESULT_TOKENS,
-        callId: context.toolCallId ?? "read-tool-output",
+        callId: context.providerCallId ?? context.invocationId ?? "read-tool-output",
       });
       if (!result.hasMoreAfter && slice.availability === "live_only") {
         await store.release(slice.ref);
@@ -179,7 +179,8 @@ function readResultFits(
   if (counter === undefined) return true;
   if (counter.countText(result.content) > budget.targetInlineBodyTokens) return false;
   return counter.countText(JSON.stringify(toolResultMessage({
-    callId: budget.callId,
+    providerCallId: budget.callId,
+    invocationId: budget.callId,
     toolName: "ReadOutput",
     input: undefined,
     output: result,

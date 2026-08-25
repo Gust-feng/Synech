@@ -36,7 +36,10 @@ export type AgentSessionWriteCheckpoint = { readonly sessionId: string } & (
   | {
       readonly kind: "assistant_tool_call_entry_committed";
       readonly assistantEntryRef: AgentSessionEntryRef;
-      readonly toolCallIds: readonly string[];
+      /** Provider call ids in the order they appear in the committed assistant entry. */
+      readonly providerCallIds: readonly string[];
+      /** Synech invocation ids in matching provider order. */
+      readonly invocationIds: readonly string[];
     }
   | {
       /** Final assistant output is durable, but becomes a rollback target only after the run snapshot commits. */
@@ -46,7 +49,9 @@ export type AgentSessionWriteCheckpoint = { readonly sessionId: string } & (
   | {
       readonly kind: "tool_result_entries_committed";
       readonly toolRoundLeafRef: AgentSessionEntryRef;
-      readonly toolCallIds: readonly string[];
+      /** Provider call ids in provider order; the matching invocation ids are accepted from the same checkpoint. */
+      readonly providerCallIds: readonly string[];
+      readonly invocationIds: readonly string[];
     }
   | {
       readonly kind: "compaction_entry_committed";
@@ -69,7 +74,7 @@ export interface AgentSessionRepository {
   readToolCalls(input: {
     readonly sessionRef: AgentSessionRef;
     readonly assistantEntryRef: AgentSessionEntryRef;
-  }): Promise<readonly ToolCallRequest[]>;
+  }): Promise<readonly ProviderToolCall[]>;
   reconcileToolResultEntries(input: {
     readonly sessionRef: AgentSessionRef;
     readonly assistantEntryRef: AgentSessionEntryRef;
@@ -82,4 +87,4 @@ export interface AgentSessionRepository {
   }): Promise<AgentSessionEntryRef>;
   delete(ref: AgentSessionRef): Promise<void>;
 }
-import type { ToolCallRequest, ToolCallResult } from "../../domain/tools/index.js";
+import type { ToolCallRequest, ToolCallResult, ProviderToolCall } from "../../domain/tools/index.js";

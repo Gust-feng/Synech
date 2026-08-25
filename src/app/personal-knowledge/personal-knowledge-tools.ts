@@ -472,7 +472,7 @@ function agentActor(context: ToolExecutionContext) {
     actorId: context.callerAgentId,
     traceId: context.traceId,
     goalId: context.goalId,
-    ...(context.toolCallId === undefined ? {} : { toolCallId: context.toolCallId }),
+    ...(context.providerCallId === undefined ? {} : { toolCallId: context.providerCallId }),
   };
 }
 

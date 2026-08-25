@@ -6,7 +6,7 @@ import type { ConfirmationDecision, ConfirmationRequest } from "../../domain/con
 import type { ModelInputAttachment, ModelInputAttachmentRef } from "../../domain/intelligence/index.js";
 import {
   copyToolModelAttachments,
-  toolCallFactId,
+  toolInvocationId,
   toolModelAttachmentsFromOutput,
   type ToolCallRequest,
   type ToolCallResult,
@@ -197,7 +197,7 @@ export function toolResultAcceptanceFailure(result: ToolCallResult, error: unkno
 
 export function requireConfirmationRequest(result: ToolCallResult): ConfirmationRequest {
   if (result.confirmationRequest === undefined) {
-    throw new Error(`Approval-required tool result ${toolCallFactId(result)} is missing its confirmation request.`);
+    throw new Error(`Approval-required tool result ${toolInvocationId(result)} is missing its confirmation request.`);
   }
   return result.confirmationRequest;
 }
@@ -213,9 +213,9 @@ export function requireApprovalRequiredResult(
 
 export function toolRequestFromResult(result: ToolCallResult): ToolCallRequest {
   return {
-    callId: result.callId,
-    ...(result.factId === undefined ? {} : { factId: result.factId }),
-    ...(result.parentToolCallFactId === undefined ? {} : { parentToolCallFactId: result.parentToolCallFactId }),
+    providerCallId: result.providerCallId,
+    invocationId: result.invocationId,
+    ...(result.parentInvocationId === undefined ? {} : { parentInvocationId: result.parentInvocationId }),
     toolName: result.toolName,
     input: result.input,
   };
@@ -230,16 +230,16 @@ export function toolResultFromDetails(details: unknown): ToolCallResult | undefi
 export function pendingToolResultForMessage(
   pendingToolResults: ReadonlyMap<string, PendingToolResultDelivery>,
   message: PiToolResultMessage,
-  parentToolCallFactId: string | undefined,
+  parentInvocationId: string | undefined,
   ambiguousResult: (message: string) => never,
 ): PendingToolResultDelivery | undefined {
   const detailed = toolResultFromDetails(message.details);
   if (detailed !== undefined) {
-    return pendingToolResults.get(toolCallFactId(detailed));
+    return pendingToolResults.get(toolInvocationId(detailed));
   }
   const matches = [...pendingToolResults.values()].filter(({ result }) =>
-    result.callId === message.toolCallId && result.toolName === message.toolName &&
-    result.parentToolCallFactId === parentToolCallFactId);
+    result.providerCallId === message.toolCallId && result.toolName === message.toolName &&
+    result.parentInvocationId === parentInvocationId);
   if (matches.length > 1) {
     return ambiguousResult(`Pi returned ambiguous pending tool results for call ${message.toolCallId}.`);
   }

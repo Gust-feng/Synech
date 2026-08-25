@@ -1,5 +1,6 @@
 import type { ObservationRef } from "../ordinary/observation.js";
 import type { ToolCallRequest, ToolDefinition } from "../tools/contracts.js";
+import type { ToolFactValue } from "../tools/fact-value.js";
 export type { ModelOutputKind } from "./model-output-contracts.js";
 import type { ModelOutputKind } from "./model-output-contracts.js";
 export type { ModelInputAttachment, ModelInputAttachmentRef, ModelInputAttachmentSource } from "../model-input/index.js";
@@ -40,6 +41,18 @@ export type OrdinaryModelPurpose =
 /** Model request purposes supported by the current Ordinary product path. */
 export type ModelPurpose = OrdinaryModelPurpose;
 
+/**
+ * Tool call as the model boundary sees it. Carries only the external call id,
+ * the tool name, and the raw input. The Synech-owned `invocationId` and the
+ * `roundId` binding token are added by the owning feature when it accepts the
+ * call and never appear on the model boundary.
+ */
+export type ModelToolCall = {
+  readonly providerCallId: string;
+  readonly toolName: string;
+  readonly input: ToolFactValue | undefined;
+};
+
 export type ModelMessage = {
   readonly role: "system" | "user" | "assistant" | "tool";
   readonly content: string;
@@ -52,7 +65,7 @@ export type ModelMessage = {
   readonly ref?: string;
   readonly toolCallId?: string;
   readonly toolName?: string;
-  readonly toolCalls?: readonly ToolCallRequest[];
+  readonly toolCalls?: readonly ModelToolCall[];
   /**
    * Opaque protocol continuation fields returned by an adapter and replayed
    * only while that protocol remains active. A protocol switch starts a new
@@ -146,8 +159,6 @@ export type ModelToolChoice =
   | "auto"
   | "none"
   | { readonly type: "function"; readonly function: { readonly name: string } };
-
-export type ModelToolCall = ToolCallRequest;
 
 /** Provider-reported token usage for one model request. */
 export type ModelRequestUsage = {
@@ -264,7 +275,7 @@ export type ModelResponse = {
   readonly textOutputRef?: ModelArtifactRef;
   readonly reasoningOutput?: ModelReasoningOutputProjection;
   readonly assistantMessage?: ModelMessage;
-  readonly toolCalls?: readonly ToolCallRequest[];
+  readonly toolCalls?: readonly ModelToolCall[];
   readonly usage?: ModelUsage;
   readonly finishReason?: "stop" | "length" | "tool_call" | "content_filter" | "error";
   readonly validation: ModelOutputValidationResult;

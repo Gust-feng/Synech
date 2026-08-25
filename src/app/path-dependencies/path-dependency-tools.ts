@@ -390,7 +390,7 @@ function allowsOwner(owners: readonly MemoryOwner[], owner: MemoryOwner): boolea
 }
 
 function memoryFactId(context: ToolExecutionContext, kind: "read" | "applied", dependency: Pick<PathDependency, "id" | "revision">): string {
-  return `${context.traceId}:${context.toolCallId ?? `${kind}:${dependency.id}@${dependency.revision}`}:${kind}`;
+  return `${context.traceId}:${context.providerCallId ?? context.invocationId ?? `${kind}:${dependency.id}@${dependency.revision}`}:${kind}`;
 }
 
 function optionalPositiveLimit(value: unknown, fallback: number): number | undefined {

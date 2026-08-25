@@ -1,58 +1,36 @@
 import {
   AgentHarness,
-  InMemorySessionRepo,
-  type AgentHarnessEvent,
   type AgentMessage,
   type AgentTool,
   type AgentToolUpdateCallback,
-  type CompactionSettings,
-  type ExecutionEnv,
   type Session,
   type SessionTreeEntry,
-  type ThinkingLevel,
 } from "@earendil-works/pi-agent-core";
-import { createHash } from "node:crypto";
 import {
   Type,
-  type Api,
   type AssistantMessage,
   type ImageContent,
-  type Model,
-  type Models,
 } from "@earendil-works/pi-ai";
 import type {
   AgentLoop,
-  AgentLoopAgentTool,
-  AgentLoopAgentToolInvocation,
   AgentLoopContinuation,
   AgentLoopInput,
   AgentLoopResult,
   AgentLoopToolBoundary,
 } from "../../app/model-runtime/agent-loop.js";
-import {
-  serializeModelVisibleToolDefinitions,
-  type ModelVisibleToolDefinitionSerialization,
-} from "../../app/model-runtime/tool-definition-visibility-cost.js";
 import type { ConfirmationDecision, ConfirmationRequest } from "../../domain/confirmation/index.js";
 import type { ModelUsage } from "../../domain/intelligence/index.js";
 import {
-  cloneToolInputSchema,
   modelVisibleToolDescription,
   normalizeToolFactValue,
-  stableToolSchemaStringify,
-  toolCallFactId,
+  toolInvocationId,
   type ToolCallRequest,
   type ToolCallResult,
   type ToolDefinition,
-  type ToolFactValue,
-  type ToolOperationType,
+  type ToolExecutionContext,
 } from "../../domain/tools/index.js";
-import { compactSessionContextIfNeeded } from "./session-context-compaction.js";
-import { replaceUnsupportedImageBlocks } from "./session-image-placeholder.js";
-import type { ModelProviderPayloadTransformer } from "./model-provider-binding.js";
 import {
   createToolVisibilitySession,
-  narrowToolVisibilityPlan,
   type ToolVisibilityToolSet,
 } from "./tool-visibility-session.js";
 import {
@@ -61,13 +39,11 @@ import {
   deniedToolResult,
   harnessToolResult,
   pendingToolResultForMessage,
-  piImmediateToolResult,
   requireApprovalRequiredResult,
   requireConfirmationRequest,
   toolRequestFromResult,
   toolResultAcceptanceFailure,
   toolResultForPiTransport,
-  toolResultFromDetails,
   toolResultHasInlineImage,
   type PendingToolResultDelivery,
   type ToolExecutionDetails,
@@ -75,47 +51,29 @@ import {
 import {
   assistantText,
   imageContentFromAttachments,
-  modelMessageFromAssistant,
-  modelUsageFromProvider,
   providerFailureFromAssistant,
   providerRefusalFromAssistant,
 } from "./provider-result-projection.js";
 import { errorMessage } from "../../kernel/values/index.js";
+import {
+  ToolInvocationBindingTable,
+} from "./agent-session-tool-bindings.js";
+import type { AgentSessionLoopOptions } from "./agent-session-loop/contracts.js";
+import {
+  RootHarnessEventProjector,
+} from "./agent-session-loop/harness-event-projector.js";
+import {
+  createDelegatedAgentTool,
+  requireDelegatedAgentResultGateway,
+} from "./agent-session-loop/delegated-agent-runner.js";
 
-export type AgentSessionLoopOptions = {
-  readonly executionEnvironment: ExecutionEnv;
-  readonly modelRegistry: Models;
-  readonly selectedModel: Model<Api>;
-  /** Frozen Ordinary capability; Pi model.input remains the transport projection. */
-  readonly supportsVisionInput?: boolean;
-  readonly agentSession: Session;
-  readonly thinkingLevel?: ThinkingLevel;
-  readonly transformProviderPayload?: ModelProviderPayloadTransformer;
-  readonly toolDefinitionTokenCounter?: AgentSessionToolDefinitionTokenCounter;
-  readonly onProviderToolDefinitionMetrics?: AgentSessionToolDefinitionMetricsObserver;
-  readonly compactionSettings?: CompactionSettings;
-  /** Injectable clock for request timing observation. */
-  readonly now?: () => number;
-};
-
-export type AgentSessionToolDefinitionTokenCounter = (serializedDefinition: string) => number;
-
-export type AgentSessionToolDefinitionMetric = {
-  readonly toolName: string;
-  readonly operationType: ToolOperationType;
-  readonly definitionHash: string;
-  readonly definitionTokens: number;
-};
-
-export type AgentSessionToolDefinitionMetrics = {
-  readonly toolCount: number;
-  readonly totalTokens: number;
-  readonly tools: readonly AgentSessionToolDefinitionMetric[];
-};
-
-export type AgentSessionToolDefinitionMetricsObserver = (
-  metrics: AgentSessionToolDefinitionMetrics,
-) => void;
+export type {
+  AgentSessionLoopOptions,
+  AgentSessionToolDefinitionMetric,
+  AgentSessionToolDefinitionMetrics,
+  AgentSessionToolDefinitionMetricsObserver,
+  AgentSessionToolDefinitionTokenCounter,
+} from "./agent-session-loop/contracts.js";
 
 type Deferred<T> = {
   readonly promise: Promise<T>;
@@ -128,75 +86,34 @@ type PendingApproval = {
   readonly decision: Deferred<ApprovalResolution>;
 };
 
-type PendingToolRequest = {
-  readonly request: ToolCallRequest;
-  /** Visibility at the provider request that produced this call, before any same-batch load. */
-  readonly modelVisibleAtRequest: boolean;
-};
-
 type ApprovalResolution = {
   readonly kind: "resolved";
   readonly decision: ConfirmationDecision;
   readonly abortSignal: AbortSignal;
 };
 
-type DelegatedAgentResultGateway = AgentLoopToolBoundary["gateway"] & {
-  readonly deliverResult: NonNullable<AgentLoopToolBoundary["gateway"]["deliverResult"]>;
-};
-
 type AgentSessionExecutionState = {
   readonly toolResults: Map<string, ToolCallResult>;
   readonly pendingToolResults: Map<string, PendingToolResultDelivery>;
   readonly approvals: ApprovalDecisionCoordinator;
-  readonly sessionId: string;
-  readonly agentSession: Session;
   readonly supportsVisionInput: boolean;
   readonly modelInputSupportsImage: boolean;
-  readonly startLeafEntryId: string | null;
-  readonly compactionEntryIds: string[];
   readonly abortSignalCleanups: Set<() => void>;
-  readonly pendingRootToolRequests: Map<string, PendingToolRequest>;
-  readonly preparedRootToolCallIds: Set<string>;
-  readonly acceptedNestedToolRequests: Map<string, ToolCallRequest>;
-  readonly now: () => number;
-  readonly timing: ProviderTimingAccumulator;
-  inputEntryId?: string;
-  latestLeafEntryId: string | null;
-  safeLeafEntryId: string | null;
+  /**
+   * Owner-bound root call ids for the active model response. Populated from
+   * `acceptToolInvocation` during the `message_end` handler before any
+   * `execute` runs, so a synchronous `execute` can read the binding.
+   */
+  readonly rootInvocationBindings: ToolInvocationBindingTable;
+  readonly rootEvents: RootHarnessEventProjector;
   cancellationRequested: boolean;
   abortRun?: () => Promise<void>;
-  usage: ModelUsage;
-  maintenanceFailure?: { readonly code: string; readonly error: string };
-  toolRequestAcceptanceFailure?: unknown;
   toolAcceptanceFailure?: unknown;
-};
-
-type ProviderRequestTiming = {
-  readonly startedAtMs: number;
-  firstVisibleOutputAtMs?: number;
-};
-
-type ProviderTimingAccumulator = {
-  latencyTotalMs: number;
-  latencySampleCount: number;
-  firstTokenLatencyTotalMs: number;
-  firstTokenLatencySampleCount: number;
-  outputDurationTotalMs: number;
-  outputDurationSampleCount: number;
-  visibleOutputTokens: number;
-  visibleOutputDurationMs: number;
-  activeRequest?: ProviderRequestTiming;
 };
 
 type ActiveAgentLoopExecution = {
   readonly run: Promise<AssistantMessage>;
   readonly cancel: () => Promise<void>;
-};
-
-type DelegatedAgentExecutionMetrics = {
-  modelRounds: number;
-  toolCallCount: number;
-  usage: ModelUsage;
 };
 
 /** Provider-neutral mechanical loop whose transcript is owned by one agent Session. */
@@ -211,27 +128,6 @@ export function createAgentSessionLoop(options: AgentSessionLoopOptions): AgentL
       if (input.abortSignal.aborted) return cancelledBeforeStart(input);
       const sessionId = (await options.agentSession.getMetadata()).id;
       const startEntryId = await options.agentSession.getLeafId();
-      const state: AgentSessionExecutionState = {
-        toolResults: new Map(),
-        pendingToolResults: new Map(),
-        approvals: new ApprovalDecisionCoordinator(),
-        sessionId,
-        agentSession: options.agentSession,
-        supportsVisionInput: options.supportsVisionInput ?? options.selectedModel.input.includes("image"),
-        modelInputSupportsImage: options.selectedModel.input.includes("image"),
-        startLeafEntryId: startEntryId,
-        compactionEntryIds: [],
-        abortSignalCleanups: new Set(),
-        pendingRootToolRequests: new Map(),
-        preparedRootToolCallIds: new Set(),
-        acceptedNestedToolRequests: new Map(),
-        now: options.now ?? (() => Date.now()),
-        timing: emptyProviderTimingAccumulator(),
-        latestLeafEntryId: startEntryId,
-        safeLeafEntryId: startEntryId,
-        cancellationRequested: false,
-        usage: {},
-      };
       const prompt = preparePromptInput(input);
       await input.onSessionWriteCheckpoint?.({
         kind: "start_leaf_captured",
@@ -239,6 +135,35 @@ export function createAgentSessionLoop(options: AgentSessionLoopOptions): AgentL
         startLeafRef: startEntryId === null ? null : { sessionId, entryId: startEntryId },
       });
       const runtimeSession = createRunLocalContextSession(options.agentSession);
+      const rootInvocationBindings = new ToolInvocationBindingTable();
+      let state!: AgentSessionExecutionState;
+      const rootEvents = new RootHarnessEventProjector({
+        input,
+        loopOptions: options,
+        sessionId,
+        agentSession: options.agentSession,
+        runtimeSession,
+        startLeafEntryId: startEntryId,
+        modelInputSupportsImage: options.selectedModel.input.includes("image"),
+        rootBindings: rootInvocationBindings,
+        resultPort: {
+          acceptObserved: (result) => acceptToolResult(input, state, result).then(() => undefined),
+          deliverPendingMessage: (message, parentInvocationId) =>
+            deliverPendingToolResultMessage(input, state, message, parentInvocationId),
+        },
+        isCancellationRequested: () => state.cancellationRequested,
+      });
+      state = {
+        toolResults: new Map(),
+        pendingToolResults: new Map(),
+        approvals: new ApprovalDecisionCoordinator(),
+        supportsVisionInput: options.supportsVisionInput ?? options.selectedModel.input.includes("image"),
+        modelInputSupportsImage: options.selectedModel.input.includes("image"),
+        abortSignalCleanups: new Set(),
+        rootInvocationBindings,
+        rootEvents,
+        cancellationRequested: false,
+      };
       const harnessTools = createHarnessTools(input, state, options);
       const harness = new AgentHarness({
         env: options.executionEnvironment,
@@ -252,7 +177,7 @@ export function createAgentSessionLoop(options: AgentSessionLoopOptions): AgentL
       });
       harnessTools.bind?.(harness);
       await harness.setActiveTools([...harnessTools.activeToolNames]);
-      attachHarnessHooks(harness, input, state, options, runtimeSession, harnessTools.metadataByName);
+      rootEvents.attach(harness, harnessTools.metadataByName);
       const run = harness.prompt(prompt.text, { images: prompt.images });
       let abortPromise: Promise<void> | undefined;
       const abort = (): Promise<void> => {
@@ -355,19 +280,6 @@ function stripPriorRunToolActivationMarker(
   return { ...entry, message };
 }
 
-function messageContainsImage(message: AgentMessage): boolean {
-  return "content" in message && Array.isArray(message.content) && message.content.some((block) =>
-    typeof block === "object" && block !== null && "type" in block && block.type === "image");
-}
-
-function compactionPreparationContainsImage(preparation: {
-  readonly messagesToSummarize: readonly AgentMessage[];
-  readonly turnPrefixMessages: readonly AgentMessage[];
-}): boolean {
-  return preparation.messagesToSummarize.some(messageContainsImage) ||
-    preparation.turnPrefixMessages.some(messageContainsImage);
-}
-
 function createHarnessTools(
   input: AgentLoopInput,
   state: AgentSessionExecutionState,
@@ -383,14 +295,17 @@ function createHarnessTools(
     .map((definition) => createHarnessTool(definition, input, state, input.tools));
   const delegatedTools = agentTools.length === 0
     ? []
-    : agentTools.map((agentTool) => createDelegatedAgentTool(
-        requireFrozenToolDefinition(definitionsByName, agentTool.toolName),
-        agentTool,
-        input,
-        state,
+    : agentTools.map((agentTool) => createDelegatedAgentTool({
+        definition: requireFrozenToolDefinition(definitionsByName, agentTool.toolName),
+        contribution: agentTool,
+        loopInput: input,
         options,
-        requireDelegatedAgentResultGateway(input.tools.gateway),
-      ));
+        rootBindings: state.rootInvocationBindings,
+        resultGateway: requireDelegatedAgentResultGateway(input.tools.gateway),
+        createMechanicalTool: ({ definition, boundary, onToolInvoked, bindings, assertAccepted }) =>
+          createHarnessTool(definition, input, state, boundary, onToolInvoked, bindings, assertAccepted),
+        facts: delegatedAgentFactPorts(input, state),
+      }));
   return createToolVisibilitySession({
     tools: [...mechanicalTools, ...delegatedTools],
     metadataByName: new Map([
@@ -402,15 +317,48 @@ function createHarnessTools(
   });
 }
 
+function delegatedAgentFactPorts(input: AgentLoopInput, state: AgentSessionExecutionState) {
+  return {
+    results: {
+      acceptObserved: (result: ToolCallResult) => acceptToolResult(input, state, result).then(() => undefined),
+      acceptForDelivery: (result: ToolCallResult) => acceptToolResultForDelivery(input, state, result),
+      deliverPendingMessage: (
+        message: Extract<AgentMessage, { readonly role: "toolResult" }>,
+        parentInvocationId?: string,
+      ) => deliverPendingToolResultMessage(input, state, message, parentInvocationId),
+      project: (result: ToolCallResult, terminate: boolean, addedToolNames?: readonly string[]) =>
+        harnessToolResult(result, state, terminate, addedToolNames),
+    },
+    run: {
+      emitToolRequested: (request: ToolCallRequest) => emitToolRequested(input, request),
+      observeUsage: (usage: ModelUsage) => state.rootEvents.mergeUsage(usage, true),
+      recordToolRequestAcceptanceFailure: (error: unknown) =>
+        state.rootEvents.recordToolRequestAcceptanceFailure(error),
+      hasBlockingFailure: () =>
+        state.rootEvents.toolRequestAcceptanceFailure !== undefined ||
+        state.toolAcceptanceFailure !== undefined ||
+        state.rootEvents.maintenanceFailure !== undefined,
+      isCancellationRequested: () => state.cancellationRequested,
+    },
+    maintenance: {
+      record: (failure: { readonly code: string; readonly error: string }) =>
+        state.rootEvents.recordMaintenanceFailure(failure),
+      fail: (code: string, error: string): never => state.rootEvents.failMaintenance(code, error),
+    },
+  };
+}
+
 function toolVisibilityHost(
   input: AgentLoopInput,
   state: AgentSessionExecutionState,
   requestScope?: (request: ToolCallRequest) => ToolCallRequest,
   onToolInvoked?: () => void,
+  bindingTable?: ToolInvocationBindingTable,
 ) {
   return {
     abortSignal: input.abortSignal,
     ...(requestScope === undefined ? {} : { requestScope }),
+    resolveInvocationId: (providerCallId: string) => (bindingTable ?? state.rootInvocationBindings).get(providerCallId),
     onToolRequested: (request: ToolCallRequest) => emitToolRequested(input, request),
     ...(onToolInvoked === undefined ? {} : { onToolInvoked }),
     acceptResult: (result: ToolCallResult) => acceptToolResultForDelivery(input, state, result),
@@ -420,7 +368,7 @@ function toolVisibilityHost(
       addedToolNames?: readonly string[],
     ) => harnessToolResult(result, state, terminate, addedToolNames),
     recordMaintenanceFailure: (failure: { readonly code: string; readonly error: string }) => {
-      state.maintenanceFailure ??= failure;
+      state.rootEvents.recordMaintenanceFailure(failure);
     },
   };
 }
@@ -430,8 +378,10 @@ function createHarnessTool(
   input: AgentLoopInput,
   state: AgentSessionExecutionState,
   boundary: AgentLoopToolBoundary,
-  requestScope?: (request: ToolCallRequest) => ToolCallRequest,
   onToolInvoked?: () => void,
+  /** Per-tool-call binding table. Defaults to the shared `state.rootInvocationBindings`. */
+  bindingTable?: ToolInvocationBindingTable,
+  assertAccepted?: (request: ToolCallRequest) => void,
 ): AgentTool {
   return {
     name: definition.name,
@@ -440,14 +390,23 @@ function createHarnessTool(
     parameters: Type.Unsafe(globalThis.structuredClone(definition.inputSchema)),
     executionMode: "parallel",
     async execute(callId, parameters, signal, onUpdate) {
-      const unscopedRequest: ToolCallRequest = {
-        callId,
+      const binding = (bindingTable ?? state.rootInvocationBindings).get(callId);
+      if (binding === undefined) {
+        throwHarnessMaintenanceFailure(
+          state,
+          "session_tool_request_missing",
+          `Pi invoked execute for ${callId} before Ordinary bound an invocation id.`,
+        );
+      }
+      const request: ToolCallRequest = {
+        providerCallId: callId,
+        invocationId: binding.invocationId,
+        ...(binding.parentInvocationId === undefined ? {} : { parentInvocationId: binding.parentInvocationId }),
         toolName: definition.name,
         input: normalizeToolFactValue(parameters),
       };
-      const request = requestScope?.(unscopedRequest) ?? unscopedRequest;
       emitToolRequested(input, request);
-      assertNestedToolRequestAccepted(state, request);
+      assertAccepted?.(request);
       onToolInvoked?.();
       let context = toolExecutionContext(input, boundary, request, signal, onUpdate);
       const preflight = boundary.gateway.preflight(request, context, boundary.permission);
@@ -513,628 +472,12 @@ function createHarnessTool(
   };
 }
 
-function createDelegatedAgentTool(
-  definition: ToolDefinition,
-  contribution: AgentLoopAgentTool,
-  input: AgentLoopInput,
-  state: AgentSessionExecutionState,
-  options: AgentSessionLoopOptions,
-  resultGateway: DelegatedAgentResultGateway,
-): AgentTool {
-  return {
-    name: definition.name,
-    label: definition.name,
-    description: modelVisibleToolDescription(definition),
-    parameters: Type.Unsafe(globalThis.structuredClone(definition.inputSchema)),
-    executionMode: "parallel",
-    async execute(callId, parameters, signal) {
-      const request: ToolCallRequest = {
-        callId,
-        toolName: contribution.toolName,
-        input: normalizeToolFactValue(parameters),
-      };
-      emitToolRequested(input, request);
-      const startedAt = Date.now();
-      let result: ToolCallResult;
-      try {
-        const invocation = validateDelegatedToolBoundary(
-          input.tools,
-          input.agentTools ?? [],
-          await contribution.resolve(requiredDelegatedAgentInput(request)),
-        );
-        result = await runDelegatedAgent({
-          invocation,
-          request,
-          input,
-          state,
-          options,
-          abortSignal: signal ?? input.abortSignal,
-          startedAt,
-        });
-      } catch (error) {
-        result = delegatedAgentFailure(request, error, signal?.aborted === true || input.abortSignal.aborted, startedAt);
-      }
-      const delivered = await deliverDelegatedAgentResult(input, resultGateway, result);
-      const acceptanceFailure = await acceptToolResultForDelivery(input, state, delivered);
-      return acceptanceFailure ?? harnessToolResult(
-        delivered,
-        state,
-        state.toolRequestAcceptanceFailure !== undefined ||
-          state.toolAcceptanceFailure !== undefined ||
-          state.maintenanceFailure !== undefined ||
-          delivered.status === "cancelled",
-      );
-    },
-  };
-}
-
-async function runDelegatedAgent(input: {
-  readonly invocation: AgentLoopAgentToolInvocation;
-  readonly request: ToolCallRequest;
-  readonly input: AgentLoopInput;
-  readonly state: AgentSessionExecutionState;
-  readonly options: AgentSessionLoopOptions;
-  readonly abortSignal: AbortSignal;
-  readonly startedAt: number;
-}): Promise<ToolCallResult> {
-  const parentFactId = toolCallFactId(input.request);
-  const boundary = delegatedToolBoundary(input.input.tools, input.invocation);
-  const metrics: DelegatedAgentExecutionMetrics = { modelRounds: 0, toolCallCount: 0, usage: {} };
-  const session = await new InMemorySessionRepo().create({ id: `delegated-agent:${parentFactId}` });
-  const toolDefinitions = boundary.definitions
-    .filter((definition) => boundary.permission.allowedTools.includes(definition.name));
-  const tools = toolDefinitions.map((definition) => createHarnessTool(
-    definition,
-    input.input,
-    input.state,
-    boundary,
-    (request) => scopedDelegatedToolRequest(parentFactId, request),
-    () => { metrics.toolCallCount += 1; },
-  ));
-  const requestScope = (request: ToolCallRequest): ToolCallRequest =>
-    scopedDelegatedToolRequest(parentFactId, request);
-  const harnessTools = createToolVisibilitySession({
-    tools,
-    metadataByName: new Map(toolDefinitions.map((definition) => [definition.name, definition.metadata] as const)),
-    visibilityPlan: narrowToolVisibilityPlan(
-      input.input.toolVisibilityPlan,
-      input.invocation.allowedTools,
-      toolDefinitions,
-      input.options.toolDefinitionTokenCounter,
-    ),
-    host: toolVisibilityHost(
-      input.input,
-      input.state,
-      requestScope,
-      () => { metrics.toolCallCount += 1; },
-    ),
-  });
-  const harness = new AgentHarness({
-    env: input.options.executionEnvironment,
-    session,
-    models: input.options.modelRegistry,
-    model: input.options.selectedModel,
-    thinkingLevel: input.options.thinkingLevel,
-    systemPrompt: input.invocation.instructions,
-    tools: [...harnessTools.tools],
-    activeToolNames: [...harnessTools.activeToolNames],
-  });
-  harnessTools.bind?.(harness);
-  await harness.setActiveTools([...harnessTools.activeToolNames]);
-  attachDelegatedHarnessHooks(
-    harness,
-    session,
-    parentFactId,
-    input.input,
-    input.state,
-    input.options,
-    input.abortSignal,
-    harnessTools.metadataByName,
-    metrics,
-  );
-  const handleAbort = (): void => { void harness.abort().catch(() => undefined); };
-  input.abortSignal.addEventListener("abort", handleAbort, { once: true });
-  if (input.abortSignal.aborted) handleAbort();
-  try {
-    const assistant = await harness.prompt(input.invocation.input);
-    if (input.abortSignal.aborted || assistant.stopReason === "aborted") {
-      return delegatedAgentFailure(input.request, input.abortSignal.reason ?? assistant.errorMessage, true, input.startedAt, metrics);
-    }
-    if (assistant.stopReason !== "stop") {
-      return delegatedAgentFailure(
-        input.request,
-        assistant.errorMessage ?? `Delegated agent stopped with ${assistant.stopReason}.`,
-        false,
-        input.startedAt,
-        metrics,
-      );
-    }
-    return {
-      ...input.request,
-      output: assistantText(assistant),
-      status: "completed",
-      delegatedExecution: delegatedExecutionMetadata(metrics),
-      durationMs: Math.max(0, Date.now() - input.startedAt),
-    };
-  } finally {
-    input.abortSignal.removeEventListener("abort", handleAbort);
-  }
-}
-
-function attachDelegatedHarnessHooks(
-  harness: AgentHarness,
-  agentSession: Session,
-  parentFactId: string,
-  loopInput: AgentLoopInput,
-  state: AgentSessionExecutionState,
-  options: AgentSessionLoopOptions,
-  abortSignal: AbortSignal,
-  metadataByName: ReadonlyMap<string, ToolDefinition["metadata"]>,
-  metrics: DelegatedAgentExecutionMetrics,
-): void {
-  const pendingRequests = new Map<string, PendingToolRequest>();
-  const preparedToolCallIds = new Set<string>();
-  attachProviderPayloadHook(harness, options, metadataByName);
-  harness.on("context", async ({ messages: contextMessages }) => {
-    // A text-only model cannot see image blocks already present in the
-    // Session; replace them with an observable text notice so the turn still
-    // runs. The Session itself keeps the original image bytes so a later
-    // vision-capable model can still reference them.
-    const messages = [...replaceUnsupportedImageBlocks(contextMessages, state.modelInputSupportsImage)];
-    const compaction = await compactSessionContextIfNeeded({
-      agentSession,
-      activeContextMessages: messages,
-      modelRegistry: options.modelRegistry,
-      selectedModel: harness.getModel(),
-      thinkingLevel: harness.getThinkingLevel(),
-      abortSignal,
-      ...(options.compactionSettings === undefined ? {} : { compactionSettings: options.compactionSettings }),
-    });
-    if (compaction.status === "failed") throw new Error(compaction.error);
-    return compaction.status === "compacted"
-      ? { messages: [...compaction.compactedContextMessages] }
-      : { messages: [...messages] };
-  });
-  harness.on("session_before_compact", ({ preparation }) => {
-    // Pi-native compaction cannot summarize image content for a text-only
-    // model; the request-boundary compaction path already replaces images
-    // with text notices. Skipping this compaction must not fail the run.
-    if (!compactionPreparationContainsImage(preparation)) return undefined;
-    return { cancel: true };
-  });
-  harness.on("tool_result", ({ details }) => {
-    const result = toolResultFromDetails(details);
-    return result === undefined ? undefined : { isError: result.status !== "completed" };
-  });
-  harness.on("tool_call", ({ toolCallId }) => {
-    preparedToolCallIds.add(toolCallId);
-    return undefined;
-  });
-  harness.subscribe(async (event) => {
-    if (event.type === "tool_execution_end") {
-      await projectToolExecutionEnd({
-        event,
-        input: loopInput,
-        state,
-        pendingRequests,
-        preparedToolCallIds,
-        abortSignal,
-      });
-      return;
-    }
-    if (event.type === "message_end" && event.message.role === "toolResult") {
-      const delivery = pendingToolResultForMessage(
-        state.pendingToolResults,
-        event.message,
-        parentFactId,
-        (error) => throwHarnessMaintenanceFailure(state, "session_tool_result_identity_mismatch", error),
-      );
-      if (delivery !== undefined) {
-        await deliverAcceptedToolResult(loopInput, state, delivery);
-      }
-      return;
-    }
-    if (event.type === "message_end" && event.message.role === "assistant") {
-      const requests = (modelMessageFromAssistant(event.message).toolCalls ?? [])
-        .map((request) => scopedDelegatedToolRequest(parentFactId, request));
-      const batchFactIds = new Set<string>();
-      for (const scoped of requests) {
-        const factId = toolCallFactId(scoped);
-        if (batchFactIds.has(factId) || state.acceptedNestedToolRequests.has(factId)) {
-          throwHarnessMaintenanceFailure(
-            state,
-            "session_tool_request_duplicate",
-            `Pi reused delegated tool fact ${factId}.`,
-          );
-        }
-        batchFactIds.add(factId);
-        if (pendingRequests.has(scoped.callId)) {
-          throwHarnessMaintenanceFailure(
-            state,
-            "session_tool_request_duplicate",
-            `Pi emitted duplicate delegated tool call id ${scoped.callId}.`,
-          );
-        }
-      }
-      if (requests.length > 0) {
-        try {
-          await loopInput.onNestedToolRequestsAccepted?.(
-            requests.map((request) => globalThis.structuredClone(request)),
-          );
-        } catch (error) {
-          state.toolRequestAcceptanceFailure ??= error;
-          throw error;
-        }
-      }
-      for (const scoped of requests) {
-        state.acceptedNestedToolRequests.set(toolCallFactId(scoped), globalThis.structuredClone(scoped));
-        pendingRequests.set(scoped.callId, {
-          request: scoped,
-          modelVisibleAtRequest: harness.getActiveTools().some((tool) => tool.name === scoped.toolName),
-        });
-      }
-      const usage = modelUsageFromProvider(event.message.usage);
-      metrics.modelRounds += 1;
-      metrics.usage = mergeUsage(metrics.usage, usage);
-      // A child request contributes to the run total but is not a parent model
-      // request, so it must not replace the parent's context-capacity snapshot.
-      state.usage = mergeUsage(state.usage, usage, { preserveLatestAgentRequest: true });
-    }
-  });
-}
-
-function attachHarnessHooks(
-  harness: AgentHarness,
-  input: AgentLoopInput,
-  state: AgentSessionExecutionState,
-  options: AgentSessionLoopOptions,
-  runtimeSession: Session,
-  metadataByName: ReadonlyMap<string, ToolDefinition["metadata"]>,
-): void {
-  attachProviderPayloadHook(harness, options, metadataByName);
-  harness.on("context", async ({ messages: contextMessages }) => {
-    // A text-only model cannot see image blocks already present in the
-    // Session; replace them with an observable text notice so the turn still
-    // runs. The Session itself keeps the original image bytes so a later
-    // vision-capable model can still reference them.
-    const messages = [...replaceUnsupportedImageBlocks(contextMessages, state.modelInputSupportsImage)];
-    const sessionCompaction = await compactSessionContextIfNeeded({
-      agentSession: runtimeSession,
-      activeContextMessages: messages,
-      modelRegistry: options.modelRegistry,
-      selectedModel: harness.getModel(),
-      thinkingLevel: harness.getThinkingLevel(),
-      abortSignal: input.abortSignal,
-      ...(options.compactionSettings === undefined
-        ? {}
-        : { compactionSettings: options.compactionSettings }),
-    });
-    if (sessionCompaction.status === "failed") {
-      state.maintenanceFailure = { code: sessionCompaction.code, error: sessionCompaction.error };
-      throw new Error(sessionCompaction.error);
-    }
-    if (sessionCompaction.status === "compacted") {
-      state.compactionEntryIds.push(sessionCompaction.compactionEntryRef.entryId);
-      state.latestLeafEntryId = sessionCompaction.compactionEntryRef.entryId;
-      try {
-        await input.onSessionWriteCheckpoint?.({
-          kind: "compaction_entry_committed",
-          sessionId: state.sessionId,
-          compactionEntryRef: sessionCompaction.compactionEntryRef,
-          tokensBefore: sessionCompaction.tokensBefore,
-        });
-      } catch (error) {
-        state.maintenanceFailure = { code: "context_compaction_fact_rejected", error: errorMessage(error) };
-        throw error;
-      }
-      state.safeLeafEntryId = sessionCompaction.compactionEntryRef.entryId;
-      return { messages: [...sessionCompaction.compactedContextMessages] };
-    }
-    return { messages: [...messages] };
-  });
-  harness.on("session_before_compact", ({ preparation }) => {
-    // Pi-native compaction cannot summarize image content for a text-only
-    // model; the request-boundary compaction path already replaces images
-    // with text notices. Skipping this compaction must not fail the run.
-    if (!compactionPreparationContainsImage(preparation)) return undefined;
-    return { cancel: true };
-  });
-  harness.on("tool_result", ({ details }) => {
-    const result = toolResultFromDetails(details);
-    return result === undefined ? undefined : { isError: result.status !== "completed" };
-  });
-  harness.on("tool_call", ({ toolCallId }) => {
-    state.preparedRootToolCallIds.add(toolCallId);
-    return undefined;
-  });
-  harness.on("before_provider_request", () => {
-    state.timing.activeRequest = { startedAtMs: state.now() };
-    return undefined;
-  });
-  harness.subscribe(async (event) => {
-    await projectHarnessEvent(event, input, state, harness);
-  });
-}
-
-function attachProviderPayloadHook(
-  harness: AgentHarness,
-  options: AgentSessionLoopOptions,
-  metadataByName: ReadonlyMap<string, ToolDefinition["metadata"]>,
-): void {
-  if (options.transformProviderPayload === undefined && options.onProviderToolDefinitionMetrics === undefined) return;
-  harness.on("before_provider_payload", ({ model, payload }) => {
-    const tools = activeModelVisibleToolDefinitions(harness, metadataByName);
-    const transformedPayload = options.transformProviderPayload?.({ model, payload, tools }) ?? payload;
-    observeProviderToolDefinitionMetrics(options, tools, model);
-    return { payload: transformedPayload };
-  });
-}
-
-function activeModelVisibleToolDefinitions(
-  harness: AgentHarness,
-  metadataByName: ReadonlyMap<string, ToolDefinition["metadata"]>,
-): ToolDefinition[] {
-  return harness.getActiveTools().map((tool) => {
-    const metadata = metadataByName.get(tool.name);
-    return {
-      name: tool.name,
-      description: tool.description,
-      inputSchema: cloneToolInputSchema(tool.parameters),
-      ...(metadata === undefined ? {} : { metadata: globalThis.structuredClone(metadata) }),
-    };
-  });
-}
-
-function observeProviderToolDefinitionMetrics(
-  options: AgentSessionLoopOptions,
-  definitions: readonly ToolDefinition[],
-  model: Model<Api>,
-): void {
-  const observer = options.onProviderToolDefinitionMetrics;
-  if (observer === undefined) return;
-  try {
-    const countTokens = options.toolDefinitionTokenCounter ?? defaultToolDefinitionTokenCount;
-    const serialized = serializeModelVisibleToolDefinitions(
-      definitions,
-      modelVisibleDefinitionSerialization(model),
-    );
-    const totalTokens = definitions.length === 0
-      ? 0
-      : normalizedToolDefinitionTokenCount(countTokens(JSON.stringify(serialized)));
-    observer({
-      toolCount: definitions.length,
-      totalTokens,
-      tools: definitions.map((definition, index) => {
-        const serializedDefinition = JSON.stringify(serialized[index]);
-        return {
-          toolName: definition.name,
-          operationType: definition.metadata?.operationType ?? "read-write",
-          definitionHash: createHash("sha256")
-            .update(stableToolSchemaStringify(serialized[index]))
-            .digest("hex"),
-          definitionTokens: normalizedToolDefinitionTokenCount(countTokens(serializedDefinition)),
-        };
-      }),
-    });
-  } catch {
-    // Observability must never alter the provider request or the owning run fact.
-  }
-}
-
-function modelVisibleDefinitionSerialization(
-  model: Model<Api>,
-): ModelVisibleToolDefinitionSerialization {
-  const api = model.api === "openai-completions"
-    ? "openai-completions"
-    : "openai-responses";
-  const compat = model.compat as { readonly supportsStrictMode?: boolean } | undefined;
-  return {
-    api,
-    includeStrict: api === "openai-responses" || compat?.supportsStrictMode !== false,
-  };
-}
-
-function defaultToolDefinitionTokenCount(serializedDefinition: string): number {
-  return Math.ceil(serializedDefinition.length / 4);
-}
-
-function normalizedToolDefinitionTokenCount(value: number): number {
-  return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
-}
-
-async function projectHarnessEvent(
-  event: AgentHarnessEvent,
-  input: AgentLoopInput,
-  state: AgentSessionExecutionState,
-  harness: AgentHarness,
-): Promise<void> {
-  if (event.type === "tool_execution_end") {
-    await projectToolExecutionEnd({
-      event,
-      input,
-      state,
-      pendingRequests: state.pendingRootToolRequests,
-      preparedToolCallIds: state.preparedRootToolCallIds,
-      abortSignal: input.abortSignal,
-    });
-    return;
-  }
-  if (event.type === "message_update") {
-    if (event.assistantMessageEvent.type === "text_delta") {
-      const activeRequest = state.timing.activeRequest;
-      if (
-        event.assistantMessageEvent.delta.length > 0 &&
-        activeRequest !== undefined &&
-        activeRequest.firstVisibleOutputAtMs === undefined
-      ) {
-        activeRequest.firstVisibleOutputAtMs = state.now();
-      }
-      input.onTextDelta?.(event.assistantMessageEvent.delta);
-    }
-    if (event.assistantMessageEvent.type === "thinking_delta") input.onReasoningDelta?.(event.assistantMessageEvent.delta);
-    return;
-  }
-  if (event.type === "turn_end") {
-    if (event.message.role !== "assistant") return;
-    const toolCallIds = (modelMessageFromAssistant(event.message).toolCalls ?? []).map((call) => call.callId);
-    if (toolCallIds.length === 0) return;
-    const resultIds = event.toolResults.map((result) => result.toolCallId);
-    if (!sameIds(toolCallIds, resultIds)) {
-      state.maintenanceFailure = {
-        code: "session_tool_result_group_incomplete",
-        error: "Pi Session turn ended without one tool result for every assistant tool call.",
-      };
-      throw new Error(state.maintenanceFailure.error);
-    }
-    const entryId = await state.agentSession.getLeafId();
-    if (entryId === null) throw new Error("Session did not expose the completed tool-result group leaf.");
-    state.latestLeafEntryId = entryId;
-    await input.onSessionWriteCheckpoint?.({
-      kind: "tool_result_entries_committed",
-      sessionId: state.sessionId,
-      toolRoundLeafRef: { sessionId: state.sessionId, entryId },
-      toolCallIds,
-    });
-    state.safeLeafEntryId = entryId;
-    return;
-  }
-  if (event.type !== "message_end") return;
-  const entryId = await state.agentSession.getLeafId();
-  if (entryId === null) throw new Error("Session did not expose the entry appended by message_end.");
-  state.latestLeafEntryId = entryId;
-  if (event.message.role === "toolResult") {
-    const delivery = pendingToolResultForMessage(
-      state.pendingToolResults,
-      event.message,
-      undefined,
-      (error) => throwHarnessMaintenanceFailure(state, "session_tool_result_identity_mismatch", error),
-    );
-    if (delivery !== undefined) {
-      await deliverAcceptedToolResult(input, state, delivery);
-    }
-    return;
-  }
-  if (event.message.role === "user") {
-    state.inputEntryId ??= entryId;
-    await input.onSessionWriteCheckpoint?.({
-      kind: "input_entry_committed",
-      sessionId: state.sessionId,
-      inputEntryRef: { sessionId: state.sessionId, entryId },
-    });
-    state.safeLeafEntryId = entryId;
-    return;
-  }
-  if (event.message.role === "assistant") {
-    const message = modelMessageFromAssistant(event.message);
-    const toolCalls = message.toolCalls ?? [];
-    // 先落思考完成事实，再落消息正文检查点：模型在同一轮里先思考、后输出正文、
-    // 再调用工具，思考的持久位置必须保持在正文与工具之前（尊重原始流顺序）。
-    const reasoning = event.message.content
-      .filter((block) => block.type === "thinking")
-      .map((block) => block.thinking)
-      .join("\n");
-    if (reasoning.length > 0) await input.onReasoningCompleted?.(reasoning);
-    if (toolCalls.length > 0) {
-      const toolCallIds = toolCalls.map((call) => call.callId);
-      await input.onSessionWriteCheckpoint?.({
-        kind: "assistant_tool_call_entry_committed",
-        sessionId: state.sessionId,
-        assistantEntryRef: { sessionId: state.sessionId, entryId },
-        toolCallIds,
-      });
-      rememberPendingToolRequests(
-        state,
-        toolCalls,
-        harness.getActiveTools().map((tool) => tool.name),
-      );
-    } else {
-      await input.onSessionWriteCheckpoint?.({
-        kind: "assistant_response_entry_committed",
-        sessionId: state.sessionId,
-        assistantEntryRef: { sessionId: state.sessionId, entryId },
-      });
-    }
-    state.usage = mergeUsage(state.usage, modelUsageFromProvider(event.message.usage));
-    state.usage = applyCompletedProviderTiming(state, event.message.usage.output);
-    return;
-  }
-}
-
-type ToolExecutionEndEvent = Extract<AgentHarnessEvent, { readonly type: "tool_execution_end" }>;
-
-async function projectToolExecutionEnd(input: {
-  readonly event: ToolExecutionEndEvent;
-  readonly input: AgentLoopInput;
-  readonly state: AgentSessionExecutionState;
-  readonly pendingRequests: Map<string, PendingToolRequest>;
-  readonly preparedToolCallIds: Set<string>;
-  readonly abortSignal: AbortSignal;
-}): Promise<void> {
-  const canonical = toolResultFromDetails(input.event.result.details);
-  if (canonical !== undefined) {
-    input.pendingRequests.delete(input.event.toolCallId);
-    input.preparedToolCallIds.delete(input.event.toolCallId);
-    if (canonical.callId !== input.event.toolCallId || canonical.toolName !== input.event.toolName) {
-      throwHarnessMaintenanceFailure(
-        input.state,
-        "session_tool_result_identity_mismatch",
-        "Pi returned canonical tool details that do not match the active tool call.",
-      );
-    }
-    return;
-  }
-
-  const pending = input.pendingRequests.get(input.event.toolCallId);
-  if (pending === undefined || pending.request.toolName !== input.event.toolName) {
-    throwHarnessMaintenanceFailure(
-      input.state,
-      "session_tool_request_missing",
-      "Pi returned a tool result without the matching accepted assistant tool request.",
-    );
-  }
-  const request = pending.request;
-  const prepared = input.preparedToolCallIds.has(input.event.toolCallId);
-  if (!prepared) emitToolRequested(input.input, request);
-  const result = piImmediateToolResult({
-    request,
-    rawResult: input.event.result,
-    prepared,
-    knownActiveTool: pending.modelVisibleAtRequest,
-    cancellationRequested: input.abortSignal.aborted || input.state.cancellationRequested,
-  });
-  await acceptToolResult(input.input, input.state, result);
-  input.pendingRequests.delete(input.event.toolCallId);
-  input.preparedToolCallIds.delete(input.event.toolCallId);
-}
-
-function rememberPendingToolRequests(
-  state: AgentSessionExecutionState,
-  requests: readonly ToolCallRequest[],
-  activeToolNames: readonly string[],
-): void {
-  const active = new Set(activeToolNames);
-  for (const request of requests) {
-    if (state.pendingRootToolRequests.has(request.callId)) {
-      throwHarnessMaintenanceFailure(
-        state,
-        "session_tool_request_duplicate",
-        `Pi emitted duplicate pending tool call id ${request.callId}.`,
-      );
-    }
-    state.pendingRootToolRequests.set(request.callId, {
-      request: globalThis.structuredClone(request),
-      modelVisibleAtRequest: active.has(request.toolName),
-    });
-  }
-}
-
 function throwHarnessMaintenanceFailure(
   state: AgentSessionExecutionState,
   code: string,
   error: string,
 ): never {
-  state.maintenanceFailure ??= { code, error };
-  throw new Error(error);
+  return state.rootEvents.failMaintenance(code, error);
 }
 
 function approvalResult(
@@ -1145,7 +488,7 @@ function approvalResult(
   return {
     status: "approval_required",
     toolResults: [...state.toolResults.values()].map(cloneToolResult),
-    usage: state.usage,
+    usage: state.rootEvents.usage,
     confirmationRequests: state.approvals.requests(),
     session: sessionExecutionRefs(state),
     continuation: approvalContinuation(input, state, settle),
@@ -1199,19 +542,19 @@ function finalResult(
   if (input.abortSignal.aborted || state.cancellationRequested) {
     return { ...facts, status: "cancelled", error: abortMessage(input.abortSignal.reason) };
   }
-  if (state.maintenanceFailure !== undefined) {
+  if (state.rootEvents.maintenanceFailure !== undefined) {
     return {
       ...facts,
       status: "failed",
-      error: state.maintenanceFailure.error,
-      errorCode: state.maintenanceFailure.code,
+      error: state.rootEvents.maintenanceFailure.error,
+      errorCode: state.rootEvents.maintenanceFailure.code,
     };
   }
-  if (state.toolRequestAcceptanceFailure !== undefined) {
+  if (state.rootEvents.toolRequestAcceptanceFailure !== undefined) {
     return {
       ...facts,
       status: "failed",
-      error: errorMessage(state.toolRequestAcceptanceFailure),
+      error: errorMessage(state.rootEvents.toolRequestAcceptanceFailure),
       errorCode: "tool_request_acceptance_failed",
     };
   }
@@ -1262,11 +605,11 @@ function failedRunResult(error: unknown, input: AgentLoopInput, state: AgentSess
   if (input.abortSignal.aborted || state.cancellationRequested) {
     return cancelledResult(state, input.abortSignal.reason ?? error);
   }
-  if (state.maintenanceFailure !== undefined) {
-    return failedResult(state, state.maintenanceFailure.error, state.maintenanceFailure.code);
+  if (state.rootEvents.maintenanceFailure !== undefined) {
+    return failedResult(state, state.rootEvents.maintenanceFailure.error, state.rootEvents.maintenanceFailure.code);
   }
-  if (state.toolRequestAcceptanceFailure !== undefined) {
-    return failedResult(state, errorMessage(state.toolRequestAcceptanceFailure), "tool_request_acceptance_failed");
+  if (state.rootEvents.toolRequestAcceptanceFailure !== undefined) {
+    return failedResult(state, errorMessage(state.rootEvents.toolRequestAcceptanceFailure), "tool_request_acceptance_failed");
   }
   if (state.toolAcceptanceFailure !== undefined) {
     return failedResult(state, errorMessage(state.toolAcceptanceFailure), "tool_result_acceptance_failed");
@@ -1296,22 +639,14 @@ function cancelledBeforeStart(input: AgentLoopInput): AgentLoopResult {
 function resultFacts(state: AgentSessionExecutionState) {
   return {
     toolResults: [...state.toolResults.values()].map(cloneToolResult),
-    usage: state.usage,
+    usage: state.rootEvents.usage,
     confirmationRequests: [] as const,
     session: sessionExecutionRefs(state),
   };
 }
 
 function sessionExecutionRefs(state: AgentSessionExecutionState) {
-  const entry = (entryId: string) => ({ sessionId: state.sessionId, entryId });
-  return {
-    sessionId: state.sessionId,
-    startLeafRef: state.startLeafEntryId === null ? null : entry(state.startLeafEntryId),
-    ...(state.inputEntryId === undefined ? {} : { inputEntryRef: entry(state.inputEntryId) }),
-    safeLeafRef: state.safeLeafEntryId === null ? null : entry(state.safeLeafEntryId),
-    latestLeafRef: state.latestLeafEntryId === null ? null : entry(state.latestLeafEntryId),
-    compactionEntryRefs: state.compactionEntryIds.map(entry),
-  };
+  return state.rootEvents.sessionExecutionRefs();
 }
 
 async function abortRun(state: AgentSessionExecutionState): Promise<void> {
@@ -1438,11 +773,11 @@ async function acceptToolResult(
     state.supportsVisionInput,
     state.modelInputSupportsImage,
   );
-  const factId = toolCallFactId(deliverable);
-  state.toolResults.set(factId, cloneToolResult(deliverable));
+  const invocationId = toolInvocationId(deliverable);
+  state.toolResults.set(invocationId, cloneToolResult(deliverable));
   const delivery: PendingToolResultDelivery = { result: deliverable };
   if (toolResultHasInlineImage(deliverable)) {
-    state.pendingToolResults.set(factId, delivery);
+    state.pendingToolResults.set(invocationId, delivery);
   } else {
     await deliverAcceptedToolResult(input, state, { result: deliverable });
   }
@@ -1455,28 +790,29 @@ async function deliverAcceptedToolResult(
   delivery: PendingToolResultDelivery,
 ): Promise<void> {
   const result = delivery.result;
-  state.pendingToolResults.delete(toolCallFactId(result));
+  state.pendingToolResults.delete(toolInvocationId(result));
   try {
     await input.onToolResult?.(cloneToolResult(result));
   } catch (error) {
     state.toolAcceptanceFailure ??= error;
-    state.toolResults.set(toolCallFactId(result), toolResultAcceptanceFailure(result, error));
+    state.toolResults.set(toolInvocationId(result), toolResultAcceptanceFailure(result, error));
     throw error;
   }
 }
 
-function assertNestedToolRequestAccepted(
+async function deliverPendingToolResultMessage(
+  input: AgentLoopInput,
   state: AgentSessionExecutionState,
-  request: ToolCallRequest,
-): void {
-  if (request.parentToolCallFactId === undefined) return;
-  const accepted = state.acceptedNestedToolRequests.get(toolCallFactId(request));
-  if (accepted !== undefined && JSON.stringify(accepted) === JSON.stringify(request)) return;
-  throwHarnessMaintenanceFailure(
-    state,
-    "nested_tool_request_not_accepted",
-    `Nested tool request ${toolCallFactId(request)} reached execution without owner acceptance.`,
+  message: Extract<AgentMessage, { readonly role: "toolResult" }>,
+  parentInvocationId?: string,
+): Promise<void> {
+  const delivery = pendingToolResultForMessage(
+    state.pendingToolResults,
+    message,
+    parentInvocationId,
+    (error) => state.rootEvents.failMaintenance("session_tool_result_identity_mismatch", error),
   );
+  if (delivery !== undefined) await deliverAcceptedToolResult(input, state, delivery);
 }
 
 async function acceptToolResultForDelivery(
@@ -1489,7 +825,7 @@ async function acceptToolResultForDelivery(
     return undefined;
   } catch (error) {
     const failure = toolResultAcceptanceFailure(result, error);
-    state.toolResults.set(toolCallFactId(failure), failure);
+    state.toolResults.set(toolInvocationId(failure), failure);
     return harnessToolResult(failure, state, true);
   }
 }
@@ -1500,16 +836,17 @@ function toolExecutionContext(
   request: ToolCallRequest,
   signal: AbortSignal | undefined,
   onUpdate: AgentToolUpdateCallback<ToolExecutionDetails> | undefined,
-) {
+): ToolExecutionContext & { readonly abortSignal: AbortSignal } {
   return {
     ...boundary.context,
-    toolCallId: toolCallFactId(request),
+    invocationId: request.invocationId,
+    providerCallId: request.providerCallId,
     abortSignal: signal ?? input.abortSignal,
     ...(input.onToolProgress === undefined ? {} : {
       reportProgress: (progress: Parameters<NonNullable<typeof input.onToolProgress>>[0]["progress"]) => {
         input.onToolProgress?.({
-          callId: request.callId,
-          ...(request.factId === undefined ? {} : { factId: request.factId }),
+          providerCallId: request.providerCallId,
+          invocationId: request.invocationId,
           toolName: request.toolName,
           progress,
         });
@@ -1534,45 +871,6 @@ function continuedToolAbortSignal(
   return AbortSignal.any([toolSignal, runSignal, decisionSignal]);
 }
 
-function validateDelegatedToolBoundary(
-  parent: AgentLoopToolBoundary,
-  agentTools: readonly AgentLoopAgentTool[],
-  invocation: AgentLoopAgentToolInvocation,
-): AgentLoopAgentToolInvocation {
-  const parentAllowed = new Set(parent.permission.allowedTools);
-  const delegatedNames = new Set(agentTools.map((tool) => tool.toolName));
-  const requested = uniqueStrings(invocation.allowedTools);
-  const unavailable = requested.filter((name) =>
-    !parentAllowed.has(name) || !parent.gateway.has(name) || delegatedNames.has(name));
-  if (unavailable.length > 0) {
-    throw new Error(`Delegated agent requested tools outside the parent boundary: ${unavailable.join(", ")}`);
-  }
-  return { ...invocation, allowedTools: requested };
-}
-
-function requiredDelegatedAgentInput(request: ToolCallRequest): ToolFactValue {
-  if (request.input === undefined) {
-    throw new Error(`Delegated agent tool ${request.toolName} requires a JSON input value.`);
-  }
-  return request.input;
-}
-
-function delegatedToolBoundary(
-  parent: AgentLoopToolBoundary,
-  invocation: AgentLoopAgentToolInvocation,
-): AgentLoopToolBoundary {
-  return {
-    definitions: parent.definitions.filter((definition) => invocation.allowedTools.includes(definition.name)),
-    gateway: parent.gateway,
-    context: { ...parent.context, callerAgentId: invocation.callerAgentId },
-    permission: {
-      ...parent.permission,
-      callerAgentId: invocation.callerAgentId,
-      allowedTools: [...invocation.allowedTools],
-    },
-  };
-}
-
 function requireFrozenToolDefinition(
   definitions: ReadonlyMap<string, ToolDefinition>,
   toolName: string,
@@ -1582,85 +880,6 @@ function requireFrozenToolDefinition(
     throw new Error(`Agent tool ${toolName} has no frozen definition in this run.`);
   }
   return definition;
-}
-
-function scopedDelegatedToolRequest(parentFactId: string, request: ToolCallRequest): ToolCallRequest {
-  return {
-    ...request,
-    factId: delegatedToolFactId(parentFactId, request.callId),
-    parentToolCallFactId: parentFactId,
-  };
-}
-
-function delegatedToolFactId(parentFactId: string, providerCallId: string): string {
-  return `agent-tool:${parentFactId.length}:${parentFactId}/tool:${providerCallId}`;
-}
-
-async function deliverDelegatedAgentResult(
-  input: AgentLoopInput,
-  gateway: DelegatedAgentResultGateway,
-  result: ToolCallResult,
-): Promise<ToolCallResult> {
-  try {
-    return await gateway.deliverResult.call(
-      gateway,
-      result,
-      input.tools.permission,
-      input.tools.context.traceId,
-    );
-  } catch (error) {
-    return {
-      ...result,
-      output: undefined,
-      status: "failed",
-      error: `Delegated agent output could not be delivered: ${errorMessage(error)}`,
-      errorDomain: "runtime_error",
-      errorFacts: {
-        code: "sub_agent_result_delivery_failed",
-        sourceExecutionStatus: result.status,
-        doNotBlindlyRetry: true,
-      },
-      confirmationRequest: undefined,
-    };
-  }
-}
-
-function requireDelegatedAgentResultGateway(
-  gateway: AgentLoopToolBoundary["gateway"],
-): DelegatedAgentResultGateway {
-  if (gateway.deliverResult === undefined) {
-    throw new Error("Delegated agent tools require a gateway with complete result delivery.");
-  }
-  return gateway as DelegatedAgentResultGateway;
-}
-
-function delegatedAgentFailure(
-  request: ToolCallRequest,
-  error: unknown,
-  cancelled: boolean,
-  startedAt: number,
-  metrics?: DelegatedAgentExecutionMetrics,
-): ToolCallResult {
-  return {
-    ...request,
-    output: undefined,
-    status: cancelled ? "cancelled" : "failed",
-    error: cancelled
-      ? `Delegated agent was cancelled: ${abortMessage(error)}`
-      : `Delegated agent failed: ${errorMessage(error)}`,
-    errorDomain: cancelled ? "runtime_error" : "model_error",
-    errorFacts: { code: cancelled ? "sub_agent_cancelled" : "sub_agent_execution_failed" },
-    ...(metrics === undefined ? {} : { delegatedExecution: delegatedExecutionMetadata(metrics) }),
-    durationMs: Math.max(0, Date.now() - startedAt),
-  };
-}
-
-function delegatedExecutionMetadata(metrics: DelegatedAgentExecutionMetrics) {
-  return {
-    modelRounds: metrics.modelRounds,
-    toolCallCount: metrics.toolCallCount,
-    usage: globalThis.structuredClone(metrics.usage),
-  };
 }
 
 function bindRunAbortSignal(state: AgentSessionExecutionState, signal: AbortSignal): void {
@@ -1687,105 +906,6 @@ function emitToolRequested(input: AgentLoopInput, request: ToolCallRequest): voi
   }
 }
 
-function emptyProviderTimingAccumulator(): ProviderTimingAccumulator {
-  return {
-    latencyTotalMs: 0,
-    latencySampleCount: 0,
-    firstTokenLatencyTotalMs: 0,
-    firstTokenLatencySampleCount: 0,
-    outputDurationTotalMs: 0,
-    outputDurationSampleCount: 0,
-    visibleOutputTokens: 0,
-    visibleOutputDurationMs: 0,
-  };
-}
-
-/**
- * Pi exposes stream deltas but not request timings. Keep this run-local
- * accumulator separate from the durable Session so completed Ordinary usage
- * contains only timing facts we actually observed at the root harness.
- */
-function applyCompletedProviderTiming(
-  state: AgentSessionExecutionState,
-  outputTokens: number,
-): ModelUsage {
-  const request = state.timing.activeRequest;
-  state.timing.activeRequest = undefined;
-  if (request === undefined) return state.usage;
-
-  const completedAtMs = state.now();
-  const latencyMs = elapsedMs(request.startedAtMs, completedAtMs);
-  state.timing.latencyTotalMs += latencyMs;
-  state.timing.latencySampleCount += 1;
-
-  if (request.firstVisibleOutputAtMs !== undefined) {
-    const firstTokenLatencyMs = elapsedMs(request.startedAtMs, request.firstVisibleOutputAtMs);
-    const outputDurationMs = elapsedMs(request.firstVisibleOutputAtMs, completedAtMs);
-    state.timing.firstTokenLatencyTotalMs += firstTokenLatencyMs;
-    state.timing.firstTokenLatencySampleCount += 1;
-    state.timing.outputDurationTotalMs += outputDurationMs;
-    state.timing.outputDurationSampleCount += 1;
-    if (Number.isFinite(outputTokens) && outputTokens > 0 && outputDurationMs > 0) {
-      state.timing.visibleOutputTokens += Math.floor(outputTokens);
-      state.timing.visibleOutputDurationMs += outputDurationMs;
-    }
-  }
-
-  return {
-    ...state.usage,
-    latencyMs: averageDuration(state.timing.latencyTotalMs, state.timing.latencySampleCount),
-    ...(state.timing.firstTokenLatencySampleCount === 0 ? {} : {
-      firstTokenLatencyMs: averageDuration(
-        state.timing.firstTokenLatencyTotalMs,
-        state.timing.firstTokenLatencySampleCount,
-      ),
-      outputDurationMs: averageDuration(
-        state.timing.outputDurationTotalMs,
-        state.timing.outputDurationSampleCount,
-      ),
-    }),
-    ...(state.timing.visibleOutputDurationMs === 0 ? {} : {
-      outputTokensPerSecond: Number((
-        state.timing.visibleOutputTokens / (state.timing.visibleOutputDurationMs / 1_000)
-      ).toFixed(2)),
-    }),
-  };
-}
-
-function elapsedMs(startedAtMs: number, completedAtMs: number): number {
-  return Math.max(0, Math.round(completedAtMs - startedAtMs));
-}
-
-function averageDuration(totalMs: number, sampleCount: number): number {
-  return Math.round(totalMs / sampleCount);
-}
-
-function mergeUsage(
-  current: ModelUsage,
-  next: ModelUsage | undefined,
-  options: { readonly preserveLatestAgentRequest?: boolean } = {},
-): ModelUsage {
-  if (next === undefined) return current;
-  return {
-    requestCount: (current.requestCount ?? 0) + (next.requestCount ?? 0),
-    inputTokens: (current.inputTokens ?? 0) + (next.inputTokens ?? 0),
-    outputTokens: (current.outputTokens ?? 0) + (next.outputTokens ?? 0),
-    totalTokens: (current.totalTokens ?? 0) + (next.totalTokens ?? 0),
-    cachedInputTokens: (current.cachedInputTokens ?? 0) + (next.cachedInputTokens ?? 0),
-    cacheWriteInputTokens: (current.cacheWriteInputTokens ?? 0) + (next.cacheWriteInputTokens ?? 0),
-    uncachedInputTokens: (current.uncachedInputTokens ?? 0) + (next.uncachedInputTokens ?? 0),
-    reasoningOutputTokens: (current.reasoningOutputTokens ?? 0) + (next.reasoningOutputTokens ?? 0),
-    estimatedCostUsd: (current.estimatedCostUsd ?? 0) + (next.estimatedCostUsd ?? 0),
-    ...(current.latencyMs === undefined ? {} : { latencyMs: current.latencyMs }),
-    ...(current.firstTokenLatencyMs === undefined ? {} : { firstTokenLatencyMs: current.firstTokenLatencyMs }),
-    ...(current.outputDurationMs === undefined ? {} : { outputDurationMs: current.outputDurationMs }),
-    ...(current.outputTokensPerSecond === undefined ? {} : { outputTokensPerSecond: current.outputTokensPerSecond }),
-    latestAgentRequest: options.preserveLatestAgentRequest
-      ? current.latestAgentRequest
-      : next.latestAgentRequest ?? current.latestAgentRequest,
-  };
-}
-
 function deferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
   let reject!: (error: unknown) => void;
@@ -1799,13 +919,6 @@ function deferred<T>(): Deferred<T> {
 function uniqueStrings(values: readonly string[]): readonly string[] {
   return [...new Set(values)];
 }
-
-function sameIds(expected: readonly string[], actual: readonly string[]): boolean {
-  if (expected.length !== actual.length) return false;
-  const actualIds = new Set(actual);
-  return actualIds.size === actual.length && expected.every((id) => actualIds.has(id));
-}
-
 
 function abortReason(signal: AbortSignal): unknown {
   return signal.reason ?? new DOMException("Agent loop was cancelled.", "AbortError");

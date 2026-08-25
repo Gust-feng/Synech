@@ -3,7 +3,8 @@ import path from "node:path";
 import { z } from "zod";
 import { renameWithRetry } from "../../kernel/fs/atomic-write.js";
 import { isNodeError, toPersistedJsonShape } from "../../kernel/values/index.js";
-import { cloneToolInputSchema, isCanonicalToolName, toolCallFactId, type ToolInputSchema } from "../../domain/tools/index.js";
+import { cloneToolInputSchema, isCanonicalToolName, toolInvocationId, type ToolInputSchema } from "../../domain/tools/index.js";
+import type { ConfirmationRequest } from "../../domain/confirmation/contracts.js";
 import {
   ORDINARY_RUN_SCHEMA_VERSION,
   OrdinaryFeatureError,
@@ -46,7 +47,7 @@ const toolInputSchemaSchema = z.custom<ToolInputSchema>((value) => {
   }
 }, "a complete object tool input schema is required");
 const confirmationSchema = z.object({
-  confirmationId: z.string().min(1), toolCallFactId: z.string().min(1), conversationId: z.string().optional(),
+  confirmationId: z.string().min(1), invocationId: z.string().min(1), conversationId: z.string().optional(),
   title: z.string(), actionSummary: z.string(), consequence: z.string().optional(),
   affectedResources: z.array(z.string()), riskLevel: z.enum(["low", "medium", "high"]),
   resumeAvailability: z.enum(["live", "lost_after_restart"]).optional(), requestedAt: z.string().min(1),
@@ -139,14 +140,14 @@ const canonicalToolNameSchema = z.string().min(1).refine(isCanonicalToolName, {
   message: "tool identity must be a canonical provider-portable name",
 });
 const pendingNestedToolCallSchema = z.object({
-  callId: z.string().min(1),
-  factId: z.string().min(1),
-  parentToolCallFactId: z.string().min(1),
+  providerCallId: z.string().min(1),
+  invocationId: z.string().min(1),
+  parentInvocationId: z.string().min(1),
   toolName: canonicalToolNameSchema,
   input: jsonValueSchema.optional(),
 }).strict();
 const toolCallSchema = z.object({
-  callId: z.string().min(1), factId: z.string().min(1).optional(), parentToolCallFactId: z.string().min(1).optional(), toolName: canonicalToolNameSchema, input: jsonValueSchema.optional(),
+  providerCallId: z.string().min(1), invocationId: z.string().min(1), parentInvocationId: z.string().min(1).optional(), toolName: canonicalToolNameSchema, input: jsonValueSchema.optional(),
   output: jsonValueSchema.optional(), status: z.enum(["completed", "failed", "approval_required", "cancelled"]),
   modelAttachmentRefs: z.array(modelAttachmentRefSchema).optional(),
   error: z.string().optional(), errorDomain: z.string().optional(), errorFacts: z.record(z.string(), jsonValueSchema).optional(),
@@ -161,8 +162,8 @@ const toolCallSchema = z.object({
   if (result.status === "approval_required") {
     if (result.confirmationRequest === undefined) {
       context.addIssue({ code: "custom", message: "approval result requires its confirmation request", path: ["confirmationRequest"] });
-    } else if (result.confirmationRequest.toolCallFactId !== (result.factId ?? result.callId)) {
-      context.addIssue({ code: "custom", message: "confirmation request does not match the tool fact identity", path: ["confirmationRequest", "toolCallFactId"] });
+    } else if (result.confirmationRequest.invocationId !== result.invocationId) {
+      context.addIssue({ code: "custom", message: "confirmation request does not match the tool invocation identity", path: ["confirmationRequest", "invocationId"] });
     }
   } else if (result.confirmationRequest !== undefined) {
     context.addIssue({ code: "custom", message: "resolved tool result cannot retain a confirmation request", path: ["confirmationRequest"] });
@@ -314,6 +315,7 @@ const eventSchema = z.discriminatedUnion("type", [
     ...eventBase,
     type: z.literal("model.reasoning.completed"),
     modelRequestId: z.string().min(1),
+    contentIndex: z.number().int().nonnegative(),
     content: z.string().min(1),
   }).strict(),
   z.object({
@@ -322,11 +324,11 @@ const eventSchema = z.discriminatedUnion("type", [
     compactionEntryRef: sessionEntryRefSchema,
     tokensBefore: z.number().int().nonnegative(),
   }).strict(),
-  z.object({ ...eventBase, type: z.literal("run.approval_requested"), confirmationRequests: z.array(confirmationSchema).min(1), toolCallIds: z.array(z.string().min(1)) }).strict(),
+  z.object({ ...eventBase, type: z.literal("run.approval_requested"), confirmationRequests: z.array(confirmationSchema).min(1), invocationIds: z.array(z.string().min(1)) }).strict(),
   z.object({ ...eventBase, type: z.literal("run.approval_decided"), decision: confirmationDecisionSchema }).strict(),
-  z.object({ ...eventBase, type: z.literal("run.completed"), toolCallIds: z.array(z.string().min(1)) }).strict(),
-  z.object({ ...eventBase, type: z.literal("run.failed"), code: z.string().min(1), toolCallIds: z.array(z.string().min(1)) }).strict(),
-  z.object({ ...eventBase, type: z.literal("run.cancelled"), reason: z.string(), toolCallIds: z.array(z.string().min(1)) }).strict(),
+  z.object({ ...eventBase, type: z.literal("run.completed"), invocationIds: z.array(z.string().min(1)) }).strict(),
+  z.object({ ...eventBase, type: z.literal("run.failed"), code: z.string().min(1), invocationIds: z.array(z.string().min(1)) }).strict(),
+  z.object({ ...eventBase, type: z.literal("run.cancelled"), reason: z.string(), invocationIds: z.array(z.string().min(1)) }).strict(),
   z.object({ ...eventBase, type: z.literal("run.blocked"), code: z.string().min(1) }).strict(),
 ]);
 const sessionPhaseSchema = z.discriminatedUnion("phase", [
@@ -396,7 +398,8 @@ const rawStateSchema = z.object({
   visibleAssistantText: z.string().optional(),
   pendingToolRound: z.object({
     assistantEntryRef: sessionEntryRefSchema,
-    toolCallIds: z.array(z.string().min(1)).min(1),
+    providerCallIds: z.array(z.string().min(1)).min(1),
+    invocationIds: z.array(z.string().min(1)).min(1),
   }).strict().optional(),
   pendingNestedToolCalls: z.array(pendingNestedToolCallSchema).min(1).optional(),
   toolCalls: z.array(toolCallSchema),
@@ -417,9 +420,16 @@ const rawStateSchema = z.object({
     context.addIssue({ code: "custom", message: "terminal status and terminalAt must agree", path: ["timestamps", "terminalAt"] });
   }
   if (state.pendingToolRound !== undefined) {
-    const pendingIds = state.pendingToolRound.toolCallIds;
+    const providerIds = state.pendingToolRound.providerCallIds;
+    const pendingIds = state.pendingToolRound.invocationIds;
+    if (providerIds.length !== pendingIds.length) {
+      context.addIssue({ code: "custom", message: "pending provider and invocation identity counts differ", path: ["pendingToolRound"] });
+    }
+    if (new Set(providerIds).size !== providerIds.length) {
+      context.addIssue({ code: "custom", message: "pending provider call identity is duplicated", path: ["pendingToolRound", "providerCallIds"] });
+    }
     if (new Set(pendingIds).size !== pendingIds.length) {
-      context.addIssue({ code: "custom", message: "pending tool call identity is duplicated", path: ["pendingToolRound", "toolCallIds"] });
+      context.addIssue({ code: "custom", message: "pending tool invocation identity is duplicated", path: ["pendingToolRound", "invocationIds"] });
     }
     if (state.status.kind === "queued" || state.status.kind === "completed") {
       context.addIssue({ code: "custom", message: "run status cannot own a pending tool round", path: ["pendingToolRound"] });
@@ -481,12 +491,12 @@ const rawStateSchema = z.object({
     if (eventIds.has(event.eventId)) context.addIssue({ code: "custom", message: "event identity is duplicated", path: ["timeline", index, "eventId"] });
     eventIds.add(event.eventId);
   }
-  const toolCallIds = new Set<string>();
+  const toolInvocationIds = new Set<string>();
   for (const [index, call] of state.toolCalls.entries()) {
-    const factId = toolCallFactId(call);
-    if (toolCallIds.has(factId)) context.addIssue({ code: "custom", message: "tool fact identity is duplicated", path: ["toolCalls", index, "factId"] });
-    toolCallIds.add(factId);
-    const resultKey = `${factId}:${call.status}`;
+    const invocationId = toolInvocationId(call);
+    if (toolInvocationIds.has(invocationId)) context.addIssue({ code: "custom", message: "tool invocation identity is duplicated", path: ["toolCalls", index, "invocationId"] });
+    toolInvocationIds.add(invocationId);
+    const resultKey = `${invocationId}:${call.status}`;
     if (call.status !== "approval_required" && state.toolResultRecordedAt[resultKey] === undefined) {
       context.addIssue({ code: "custom", message: "resolved tool result occurrence time is missing", path: ["toolResultRecordedAt", resultKey] });
     }
@@ -514,7 +524,7 @@ const rawStateSchema = z.object({
       context.addIssue({ code: "custom", message: "awaiting approval facts must be pending or have a durable decision", path: ["status", "confirmationRequests"] });
     }
     for (const [confirmationId, request] of statusRequests) {
-      if (JSON.stringify(request) !== JSON.stringify(factRequests.get(confirmationId))) {
+      if (!sameConfirmationRequestShape(request, factRequests.get(confirmationId))) {
         context.addIssue({ code: "custom", message: "awaiting approval request differs from its tool fact", path: ["status", "confirmationRequests"] });
       }
     }
@@ -790,3 +800,32 @@ async function writeJsonAtomically(filePath: string, value: unknown): Promise<vo
 function snapshotPath(rootDir: string, runId: string): string { return path.join(runDirectory(rootDir, runId), "snapshot.json"); }
 function runDirectory(rootDir: string, runId: string): string { return path.join(rootDir, "runs", encodeURIComponent(runId)); }
 function manifestPath(rootDir: string): string { return path.join(rootDir, "manifest.json"); }
+
+function sameConfirmationRequestShape(
+  left: ConfirmationRequest | undefined,
+  right: ConfirmationRequest | undefined,
+): boolean {
+  if (left === right) return true;
+  if (left === undefined || right === undefined) return false;
+  return left.confirmationId === right.confirmationId
+    && left.invocationId === right.invocationId
+    && left.title === right.title
+    && left.actionSummary === right.actionSummary
+    && left.consequence === right.consequence
+    && left.riskLevel === right.riskLevel
+    && left.requestedAt === right.requestedAt
+    && left.expiresAt === right.expiresAt
+    && left.resumeAvailability === right.resumeAvailability
+    && sameStringList(left.affectedResources, right.affectedResources)
+    && sameStringList(left.sourceRefs, right.sourceRefs)
+    && left.conversationId === right.conversationId;
+}
+
+function sameStringList(left: readonly string[], right: readonly string[]): boolean {
+  if (left === right) return true;
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
+}

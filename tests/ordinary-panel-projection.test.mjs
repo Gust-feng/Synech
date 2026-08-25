@@ -9,6 +9,7 @@ import {
   projectOrdinaryPanelConversation,
   projectOrdinaryPanelRunView,
 } from "../dist/app/panel-server/ordinary/ordinary-agent-panel-projection.js";
+import { appendLiveRunEvents } from "../dist/app/panel-api/ui-read-model.js";
 
 test("cursor round-trips exact stream position and rejects extra facts", () => {
   const cursor = { streamId: "stream-1", sequence: 7 };
@@ -22,14 +23,19 @@ test("activity replay preserves event order while transcript coalesces adjacent 
   const run = runState({ status: { kind: "running" } });
   const replay = activityReplay([
     activity("request", 1, { type: "model.request", reason: "initial" }),
-    activity("reasoning-1", 2, { type: "model.reasoning.delta", modelRequestId: "model-1", delta: "先分析" }),
-    activity("reasoning-2", 3, { type: "model.reasoning.delta", modelRequestId: "model-1", delta: "，再处理" }),
+    activity("reasoning-1", 2, { type: "model.reasoning.delta", modelRequestId: "model-1", contentIndex: 0, delta: "先分析" }),
+    activity("reasoning-2", 3, { type: "model.reasoning.delta", modelRequestId: "model-1", contentIndex: 0, delta: "，再处理" }),
     activity("tool", 4, {
       type: "tool.requested",
-      request: { callId: "call-1", toolName: "Read", input: { path: "README.md" } },
+      request: {
+        providerCallId: "call-1",
+        invocationId: "invocation-1",
+        toolName: "Read",
+        input: { path: "README.md" },
+      },
     }),
-    activity("output-1", 5, { type: "model.output.delta", modelRequestId: "model-1", delta: "Hello " }),
-    activity("output-2", 6, { type: "model.output.delta", modelRequestId: "model-1", delta: "world" }),
+    activity("output-1", 5, { type: "model.output.delta", modelRequestId: "model-1", contentIndex: 1, delta: "Hello " }),
+    activity("output-2", 6, { type: "model.output.delta", modelRequestId: "model-1", contentIndex: 1, delta: "world" }),
   ]);
 
   const batch = projectOrdinaryPanelActivityBatch({ run, replay });
@@ -53,10 +59,56 @@ test("activity replay preserves event order while transcript coalesces adjacent 
   ]);
 });
 
+test("reasoning completion keeps its content block identity across panel projection", () => {
+  const run = runState({ status: { kind: "running" } });
+  const replay = activityReplay([
+    activity("reasoning-delta", 1, {
+      type: "model.reasoning.delta",
+      modelRequestId: "model-1",
+      contentIndex: 0,
+      delta: "分析中",
+    }),
+    activity("output-delta", 2, {
+      type: "model.output.delta",
+      modelRequestId: "model-1",
+      contentIndex: 1,
+      delta: "正式回答",
+    }),
+    activity("reasoning-completed", 3, {
+      type: "run.transition",
+      durability: "durable",
+      event: {
+        eventId: "event-reasoning-completed",
+        runId: "run-1",
+        sequence: 1,
+        recordedAt: "2026-08-24T00:00:03.000Z",
+        type: "model.reasoning.completed",
+        modelRequestId: "model-1",
+        contentIndex: 0,
+        content: "分析完成",
+      },
+    }),
+  ]);
+
+  const batch = projectOrdinaryPanelActivityBatch({ run, replay });
+  const completed = batch.events.find((event) => event.type === "model.reasoning.completed");
+  assert.equal(completed?.contentIndex, 0);
+
+  const live = appendLiveRunEvents("run-1", undefined, batch.events);
+  assert.deepEqual(live.turns.map((turn) => ({
+    contentIndex: turn.contentIndex,
+    reasoning: turn.reasoning.text,
+    output: turn.output.text,
+  })), [
+    { contentIndex: 0, reasoning: "分析完成", output: "" },
+    { contentIndex: 1, reasoning: "", output: "正式回答" },
+  ]);
+});
+
 test("approval run keeps status copy, owner-scoped confirmation, and continuation facts", () => {
   const confirmation = {
     confirmationId: "confirmation-1",
-    toolCallFactId: "call-1",
+    invocationId: "call-1",
     title: "删除文件",
     actionSummary: "删除 temp.txt",
     affectedResources: ["temp.txt"],

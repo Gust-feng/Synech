@@ -2,6 +2,7 @@ import type { ToolFileDisplayOperation } from "../../domain/tools/contracts.js";
 import type { ToolFactValue } from "../../domain/tools/fact-value.js";
 
 export type PanelToolFactValue = ToolFactValue;
+export type ToolDisplayCategory = "read" | "search" | "web" | "command" | "edit" | "other";
 
 export type ToolDisplayResultFacts = {
   readonly truncated?: boolean;
@@ -27,6 +28,6 @@ export type ToolDisplayProjection = ToolDisplayResultFacts & (
   | { readonly kind: "knowledge_operation"; readonly operation: "search" | "read" | "create_note" | "update_note" | "collect"; readonly status?: string; readonly query?: string; readonly spaceId?: string; readonly noteId?: string; readonly title?: string; readonly revision?: number; readonly count?: number; readonly items?: readonly { readonly noteId: string; readonly title?: string; readonly spaceId?: string; readonly revision?: number; readonly snippet?: string }[] }
   | { readonly kind: "space_operation"; readonly operation: "list" | "create" | "move" | "add_reference" | "mount" | "create_managed_folder" | "create_entry" | "rename_entry" | "delete_entry" | "update_caption" | "remove_reference" | "rename"; readonly status?: string; readonly spaceId?: string; readonly title?: string; readonly targetId?: string; readonly destinationSpaceId?: string; readonly count?: number; readonly items?: readonly { readonly spaceId: string; readonly title?: string; readonly folderCount?: number; readonly referenceItemCount?: number }[] }
   | { readonly kind: "note_operation"; readonly operation: "write"; readonly status?: string; readonly scope?: "workspace" | "global"; readonly characters?: number }
-  | { readonly kind: "generic_tool_summary"; readonly action?: string; readonly summary?: string; readonly items?: readonly string[] }
+  | { readonly kind: "generic_tool_summary"; readonly category: ToolDisplayCategory; readonly action?: string; readonly summary?: string; readonly items?: readonly string[] }
   | { readonly kind: "raw_tool_result"; readonly toolName: string; readonly label: string; readonly value?: ToolFactValue }
 );

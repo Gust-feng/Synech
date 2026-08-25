@@ -8,7 +8,8 @@ import {
 
 test("durable replay restores tool, reasoning and assistant output in semantic order", () => {
   const toolResult = {
-    callId: "call-1",
+    providerCallId: "call-1",
+    invocationId: "call-1",
     toolName: "Read",
     input: { path: "README.md" },
     output: "content",
@@ -27,11 +28,12 @@ test("durable replay restores tool, reasoning and assistant output in semantic o
       {
         ...event("event-reasoning", "model.reasoning.completed", "2026-01-01T00:00:04.000Z"),
         modelRequestId: "request-1",
+        contentIndex: 0,
         content: "reasoning",
       },
       {
         ...event("event-completed", "run.completed", "2026-01-01T00:00:05.000Z"),
-        toolCallIds: ["call-1"],
+        invocationIds: ["call-1"],
       },
     ],
     toolCalls: [toolResult],
@@ -67,7 +69,8 @@ test("durable replay omits unresolved output and approval-only tool results", ()
       assistantEntryRef: { sessionId: "session-2", entryId: "assistant-2" },
     }],
     toolCalls: [{
-      callId: "call-2",
+      providerCallId: "call-2",
+      invocationId: "call-2",
       toolName: "Write",
       input: { path: "file.txt" },
       output: undefined,

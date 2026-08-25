@@ -25,7 +25,7 @@ import {
   normalizeToolErrorFacts,
   normalizeToolErrorFactValue,
   normalizeToolFactValue,
-  toolCallFactId,
+  toolInvocationId,
   toolDisplayName,
 } from "../../domain/tools/index.js";
 import type { ConfirmationRequest } from "../../domain/confirmation/contracts.js";
@@ -128,7 +128,8 @@ export class ToolCenter implements ToolExecutionGateway {
     try {
       output = await executor.execute(factRequest.input, {
         ...context,
-        toolCallId: toolCallFactId(factRequest),
+        invocationId: toolInvocationId(factRequest),
+        providerCallId: factRequest.providerCallId,
         approvedConfirmationIds: permission.approvedConfirmationIds,
         confirmationPolicy: permission.confirmationPolicy,
       });
@@ -183,7 +184,7 @@ export class ToolCenter implements ToolExecutionGateway {
         return delivered;
       }
       const rawResult: ToolCallResult = {
-        callId: factRequest.callId,
+        providerCallId: factRequest.providerCallId,
         ...toolFactIdentity(factRequest),
         toolName: factRequest.toolName,
         input: factRequest.input,
@@ -528,7 +529,7 @@ function normalizeExecutorResult(
       });
     }
     return {
-      callId: request.callId,
+      providerCallId: request.providerCallId,
       ...toolFactIdentity(request),
       toolName: request.toolName,
       input: request.input,
@@ -541,7 +542,7 @@ function normalizeExecutorResult(
 
   if (status === "completed") {
     return {
-      callId: request.callId,
+      providerCallId: request.providerCallId,
       ...toolFactIdentity(request),
       toolName: request.toolName,
       input: request.input,
@@ -558,7 +559,7 @@ function normalizeExecutorResult(
       ? defaultToolErrorDomain(request.toolName, errorFacts)
       : undefined;
   return {
-    callId: request.callId,
+    providerCallId: request.providerCallId,
     ...toolFactIdentity(request),
     toolName: request.toolName,
     input: request.input,
@@ -584,7 +585,7 @@ function invalidExecutorResult(input: {
   readonly message: string;
 }): ToolCallResult {
   return {
-    callId: input.request.callId,
+    providerCallId: input.request.providerCallId,
     ...toolFactIdentity(input.request),
     toolName: input.request.toolName,
     input: input.request.input,
@@ -619,7 +620,7 @@ function toolCallStatus(value: unknown): ToolCallResult["status"] | undefined {
 function normalizeConfirmationRequest(value: unknown): ConfirmationRequest | undefined {
   const record = asPlainRecord(value);
   const confirmationId = nonEmptyString(record.confirmationId);
-  const confirmationToolCallFactId = nonEmptyString(record.toolCallFactId);
+  const confirmationInvocationId = nonEmptyString(record.invocationId);
   const title = nonEmptyString(record.title);
   const actionSummary = nonEmptyString(record.actionSummary);
   const requestedAt = nonEmptyString(record.requestedAt);
@@ -632,7 +633,7 @@ function normalizeConfirmationRequest(value: unknown): ConfirmationRequest | und
   const resumeAvailability = confirmationResumeAvailability(record.resumeAvailability);
   if (
     confirmationId === undefined ||
-    confirmationToolCallFactId === undefined ||
+    confirmationInvocationId === undefined ||
     title === undefined ||
     actionSummary === undefined ||
     requestedAt === undefined ||
@@ -648,7 +649,7 @@ function normalizeConfirmationRequest(value: unknown): ConfirmationRequest | und
   }
   return {
     confirmationId,
-    toolCallFactId: confirmationToolCallFactId,
+    invocationId: confirmationInvocationId,
     conversationId,
     title,
     actionSummary,
@@ -705,7 +706,7 @@ function failedToolResult(
 ): ToolCallResult & { readonly status: "failed" } {
   const durationMs = Date.now() - startedAt;
   return {
-    callId: request.callId,
+    providerCallId: request.providerCallId,
     ...toolFactIdentity(request),
     toolName: request.toolName,
     input: request.input,
@@ -731,7 +732,7 @@ function approvalRequiredToolResult(
 ): ToolCallResult & { readonly status: "approval_required" } {
   const confirmationRequest: ConfirmationRequest = confirmationRequestFromSecurityDecision({ request, decision });
   return {
-    callId: request.callId,
+    providerCallId: request.providerCallId,
     ...toolFactIdentity(request),
     toolName: request.toolName,
     input: request.input,
@@ -748,7 +749,7 @@ function cancelledToolResult(
   errorFacts?: ToolErrorFacts,
 ): ToolCallResult & { readonly status: "cancelled" } {
   return {
-    callId: request.callId,
+    providerCallId: request.providerCallId,
     ...toolFactIdentity(request),
     toolName: request.toolName,
     input: request.input,
@@ -762,12 +763,12 @@ function cancelledToolResult(
 
 function toolFactIdentity(
   request: ToolCallRequest,
-): Pick<ToolCallRequest, "factId" | "parentToolCallFactId"> {
+): Pick<ToolCallRequest, "invocationId" | "parentInvocationId"> {
   return {
-    ...(request.factId === undefined ? {} : { factId: request.factId }),
-    ...(request.parentToolCallFactId === undefined
+    invocationId: request.invocationId,
+    ...(request.parentInvocationId === undefined
       ? {}
-      : { parentToolCallFactId: request.parentToolCallFactId }),
+      : { parentInvocationId: request.parentInvocationId }),
   };
 }
 

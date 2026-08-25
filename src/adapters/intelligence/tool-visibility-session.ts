@@ -42,6 +42,15 @@ type VisibilitySearchInput = {
 type VisibilityControlHost = {
   readonly abortSignal: AbortSignal;
   readonly requestScope?: (request: ToolCallRequest) => ToolCallRequest;
+  /**
+   * Resolves the Synech invocation identity for a provider-issued call id.
+   * The visibility-control execute() path uses it instead of minting its own
+   * id; the result is the only ToolCallRequest the harness is allowed to
+   * dispatch downstream.
+   */
+  readonly resolveInvocationId: (providerCallId: string) =>
+    | { readonly invocationId: string; readonly parentInvocationId?: string }
+    | undefined;
   readonly onToolRequested: (request: ToolCallRequest) => void;
   readonly onToolInvoked?: () => void;
   readonly acceptResult: (result: ToolCallResult) => Promise<AgentToolResult<unknown> | undefined>;
@@ -271,15 +280,35 @@ function createVisibilityControlTool(input: {
     async execute(callId, parameters, signal) {
       const startedAt = Date.now();
       let request: ToolCallRequest;
+      const binding = input.host.resolveInvocationId(callId);
+      if (binding === undefined) {
+        // The harness violated the identity contract: every execute() call
+        // must be preceded by a binding from the owner. Refuse to fabricate
+        // a result; let the harness surface a maintenance failure with the
+        // canonical provider call id so Ordinary can report the conflict.
+        input.host.recordMaintenanceFailure({
+          code: "tool_visibility_invocation_missing",
+          error: `Visibility control invoked execute for ${callId} before the owner bound an invocation id.`,
+        });
+        throw new Error(`Visibility control invoked execute for ${callId} before the owner bound an invocation id.`);
+      }
       try {
         const unscopedRequest: ToolCallRequest = {
-          callId,
+          providerCallId: callId,
+          invocationId: binding.invocationId,
+          ...(binding.parentInvocationId === undefined ? {} : { parentInvocationId: binding.parentInvocationId }),
           toolName: input.definition.name,
           input: normalizeToolFactValue(parameters),
         };
         request = input.host.requestScope?.(unscopedRequest) ?? unscopedRequest;
       } catch (error) {
-        const unscopedRequest = { callId, toolName: input.definition.name, input: undefined };
+        const unscopedRequest: ToolCallRequest = {
+          providerCallId: callId,
+          invocationId: binding.invocationId,
+          ...(binding.parentInvocationId === undefined ? {} : { parentInvocationId: binding.parentInvocationId }),
+          toolName: input.definition.name,
+          input: undefined,
+        };
         request = input.host.requestScope?.(unscopedRequest) ?? unscopedRequest;
         input.host.onToolRequested(request);
         input.host.onToolInvoked?.();

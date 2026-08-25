@@ -8,6 +8,7 @@ export type TranscriptNodeIdentityLike = {
   readonly nodeId: string;
   readonly runId: string;
   readonly sequence: number;
+  readonly contentIndex?: number;
   readonly eventType?: string;
   readonly kind?: string;
   readonly phase?: string;
@@ -40,9 +41,10 @@ export function transcriptNodeIdentityKey(node: TranscriptNodeIdentityLike): str
   const ownerId = family === "tool_active" || family === "tool_terminal"
     ? firstRefId(node, "tool_call")
     : family === undefined ? undefined : firstRefId(node, "model_call");
+  const block = node.contentIndex === undefined ? "" : `:block:${node.contentIndex}`;
   return ownerId === undefined
     ? `${node.runId}:node:${node.nodeId}`
-    : `${node.runId}:${family}:${ownerId}`;
+    : `${node.runId}:${family}:${ownerId}${block}`;
 }
 
 export function sameTranscriptNodeIdentity(
@@ -57,7 +59,8 @@ export function sameTranscriptNodeIdentity(
   const refKind = leftFamily === "tool_active" || leftFamily === "tool_terminal" ? "tool_call" : "model_call";
   const leftOwner = firstRefId(left, refKind);
   const rightOwner = firstRefId(right, refKind);
-  return leftOwner !== undefined && leftOwner === rightOwner;
+  return leftOwner !== undefined && leftOwner === rightOwner &&
+    (left.contentIndex === undefined || right.contentIndex === undefined || left.contentIndex === right.contentIndex);
 }
 
 /**

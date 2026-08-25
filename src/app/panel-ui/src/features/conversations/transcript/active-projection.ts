@@ -11,7 +11,6 @@ import {
   isLowValueUserDecisionNode,
   nodesForRun,
 } from "@panel-api/ui-read-model";
-import { isGenericApprovalDecisionText } from "@panel-api/ui-read-model";
 
 export type ChatActiveConversationTurn = {
   readonly turnId: string;
@@ -174,9 +173,6 @@ function canUseConversationTurnAsAnswer<TPending>(input: {
   if (input.run === undefined) return true;
   if (terminalStatuses.has(input.run.status)) return true;
   if (input.run.status !== "running" || input.turn.content.trim().length === 0) {
-    return false;
-  }
-  if (isGenericApprovalDecisionText(input.turn.content)) {
     return false;
   }
   const currentNodes = input.currentRunNodes ?? (

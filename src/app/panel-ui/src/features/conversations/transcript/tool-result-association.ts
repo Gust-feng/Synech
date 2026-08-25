@@ -7,8 +7,8 @@ export function toolResultForActivity(
   nodes: readonly TranscriptNode[],
   toolResultsByRunId: Readonly<Record<string, readonly ToolCallResult[]>>,
 ): ToolCallResult | undefined {
-  if (item.toolCallFactId === undefined) return undefined;
+  if (item.toolInvocationId === undefined) return undefined;
   const runId = nodes.find((node) => node.nodeId === item.nodeId)?.runId;
   if (runId === undefined) return undefined;
-  return toolResultsByRunId[runId]?.find((result) => (result.factId ?? result.callId) === item.toolCallFactId);
+  return toolResultsByRunId[runId]?.find((result) => result.invocationId === item.toolInvocationId);
 }

@@ -16,9 +16,96 @@ import {
   pendingToolResultForMessage,
   piImmediateToolResult,
 } from "../dist/adapters/intelligence/tool-result-transport.js";
+import {
+  AgentSessionProviderTiming,
+  mergeModelUsage,
+} from "../dist/adapters/intelligence/agent-session-provider-timing.js";
+import {
+  AcceptedNestedToolRequestRegistry,
+  ToolInvocationBindingTable,
+  acceptedToolRequests,
+  providerToolCallsForRound,
+} from "../dist/adapters/intelligence/agent-session-tool-bindings.js";
 import { withToolModelAttachments } from "../dist/domain/tools/model-attachments.js";
+import { sameResultForIdempotency } from "../dist/domain/tools/contracts.js";
 
 const modelInput = { supportsVisionInput: true, modelInputSupportsImage: true };
+
+test("provider timing aggregates observed latency and merge preserves the selected latest request", () => {
+  let now = 0;
+  const timing = new AgentSessionProviderTiming(() => now);
+
+  timing.startRequest();
+  now = 120;
+  timing.observeVisibleOutput();
+  now = 1_120;
+  let usage = timing.completeUsage({ requestCount: 1 }, 1_000);
+  assert.deepEqual(usage, {
+    requestCount: 1,
+    latencyMs: 1_120,
+    firstTokenLatencyMs: 120,
+    outputDurationMs: 1_000,
+    outputTokensPerSecond: 1_000,
+  });
+
+  now = 2_000;
+  timing.startRequest();
+  now = 2_200;
+  timing.observeVisibleOutput();
+  now = 2_700;
+  usage = timing.completeUsage(usage, 500);
+  assert.deepEqual(usage, {
+    requestCount: 1,
+    latencyMs: 910,
+    firstTokenLatencyMs: 160,
+    outputDurationMs: 750,
+    outputTokensPerSecond: 1_000,
+  });
+
+  const previousRequest = { inputTokens: 10, outputTokens: 2 };
+  const nextRequest = { inputTokens: 20, outputTokens: 4 };
+  const current = { requestCount: 1, inputTokens: 10, latestAgentRequest: previousRequest };
+  const next = { requestCount: 1, inputTokens: 20, latestAgentRequest: nextRequest };
+  assert.equal(mergeModelUsage(current, next).latestAgentRequest, nextRequest);
+  assert.deepEqual(
+    mergeModelUsage(current, next, { preserveLatestAgentRequest: true }),
+    { requestCount: 2, inputTokens: 30, outputTokens: 0, totalTokens: 0, cachedInputTokens: 0,
+      cacheWriteInputTokens: 0, uncachedInputTokens: 0, reasoningOutputTokens: 0,
+      estimatedCostUsd: 0, latestAgentRequest: previousRequest },
+  );
+});
+
+test("tool binding helpers keep root rounds and nested acceptance scoped", () => {
+  const providerCalls = providerToolCallsForRound([
+    { providerCallId: "call-1", toolName: "Read", input: { path: "README.md" } },
+  ], "round-1", "parent-1");
+  assert.deepEqual(providerCalls, [{
+    providerCallId: "call-1",
+    toolName: "Read",
+    input: { path: "README.md" },
+    parentInvocationId: "parent-1",
+    roundId: "round-1",
+  }]);
+
+  const accepted = [{ ...providerCalls[0], invocationId: "invocation-1" }];
+  const requests = acceptedToolRequests(accepted);
+  const bindings = new ToolInvocationBindingTable();
+  bindings.replace(accepted);
+  assert.deepEqual(bindings.get("call-1"), {
+    invocationId: "invocation-1",
+    parentInvocationId: "parent-1",
+  });
+
+  const nested = new AcceptedNestedToolRequestRegistry();
+  nested.remember(requests[0]);
+  assert.equal(nested.matches(structuredClone(requests[0])), true);
+  assert.equal(nested.matches({ ...requests[0], toolName: "Write" }), false);
+  assert.equal(nested.matches({ ...requests[0], input: { path: "other.md" } }), false);
+  assert.equal(nested.matches({ ...requests[0], input: { path: "README.md" } }), true);
+
+  bindings.replace([]);
+  assert.equal(bindings.get("call-1"), undefined);
+});
 
 test("Pi transport preserves completed, failed, and cancelled execution facts", () => {
   for (const result of [
@@ -54,7 +141,7 @@ test("approval decisions become one resolved failed or cancelled fact", () => {
     output: { preview: "delete temp.txt" },
     confirmationRequest: {
       confirmationId: "confirmation-1",
-      toolCallFactId: "call-1",
+      invocationId: "invocation-1",
       title: "Delete file",
       actionSummary: "Delete temp.txt",
       affectedResources: ["temp.txt"],
@@ -143,7 +230,12 @@ test("tool continuation remains a durable fact and a model-visible next input", 
 });
 
 test("Pi immediate failures distinguish cancellation, execution, and rejected calls", () => {
-  const request = { callId: "call-1", toolName: "Read", input: { path: "README.md" } };
+  const request = {
+    providerCallId: "call-1",
+    invocationId: "invocation-1",
+    toolName: "Read",
+    input: { path: "README.md" },
+  };
   const rawResult = { content: [{ type: "text", text: "Pi failure" }], details: undefined };
 
   assert.equal(piImmediateToolResult({
@@ -169,11 +261,23 @@ test("Pi immediate failures distinguish cancellation, execution, and rejected ca
   }).errorFacts.code, "pi_tool_call_rejected");
 });
 
+test("tool result idempotency includes business result content", () => {
+  const completed = toolResult({ status: "completed", output: { value: "A" } });
+
+  assert.equal(sameResultForIdempotency(completed, { ...completed, durationMs: 999 }), true);
+  assert.equal(sameResultForIdempotency(completed, { ...completed, output: { value: "B" } }), false);
+  assert.equal(sameResultForIdempotency(completed, {
+    ...completed,
+    status: "failed",
+    error: "delivery failed",
+  }), false);
+});
+
 test("pending image delivery resolves by canonical fact identity or scoped Pi identity", () => {
   const nested = toolResult({
     status: "completed",
-    factId: "nested-fact",
-    parentToolCallFactId: "parent-fact",
+    invocationId: "nested-fact",
+    parentInvocationId: "parent-fact",
   });
   const pending = new Map([["nested-fact", { result: nested }]]);
   const failAmbiguous = (message) => { throw new Error(message); };
@@ -209,7 +313,7 @@ test("provider projection keeps assistant calls, refusal, and usage facts explic
   assert.deepEqual(modelMessageFromAssistant(assistant), {
     role: "assistant",
     content: "Working",
-    toolCalls: [{ callId: "call-1", toolName: "Read", input: { path: "README.md" } }],
+    toolCalls: [{ providerCallId: "call-1", toolName: "Read", input: { path: "README.md" } }],
   });
   assert.equal(providerRefusalFromAssistant({
     ...assistant,
@@ -247,7 +351,8 @@ test("provider projection keeps assistant calls, refusal, and usage facts explic
 
 function toolResult(overrides) {
   return {
-    callId: "call-1",
+    providerCallId: "call-1",
+    invocationId: "invocation-1",
     toolName: "Read",
     input: { path: "README.md" },
     output: undefined,

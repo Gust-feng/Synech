@@ -1,4 +1,4 @@
-import { toolCallFactId, type ToolCallResult } from "../../domain/tools/index.js";
+import { toolInvocationId, sameResultForIdempotency, type ToolCallResult } from "../../domain/tools/index.js";
 import { errorMessage } from "../../kernel/values/index.js";
 import type { AgentSessionEntryRef } from "../model-runtime/agent-session.js";
 import type {
@@ -34,16 +34,16 @@ export function createTerminalSettlement(input: {
   function rememberToolResults(runId: string, results: readonly ToolCallResult[]): void {
     const accepted = acceptedToolResults.get(runId) ?? new Map<string, ToolCallResult>();
     for (const result of results) {
-      const factId = toolCallFactId(result);
-      const existing = accepted.get(factId);
+      const invocationId = toolInvocationId(result);
+      const existing = accepted.get(invocationId);
       if (existing !== undefined && existing.status !== "approval_required" &&
-          JSON.stringify(existing) !== JSON.stringify(result)) {
+          !sameResultForIdempotency(existing, result)) {
         throw new OrdinaryFeatureError(
           "ordinary_tool_result_conflict",
-          `Ordinary run ${runId} observed different results for tool fact ${factId}`,
+          `Ordinary run ${runId} observed different results for tool invocation ${invocationId}`,
         );
       }
-      accepted.set(factId, cloneToolResult(result));
+      accepted.set(invocationId, cloneToolResult(result));
     }
     if (accepted.size > 0) acceptedToolResults.set(runId, accepted);
   }
@@ -53,10 +53,10 @@ export function createTerminalSettlement(input: {
     const state = input.cachedRun(runId)?.state;
     if (accepted === undefined || state === undefined) return;
     for (const result of results) {
-      const factId = toolCallFactId(result);
-      const persisted = state.toolCalls.find((item) => toolCallFactId(item) === factId);
-      if (persisted !== undefined && JSON.stringify(persisted) === JSON.stringify(result)) {
-        accepted.delete(factId);
+      const invocationId = toolInvocationId(result);
+      const persisted = state.toolCalls.find((item) => toolInvocationId(item) === invocationId);
+      if (persisted !== undefined && sameResultForIdempotency(persisted, result)) {
+        accepted.delete(invocationId);
       }
     }
     if (accepted.size === 0) acceptedToolResults.delete(runId);
@@ -66,11 +66,11 @@ export function createTerminalSettlement(input: {
     const accepted = acceptedToolResults.get(runId);
     const state = input.cachedRun(runId)?.state;
     if (accepted === undefined || state === undefined) return;
-    for (const [factId, result] of accepted) {
+    for (const [invocationId, result] of accepted) {
       if (result.status === "approval_required" &&
-          state.toolCalls.some((persisted) => toolCallFactId(persisted) === factId &&
+          state.toolCalls.some((persisted) => toolInvocationId(persisted) === invocationId &&
             persisted.status !== "approval_required")) {
-        accepted.delete(factId);
+        accepted.delete(invocationId);
       }
     }
     if (accepted.size === 0) acceptedToolResults.delete(runId);
@@ -239,7 +239,7 @@ export function createTerminalSettlement(input: {
     subscribeStable,
     isStable,
     hasAcceptedToolResults: (runId: string) => acceptedToolResults.has(runId),
-    hasAcceptedToolResult: (runId: string, factId: string) => acceptedToolResults.get(runId)?.has(factId) === true,
+    hasAcceptedToolResult: (runId: string, invocationId: string) => acceptedToolResults.get(runId)?.has(invocationId) === true,
     clearAcceptedToolResults: (runId: string) => acceptedToolResults.delete(runId),
     isFinalizationPending: (runId: string) => sessionFinalizationPending.has(runId),
     finalizationFailure: (runId: string) => sessionFinalizationFailures.get(runId),
@@ -271,8 +271,8 @@ export function projectStableTerminalRunFacts(
       .filter((result): result is ToolCallResult & { readonly status: "completed" | "failed" | "cancelled" } =>
         result.status === "completed" || result.status === "failed" || result.status === "cancelled")
       .map((result) => ({
-        toolFactId: toolCallFactId(result),
-        ...(result.parentToolCallFactId === undefined ? {} : { parentToolFactId: result.parentToolCallFactId }),
+        toolFactId: toolInvocationId(result),
+        ...(result.parentInvocationId === undefined ? {} : { parentToolFactId: result.parentInvocationId }),
         toolName: result.toolName,
         status: result.status,
         durationMs: result.durationMs,

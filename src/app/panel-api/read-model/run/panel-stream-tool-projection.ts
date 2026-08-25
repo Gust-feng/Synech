@@ -44,8 +44,10 @@ export function toolStreamDetail(
   const input = asRecord(payload.input);
   const output = payload.output;
   const outputRecord = asRecord(output);
+  const callId = stringOrUndefined(payload.callId) ?? "panel-tool";
   const display = projectToolDisplay({
-    callId: stringOrUndefined(payload.callId) ?? "panel-tool",
+    providerCallId: callId,
+    invocationId: callId,
     toolName,
     input: cloneToolFactValue(input),
   }, cloneToolFactValue(output));

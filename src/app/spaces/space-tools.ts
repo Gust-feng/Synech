@@ -1000,6 +1000,6 @@ function agentActor(context: ToolExecutionContext): SpaceReferenceActorRecord {
     actorId: context.callerAgentId,
     ...(context.traceId === undefined ? {} : { traceId: context.traceId }),
     ...(context.goalId === undefined ? {} : { goalId: context.goalId }),
-    ...(context.toolCallId === undefined ? {} : { toolCallId: context.toolCallId }),
+    ...(context.providerCallId === undefined ? {} : { toolCallId: context.providerCallId }),
   };
 }

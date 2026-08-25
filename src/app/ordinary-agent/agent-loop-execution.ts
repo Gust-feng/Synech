@@ -94,9 +94,9 @@ export function createOrdinaryAgentLoopExecutionPort(input: {
             ? {}
             : { toolVisibilityPlan: resources.toolVisibilityPlan }),
           abortSignal: executionInput.abortSignal,
-          onTextDelta: executionInput.onTextDelta,
-          onReasoningDelta: executionInput.onReasoningDelta,
-          onReasoningCompleted: executionInput.onReasoningCompleted,
+          onModelContent: executionInput.onModelContent,
+          acceptToolInvocations: executionInput.acceptToolInvocations,
+          acceptNestedToolInvocations: executionInput.acceptNestedToolInvocations,
           onToolRequested: executionInput.onToolRequested,
           onNestedToolRequestsAccepted: executionInput.onNestedToolRequestsAccepted,
           onToolProgress: executionInput.onToolProgress,

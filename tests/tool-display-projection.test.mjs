@@ -5,7 +5,12 @@ import { projectToolDisplay } from "../dist/app/panel-api/read-model/tool-projec
 import { activityItemsForNodes } from "../dist/app/panel-api/read-model/transcript/panel-transcript-activity-copy.js";
 
 function request(toolName, input = {}) {
-  return { callId: `call-${toolName}`, toolName, input };
+  return {
+    providerCallId: `call-${toolName}`,
+    invocationId: `invocation-${toolName}`,
+    toolName,
+    input,
+  };
 }
 
 test("Write uses its explicit output path, operation, and diff", () => {

@@ -259,7 +259,7 @@ function messageGroupsFromEnd(
     if (message.role === "tool") {
       const assistantIndex = findToolCallAssistantIndex(messages, message.toolCallId);
       if (assistantIndex !== undefined && !groupedIndexes.has(assistantIndex)) {
-        const callIds = new Set(messages[assistantIndex]?.toolCalls?.map((call) => call.callId));
+        const callIds = new Set(messages[assistantIndex]?.toolCalls?.map((call) => call.providerCallId));
         const indexes = [
           assistantIndex,
           ...messages
@@ -273,7 +273,7 @@ function messageGroupsFromEnd(
       }
     }
     if (message.role === "assistant" && (message.toolCalls?.length ?? 0) > 0) {
-      const callIds = new Set(message.toolCalls?.map((call) => call.callId));
+      const callIds = new Set(message.toolCalls?.map((call) => call.providerCallId));
       const indexes = [
         index,
         ...messages
@@ -297,7 +297,7 @@ function findToolCallAssistantIndex(
 ): number | undefined {
   if (toolCallId === undefined) return undefined;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (messages[index]?.role === "assistant" && messages[index]?.toolCalls?.some((call) => call.callId === toolCallId)) {
+    if (messages[index]?.role === "assistant" && messages[index]?.toolCalls?.some((call) => call.providerCallId === toolCallId)) {
       return index;
     }
   }
@@ -319,7 +319,7 @@ function preserveLatestCompleteToolInteraction(
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message?.role !== "assistant" || (message.toolCalls?.length ?? 0) === 0) continue;
-    const callIds = new Set(message.toolCalls?.map((call) => call.callId));
+    const callIds = new Set(message.toolCalls?.map((call) => call.providerCallId));
     const resultIndexes = messages
       .map((candidate, candidateIndex) => ({ candidate, candidateIndex }))
       .filter(({ candidate }) => candidate.role === "tool" && candidate.toolCallId !== undefined && callIds.has(candidate.toolCallId))
@@ -367,14 +367,14 @@ function preserveOnlyCompleteToolInteractionGroups(
     }
     const group = new Set([
       index,
-      ...calls.flatMap((call) => toolResultIndexes.get(call.callId) ?? []),
+      ...calls.flatMap((call) => toolResultIndexes.get(call.providerCallId) ?? []),
     ]);
     group.forEach((groupIndex) => {
       if (messages[groupIndex]?.role === "tool") {
         groupedToolResultIndexes.add(groupIndex);
       }
     });
-    const complete = calls.every((call) => (toolResultIndexes.get(call.callId)?.length ?? 0) === 1);
+    const complete = calls.every((call) => (toolResultIndexes.get(call.providerCallId)?.length ?? 0) === 1);
     if (!complete) {
       group.forEach((groupIndex) => preserved.delete(groupIndex));
       return;
@@ -434,7 +434,7 @@ function serializeLoopMessageForCompaction(message: ModelMessage, index: number)
   const ref = message.ref ?? `loop-context:${index}`;
   const toolCalls = message.toolCalls?.length
     ? `\n  toolCalls: ${message.toolCalls.map((call) =>
-        `${call.toolName}#${call.callId} input=${serializeToolInput(call.input)}`
+        `${call.toolName}#${call.providerCallId} input=${serializeToolInput(call.input)}`
       ).join(", ")}`
     : "";
   const toolResult = message.toolCallId === undefined
@@ -483,8 +483,7 @@ function cloneLoopMessage(message: ModelMessage): ModelMessage {
     ...message,
     attachments: message.attachments?.map((attachment) => globalThis.structuredClone(attachment)),
     toolCalls: message.toolCalls?.map((toolCall) => ({
-      callId: toolCall.callId,
-      toolName: toolCall.toolName,
+      ...toolCall,
       input: globalThis.structuredClone(toolCall.input),
     })),
     protocolExtensions:

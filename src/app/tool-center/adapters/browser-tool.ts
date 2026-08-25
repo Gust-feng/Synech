@@ -104,8 +104,8 @@ export function createBrowserSnapshotTool(options: BrowserToolOptions = {}): Too
             mediaType: "text/plain",
             content: fullText,
             sourceToolName: "WebFetch",
-            sourceCallId: context.toolCallId ?? "WebFetch",
-            sourceFactId: context.toolCallId,
+            sourceCallId: context.providerCallId ?? context.invocationId ?? "WebFetch",
+            sourceFactId: context.invocationId,
             ownerId: context.traceId,
           })
         : undefined;

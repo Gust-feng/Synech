@@ -3,7 +3,6 @@ import { cleanConfirmationSummary } from "../../../text-projection/confirmation-
 import { cleanOrdinaryToolText } from "../tool-projection/ordinary-tool-copy.js";
 import {
   isFileReadNode,
-  normalizedToolName,
   type ProjectableTranscriptNode,
 } from "./panel-transcript-node-projection.js";
 import { commandText, genericItemLabel } from "./panel-transcript-tool-format.js";
@@ -23,11 +22,7 @@ type GenericToolSummaryDisplay = Extract<
 
 export function toolActivityVerb(node: ProjectableTranscriptNode): string {
   const display = node.display;
-  const toolName = normalizedToolName(node.toolName);
   if (display?.kind === "raw_tool_result") return "工具";
-  const action = display?.kind === "generic_tool_summary"
-    ? display.action?.toLowerCase() ?? ""
-    : "";
   if (display?.kind === "knowledge_operation") {
     if (display.operation === "search") return "搜索";
     if (display.operation === "read") return "读取";
@@ -38,30 +33,25 @@ export function toolActivityVerb(node: ProjectableTranscriptNode): string {
     return "空间";
   }
   if (display?.kind === "note_operation") return "记录";
-  if (display?.kind === "agent_task" || toolName === "agent" || toolName === "agentspawn") return "委派";
-  if (display?.kind === "command_summary" || toolName === "shell" || toolName.includes("terminal") || toolName.includes("powershell") || toolName.includes("cmd")) return "命令";
-  if (display?.kind === "search_results" || toolName === "researchsearch" || toolName === "websearch" || toolName.includes("grep")) return "搜索";
+  if (display?.kind === "agent_task") return "委派";
+  if (display?.kind === "command_summary") return "命令";
+  if (display?.kind === "search_results") return "搜索";
   if (display?.kind === "file_search_results") return "搜索";
   if (display?.kind === "directory_listing") return "查看";
-  if (display?.kind === "http_response" || toolName === "httprequest") return "请求";
-  if (display?.kind === "generic_tool_summary") {
-    const role = genericToolRole(toolName, display);
-    if (role !== undefined) return role;
-  }
+  if (display?.kind === "http_response") return "请求";
+  if (display?.kind === "generic_tool_summary") return genericCategoryLabel(display.category);
   if (display?.kind === "read_result") return "读取";
-  if (display?.kind === "web_fetch" || toolName === "webfetch" || toolName.includes("browser")) return "网页";
-  if (toolName === "list" || toolName === "list_files" || toolName.includes("list") || toolName.includes("dir")) return "查看";
-  if (toolName === "read" || toolName === "researchread" || toolName.startsWith("read") || toolName.includes("file")) return "读取";
-  if (action.includes("读取")) return "读取";
-  if (action.includes("搜索") || action.includes("查找")) return "搜索";
-  if (action.includes("浏览")) return "网页";
-  if (action.includes("列出")) return "查看";
-  if (action.includes("命令") || action.includes("shell") || action.includes("执行")) return "命令";
-  if (action.includes("写入")) return "写入";
-  if (action.includes("编辑") || action.includes("修改")) return "编辑";
-  if (action.includes("删除")) return "删除";
-  if (toolName.includes("generate") || action.includes("生成")) return "生成";
-  return "动作";
+  if (display?.kind === "web_fetch") return "网页";
+  return "工具";
+}
+
+function genericCategoryLabel(category: GenericToolSummaryDisplay["category"]): string {
+  if (category === "read") return "读取";
+  if (category === "search") return "搜索";
+  if (category === "web") return "网页";
+  if (category === "command") return "命令";
+  if (category === "edit") return "编辑";
+  return "工具";
 }
 
 export function toolActivityTargetCopy(
@@ -385,12 +375,6 @@ function compactHostLabel(value: string | undefined): string | undefined {
   }
 }
 
-function genericToolRole(toolName: string, display: GenericToolSummaryDisplay): "读取" | undefined {
-  return toolName === "read" || toolName === "researchread" || display.action === "读取文件"
-    ? "读取"
-    : undefined;
-}
-
 function genericToolSections(
   display: GenericToolSummaryDisplay,
   copy: ActivityLineCopy,
@@ -457,8 +441,7 @@ function fallbackToolTargetText(node: ProjectableTranscriptNode): string | undef
 }
 
 function genericActionTargetText(value: string | undefined): string | undefined {
-  const cleaned = cleanToolTargetText(value);
-  return cleaned === undefined || isLowValueToolFallback(cleaned) ? undefined : cleaned;
+  return cleanToolTargetText(value);
 }
 
 function previewLineTarget(value: string | undefined): string | undefined {
@@ -469,39 +452,12 @@ function previewLineTarget(value: string | undefined): string | undefined {
 }
 
 function fallbackToolActionText(node: ProjectableTranscriptNode): string | undefined {
-  return cleanFallbackToolTitle(node.title) ?? fallbackToolNameText(node);
+  return cleanFallbackToolTitle(node.title);
 }
 
 function cleanFallbackToolTitle(value: string | undefined): string | undefined {
-  const cleaned = cleanToolTargetText(value)
-    ?.replace(/^准备\s*/u, "")
-    .replace(/(?:已)?完成$/u, "")
-    .replace(/未完成$/u, "")
-    .trim();
-  return cleaned === undefined || cleaned.length === 0 || isLowValueToolFallback(cleaned) ? undefined : cleaned;
-}
-
-function fallbackToolNameText(node: ProjectableTranscriptNode): string | undefined {
-  const toolName = normalizedToolName(node.toolName);
-  if (toolName.length === 0) return undefined;
-  const verb = toolActivityVerb(node);
-  if (verb === "搜索") return "搜索";
-  if (verb === "命令") return "运行命令";
-  if (verb === "网页") return "读取网页";
-  if (verb === "生成") return "生成内容";
-  if (verb === "委派") return "协作任务";
-  return cleanToolTargetText(toolName.replace(/[_-]+/g, " "));
-}
-
-function isLowValueToolFallback(value: string): boolean {
-  const normalized = value.replace(/[。.!！?？；;:：、，,\s_-]/g, "").trim().toLowerCase();
-  return normalized.length === 0 ||
-    normalized === "tool" ||
-    normalized === "工具" ||
-    normalized === "使用工具" ||
-    normalized === "工具结果" ||
-    normalized === "工具调用" ||
-    normalized === "动作";
+  const cleaned = cleanToolTargetText(value);
+  return cleaned === undefined || cleaned.length === 0 ? undefined : cleaned;
 }
 
 function httpHref(value: string | undefined): string | undefined {

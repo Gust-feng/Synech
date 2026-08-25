@@ -192,14 +192,6 @@ function activePhaseCopy(item: TimelineCollapseActivityLike): string {
   if (item.toolKind === "search") return target === undefined ? "正在搜索" : `正在搜索 ${target}`;
   if (item.toolKind === "edit") return target === undefined ? "正在修改内容" : `正在修改 ${target}`;
   if (item.toolKind === "command") return "正在运行命令";
-  const label = item.copy.label?.trim();
-  if (label === "读取" || label === "查看") return "正在查看内容";
-  if (label === "搜索") return "正在搜索";
-  if (label === "编辑" || label === "写入" || label === "创建" || label === "删除" || label === "生成") {
-    return "正在修改内容";
-  }
-  if (label === "网页" || label === "请求") return "正在查看内容";
-  if (label === "命令") return "正在运行命令";
   return "正在处理";
 }
 

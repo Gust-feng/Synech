@@ -149,7 +149,7 @@ export async function readLocalFile(input: {
   return fitReadOutput(
     output,
     input.outputTokenCounter,
-    input.context.toolCallId,
+    input.context.providerCallId ?? input.context.invocationId,
     lineRange === undefined ? { path: target.absolutePath, maxLength } : undefined,
   );
 }

@@ -1,5 +1,6 @@
 import type { ModelMessage } from "../../domain/intelligence/index.js";
-import type { ToolCallRequest, ToolCallResult, ToolFactValue } from "../../domain/tools/index.js";
+import type { ToolCallResult, ToolFactValue } from "../../domain/tools/index.js";
+import type { ModelToolCall } from "../../domain/intelligence/contracts.js";
 import { copyToolModelAttachments } from "../../domain/tools/index.js";
 
 export function cloneModelMessage(message: ModelMessage): ModelMessage {
@@ -8,14 +9,13 @@ export function cloneModelMessage(message: ModelMessage): ModelMessage {
     attachments: message.attachments?.map((attachment) => globalThis.structuredClone(attachment)),
     protocolExtensions:
       message.protocolExtensions === undefined ? undefined : globalThis.structuredClone(message.protocolExtensions),
-    toolCalls: message.toolCalls?.map(cloneToolCallRequest),
+    toolCalls: message.toolCalls?.map(cloneModelToolCall),
   };
 }
 
-export function cloneToolCallRequest(request: ToolCallRequest): ToolCallRequest {
+export function cloneModelToolCall(request: ModelToolCall): ModelToolCall {
   return {
-    callId: request.callId,
-    toolName: request.toolName,
+    ...request,
     input: cloneToolFact(request.input),
   };
 }

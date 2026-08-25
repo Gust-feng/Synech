@@ -21,6 +21,7 @@ import {
   joinRelativePath,
   resolveWithinRoot,
   resolveDestinationWithinRoot,
+  LocalFilesystemPathError,
   renameEntry,
   createFile,
   createDirectory,
@@ -161,7 +162,7 @@ async function resolveMutableDestination(item: SpaceReferenceItem, relativePath:
   try {
     return await resolveDestinationWithinRoot(item.reference.path, relativePath);
   } catch (error) {
-    if (error instanceof Error && error.message.includes("Root directory does not exist")) {
+    if (error instanceof LocalFilesystemPathError && error.code === "root_missing") {
       throw new PanelHttpError(404, "space_reference_source_missing", "工作区文件夹已不存在。");
     }
     throw new PanelHttpError(400, "invalid_space_reference_path", "引用子路径超出了文件夹范围。");

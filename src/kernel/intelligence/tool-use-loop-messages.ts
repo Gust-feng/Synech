@@ -10,7 +10,7 @@ import type {
 import {
   toolModelAttachmentsFromOutput,
 } from "../../domain/tools/index.js";
-import { cloneModelMessage, cloneToolCallRequest } from "./model-message-cloning.js";
+import { cloneModelMessage } from "./model-message-cloning.js";
 import {
   toolCallOutputToModelBody,
   toolCallResultToModelToolResult,
@@ -20,17 +20,22 @@ export function assistantToolCallMessage(
   response: ModelResponse,
   requestedToolCalls: readonly ToolCallRequest[]
 ): ModelMessage {
+  const providerCalls = requestedToolCalls.map((request) => ({
+    providerCallId: request.providerCallId,
+    toolName: request.toolName,
+    input: request.input,
+  }));
   if (response.assistantMessage?.role === "assistant") {
     return cloneModelMessage({
       ...response.assistantMessage,
       content: response.assistantMessage.content ?? response.textOutput ?? "",
-      toolCalls: requestedToolCalls.map(cloneToolCallRequest),
+      toolCalls: providerCalls,
     });
   }
   return {
     role: "assistant",
     content: response.textOutput ?? "",
-    toolCalls: requestedToolCalls.map(cloneToolCallRequest),
+    toolCalls: providerCalls,
   };
 }
 
@@ -45,7 +50,7 @@ export function toolResultMessage(result: ToolCallResult): ModelMessage {
   return {
     role: "tool",
     content: stringifyToolMessagePayload(payload, MAX_TOOL_MESSAGE_CHARS),
-    toolCallId: result.callId,
+    toolCallId: result.providerCallId,
     toolName: result.toolName,
     attachments: attachments === undefined || attachments.length === 0
       ? undefined
@@ -63,12 +68,12 @@ export function toolResultMessagesWithResolvedApprovals(
 ): ModelMessage[] {
   const preApprovalByCallId = new Map<string, ToolCallResult[]>();
   for (const result of preApprovalResults) {
-    const existing = preApprovalByCallId.get(result.callId) ?? [];
+    const existing = preApprovalByCallId.get(result.providerCallId) ?? [];
     existing.push(result);
-    preApprovalByCallId.set(result.callId, existing);
+    preApprovalByCallId.set(result.providerCallId, existing);
   }
   return results.map((result) => {
-    const preApprovals = preApprovalByCallId.get(result.callId);
+    const preApprovals = preApprovalByCallId.get(result.providerCallId);
     return preApprovals === undefined
       ? toolResultMessage(result)
       : resolvedApprovalToolResultMessage(preApprovals, result);
@@ -144,7 +149,7 @@ function resolvedApprovalToolResultMessage(
   return {
     role: "tool",
     content: stringifyToolMessagePayload(payload, MAX_TOOL_MESSAGE_CHARS),
-    toolCallId: resolvedResult.callId,
+    toolCallId: resolvedResult.providerCallId,
     toolName: resolvedResult.toolName,
     attachments: attachments.length === 0 ? undefined : attachments,
   };

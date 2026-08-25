@@ -1,4 +1,4 @@
-import { cleanConfirmationSummary, isGenericApprovalDecisionText } from "../../../text-projection/confirmation-copy.js";
+import { cleanConfirmationSummary } from "../../../text-projection/confirmation-copy.js";
 import {
   isModelSideOutputNode,
   type ProjectableTranscriptNode,
@@ -71,10 +71,10 @@ export type ActivityItem = {
   readonly key: string;
   /** Source event identity used for presentation decisions without parsing display copy. */
   readonly eventType: string;
-  /** Stable tool fact identity used to attach nested sub-agent work. */
-  readonly toolCallFactId?: string;
-  /** Parent AgentTool fact for nested sub-agent work. */
-  readonly parentToolCallFactId?: string;
+  /** Stable tool invocation identity used to attach nested sub-agent work. */
+  readonly toolInvocationId?: string;
+  /** Parent AgentTool invocation for nested sub-agent work. */
+  readonly parentInvocationId?: string;
   /** Nested mechanical activity owned by this AgentTool invocation. */
   readonly children?: readonly ActivityItem[];
   readonly variant?: "context_compaction";
@@ -151,6 +151,7 @@ export function resolveActivityToolKind(item: {
   readonly tone: ActivityItem["tone"];
   readonly copy: { readonly label?: string };
   readonly displayKind?: NonNullable<ProjectableTranscriptNode["display"]>["kind"];
+  readonly displayCategory?: Extract<NonNullable<ProjectableTranscriptNode["display"]>, { readonly kind: "generic_tool_summary" }>["category"];
 }): ActivityToolKind {
   if (item.tone === "thinking") return "thinking";
   if (item.tone === "confirmation") return "confirmation";
@@ -162,19 +163,16 @@ export function resolveActivityToolKind(item: {
   if (item.displayKind === "read_result") return "read";
   if (item.displayKind === "web_fetch" || item.displayKind === "http_response") return "web";
   if (item.displayKind === "agent_task") return "agent";
+  if (item.displayCategory === "read") return "read";
+  if (item.displayCategory === "search") return "search";
+  if (item.displayCategory === "web") return "web";
+  if (item.displayCategory === "command") return "command";
+  if (item.displayCategory === "edit") return "edit";
   if (
     item.displayKind === "file_change_summary" ||
     item.displayKind === "file_diff_preview" ||
     item.displayKind === "file_change_group"
   ) return "edit";
-  const label = item.copy.label;
-  if (label === "命令") return "command";
-  if (label === "搜索") return "search";
-  if (label === "读取" || label === "查看") return "read";
-  if (label === "编辑" || label === "写入" || label === "创建" || label === "删除") return "edit";
-  if (label === "网页") return "web";
-  if (label === "委派") return "agent";
-  if (label === "生成") return "edit";
   return "other";
 }
 
@@ -193,7 +191,7 @@ export function activityItemsForNodes(nodes: readonly ProjectableTranscriptNode[
       tone,
       phase: node.phase,
       startedAt: node.timestamp || undefined,
-      toolKind: resolveActivityToolKind({ tone, copy, displayKind: node.display?.kind }),
+      toolKind: resolveActivityToolKind({ tone, copy, displayKind: node.display?.kind, displayCategory: node.display?.kind === "generic_tool_summary" ? node.display.category : undefined }),
       lead: activityLeadForNode(node, copy),
       lineDelta: fileActivityLineDelta(node, copy),
       statusBadge: activityStatusBadge(node),
@@ -289,14 +287,14 @@ function activityItemFromNode(node: ProjectableTranscriptNode, copy: ActivityLin
     nodeId: node.nodeId,
     key: activityItemKey(node),
     eventType: node.eventType,
-    toolCallFactId: toolCallIdForActivityNode(node),
-    ...(node.parentToolCallFactId === undefined ? {} : { parentToolCallFactId: node.parentToolCallFactId }),
+    toolInvocationId: toolCallIdForActivityNode(node),
+    ...(node.parentInvocationId === undefined ? {} : { parentInvocationId: node.parentInvocationId }),
     variant: activityVariantForNode(node),
     copy,
     tone,
     phase: node.phase,
     startedAt: node.timestamp || undefined,
-    toolKind: resolveActivityToolKind({ tone, copy, displayKind: node.display?.kind }),
+    toolKind: resolveActivityToolKind({ tone, copy, displayKind: node.display?.kind, displayCategory: node.display?.kind === "generic_tool_summary" ? node.display.category : undefined }),
     lead: activityLeadForNode(node, copy),
     lineDelta: fileActivityLineDelta(node, copy),
     statusBadge: activityStatusBadge(node),
@@ -308,16 +306,16 @@ function activityItemFromNode(node: ProjectableTranscriptNode, copy: ActivityLin
 function nestDelegatedActivityItems(items: readonly ActivityItem[]): readonly ActivityItem[] {
   const parents = new Map<string, number>();
   for (const [index, item] of items.entries()) {
-    if (item.toolKind === "agent" && item.toolCallFactId !== undefined) {
-      parents.set(item.toolCallFactId, index);
+    if (item.toolKind === "agent" && item.toolInvocationId !== undefined) {
+      parents.set(item.toolInvocationId, index);
     }
   }
   const childIndexes = new Set<number>();
   const childrenByParent = new Map<number, ActivityItem[]>();
   for (const [index, item] of items.entries()) {
-    const parentIndex = item.parentToolCallFactId === undefined
+    const parentIndex = item.parentInvocationId === undefined
       ? undefined
-      : parents.get(item.parentToolCallFactId);
+      : parents.get(item.parentInvocationId);
     if (parentIndex === undefined || parentIndex === index) continue;
     const children = childrenByParent.get(parentIndex) ?? [];
     children.push(item);
@@ -567,9 +565,6 @@ function readableUserDecisionCopy(node: ProjectableTranscriptNode): ActivityLine
   const raw = cleanConfirmationSummary(node.text ?? node.summary ?? "");
   const detail = readableActivityText(stripUserDecisionBoilerplate(stripMarkdownStructure(raw)));
   if (detail.length === 0) {
-    return fallback === undefined ? undefined : { detail: fallback };
-  }
-  if (isGenericApprovalDecisionText(detail)) {
     return fallback === undefined ? undefined : { detail: fallback };
   }
   const compactDetail = compact(detail, 180);

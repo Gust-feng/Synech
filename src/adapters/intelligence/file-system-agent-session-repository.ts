@@ -18,7 +18,7 @@ import type { ModelInputAttachmentRef } from "../../domain/intelligence/index.js
 import { canonicalToolResultMessage } from "../../app/model-runtime/tool-result-message.js";
 import {
   normalizeToolFactValue,
-  toolCallFactId,
+  toolInvocationId,
   type ToolCallResult,
 } from "../../domain/tools/index.js";
 import {
@@ -213,9 +213,13 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
     return entry.message.content
       .filter((block) => block.type === "toolCall")
       .map((call) => ({
-        callId: call.id,
+        providerCallId: call.id,
         toolName: call.name,
         input: normalizeToolFactValue(call.arguments),
+        // The assistant entry id is the per-message roundId; same value
+        // the live loop captured at the originating `message_end` so the
+        // invocation id minted by Ordinary is stable across this read.
+        roundId: input.assistantEntryRef.entryId,
       }));
   }
 
@@ -226,8 +230,8 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
     readonly orderedResults: readonly ToolCallResult[];
   }): Promise<AgentSessionEntryRef> {
     this.assertEntryBelongsToSession(input.sessionRef, input.assistantEntryRef);
-    if (input.orderedResults.some((result) => result.parentToolCallFactId !== undefined) ||
-        new Set(input.orderedResults.map(toolCallFactId)).size !== input.orderedResults.length) {
+    if (input.orderedResults.some((result) => result.parentInvocationId !== undefined) ||
+        new Set(input.orderedResults.map(toolInvocationId)).size !== input.orderedResults.length) {
       throw new AgentSessionRepositoryError(
         "agent_session_ref_invalid",
         "Agent session reconciliation requires unique root tool results.",
@@ -260,7 +264,7 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
         .map((call) => ({ callId: call.id, toolName: call.name }));
       if (expectedCalls.length !== input.orderedResults.length || expectedCalls.some((call, index) => {
         const result = input.orderedResults[index];
-        return result === undefined || result.callId !== call.callId || result.toolName !== call.toolName;
+        return result === undefined || result.providerCallId !== call.callId || result.toolName !== call.toolName;
       })) {
         throw new AgentSessionRepositoryError(
           "agent_session_ref_invalid",
@@ -292,7 +296,7 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
         if (expectedImages.length === 0 && expectedImageRefs.length === 0 && actualImages.length > 0) {
           throw new AgentSessionRepositoryError(
             "agent_session_attachment_mismatch",
-            `Agent session tool result ${expected.callId} contains a durable image that the run fact cannot prove.`,
+            `Agent session tool result ${expected.providerCallId} contains a durable image that the run fact cannot prove.`,
           );
         }
         const imagesMatch = expectedImages.length > 0
@@ -303,11 +307,11 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
         if (!imagesMatch && expectedImageRefs.length > 0) {
           throw new AgentSessionRepositoryError(
             "agent_session_attachment_mismatch",
-            `Agent session tool result ${expected.callId} image manifest does not match the durable Session entry.`,
+            `Agent session tool result ${expected.providerCallId} image manifest does not match the durable Session entry.`,
           );
         }
         if (entry?.type !== "message" || entry.message.role !== "toolResult" || expected === undefined ||
-            entry.message.toolCallId !== expected.callId || entry.message.toolName !== expected.toolName ||
+            entry.message.toolCallId !== expected.providerCallId || entry.message.toolName !== expected.toolName ||
             entry.message.isError !== (expected.status !== "completed") || text !== expectedMessage?.content ||
             !imagesMatch) {
           await lease.session.moveTo(input.assistantEntryRef.entryId);
@@ -322,7 +326,7 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
         if (availableImages.length !== expectedRefs.length) {
           throw new AgentSessionRepositoryError(
             "agent_session_attachment_mismatch",
-            `Agent session tool result ${result.callId} has image references but no recoverable image payload.`,
+            `Agent session tool result ${result.providerCallId} has image references but no recoverable image payload.`,
           );
         }
       }
@@ -330,7 +334,7 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
         const modelMessage = canonicalToolResultMessage(result);
         await lease.session.appendMessage({
           role: "toolResult",
-          toolCallId: result.callId,
+          toolCallId: result.providerCallId,
           toolName: result.toolName,
           content: [
             { type: "text", text: modelMessage.content },

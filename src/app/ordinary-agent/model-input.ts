@@ -220,10 +220,9 @@ function modelInputRefs(
 function cloneModelMessage(message: ModelMessage): ModelMessage {
   const attachments = message.attachments?.map((attachment) => globalThis.structuredClone(attachment));
   const toolCalls = message.toolCalls?.map((call) => ({
-      callId: call.callId,
-      toolName: call.toolName,
-      input: globalThis.structuredClone(call.input),
-    }));
+    ...call,
+    input: globalThis.structuredClone(call.input),
+  }));
   const protocolExtensions = message.protocolExtensions === undefined
     ? undefined
     : globalThis.structuredClone(message.protocolExtensions);

@@ -1,11 +1,8 @@
-import { isStaleModelProgressSummary } from "../panel-model-progress-copy.js";
 import type { ModelUsage } from "../../../../domain/intelligence/index.js";
 import type { ToolDisplayProjection } from "../../tool-display.js";
 import type { ToolFailureAttribution } from "../../../../domain/tools/index.js";
 import type { DelegatedAgentExecutionMetadata } from "../../../../domain/tools/index.js";
-import { userVisibleAnswer } from "../assistant/panel-assistant-visible-text.js";
 import { genericItemLabel } from "./panel-transcript-tool-format.js";
-import { isGenericApprovalDecisionText } from "../../../text-projection/confirmation-copy.js";
 import {
   isMergeableModelTranscriptNode,
   isModelSideTranscriptNode,
@@ -24,6 +21,7 @@ export type ProjectableTranscriptNode = {
   readonly nodeId: string;
   readonly runId: string;
   readonly sequence: number;
+  readonly contentIndex?: number;
   readonly eventType: string;
   readonly kind: "thinking" | "tool" | "confirmation" | "user_decision" | "answer" | "body" | "system";
   readonly phase:
@@ -45,8 +43,8 @@ export type ProjectableTranscriptNode = {
   readonly toolName?: string;
   readonly failureAttribution?: ToolFailureAttribution;
   readonly error?: string;
-  /** The parent AgentTool fact for a nested sub-agent mechanical action. */
-  readonly parentToolCallFactId?: string;
+  /** The parent AgentTool invocation for a nested sub-agent mechanical action. */
+  readonly parentInvocationId?: string;
   readonly delegatedExecution?: DelegatedAgentExecutionMetadata;
   readonly display?: TranscriptToolDisplayLike;
   readonly confirmation?: {
@@ -62,7 +60,6 @@ export function visibleTranscriptNodes<TNode extends ProjectableTranscriptNode>(
   const sorted = [...nodes]
     .filter((node) => node.kind !== "answer")
     .filter((node) => node.kind !== "body")
-    .filter((node) => !isLowValueNode(node))
     .sort(compareNodeOrder);
   const terminalToolCallIds = new Set(
     sorted
@@ -97,7 +94,6 @@ export function timelineVisibleNodes<TNode extends ProjectableTranscriptNode>(no
 
 export function activityVisibleNodes<TNode extends ProjectableTranscriptNode>(nodes: readonly TNode[]): readonly TNode[] {
   const sorted = [...nodes]
-    .filter((node) => !isLowValueNode(node))
     .sort(compareNodeOrder);
   const confirmationToolCallIds = new Set(
     sorted
@@ -156,19 +152,11 @@ function isMergeableModelActivityNode(node: ProjectableTranscriptNode): boolean 
 export function isFileReadNode(node: ProjectableTranscriptNode): boolean {
   if (node.kind !== "tool") return false;
   if (node.display?.kind === "read_result") return node.display.url === undefined;
-  const toolName = normalizedToolName(node.toolName);
-  if (toolName === "read" || toolName === "researchread") return true;
-  return node.display?.kind === "generic_tool_summary" && node.display.action === "读取文件";
+  return node.display?.kind === "generic_tool_summary" && node.display.category === "read";
 }
 
 export function isLowValueUserDecisionNode(node: ProjectableTranscriptNode): boolean {
-  return node.kind === "user_decision" &&
-    node.phase === "approved" &&
-    isGenericApprovalDecisionText(node.text ?? node.summary ?? node.title);
-}
-
-export function normalizedToolName(value: string | undefined): string {
-  return value?.trim().toLowerCase() ?? "";
+  return node.kind === "user_decision" && node.phase === "approved";
 }
 
 function toolCallIdsForNode(node: ProjectableTranscriptNode): readonly string[] {
@@ -229,6 +217,7 @@ function aggregateFileReadNodes<TNode extends ProjectableTranscriptNode>(previou
     summary: `${items.length} 个文件`,
     display: {
       kind: "generic_tool_summary",
+      category: "read",
       action: "读取文件",
       summary: `${items.length} 个文件`,
       items,
@@ -251,7 +240,7 @@ function fileReadLabels(node: ProjectableTranscriptNode): readonly string[] {
 function isBoringSuccessfulToolResult(node: ProjectableTranscriptNode): boolean {
   if (node.kind !== "tool" || node.phase !== "completed" || node.eventType !== "tool.completed") return false;
   const display = node.display;
-  if (display === undefined) return lowValueCopy(node.summary);
+  if (display === undefined) return false;
   if (display.kind === "command_summary") {
     return display.exitCode === 0 &&
       display.timedOut !== true &&
@@ -259,19 +248,6 @@ function isBoringSuccessfulToolResult(node: ProjectableTranscriptNode): boolean 
       display.stderrPreview === undefined;
   }
   return false;
-}
-
-function isLowValueNode(node: ProjectableTranscriptNode): boolean {
-  if (node.kind === "thinking" || isModelSideOutputNode(node)) {
-    return false;
-  }
-  if (node.kind === "user_decision") {
-    return isLowValueUserDecisionNode(node);
-  }
-  if (node.kind === "tool" || node.kind === "confirmation" || node.kind === "body") {
-    return false;
-  }
-  return lowValueCopy(node.text ?? node.summary ?? node.title);
 }
 
 function duplicateModelActivityIndex<TNode extends ProjectableTranscriptNode>(
@@ -303,21 +279,6 @@ function mergeModelActivityNodes<TNode extends ProjectableTranscriptNode>(previo
   return mergeTranscriptNodes(previous, next);
 }
 
-function lowValueCopy(value: string | undefined): boolean {
-  if (value === undefined) return false;
-  const normalized = normalizeCopy(value);
-  return isStaleModelProgressSummary(value) ||
-    (normalized.includes("助手已选择使用工具") && normalized.includes("工具结果") && normalized.includes("进入后续处理")) ||
-    (normalized.includes("模型调用完成") && normalized.includes("可见输出")) ||
-    normalized === "内容已整理" ||
-    normalized === "内容已整理并已进入报告或详情";
-}
-
-function normalizeCopy(value: string | undefined): string {
-  return userVisibleAnswer(value ?? "")
-    .replace(/[。.!！?？；;:：、，,\s]/g, "")
-    .trim();
-}
 
 function uniqueStrings(values: readonly string[]): readonly string[] {
   const seen = new Set<string>();

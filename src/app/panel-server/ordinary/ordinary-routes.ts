@@ -486,7 +486,8 @@ async function streamRun(
     if (
       pendingDelta !== undefined &&
       activity.sequence === pendingDelta.sequence + 1 &&
-      activity.modelRequestId === pendingDelta.modelRequestId
+      activity.modelRequestId === pendingDelta.modelRequestId &&
+      activity.contentIndex === pendingDelta.contentIndex
     ) {
       pendingDelta = { ...activity, delta: `${pendingDelta.delta}${activity.delta}` };
     } else {

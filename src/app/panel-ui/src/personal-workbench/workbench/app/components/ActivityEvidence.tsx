@@ -124,12 +124,12 @@ function CanonicalToolResultEvidence(props: {
         </div>
       )}
       <CanonicalText title="工具" value={props.result.toolName} />
-      <CanonicalText title="调用 ID" value={props.result.callId} />
-      {props.result.factId !== undefined && (
-        <CanonicalText title="事实 ID" value={props.result.factId} />
+      <CanonicalText title="调用 ID" value={props.result.providerCallId} />
+      {props.result.invocationId !== undefined && (
+        <CanonicalText title="事实 ID" value={props.result.invocationId} />
       )}
-      {props.result.parentToolCallFactId !== undefined && (
-        <CanonicalText title="父调用" value={props.result.parentToolCallFactId} />
+      {props.result.parentInvocationId !== undefined && (
+        <CanonicalText title="父调用" value={props.result.parentInvocationId} />
       )}
       <CanonicalText title="状态" value={props.result.status} />
       <CanonicalFact title="输入" value={props.result.input} />

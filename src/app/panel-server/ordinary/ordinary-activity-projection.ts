@@ -2,7 +2,7 @@ import type {
   OrdinaryPanelRunEvent as RunEvent,
   OrdinaryPanelTranscriptNode as TranscriptNode,
 } from "../../panel-api/ordinary-agent.js";
-import { toolCallFactId } from "../../../domain/tools/index.js";
+import { toolInvocationId } from "../../../domain/tools/index.js";
 import type {
   OrdinaryRunActivity,
   OrdinaryRunEvent,
@@ -28,8 +28,8 @@ export function projectOrdinaryActivity(run: OrdinaryRunState, activity: Ordinar
       status: "running",
       timestamp: activity.recordedAt,
       toolName: activity.request.toolName,
-      parentToolCallFactId: activity.request.parentToolCallFactId,
-      refs: [{ kind: "tool_call", id: toolCallFactId(activity.request) }],
+      parentInvocationId: activity.request.parentInvocationId,
+      refs: [{ kind: "tool_call", id: toolInvocationId(activity.request) }],
       visibility: "compact",
       detail: toolStreamDetail("tool.requested", payload),
     };
@@ -39,7 +39,7 @@ export function projectOrdinaryActivity(run: OrdinaryRunState, activity: Ordinar
       ? "tool.completed"
       : activity.result.status === "cancelled" ? "tool.cancelled" : "tool.failed";
     const payload = {
-      callId: activity.result.callId,
+      callId: activity.result.providerCallId,
       toolName: activity.result.toolName,
       input: activity.result.input,
       output: activity.result.output,
@@ -61,8 +61,8 @@ export function projectOrdinaryActivity(run: OrdinaryRunState, activity: Ordinar
         : activity.result.status === "cancelled" ? "cancelled" : "failed",
       timestamp: activity.recordedAt,
       toolName: activity.result.toolName,
-      parentToolCallFactId: activity.result.parentToolCallFactId,
-      refs: [{ kind: "tool_call", id: toolCallFactId(activity.result) }],
+      parentInvocationId: activity.result.parentInvocationId,
+      refs: [{ kind: "tool_call", id: toolInvocationId(activity.result) }],
       visibility: "compact",
       detail: toolStreamDetail(type, payload),
     };
@@ -75,6 +75,7 @@ export function projectOrdinaryActivity(run: OrdinaryRunState, activity: Ordinar
       type: activity.type,
       title: "",
       delta: activity.delta,
+      contentIndex: activity.contentIndex,
       status: "running",
       timestamp: activity.recordedAt,
       refs: [{ kind: "model_call", id: activity.modelRequestId }],
@@ -103,6 +104,7 @@ export function projectOrdinaryActivity(run: OrdinaryRunState, activity: Ordinar
       type: activity.type,
       title: "思考",
       delta: activity.delta,
+      contentIndex: activity.contentIndex,
       status: "running",
       timestamp: activity.recordedAt,
       refs: [{ kind: "model_call", id: activity.modelRequestId }],
@@ -151,6 +153,7 @@ function projectTransition(
       type: event.type,
       title: "思考",
       delta: event.content,
+      contentIndex: event.contentIndex,
       status: "completed",
       refs: [{ kind: "model_call", id: event.modelRequestId }],
     };
@@ -224,7 +227,7 @@ function projectTranscriptNode(run: OrdinaryRunState, activity: OrdinaryRunActiv
       summary: event.summary,
       timestamp: activity.recordedAt,
       toolName: activity.request.toolName,
-      parentToolCallFactId: activity.request.parentToolCallFactId,
+      parentInvocationId: activity.request.parentInvocationId,
       display: toolStreamDetail("tool.requested", liveToolPayload(activity)).display,
       refs: event.refs,
     };
@@ -245,14 +248,14 @@ function projectTranscriptNode(run: OrdinaryRunState, activity: OrdinaryRunActiv
       toolName: activity.result.toolName,
       failureAttribution: activity.result.failureAttribution,
       error: activity.result.error,
-      parentToolCallFactId: activity.result.parentToolCallFactId,
+      parentInvocationId: activity.result.parentInvocationId,
       delegatedExecution: activity.result.delegatedExecution,
       display: toolStreamDetail(
         event.type === "tool.completed"
           ? "tool.completed"
           : event.type === "tool.cancelled" ? "tool.cancelled" : "tool.failed",
         {
-          callId: activity.result.callId,
+          callId: activity.result.providerCallId,
           toolName: activity.result.toolName,
           input: activity.result.input,
           output: activity.result.output,
@@ -276,6 +279,7 @@ function projectTranscriptNode(run: OrdinaryRunState, activity: OrdinaryRunActiv
       phase: "executing",
       title: "",
       text: activity.delta,
+      contentIndex: activity.contentIndex,
       timestamp: activity.recordedAt,
       refs: event.refs,
     };
@@ -305,6 +309,7 @@ function projectTranscriptNode(run: OrdinaryRunState, activity: OrdinaryRunActiv
       title: "思考",
       summary: compact(activity.delta, 180),
       text: activity.delta,
+      contentIndex: activity.contentIndex,
       timestamp: activity.recordedAt,
       refs: event.refs,
     };
@@ -336,6 +341,7 @@ function projectTranscriptNode(run: OrdinaryRunState, activity: OrdinaryRunActiv
     title: event.title,
     summary: event.summary,
     text: activity.event.type === "model.reasoning.completed" ? activity.event.content : undefined,
+    contentIndex: activity.event.type === "model.reasoning.completed" ? activity.event.contentIndex : undefined,
     timestamp: activity.recordedAt,
     confirmation,
     modelUsage: activity.event.type === "run.approval_requested" ||
@@ -383,7 +389,7 @@ export function projectOrdinaryTranscriptNodes(
     if (activity.type === "model.output.delta") {
       flushReasoningDeltas();
       if (outputDeltas[0]?.modelRequestId !== undefined &&
-          outputDeltas[0].modelRequestId !== activity.modelRequestId) {
+          (outputDeltas[0].modelRequestId !== activity.modelRequestId || outputDeltas[0].contentIndex !== activity.contentIndex)) {
         flushOutputDeltas();
       }
       outputDeltas.push(activity);
@@ -392,7 +398,7 @@ export function projectOrdinaryTranscriptNodes(
     if (activity.type === "model.reasoning.delta") {
       flushOutputDeltas();
       if (reasoningDeltas[0]?.modelRequestId !== undefined &&
-          reasoningDeltas[0].modelRequestId !== activity.modelRequestId) {
+          (reasoningDeltas[0].modelRequestId !== activity.modelRequestId || reasoningDeltas[0].contentIndex !== activity.contentIndex)) {
         flushReasoningDeltas();
       }
       reasoningDeltas.push(activity);
@@ -434,7 +440,7 @@ function liveToolPayload(
       }
     : undefined;
   return {
-    callId: activity.request.callId,
+    callId: activity.request.providerCallId,
     toolName: activity.request.toolName,
     input: activity.request.input,
     output,

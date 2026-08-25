@@ -263,7 +263,8 @@ function modelOutputFits(
 ): boolean {
   if (counter.countText(JSON.stringify(output)) > DEFAULT_TARGET_INLINE_TOOL_BODY_TOKENS) return false;
   const message = toolResultMessage({
-    callId: callId ?? toolName,
+    providerCallId: callId ?? toolName,
+    invocationId: callId ?? throwMissingInvocationForInlineBudget(toolName),
     toolName,
     input: undefined,
     output: output as ToolFactValue,
@@ -304,4 +305,10 @@ function nextLineEnding(value: string, final: boolean): { readonly index: number
     return final ? { index, length: 1 } : undefined;
   }
   return undefined;
+}
+
+function throwMissingInvocationForInlineBudget(toolName: string): never {
+  throw new Error(
+    `Tool adapter for ${toolName} cannot measure an inline tool result without an upstream-bound invocationId.`,
+  );
 }

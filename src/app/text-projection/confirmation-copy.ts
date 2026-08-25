@@ -2,24 +2,7 @@ import type { ConfirmationDecision } from "../../domain/confirmation/index.js";
 import { sanitizeAssistantVisibleText } from "./visible-text-safety.js";
 
 export function cleanConfirmationSummary(value: string): string {
-  const cleaned = value
-    .replace(/^User approval was requested\.?\s*/i, "")
-    .replace(/^Approval required\.?\s*/i, "")
-    .replace(/^需要确认[:：]?\s*/i, "")
-    .replace(/^需要你判断[:：]?\s*/i, "")
-    .replace(/^待处理[:：]?\s*/i, "")
-    .replace(/请求执行执行操作/g, "请求执行操作")
-    .replace(/\btool:call[_:A-Za-z0-9-]+\b/g, "")
-    .replace(/[:：]\s*[:：]/g, "：")
-    .replace(/^[，,。.\s]+$/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-  return isGenericConfirmationPrompt(cleaned) ? "" : cleaned;
-}
-
-export function isGenericApprovalDecisionText(value: string | undefined): boolean {
-  const normalized = normalizedConfirmationPrompt(value ?? "");
-  return normalized.length === 0 || GENERIC_APPROVAL_DECISION_TEXT.has(normalized);
+  return value.replace(/\s+/g, " ").trim();
 }
 
 export function confirmationActionSummaryText(input: {
@@ -29,16 +12,7 @@ export function confirmationActionSummaryText(input: {
 }): string {
   const question = cleanConfirmationSummary(input.question ?? "");
   const consequence = cleanConfirmationSummary(input.consequence ?? "");
-  if (question.length > 0 && !isGenericConfirmationPrompt(question)) {
-    return question;
-  }
-  if (consequence.length > 0) {
-    return consequence;
-  }
-  if (question.length > 0) {
-    return question;
-  }
-  return cleanConfirmationSummary(input.fallback ?? "") || "等待你判断。";
+  return question || consequence || cleanConfirmationSummary(input.fallback ?? "") || "等待你判断。";
 }
 
 export function basicConfirmationDecisionSummary(
@@ -63,44 +37,3 @@ function compactSafeText(value: string, maxLength: number): string {
   }
   return `${normalized.slice(0, Math.max(0, maxLength - 1))}…`;
 }
-
-function isGenericConfirmationPrompt(value: string): boolean {
-  const normalized = normalizedConfirmationPrompt(value);
-  return GENERIC_CONFIRMATION_PROMPTS.has(normalized) || GENERIC_APPROVAL_DECISION_TEXT.has(normalized);
-}
-
-function normalizedConfirmationPrompt(value: string): string {
-  return value
-    .replace(/[。.!！?？；;:：、，,\s]/g, "")
-    .trim();
-}
-
-const GENERIC_CONFIRMATION_PROMPTS = new Set([
-  "确认",
-  "需要确认",
-  "待确认",
-  "继续",
-  "是否继续",
-  "确认继续",
-  "确认下一步",
-  "等待确认",
-  "等待用户确认下一步",
-  "需要你判断",
-  "等待你判断后继续",
-  "等待你判断下一步",
-  "等待用户补充要求",
-  "需要你补充材料后继续",
-  "待处理",
-  "等待你判断",
-]);
-
-const GENERIC_APPROVAL_DECISION_TEXT = new Set([
-  "已继续",
-  "已允许",
-  "继续处理",
-  "继续执行",
-  "工作继续推进",
-  "用户反馈已收到工作继续推进",
-  "用户已批准",
-  "已批准",
-]);

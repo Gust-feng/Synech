@@ -2,7 +2,7 @@ import type { ToolCallResult, ToolErrorDomain, ToolErrorFacts } from "../../doma
 import {
   copyToolModelAttachments,
   normalizeToolErrorFacts,
-  toolCallFactId,
+  toolInvocationId,
 } from "../../domain/tools/index.js";
 import { toolResultMessage } from "../../kernel/intelligence/tool-use-loop-messages.js";
 import {
@@ -275,8 +275,8 @@ function retentionInput(
     mediaType: candidate.mediaType,
     content: candidate.content,
     sourceToolName: result.toolName,
-    sourceCallId: result.callId,
-    sourceFactId: toolCallFactId(result),
+    sourceCallId: result.providerCallId,
+    sourceFactId: toolInvocationId(result),
     ownerId,
   };
 }

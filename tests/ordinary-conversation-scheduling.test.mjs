@@ -136,7 +136,11 @@ test("completion fallback records one honest blocked terminal fact", () => {
 });
 
 test("Ordinary background retry timers are absent while visible checkpoint debounce remains", async () => {
-  const source = await readFile(new URL("../src/app/ordinary-agent/ordinary-agent-feature.ts", import.meta.url), "utf8");
+  const sources = await Promise.all([
+    readFile(new URL("../src/app/ordinary-agent/ordinary-agent-feature.ts", import.meta.url), "utf8"),
+    readFile(new URL("../src/app/ordinary-agent/run-activity-hub.ts", import.meta.url), "utf8"),
+  ]);
+  const source = sources.join("\n");
   for (const retiredName of [
     "completionCommitRetryTimers",
     "completionCommitRetryCounts",

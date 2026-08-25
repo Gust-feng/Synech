@@ -9,9 +9,13 @@ import type {
   ToolFactValue,
   ToolDefinition,
   ToolPermissionCheck,
+  ProviderToolCall,
+  AcceptedToolInvocation,
 } from "../../domain/tools/index.js";
 import type { ProgressiveToolVisibilityCostGate } from "./tool-definition-visibility-cost.js";
 import type { AgentSessionExecutionRefs, AgentSessionWriteCheckpoint } from "./agent-session.js";
+
+export type { ProviderToolCall, AcceptedToolInvocation };
 
 export type AgentLoopToolBoundary = {
   /** Complete model contracts frozen when the owning run was created. */
@@ -37,6 +41,13 @@ export type AgentLoopAgentToolInvocation = {
 export type AgentLoopAgentTool = {
   readonly toolName: string;
   resolve(input: ToolFactValue): Promise<AgentLoopAgentToolInvocation>;
+};
+
+export type ModelContentBlockEvent = {
+  readonly contentIndex: number;
+  readonly kind: "text" | "thinking";
+  readonly phase: "delta" | "completed";
+  readonly content: string;
 };
 
 /**
@@ -82,14 +93,32 @@ export type AgentLoopInput = {
   /** Optional run-frozen progressive model visibility policy. */
   readonly toolVisibilityPlan?: AgentLoopToolVisibilityPlan;
   readonly abortSignal: AbortSignal;
-  readonly onTextDelta?: (delta: string) => void;
-  /** Provider-normalized visible reasoning text for the active model turn. */
-  readonly onReasoningDelta?: (delta: string) => void;
-  /** Authoritative complete reasoning text observed at the model response boundary. */
-  readonly onReasoningCompleted?: (content: string) => Promise<void>;
-  /** Emitted once when an exact tool request enters its execution boundary. */
+  /** Provider-normalized model content blocks. Pi contentIndex is preserved. */
+  readonly onModelContent?: (event: ModelContentBlockEvent) => void | Promise<void>;
+  /**
+   * Owner-side identity binding for a root tool batch. The model adapter
+   * MUST call this with the exact provider-issued calls before any tool
+   * execution and use the returned invocationIds for the rest of the loop.
+   * The adapter is not allowed to mint invocation ids on its own.
+   */
+  readonly acceptToolInvocations: (calls: readonly ProviderToolCall[]) => Promise<readonly AcceptedToolInvocation[]>;
+  /**
+   * Owner-side identity binding for one provider-emitted nested tool batch.
+   * Called when a delegated agent harness emits tool calls.
+   */
+  readonly acceptNestedToolInvocations: (calls: readonly ProviderToolCall[]) => Promise<readonly AcceptedToolInvocation[]>;
+  /**
+   * Observation-only hook for live activity. The adapter is no longer required
+   * to drive invocation identity through this signal; the accept hooks already
+   * returned the bound request. Listeners receive the post-binding
+   * ToolCallRequest and must not be used to re-derive identity.
+   */
   readonly onToolRequested?: (request: ToolCallRequest) => void;
-  /** Resolves after the owner atomically accepts one provider-emitted nested tool batch. */
+  /**
+   * Resolves after the owner has atomically accepted a provider-emitted nested
+   * tool batch. Adapter callers should rely on `acceptNestedToolInvocations`
+   * instead; this hook remains for live activity observation only.
+   */
   readonly onNestedToolRequestsAccepted?: (requests: readonly ToolCallRequest[]) => Promise<void>;
   /** Live-only bounded progress emitted by the active tool executor. */
   readonly onToolProgress?: (progress: ToolCallProgress) => void;

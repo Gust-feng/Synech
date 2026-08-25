@@ -1,6 +1,6 @@
 import { stringOrUndefined } from "../../../kernel/values/index.js";
 import { promises as fs } from "node:fs";
-import type { ToolExecutor, ToolFactValue } from "../../../domain/tools/index.js";
+import type { ToolExecutionContext, ToolExecutor, ToolFactValue } from "../../../domain/tools/index.js";
 import {
   asRecord,
   isLikelyBinaryPath,
@@ -473,7 +473,8 @@ export function createListContextAttachmentFilesTool(options: ContextAttachmentT
         return {
           kind: "tool_call_result",
           result: {
-            callId: context.toolCallId ?? "AttachmentListFiles",
+            providerCallId: context.providerCallId ?? throwMissingInvocation(context, "AttachmentListFiles"),
+            invocationId: context.invocationId ?? throwMissingInvocation(context, "AttachmentListFiles"),
             toolName: "AttachmentListFiles",
             input: input as ToolFactValue,
             output: {
@@ -601,7 +602,8 @@ export function createSearchContextAttachmentFilesTool(options: ContextAttachmen
         return {
           kind: "tool_call_result",
           result: {
-            callId: context.toolCallId ?? "AttachmentSearchFiles",
+            providerCallId: context.providerCallId ?? throwMissingInvocation(context, "AttachmentSearchFiles"),
+            invocationId: context.invocationId ?? throwMissingInvocation(context, "AttachmentSearchFiles"),
             toolName: "AttachmentSearchFiles",
             input: input as ToolFactValue,
             output: {
@@ -669,4 +671,11 @@ function boundedOffset(value: unknown, maxOffset: number): number {
 
 function compactRecord(value: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
   return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));
+}
+
+function throwMissingInvocation(context: ToolExecutionContext, toolName: string): never {
+  throw new Error(
+    `Tool adapter for ${toolName} cannot construct a ToolCallResult without an upstream-bound invocationId.`
+    + ` providerCallId=${context.providerCallId ?? "undefined"}.`,
+  );
 }
