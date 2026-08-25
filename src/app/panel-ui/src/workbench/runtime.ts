@@ -122,6 +122,7 @@ export function useAppWorkbenchRuntime(options: AppWorkbenchRuntimeOptions): App
   const attachmentUploadAttemptRef = useRef<{ readonly key: string; readonly id: string } | undefined>(undefined);
 
   const conversationLoadAbortRef = useRef<AbortController | undefined>(undefined);
+  const conversationLoadTargetRef = useRef<string | undefined>(undefined);
   const bootstrapAbortRef = useRef<AbortController | undefined>(undefined);
   const bootstrapEpochRef = useRef(0);
   const mutationConversationIdsRef = useRef<Set<string>>(new Set());
@@ -173,6 +174,7 @@ export function useAppWorkbenchRuntime(options: AppWorkbenchRuntimeOptions): App
       bootstrapAbortRef.current = undefined;
       conversationLoadAbortRef.current?.abort();
       conversationLoadAbortRef.current = undefined;
+      conversationLoadTargetRef.current = undefined;
       stopLiveUpdates(pollTimer, streamRef, fallbackPollRef);
       resetTranscriptCache();
 
@@ -234,6 +236,7 @@ export function useAppWorkbenchRuntime(options: AppWorkbenchRuntimeOptions): App
     viewEpochRef,
     submissionAttemptRef,
     conversationLoadAbortRef,
+    conversationLoadTargetRef,
     setCancellingRunId,
     refreshSpaceConversations: options.refreshSpaceConversations,
   }), [

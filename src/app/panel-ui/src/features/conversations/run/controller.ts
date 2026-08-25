@@ -52,6 +52,7 @@ export type AppRunControllerOptions = {
   readonly viewEpochRef: React.MutableRefObject<number>;
   readonly submissionAttemptRef: React.MutableRefObject<{ readonly key: string; readonly id: string } | undefined>;
   readonly conversationLoadAbortRef: React.MutableRefObject<AbortController | undefined>;
+  readonly conversationLoadTargetRef: React.MutableRefObject<string | undefined>;
   readonly setCancellingRunId: React.Dispatch<React.SetStateAction<string | undefined>>;
   /** Owner 为空间的对话提交（创建/续接）成功后刷新对应空间 read-model。 */
   readonly refreshSpaceConversations?: (spaceId: string) => void | Promise<void>;

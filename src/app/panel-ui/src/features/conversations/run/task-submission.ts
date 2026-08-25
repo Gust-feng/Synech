@@ -56,6 +56,7 @@ export type PanelTaskSubmissionOptions = {
   readonly viewEpochRef: React.MutableRefObject<number>;
   readonly submissionAttemptRef: React.MutableRefObject<{ readonly key: string; readonly id: string } | undefined>;
   readonly conversationLoadAbortRef: React.MutableRefObject<AbortController | undefined>;
+  readonly conversationLoadTargetRef: React.MutableRefObject<string | undefined>;
   readonly refreshConversations: () => Promise<void>;
   readonly startLiveUpdates: (input: LiveRunSubscription) => void;
   /** Owner 为空间的对话提交成功后刷新对应空间 read-model；失败静默。 */
@@ -111,6 +112,7 @@ export async function submitPanelTask(
     shouldKeepRefreshing(runForSubmit.status);
   options.conversationLoadAbortRef.current?.abort();
   options.conversationLoadAbortRef.current = undefined;
+  options.conversationLoadTargetRef.current = undefined;
   options.viewEpochRef.current = epoch;
   if (!likelyQueuesBehindActiveRun) {
     stopLiveUpdates(options.pollTimer, options.streamRef, options.fallbackPollRef);

@@ -33,14 +33,14 @@ test("activity hub aggregates deltas and replaces live output with the durable t
     type: "model.output.completed",
     modelRequestId: reasoningFacts[0].modelRequestId,
     assistantEntryRef: { sessionId: "session-1", entryId: "assistant-1" },
-  }, "Hello, world.");
+  }, "Hello, complete world.");
 
   const stream = await fixture.hub.replayStream(fixture.document);
   assert.equal(stream.activities.some((activity) => activity.type === "model.output.delta"), false);
   assert.deepEqual(
     stream.activities.filter((activity) => activity.type === "model.output.completed")
       .map((activity) => activity.content),
-    ["Hello, world."],
+    ["Hello, complete world."],
   );
   fixture.hub.release();
 });

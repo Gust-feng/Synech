@@ -31,6 +31,7 @@ export type ConversationSessionControllerOptions = {
   readonly activeRunIdRef: React.MutableRefObject<string | undefined>;
   readonly viewEpochRef: React.MutableRefObject<number>;
   readonly conversationLoadAbortRef: React.MutableRefObject<AbortController | undefined>;
+  readonly conversationLoadTargetRef: React.MutableRefObject<string | undefined>;
   readonly refreshConversations: () => Promise<void>;
   readonly startLiveUpdates: (input: LiveRunSubscription) => void;
 };
@@ -41,18 +42,21 @@ export async function loadConversationSession(
 ): Promise<boolean> {
   const currentLoad = options.conversationLoadAbortRef.current;
   if (currentLoad !== undefined && !currentLoad.signal.aborted) {
-    if (options.app.conversation?.conversationId === conversationId) {
+    if (options.conversationLoadTargetRef.current === conversationId) {
       return true;
     }
     currentLoad.abort();
     options.conversationLoadAbortRef.current = undefined;
+    options.conversationLoadTargetRef.current = undefined;
   }
   if (options.conversationLoadAbortRef.current !== undefined) {
     options.conversationLoadAbortRef.current.abort();
     options.conversationLoadAbortRef.current = undefined;
+    options.conversationLoadTargetRef.current = undefined;
   }
   const abortController = new AbortController();
   options.conversationLoadAbortRef.current = abortController;
+  options.conversationLoadTargetRef.current = conversationId;
   if (abortController.signal.aborted) {
     return false;
   }
@@ -68,6 +72,7 @@ export async function loadConversationSession(
   } catch (error) {
     if (options.conversationLoadAbortRef.current === abortController) {
       options.conversationLoadAbortRef.current = undefined;
+      options.conversationLoadTargetRef.current = undefined;
     }
     if (abortController.signal.aborted) return false;
     if (isMissingConversationError(error)) {
@@ -182,6 +187,7 @@ export async function loadConversationSession(
   } else {
     if (options.conversationLoadAbortRef.current === abortController) {
       options.conversationLoadAbortRef.current = undefined;
+      options.conversationLoadTargetRef.current = undefined;
     }
   }
   return true;
@@ -212,6 +218,7 @@ async function hydrateHistoricalTranscript(input: {
   } finally {
     if (options.conversationLoadAbortRef.current === abortController) {
       options.conversationLoadAbortRef.current = undefined;
+      options.conversationLoadTargetRef.current = undefined;
     }
   }
 }
@@ -229,6 +236,7 @@ export function resetConversationSession(options: ConversationSessionControllerO
   }
   options.conversationLoadAbortRef.current?.abort();
   options.conversationLoadAbortRef.current = undefined;
+  options.conversationLoadTargetRef.current = undefined;
   options.viewEpochRef.current += 1;
   stopLiveUpdates(options.pollTimer, options.streamRef, options.fallbackPollRef);
   options.activeRunIdRef.current = undefined;
