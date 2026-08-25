@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { DndProvider } from 'react-dnd'
 import { HTML5Backend } from 'react-dnd-html5-backend'
-import { type View } from './Sidebar'
+import type { WorkbenchView as View } from '../../../../workbench/navigation-state'
 import type {
   PersonalSpaceActions,
   PersonalSpaceProjection,

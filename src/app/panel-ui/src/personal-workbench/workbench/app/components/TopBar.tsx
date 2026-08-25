@@ -1,6 +1,6 @@
 import { ChevronLeft, Maximize2, Search, PanelLeftOpen, PanelLeftClose } from 'lucide-react'
 import { DesktopWindowControls } from './DesktopWindowControls'
-import { type View } from './Sidebar'
+import type { WorkbenchView as View } from '../../../../workbench/navigation-state'
 import {
   visibleConversationHeaderState,
   type LiveConversationState,

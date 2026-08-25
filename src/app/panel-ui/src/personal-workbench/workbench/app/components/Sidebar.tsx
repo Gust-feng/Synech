@@ -28,11 +28,12 @@ import { conversationStatusMarker } from '@ui/features/conversations/conversatio
 import type { ConversationSummary } from '@ui/contracts/conversation'
 import type { PersonalSpaceProjection } from '../../../space'
 import type { PersonalWorkspaceProjection } from '../../../workspace'
+import type { WorkbenchView } from '../../../../workbench/navigation-state'
 
 /**
  * 所有会话统一进入空间右侧对话面板。
  */
-export type View = 'home' | 'space' | 'search' | 'brain' | 'memory'
+export type View = WorkbenchView
 
 interface SidebarProps {
   view: View

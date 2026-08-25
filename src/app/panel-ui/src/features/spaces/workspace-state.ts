@@ -4,6 +4,14 @@ import { z } from "zod";
 import { selectTaskWorkspaceDirectory } from "./workspace-selection";
 import type { PersonalWorkspaceProjection } from "../../personal-workbench/workspace";
 import { subscribeWorkbenchProjectionChanges } from "../../workbench/projection-changes";
+import {
+  createIdleAsyncRequestState,
+  failAsyncRequest,
+  resolveAsyncRequest,
+  settleAsyncRequest,
+  startAsyncRequest,
+  type AsyncRequestState,
+} from "../../workbench/async-request-state";
 
 const workspaceSummarySchema = z.object({
   id: z.string(),
@@ -33,10 +41,10 @@ export type WorkspaceProjectionState = {
 };
 
 export function useWorkspaceProjection(enabled: boolean): WorkspaceProjectionState {
-  const [workspaces, setWorkspaces] = useState<readonly PersonalWorkspaceProjection[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [requestState, setRequestState] = useState<AsyncRequestState<readonly PersonalWorkspaceProjection[], string>>(
+    createIdleAsyncRequestState,
+  );
   const [mutationPending, setMutationPending] = useState(false);
-  const [error, setError] = useState<string | undefined>(undefined);
   const refreshAbortRef = useRef<AbortController | undefined>(undefined);
   const refreshEpochRef = useRef(0);
 
@@ -46,7 +54,7 @@ export function useWorkspaceProjection(enabled: boolean): WorkspaceProjectionSta
     refreshAbortRef.current?.abort();
     const abortController = new AbortController();
     refreshAbortRef.current = abortController;
-    setLoading(true);
+    setRequestState(startAsyncRequest);
     try {
       const response = await fetch("/api/workspaces", {
         signal: AbortSignal.any([abortController.signal, AbortSignal.timeout(15_000)]),
@@ -55,19 +63,18 @@ export function useWorkspaceProjection(enabled: boolean): WorkspaceProjectionSta
       const parsed = workspacesResponseSchema.safeParse(await response.json());
       if (!parsed.success) throw new Error("工作区数据无效。");
       if (epoch !== refreshEpochRef.current) return;
-      setWorkspaces(parsed.data.workspaces.map((workspace) => ({
+      const workspaces = parsed.data.workspaces.map((workspace) => ({
         workspaceId: workspace.id,
         title: workspace.title,
         status: workspace.status,
         rootPath: workspace.currentMount?.rootPath,
-      })));
-      setError(undefined);
+      }));
+      setRequestState(resolveAsyncRequest(workspaces));
     } catch (requestError) {
       if (epoch !== refreshEpochRef.current || isAbortError(requestError)) return;
-      setError(workspaceErrorText(requestError, "加载工作区失败。"));
+      setRequestState((current) => failAsyncRequest(current, workspaceErrorText(requestError, "加载工作区失败。")));
     } finally {
       if (epoch === refreshEpochRef.current) {
-        setLoading(false);
         if (refreshAbortRef.current === abortController) refreshAbortRef.current = undefined;
       }
     }
@@ -88,10 +95,9 @@ export function useWorkspaceProjection(enabled: boolean): WorkspaceProjectionSta
         const body = await response.json().catch(() => undefined) as { error?: { code?: string; message?: string } } | undefined;
         throw new Error(body?.error?.message ?? `HTTP ${response.status}`);
       }
-      setError(undefined);
       await refresh();
     } catch (requestError) {
-      setError(workspaceErrorText(requestError, "添加工作区失败。"));
+      setRequestState((current) => failAsyncRequest(current, workspaceErrorText(requestError, "添加工作区失败。")));
     } finally {
       setMutationPending(false);
     }
@@ -110,10 +116,9 @@ export function useWorkspaceProjection(enabled: boolean): WorkspaceProjectionSta
         const body = await response.json().catch(() => undefined) as { error?: { code?: string; message?: string } } | undefined;
         throw new Error(body?.error?.message ?? `HTTP ${response.status}`);
       }
-      setError(undefined);
       await refresh();
     } catch (requestError) {
-      setError(workspaceErrorText(requestError, "移除工作区失败。"));
+      setRequestState((current) => failAsyncRequest(current, workspaceErrorText(requestError, "移除工作区失败。")));
     } finally {
       setMutationPending(false);
     }
@@ -134,10 +139,9 @@ export function useWorkspaceProjection(enabled: boolean): WorkspaceProjectionSta
         const body = await response.json().catch(() => undefined) as { error?: { message?: string } } | undefined;
         throw new Error(body?.error?.message ?? `HTTP ${response.status}`);
       }
-      setError(undefined);
       await refresh();
     } catch (requestError) {
-      setError(workspaceErrorText(requestError, "重新连接工作区失败。"));
+      setRequestState((current) => failAsyncRequest(current, workspaceErrorText(requestError, "重新连接工作区失败。")));
     } finally {
       setMutationPending(false);
     }
@@ -148,7 +152,7 @@ export function useWorkspaceProjection(enabled: boolean): WorkspaceProjectionSta
       refreshEpochRef.current += 1;
       refreshAbortRef.current?.abort();
       refreshAbortRef.current = undefined;
-      setLoading(false);
+      setRequestState((current) => settleAsyncRequest(current));
       return;
     }
     void refresh();
@@ -166,7 +170,16 @@ export function useWorkspaceProjection(enabled: boolean): WorkspaceProjectionSta
     });
   }, [enabled, refresh]);
 
-  return { workspaces, loading, mutationPending, error, refresh, addWorkspace, hideWorkspace, reconnectWorkspace };
+  return {
+    workspaces: requestState.data ?? [],
+    loading: requestState.status === "loading" || requestState.status === "refreshing",
+    mutationPending,
+    error: requestState.status === "error" ? requestState.error : undefined,
+    refresh,
+    addWorkspace,
+    hideWorkspace,
+    reconnectWorkspace,
+  };
 }
 
 function workspaceErrorText(error: unknown, fallback: string): string {

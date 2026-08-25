@@ -1,5 +1,4 @@
-import { AlertCircle, RotateCcw, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { flushSync } from "react-dom";
 import type { CurrentRunProjection } from "../../features/conversations/run/projection";
 import { projectChatActiveView } from "../../features/conversations/transcript/live-view";
@@ -8,19 +7,18 @@ import { WorkbenchSettingsDialog, type WorkbenchSettingsDialogProps } from "../.
 import { WorkbenchBootstrapLoading } from "../../components/workbench-bootstrap-loading";
 import type { Conversation, ConversationSummary } from "../../contracts/conversation";
 import type { PendingConfirmation } from "../../contracts/run";
-import type { ConfirmationProjection } from "./app/components/ConfirmationCard";
 import type { PersonalSpaceActions, PersonalSpaceProjection } from "../space";
 import { useWorkspaceProjection } from "../../features/spaces/workspace-state";
-import { ConversationPage } from "./app/components/ConversationPage";
 import { BrainPage } from "./app/components/BrainPage";
 import { SurfaceErrorBoundary } from "./app/components/SurfaceErrorBoundary";
 import { HomePage } from "./app/components/HomePage";
 import { MemoryPage } from "./app/components/MemoryPage";
-import { ConversationTranscript } from "./app/components/ConversationTranscript";
 import { SearchPage } from "./app/components/SearchPage";
-import { type View, Sidebar } from "./app/components/Sidebar";
+import { Sidebar } from "./app/components/Sidebar";
 import { SpacePage } from "./app/components/SpacePage";
 import { TopBar } from "./app/components/TopBar";
+import { ConversationSurface, type ConversationSurfaceProjection } from "./app/components/ConversationSurface";
+import { WorkbenchStatusNotice } from "./app/components/WorkbenchStatusNotice";
 import type { LiveConversationState } from "./app/components/conversation-surface-state";
 import { runFocusModeTransition, type FocusModeTransitionHandle } from "./app/components/focus-mode-transition";
 import { resolveById } from "./app/components/brainStore";
@@ -35,6 +33,13 @@ import {
   setPersonalKnowledgePersistenceEnabled,
   clearPersonalKnowledgeError,
 } from "./app/components/personalKnowledgeClient";
+import {
+  createInitialWorkbenchNavigationState,
+  reduceWorkbenchNavigation,
+  type ConversationOwnerSelection,
+  type ConversationSurfaceRequest,
+  type WorkbenchView,
+} from "../../workbench/navigation-state";
 
 export type PersonalWorkbenchProps = {
   readonly personalKnowledgePersistenceEnabled?: boolean;
@@ -56,7 +61,7 @@ export type PersonalWorkbenchProps = {
   readonly pendingConfirmation?: PendingConfirmation | NonNullable<CurrentRunProjection["workView"]>["pendingConfirmation"];
   readonly confirmationBusy: boolean;
   readonly onDecision: (decision: "approve_once" | "deny" | "guidance", guidance?: string) => void;
-  readonly onStartNewConversation: (owner?: { readonly kind: "space" | "workspace"; readonly id: string }) => Promise<boolean>;
+  readonly onStartNewConversation: (owner?: ConversationOwnerSelection) => Promise<boolean>;
   readonly onOpenConversation: (conversationId: string) => boolean | Promise<boolean>;
   readonly pendingConversationIds?: ReadonlySet<string>;
   readonly onRenameConversation: (conversationId: string, title: string) => void | Promise<void>;
@@ -79,22 +84,25 @@ export type PersonalWorkbenchProps = {
 
 type ConversationMode = "normal" | "focus";
 
-/** 宿主统一会话承载请求：指定某个会话在哪个空间右侧对话面板展示。 */
-type ConversationSurfaceRequest = { readonly conversationId: string; readonly spaceId: string };
-
 /** Conversation uses one canonical projection and is composed into the active Synech surface. */
 export function PersonalWorkbench(props: PersonalWorkbenchProps) {
   const rootRef = useRef<HTMLDivElement>(null);
-  const [view, setView] = useState<View>(initialView);
+  const [navigation, dispatchNavigation] = useReducer(
+    reduceWorkbenchNavigation,
+    undefined,
+    createInitialWorkbenchNavigationState,
+  );
+  const {
+    view,
+    previousView,
+    brainSelectedId,
+    spaceTargetId,
+    activeSpaceId,
+    homeOwnerSelection,
+    homeFocusRequest,
+    conversationSurfaceRequest,
+  } = navigation;
   const [conversationMode, setConversationModeState] = useState<ConversationMode>("normal");
-  const [previousView, setPreviousView] = useState<View>("home");
-  const [brainSelectedId, setBrainSelectedId] = useState<string | null>(null);
-  const [spaceTargetId, setSpaceTargetId] = useState<string | null>(null);
-  const [activeSpaceId, setActiveSpaceId] = useState<string | null>(null);
-  const [homeOwnerSelection, setHomeOwnerSelection] = useState<{ readonly kind: "space" | "workspace"; readonly id: string } | null>(null);
-  const [homeFocusRequest, setHomeFocusRequest] = useState(0);
-  // The host surface request selects where the canonical Conversation projection is presented.
-  const [conversationSurfaceRequest, setConversationSurfaceRequest] = useState<ConversationSurfaceRequest | null>(null);
   const observedViewRef = useRef(view);
   const navigationIntentRef = useRef(view);
   const focusTransitionRef = useRef<FocusModeTransitionHandle | null>(null);
@@ -135,16 +143,10 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
 
   useEffect(() => {
     const spaces = props.spaces ?? [];
-    const firstSpaceId = spaces[0]?.spaceId;
-    setActiveSpaceId((current) => current !== null && spaces.some((space) => space.spaceId === current)
-      ? current
-      : firstSpaceId ?? null);
-    setHomeOwnerSelection((current) => {
-      if (current !== null && (
-        (current.kind === "space" && spaces.some((space) => space.spaceId === current.id)) ||
-        (current.kind === "workspace" && workspaceProjection.workspaces.some((workspace) => workspace.workspaceId === current.id))
-      )) return current;
-      return firstSpaceId === undefined ? null : { kind: "space", id: firstSpaceId };
+    dispatchNavigation({
+      type: "sync-context-selection",
+      spaceIds: spaces.map((space) => space.spaceId),
+      workspaceIds: workspaceProjection.workspaces.map((workspace) => workspace.workspaceId),
     });
     if (props.personalKnowledgePersistenceEnabled && props.spaceLoadState?.loading !== true) {
       void initializePersonalKnowledge().catch(() => undefined);
@@ -206,16 +208,19 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
   /** Resolve the active Conversation projection and its current Synech surface. */
   const surfaceConversation = (
     conversationId: string | undefined,
-    owner?: { readonly kind: "space" | "workspace"; readonly id: string },
+    owner?: ConversationOwnerSelection,
   ): void => {
     const effectiveOwner = owner ?? conversationRef.current?.owner;
     const targetSpaceId = effectiveOwner?.kind === "space"
       ? effectiveOwner.id
       : (activeSpaceIdRef.current ?? spacesRef.current?.[0]?.spaceId);
     if (targetSpaceId === undefined) return;
-    setActiveSpaceId(targetSpaceId);
+    dispatchNavigation({ type: "set-active-space", id: targetSpaceId });
     if (conversationId !== undefined) {
-      setConversationSurfaceRequest({ conversationId, spaceId: targetSpaceId });
+      dispatchNavigation({
+        type: "set-conversation-surface",
+        request: { conversationId, spaceId: targetSpaceId },
+      });
     } else {
       // 会话 id 尚未确定：记录承载空间，等待真实会话落地后由 effect 补写请求。
       pendingSurfaceSpaceRef.current = targetSpaceId;
@@ -235,11 +240,14 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
     const targetSpaceId = conversation.owner.kind === "space"
       ? conversation.owner.id
       : pendingSpaceId;
-    setConversationSurfaceRequest({ conversationId: conversation.conversationId, spaceId: targetSpaceId });
+    dispatchNavigation({
+      type: "set-conversation-surface",
+      request: { conversationId: conversation.conversationId, spaceId: targetSpaceId },
+    });
     // 只有用户仍停留在空间视图（提交后已导航过去）时才补导航；
     // 用户已主动离开则不劫持，request 仍保留，再次回到该空间时面板照常展示。
     if (navigationIntentRef.current === "space") {
-      setActiveSpaceId(targetSpaceId);
+      dispatchNavigation({ type: "set-active-space", id: targetSpaceId });
       navigate("space");
     }
   }, [props.conversation]);
@@ -254,17 +262,12 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 启动恢复只执行一次，闭包读取挂载时事实
   }, []);
 
-  const navigate = (target: View): void => {
+  const navigate = (target: WorkbenchView): void => {
     // Record explicit intent synchronously so an already-resolving home
     // submission cannot navigate back after the user chose another surface.
     navigationIntentRef.current = target;
     const updateNavigation = (): void => {
-      if (target === "search") setPreviousView(view);
-      // Only search navigation sets a target explicitly. Normal navigation must
-      // clear it, otherwise a later Space switch can reuse an id from another Space.
-      setSpaceTargetId(null);
-      if (target !== "brain") setBrainSelectedId(null);
-      setView(target);
+      dispatchNavigation({ type: "navigate", target });
     };
     if (conversationMode === "focus") {
       setConversationMode("normal", updateNavigation);
@@ -299,7 +302,7 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
           // owner 优先取首页选择器已确定的归属，响应未落地时由 landing effect 补写请求。
           surfaceConversation(conversationRef.current?.conversationId, homeOwnerSelection ?? undefined);
         } else {
-          setHomeFocusRequest((current) => current + 1);
+          dispatchNavigation({ type: "focus-home-input" });
         }
       });
     },
@@ -366,7 +369,7 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
         onToggleConversationPinned={props.onToggleConversationPinned}
         onDeleteConversation={props.onDeleteConversation}
         onOpenSpace={props.onOpenSpace}
-        onActiveSpaceChange={setActiveSpaceId}
+        onActiveSpaceChange={(id) => dispatchNavigation({ type: "set-active-space", id })}
         onCreateSpace={props.onCreateSpace}
         onRenameSpace={props.spaceActions?.rename === undefined
           ? undefined
@@ -387,7 +390,7 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
           conversationState={conversationState}
           onEnterFocus={undefined}
           brainFileTitle={brainSelectedId === null ? null : resolveById(brainSelectedId)?.title ?? null}
-          onBrainRoot={() => setBrainSelectedId(null)}
+          onBrainRoot={() => dispatchNavigation({ type: "set-brain-selection", id: null })}
         />
 
         <main
@@ -410,23 +413,26 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
                     homeFocusRequest,
                     workspaceProjection,
                     homeOwnerSelection,
-                    onHomeOwnerChange: setHomeOwnerSelection,
+                    onHomeOwnerChange: (owner) => dispatchNavigation({ type: "set-home-owner", owner }),
                     conversationInput,
                     brainSelectedId,
                     spaceTargetId,
                     activeSpaceId,
-                    onActiveSpaceChange: setActiveSpaceId,
+                    onActiveSpaceChange: (id) => dispatchNavigation({ type: "set-active-space", id }),
                     conversationMode,
                     conversationSurfaceRequest,
-                    onBrainSelect: setBrainSelectedId,
+                    onBrainSelect: (id) => dispatchNavigation({ type: "set-brain-selection", id }),
                     navigate,
                     onEnterFocus: () => setConversationMode("focus"),
                     onExitFocus: () => setConversationMode("normal"),
                     onOpenConversationInSurface: openConversationInSurface,
                     onOpenInSpace: (spaceId, id) => {
-                      setActiveSpaceId(spaceId);
-                      setSpaceTargetId(id);
+                      // Navigation clears stale targets; apply the explicit
+                      // search target after entering the Space surface so it
+                      // remains available to SpacePage for this transition.
                       navigate("space");
+                      dispatchNavigation({ type: "set-active-space", id: spaceId });
+                      dispatchNavigation({ type: "set-space-target", id });
                     },
                   })}
               </SurfaceErrorBoundary>
@@ -471,7 +477,7 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
   );
 }
 
-function viewLabel(view: View): string {
+function viewLabel(view: WorkbenchView): string {
   switch (view) {
     case "home": return "个人首页";
     case "space": return "空间";
@@ -482,7 +488,7 @@ function viewLabel(view: View): string {
 }
 
 function renderView(input: {
-  readonly view: View;
+  readonly view: WorkbenchView;
   readonly props: PersonalWorkbenchProps;
   readonly activeConversation?: Conversation;
   readonly conversationProjection: ConversationSurfaceProjection;
@@ -490,8 +496,8 @@ function renderView(input: {
   readonly homeInput: ChatInputProps;
   readonly homeFocusRequest: number;
   readonly workspaceProjection: ReturnType<typeof useWorkspaceProjection>;
-  readonly homeOwnerSelection: { readonly kind: "space" | "workspace"; readonly id: string } | null;
-  readonly onHomeOwnerChange: (owner: { readonly kind: "space" | "workspace"; readonly id: string } | null) => void;
+  readonly homeOwnerSelection: ConversationOwnerSelection | null;
+  readonly onHomeOwnerChange: (owner: ConversationOwnerSelection | null) => void;
   readonly conversationInput: ChatInputProps;
   readonly brainSelectedId: string | null;
   readonly spaceTargetId: string | null;
@@ -500,7 +506,7 @@ function renderView(input: {
   readonly conversationMode: ConversationMode;
   readonly conversationSurfaceRequest: ConversationSurfaceRequest | null;
   readonly onBrainSelect: (id: string | null) => void;
-  readonly navigate: (view: View) => void;
+  readonly navigate: (view: WorkbenchView) => void;
   readonly onEnterFocus: () => void;
   readonly onExitFocus: () => void;
   readonly onOpenConversationInSurface: (conversationId: string) => boolean | Promise<boolean>;
@@ -531,11 +537,15 @@ function renderView(input: {
       conversationSurfaceRequest={input.conversationSurfaceRequest}
       conversationContent={
         <ConversationSurface
-          props={input.props}
           conversation={input.activeConversation}
           projection={input.conversationProjection}
           state={input.conversationState}
           input={input.conversationInput}
+          currentRun={input.props.currentRun}
+          showModelUsage={input.props.showModelUsage}
+          developerModeEnabled={input.props.developerModeEnabled}
+          confirmationBusy={input.props.confirmationBusy}
+          onDecision={input.props.onDecision}
           focus={input.conversationMode === "focus"}
           onExitFocus={input.onExitFocus}
         />
@@ -574,68 +584,6 @@ function renderView(input: {
 
 const EMPTY_ID_SET: ReadonlySet<string> = new Set();
 
-function ConversationSurface(props: {
-  readonly props: PersonalWorkbenchProps;
-  readonly conversation?: Conversation;
-  readonly projection: ConversationSurfaceProjection;
-  readonly state: LiveConversationState;
-  readonly input: ChatInputProps;
-  readonly focus?: boolean;
-  readonly onExitFocus?: () => void;
-}) {
-  const active = props.projection;
-  const composerInput = confirmationGuidanceInput(
-    props.input,
-    active.pending,
-    props.props.confirmationBusy,
-    props.props.onDecision,
-  );
-  const content = active.hasVisibleContent ? (
-    <SurfaceErrorBoundary resetKey={props.props.currentRun.run?.runId ?? props.conversation?.conversationId ?? "transcript"} label="对话内容暂时无法显示">
-        <ConversationTranscript
-      conversationId={props.conversation?.conversationId}
-      projectedTurns={active.workline.turns}
-      turns={props.conversation?.turns ?? []}
-      currentRunId={active.currentRunId}
-      currentRunNodes={active.currentRunProjection.nodes}
-      currentRunToolResults={props.props.currentRun.detail?.toolResults ?? []}
-      run={props.props.currentRun.run}
-      live={props.props.currentRun.live}
-      workView={props.props.currentRun.workView}
-      pending={active.pending}
-      showModelUsage={props.props.showModelUsage}
-      developerModeEnabled={props.props.developerModeEnabled}
-      standaloneRun={active.workline.standaloneRun !== true ? undefined : {
-        currentRunId: active.currentRunId,
-        runStatus: props.props.currentRun.run?.status,
-        answer: active.answer,
-        failure: props.props.currentRun.detail?.error,
-        deliverable: active.deliverable,
-        runProjection: active.currentRunProjection,
-        pending: active.pending,
-      }}
-      models={props.input.models}
-      selectedModelId={props.input.selectedModelId}
-      onDecision={props.props.onDecision}
-      confirmationBusy={props.props.confirmationBusy}
-        />
-    </SurfaceErrorBoundary>
-  ) : undefined;
-  const title = props.conversation?.title ?? "新的对话";
-  const scrollKey = `${props.conversation?.conversationId ?? "new-conversation"}:${active.currentRunId ?? "idle"}`;
-
-  return <ConversationPage
-    scrollKey={scrollKey}
-    content={content}
-    input={composerInput}
-    focus={props.focus ? {
-      title,
-      state: props.state,
-      onExit: props.onExitFocus ?? (() => undefined),
-    } : undefined}
-  />;
-}
-
 function projectConversationSurface(
   props: PersonalWorkbenchProps,
   conversation: Conversation | undefined,
@@ -652,8 +600,6 @@ function projectConversationSurface(
   });
 }
 
-type ConversationSurfaceProjection = ReturnType<typeof projectConversationSurface>;
-
 function projectLiveConversationState(
   active: ConversationSurfaceProjection,
   props: PersonalWorkbenchProps,
@@ -664,73 +610,8 @@ function projectLiveConversationState(
   return active.hasVisibleContent ? "completed" : "initial";
 }
 
-function isKnowledgeView(view: View): boolean {
+function isKnowledgeView(view: WorkbenchView): boolean {
   return view === "space" || view === "brain" || view === "search";
-}
-
-function WorkbenchStatusNotice(props: {
-  readonly message: string;
-  readonly onRetry?: () => void;
-  readonly retrying?: boolean;
-  readonly onDismiss?: () => void;
-}) {
-  return (
-    <div
-      className="fixed bottom-5 right-5 z-50 flex max-w-sm items-start gap-2.5 rounded-md px-3 py-2.5 shadow-sm"
-      style={{ background: "var(--ui-surface)", border: "1px solid var(--ui-border)", color: "var(--ui-text-2)" }}
-      role="alert"
-    >
-      <AlertCircle className="mt-0.5 shrink-0" size={14} style={{ color: "var(--ui-status-error)" }} />
-      <span className="min-w-0 flex-1 break-words text-xs leading-5">{props.message}</span>
-      {props.onRetry !== undefined && (
-        <button
-          type="button"
-          aria-label="重新加载工作台数据"
-          onClick={props.onRetry}
-          className="flex h-6 w-6 shrink-0 items-center justify-center rounded hover:bg-[var(--ui-hover-tint)] disabled:opacity-40"
-          style={{ color: "var(--ui-text-3)" }}
-          disabled={props.retrying}
-        >
-          <RotateCcw className={props.retrying ? "animate-spin" : undefined} size={12} />
-        </button>
-      )}
-      {props.onDismiss !== undefined && (
-        <button
-          type="button"
-          aria-label="关闭错误提示"
-          onClick={props.onDismiss}
-          className="flex h-6 w-6 shrink-0 items-center justify-center rounded hover:bg-[var(--ui-hover-tint)]"
-          style={{ color: "var(--ui-text-3)" }}
-        >
-          <X size={12} />
-        </button>
-      )}
-    </div>
-  );
-}
-
-function confirmationGuidanceInput(
-  input: ChatInputProps,
-  pending: ConfirmationProjection | undefined,
-  confirmationBusy: boolean,
-  onDecision: PersonalWorkbenchProps["onDecision"],
-): ChatInputProps {
-  if (pending === undefined || pending.resumeAvailability === "lost_after_restart") return input;
-  return {
-    ...input,
-    placeholder: "补充要求...",
-    onSubmit: () => {
-      const guidance = input.value.trim();
-      if (guidance.length === 0 || confirmationBusy) return;
-      onDecision("guidance", guidance);
-      input.onChange("");
-    },
-  };
-}
-
-/** The initial navigation target is Home; active run recovery is handled after mount. */
-function initialView(): View {
-  return "home";
 }
 
 function requiresImmediateConversationView(props: Pick<PersonalWorkbenchProps, "currentRun" | "pendingConfirmation">): boolean {
