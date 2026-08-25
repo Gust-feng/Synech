@@ -28,3 +28,4 @@ export {
   isTransientRenameError,
 } from "./error.js";
 export { cloneDeep, toPersistedJsonShape } from "./clone.js";
+export { stableStringify } from "./stable-stringify.js";

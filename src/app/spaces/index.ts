@@ -33,7 +33,7 @@ export {
   type SpaceTreeEntry,
   type SpaceTreeSnapshot,
 } from "./contracts.js";
-export { createFileSystemSpaceRepository, validateSpaceTreeSnapshot } from "./file-system-repository.js";
+export { validateSpaceTreeSnapshot } from "./space-validation.js";
 export { createSqliteSpaceRepository } from "./sqlite-repository.js";
 export { createSpaceFeature, type CreateSpaceFeatureInput } from "./space-feature.js";
 export {

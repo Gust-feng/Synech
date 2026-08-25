@@ -91,9 +91,6 @@ function liveTranscriptNodes(live: LiveRunBuffer): readonly LiveTranscriptNode[]
     if (turn.reasoning.text.trim().length > 0) {
       nodes.push(liveThinkingNode(live.runId, turn));
     }
-    if (turn.sideText.trim().length > 0) {
-      nodes.push(liveSideTextNode(live.runId, turn));
-    }
     if (turn.output.text.trim().length > 0) {
       nodes.push(liveBodyNode(live.runId, turn));
     }
@@ -198,26 +195,6 @@ function liveThinkingNode(runId: string, turn: LiveModelTurnBuffer): LiveTranscr
   };
 }
 
-function liveSideTextNode(runId: string, turn: LiveModelTurnBuffer): LiveTranscriptNode {
-  const text = turn.sideText.trim();
-  const modelRefs = turn.modelRefs.map((id): LiveTranscriptObservationRef => ({ kind: "model_call", id }));
-  return {
-    nodeId: `${runId}:live:${turn.requestId}:block:${turn.contentIndex}:side-text`,
-    runId,
-    requestStartSequence: turn.requestStartSequence,
-    sequence: liveSideTextSequence(turn),
-    contentIndex: turn.contentIndex,
-    eventType: "model.output.side",
-    kind: "system",
-    phase: "completed",
-    title: "",
-    summary: compact(text, 220),
-    text,
-    timestamp: "",
-    refs: modelRefs,
-  };
-}
-
 function liveBodyNode(runId: string, turn: LiveModelTurnBuffer): LiveTranscriptNode {
   const text = turn.output.text.trim();
   const completed = turn.outputCompleted === true;
@@ -258,10 +235,6 @@ function liveOutputLatestSequence(turn: LiveModelTurnBuffer): number {
 
 function liveReasoningSequence(turn: LiveModelTurnBuffer): number {
   return turn.reasoningStartSequence ?? turn.reasoningSequence ?? turn.updatedAtSequence;
-}
-
-function liveSideTextSequence(turn: LiveModelTurnBuffer): number {
-  return turn.sideTextSequence ?? turn.updatedAtSequence;
 }
 
 function answerFallbackText(value: string): string {

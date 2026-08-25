@@ -1,6 +1,7 @@
 import { stringOrUndefined } from "../../../kernel/values/index.js";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { imageMimeTypeForExtension } from "../../local-filesystem/index.js";
 import type { ModelInputAttachment } from "../../../domain/intelligence/index.js";
 import type { OrdinaryRunContextReference } from "../../../domain/ordinary/index.js";
 import type { ToolExecutor } from "../../../domain/tools/index.js";
@@ -24,14 +25,6 @@ import {
 } from "./context-attachment-access.js";
 
 const MAX_IMAGE_ATTACHMENT_BYTES = 20 * 1024 * 1024;
-
-const IMAGE_MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
-  ".gif": "image/gif",
-  ".jpeg": "image/jpeg",
-  ".jpg": "image/jpeg",
-  ".png": "image/png",
-  ".webp": "image/webp",
-};
 
 /** Creates the attachment tool that adds an image to the next model turn. */
 export function createReadContextAttachmentImageTool(
@@ -187,7 +180,7 @@ function imageModelFilename(entry: AttachmentEntry, target: AttachmentTarget): s
 }
 
 function imageMimeTypeForTarget(ref: OrdinaryRunContextReference, target: AttachmentTarget): string | undefined {
-  const mimeFromExtension = IMAGE_MIME_BY_EXTENSION[tableTargetExtension(ref, target.targetPath)];
+  const mimeFromExtension = imageMimeTypeForExtension(tableTargetExtension(ref, target.targetPath));
   if (mimeFromExtension !== undefined) {
     return mimeFromExtension;
   }
@@ -195,7 +188,7 @@ function imageMimeTypeForTarget(ref: OrdinaryRunContextReference, target: Attach
     return undefined;
   }
   const metadataMimeType = ref.metadata?.mimeType?.toLowerCase();
-  return metadataMimeType !== undefined && Object.values(IMAGE_MIME_BY_EXTENSION).includes(metadataMimeType)
+  return metadataMimeType !== undefined && imageMimeTypeForExtension(`.${metadataMimeType.slice("image/".length)}`) === metadataMimeType
     ? metadataMimeType
     : undefined;
 }

@@ -45,6 +45,22 @@ export function mimeTypeForPath(value: string): string {
   }
 }
 
+/** 根据文件扩展名返回图片 MIME 类型；未知扩展名不视为图片。 */
+export function imageMimeTypeForExtension(value: string): string | undefined {
+  switch (value.toLowerCase()) {
+    case ".gif": return "image/gif";
+    case ".jpeg":
+    case ".jpg": return "image/jpeg";
+    case ".png": return "image/png";
+    case ".webp": return "image/webp";
+    default: return undefined;
+  }
+}
+
+export function imageMimeTypeForPath(value: string): string | undefined {
+  return imageMimeTypeForExtension(path.extname(value));
+}
+
 /** 根据 MIME 类型判断是否为可预览的媒体类型。 */
 export function mediaKindForMimeType(mimeType: string): "image" | "pdf" | "video" | "audio" | undefined {
   if (mimeType === "application/pdf") return "pdf";

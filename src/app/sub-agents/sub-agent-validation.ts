@@ -1,4 +1,4 @@
-import { isPlainRecord } from "../../kernel/values/index.js";
+import { isPlainRecord, stableStringify } from "../../kernel/values/index.js";
 import { createHash } from "node:crypto";
 import { parseDocument } from "yaml";
 
@@ -170,17 +170,4 @@ function parseYamlFrontmatter(value: string): Readonly<Record<string, unknown>> 
   } catch {
     return {};
   }
-}
-
-function stableStringify(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
-  }
-  if (isPlainRecord(value)) {
-    return `{${Object.keys(value)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
 }

@@ -35,8 +35,6 @@ export type LiveModelTurnBuffer = {
   readonly output: TextStreamAssembly;
   readonly outputSequence?: number;
   readonly outputCompleted?: boolean;
-  readonly sideText: string;
-  readonly sideTextSequence?: number;
   readonly reasoning: TextStreamAssembly;
   /** First observed sequence for this reasoning block. */
   readonly reasoningStartSequence?: number;
@@ -79,7 +77,6 @@ export function emptyLiveRun(runId: string): LiveRunBuffer {
 export function liveRunHasVisibleText(live: LiveRunBuffer | undefined): boolean {
   return live?.turns.some((turn) =>
     turn.output.text.trim().length > 0 ||
-    turn.sideText.trim().length > 0 ||
     turn.reasoning.text.trim().length > 0
   ) === true;
 }
@@ -269,8 +266,6 @@ function emptyLiveModelTurn(requestId: string, contentIndex = 0, requestStartSeq
     output: emptyTextStreamAssembly(),
     outputSequence: 0,
     outputCompleted: false,
-    sideText: "",
-    sideTextSequence: 0,
     reasoning: emptyTextStreamAssembly(),
     reasoningSequence: 0,
     reasoningCompleted: false,

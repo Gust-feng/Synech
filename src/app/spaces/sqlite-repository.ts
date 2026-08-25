@@ -8,7 +8,7 @@ import {
   type SpaceRepository,
   type SpaceTreeSnapshot,
 } from "./contracts.js";
-import { validateSpaceTreeSnapshot } from "./file-system-repository.js";
+import { validateSpaceTreeSnapshot } from "./space-validation.js";
 
 const MIGRATIONS = [{
   version: 1,

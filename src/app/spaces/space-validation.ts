@@ -1,6 +1,13 @@
 import { z } from "zod";
 
-import { SpaceFeatureError, type SpaceReference, type SpaceReferenceAnnotation, type SpaceReferenceImageCaption } from "./contracts.js";
+import {
+  SPACE_TREE_SCHEMA_VERSION,
+  SpaceFeatureError,
+  type SpaceReference,
+  type SpaceReferenceAnnotation,
+  type SpaceReferenceImageCaption,
+  type SpaceTreeSnapshot,
+} from "./contracts.js";
 import { toPersistedJsonShape } from "../../kernel/values/index.js";
 
 /**
@@ -56,6 +63,62 @@ export const spaceReferenceImageCaptionsSchema = z.record(
   z.string().max(4_096),
   spaceReferenceImageCaptionSchema,
 );
+
+const spaceSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1),
+  createdAt: z.string().min(1),
+  updatedAt: z.string().min(1),
+}).strict();
+
+const referenceItemSchema = z.object({
+  id: z.string().min(1),
+  spaceId: z.string().min(1),
+  title: z.string().min(1),
+  parentId: z.string().min(1).optional(),
+  reference: spaceReferenceSchema,
+  sourceIdentity: z.string().min(1).optional(),
+  annotation: spaceReferenceAnnotationSchema.optional(),
+  imageCaptions: spaceReferenceImageCaptionsSchema.optional(),
+  createdAt: z.string().min(1),
+  updatedAt: z.string().min(1),
+}).strict();
+
+const snapshotSchema = z.object({
+  schemaVersion: z.literal(SPACE_TREE_SCHEMA_VERSION),
+  spaces: z.array(spaceSchema),
+  referenceItems: z.array(referenceItemSchema),
+}).strict().superRefine((snapshot, context) => {
+  const ids = new Set<string>();
+  for (const [collection, entries] of [["spaces", snapshot.spaces], ["referenceItems", snapshot.referenceItems]] as const) {
+    for (const [index, entry] of entries.entries()) {
+      if (ids.has(entry.id)) {
+        context.addIssue({ code: "custom", path: [collection, index, "id"], message: "ids must be unique across a SpaceTree snapshot" });
+      }
+      ids.add(entry.id);
+    }
+  }
+  const spaceIds = new Set(snapshot.spaces.map((space) => space.id));
+  for (const [index, item] of snapshot.referenceItems.entries()) {
+    if (!spaceIds.has(item.spaceId)) {
+      context.addIssue({ code: "custom", path: ["referenceItems", index, "spaceId"], message: "reference item space must exist" });
+    }
+    if (item.parentId !== undefined) {
+      const parent = snapshot.referenceItems.find((candidate) => candidate.id === item.parentId);
+      if (parent === undefined || parent.spaceId !== item.spaceId) {
+        context.addIssue({ code: "custom", path: ["referenceItems", index, "parentId"], message: "reference parent must exist in the same Space" });
+      }
+    }
+  }
+});
+
+export function validateSpaceTreeSnapshot(snapshot: unknown): SpaceTreeSnapshot {
+  const result = snapshotSchema.safeParse(snapshot);
+  if (!result.success) {
+    throw new SpaceFeatureError("space_snapshot_incompatible", `SpaceTree snapshot is invalid: ${z.prettifyError(result.error)}`);
+  }
+  return toPersistedJsonShape(result.data);
+}
 
 /** Validate the opaque edge, never by reading or resolving its external target. */
 export function validateSpaceReference(reference: SpaceReference): SpaceReference {

@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { CodedExecutionError } from "../execution-errors/index.js";
+import { imageMimeTypeForPath } from "../local-filesystem/index.js";
 import type { ModelCapabilities } from "../../domain/config/index.js";
 import type { ModelInputAttachment, ModelMessage } from "../../domain/intelligence/index.js";
 import {
@@ -14,14 +15,6 @@ import {
 import { isConversationOwnerContextRef } from "../../domain/ordinary/index.js";
 
 const MAX_IMAGE_ATTACHMENT_BYTES = 20 * 1024 * 1024;
-
-const IMAGE_MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
-  ".gif": "image/gif",
-  ".jpeg": "image/jpeg",
-  ".jpg": "image/jpeg",
-  ".png": "image/png",
-  ".webp": "image/webp",
-};
 
 export async function attachOrdinaryFileInputsToModelMessages(input: {
   readonly messages: readonly ModelMessage[];
@@ -167,7 +160,7 @@ function isImageContextRef(ref: OrdinaryRunContextReference): boolean {
   if (ref.kind !== "file") return false;
   if (isConversationOwnerContextRef(ref)) return false;
   if (ref.metadata?.mimeType?.startsWith("image/") === true) return true;
-  return IMAGE_MIME_BY_EXTENSION[path.extname(ref.ref).toLowerCase()] !== undefined;
+  return imageMimeTypeForPath(ref.ref) !== undefined;
 }
 
 function imageMimeTypeFor(ref: OrdinaryRunContextReference, absolutePath: string): string | undefined {
@@ -175,7 +168,7 @@ function imageMimeTypeFor(ref: OrdinaryRunContextReference, absolutePath: string
   if (metadataMimeType !== undefined && metadataMimeType.startsWith("image/")) {
     return metadataMimeType;
   }
-  return IMAGE_MIME_BY_EXTENSION[path.extname(absolutePath).toLowerCase()];
+  return imageMimeTypeForPath(absolutePath);
 }
 
 async function resolveReadableFileRef(

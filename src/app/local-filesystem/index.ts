@@ -31,6 +31,8 @@ export {
   MAX_TEXT_PREVIEW_BYTES,
   MAX_DIRECTORY_ENTRIES,
   mimeTypeForPath,
+  imageMimeTypeForExtension,
+  imageMimeTypeForPath,
   mediaKindForMimeType,
   officeKindForPath,
   languageForPath,
