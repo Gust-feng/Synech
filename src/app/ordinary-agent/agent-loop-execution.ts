@@ -119,10 +119,11 @@ export function createOrdinaryAgentLoopExecutionPort(input: {
     async finalizeSession(runId, target) {
       const control = sessionControls.get(runId);
       if (control === undefined) {
-        throw new Error(`Ordinary run ${runId} has no active Session control.`);
+        return { status: "no_session" };
       }
       await control.finalize(target);
       if (sessionControls.get(runId) === control) sessionControls.delete(runId);
+      return { status: "finalized" };
     },
   };
 }

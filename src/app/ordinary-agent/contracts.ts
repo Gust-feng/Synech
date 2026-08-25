@@ -526,13 +526,18 @@ export type OrdinaryRunActivityReplay = {
   readonly activities: readonly OrdinaryRunActivity[];
 };
 
+/** Missing live control is an idempotent outcome, not an error classified by message text. */
+export type OrdinarySessionFinalizationResult =
+  | { readonly status: "finalized" }
+  | { readonly status: "no_session" };
+
 export interface OrdinaryExecutionPort {
   execute(input: OrdinaryExecutionInput): Promise<OrdinaryExecutionOutcome>;
   /** Finalizes an active Session writer after Ordinary durably commits terminal state. */
   finalizeSession?(
     runId: string,
     target?: import("../model-runtime/agent-session.js").AgentSessionEntryRef | null,
-  ): Promise<void>;
+  ): Promise<OrdinarySessionFinalizationResult>;
 }
 
 export type StartOrdinaryRunInput = {

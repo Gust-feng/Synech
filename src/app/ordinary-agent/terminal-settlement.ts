@@ -1,8 +1,8 @@
 import { toolInvocationId, sameResultForIdempotency, type ToolCallResult } from "../../domain/tools/index.js";
-import { errorMessage } from "../../kernel/values/index.js";
 import type { AgentSessionEntryRef } from "../model-runtime/agent-session.js";
 import type {
   OrdinaryFeatureDiagnostic,
+  OrdinarySessionFinalizationResult,
   OrdinaryStableTerminalRunFacts,
   OrdinaryRunSnapshotDocument,
   OrdinaryRunState,
@@ -12,7 +12,10 @@ import { OrdinaryFeatureError } from "./contracts.js";
 import { isTerminal } from "./run-lifecycle-policy.js";
 
 export function createTerminalSettlement(input: {
-  readonly finalizeSession?: (runId: string, target?: AgentSessionEntryRef | null) => Promise<void>;
+  readonly finalizeSession?: (
+    runId: string,
+    target?: AgentSessionEntryRef | null,
+  ) => Promise<OrdinarySessionFinalizationResult>;
   readonly loadRun: (runId: string) => Promise<OrdinaryRunSnapshotDocument | undefined>;
   readonly cachedRun: (runId: string) => OrdinaryRunSnapshotDocument | undefined;
   readonly persistToolResult: (runId: string, result: ToolCallResult) => Promise<void>;
@@ -28,7 +31,7 @@ export function createTerminalSettlement(input: {
   const acceptedToolResults = new Map<string, Map<string, ToolCallResult>>();
   const sessionsAwaitingFinalization = new Set<string>();
   const sessionFinalizationPending = new Set<string>();
-  const sessionFinalizationFailures = new Map<string, unknown>();
+  const sessionFinalizationFailures = new Map<string, SessionFinalizationFailure>();
   const sessionFinalizationAttempts = new Map<string, Promise<void>>();
   const stableTerminalListeners = new Set<(runId: string) => void>();
 
@@ -127,35 +130,46 @@ export function createTerminalSettlement(input: {
     restoreSafeLeaf: boolean,
   ): Promise<void> {
     if (input.finalizeSession === undefined) return;
+    const failedAttempt = sessionFinalizationFailures.get(runId);
+    // Durable run facts may advance while cleanup is pending; replay the first target exactly.
+    const target = failedAttempt === undefined
+      ? (restoreSafeLeaf ? rollbackLeafRef(state) : undefined)
+      : failedAttempt.target;
+    await attemptSessionFinalization(runId, target);
+  }
+
+  async function attemptSessionFinalization(
+    runId: string,
+    target: AgentSessionEntryRef | null | undefined,
+  ): Promise<void> {
+    if (input.finalizeSession === undefined) return;
     sessionFinalizationPending.add(runId);
-    const target = restoreSafeLeaf ? rollbackLeafRef(state) : undefined;
     let firstFailure: unknown;
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       try {
-        await input.finalizeSession(runId, target);
-        clearFinalization(runId);
-        return;
-      } catch (error) {
-        if (state.session.phase === "not_started" && errorMessage(error).includes("has no active Session control")) {
+        const result = await input.finalizeSession(runId, target);
+        if (result.status === "finalized" || result.status === "no_session") {
           clearFinalization(runId);
           return;
         }
+      } catch (error) {
         firstFailure ??= error;
       }
     }
-    sessionFinalizationFailures.set(runId, firstFailure);
+    sessionFinalizationFailures.set(runId, { target, error: firstFailure });
     input.emitDiagnostic({ kind: "session_finalization_failed", runId, error: firstFailure });
     throw firstFailure;
   }
 
   async function retryFinalization(runId: string): Promise<void> {
-    if (!sessionFinalizationPending.has(runId) || !sessionFinalizationFailures.has(runId)) return;
+    const failure = sessionFinalizationFailures.get(runId);
+    if (!sessionFinalizationPending.has(runId) || failure === undefined) return;
     const existing = sessionFinalizationAttempts.get(runId);
     if (existing !== undefined) return existing;
     const attempt = (async () => {
       const document = await input.loadRun(runId);
       if (document === undefined || !isTerminal(document.state)) return;
-      await finalizeSession(runId, document.state, document.state.status.kind !== "completed");
+      await attemptSessionFinalization(runId, failure.target);
     })().catch(() => undefined);
     sessionFinalizationAttempts.set(runId, attempt);
     try {
@@ -208,7 +222,7 @@ export function createTerminalSettlement(input: {
       try {
         await finalizeSession(runId, document.state, document.state.status.kind !== "completed");
       } catch (error) {
-        failures.push(sessionFinalizationFailures.get(runId) ?? error);
+        failures.push(sessionFinalizationFailures.get(runId)?.error ?? error);
       }
     }
     stableTerminalListeners.clear();
@@ -243,10 +257,15 @@ export function createTerminalSettlement(input: {
     hasAcceptedToolResult: (runId: string, invocationId: string) => acceptedToolResults.get(runId)?.has(invocationId) === true,
     clearAcceptedToolResults: (runId: string) => acceptedToolResults.delete(runId),
     isFinalizationPending: (runId: string) => sessionFinalizationPending.has(runId),
-    finalizationFailure: (runId: string) => sessionFinalizationFailures.get(runId),
+    finalizationFailure: (runId: string) => sessionFinalizationFailures.get(runId)?.error,
     release,
   };
 }
+
+type SessionFinalizationFailure = {
+  readonly target: AgentSessionEntryRef | null | undefined;
+  readonly error: unknown;
+};
 
 export function projectStableTerminalRunFacts(
   document: OrdinaryRunSnapshotDocument,
