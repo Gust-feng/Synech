@@ -297,7 +297,7 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
       className="ui-workbench-root flex h-screen min-h-0 w-full overflow-hidden"
       spellCheck={false}
       style={{
-        background: "var(--ui-canvas)",
+        backgroundColor: "var(--ui-canvas)",
         color: "var(--ui-text-1)",
         fontFamily: '"Noto Sans SC", Inter, system-ui, -apple-system, sans-serif',
       }}

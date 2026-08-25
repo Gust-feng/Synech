@@ -10,6 +10,7 @@
 @import './sidebar-footer.css';
 @import './editor.css';
 @import './recovery.css';
+@import './workbench-shell.css';
 @import './workbench-status.css';
 @import './activity-evidence.css';
 @import './action-confirmation.css';

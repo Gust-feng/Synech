@@ -1,0 +1,19 @@
+.ui-workbench-root {
+  background-color: var(--ui-canvas);
+  background-image:
+    radial-gradient(circle at 12% 0%, color-mix(in srgb, var(--ui-accent) 5%, transparent), transparent 34%),
+    radial-gradient(circle at 92% 100%, color-mix(in srgb, var(--ui-sage) 14%, transparent), transparent 38%);
+  background-attachment: fixed;
+}
+
+html[data-style='default'][data-color='dark'] .ui-workbench-root {
+  background-image:
+    radial-gradient(circle at 12% 0%, color-mix(in srgb, var(--ui-accent) 8%, transparent), transparent 34%),
+    radial-gradient(circle at 92% 100%, color-mix(in srgb, var(--ui-sage) 8%, transparent), transparent 38%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-workbench-root {
+    background-attachment: scroll;
+  }
+}
