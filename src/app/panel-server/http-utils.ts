@@ -16,12 +16,26 @@ export async function readJsonBody(
   options: { readonly maxChars?: number } = {}
 ): Promise<unknown> {
   const maxChars = options.maxChars ?? 128_000;
+  const decoder = new TextDecoder("utf-8", { fatal: true });
   let raw = "";
   for await (const chunk of request) {
-    raw += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8");
+    try {
+      raw += decoder.decode(bytes, { stream: true });
+    } catch {
+      throw new PanelHttpError(400, "invalid_utf8", "请求体不是有效的 UTF-8 文本。");
+    }
     if (raw.length > maxChars) {
       throw new PanelHttpError(413, "request_body_too_large", "面板请求体过大。");
     }
+  }
+  try {
+    raw += decoder.decode();
+  } catch {
+    throw new PanelHttpError(400, "invalid_utf8", "请求体不是有效的 UTF-8 文本。");
+  }
+  if (raw.length > maxChars) {
+    throw new PanelHttpError(413, "request_body_too_large", "面板请求体过大。");
   }
   if (raw.trim().length === 0) {
     return {};
