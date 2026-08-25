@@ -2,6 +2,7 @@ import type { SpaceFeature, SpaceExternalSourceSnapshot } from "../spaces/index.
 import type { WorkspaceFeature } from "../workspaces/index.js";
 import {
   WorkbenchCoordinationError,
+  type SpaceKnowledgeDetachWorkflow,
   type WorkbenchCoordination,
 } from "./contracts.js";
 
@@ -25,7 +26,7 @@ export function createWorkbenchCoordination(input: {
     operation: () => Promise<T>,
   ) => Promise<T>;
   readonly deleteWorkspace: (workspaceId: string) => Promise<void>;
-  readonly deleteSpace: (spaceId: string) => Promise<void>;
+  readonly deleteSpace: (spaceId: string, detachKnowledgeFromSpace?: SpaceKnowledgeDetachWorkflow) => Promise<void>;
   readonly detachKnowledgeFromSpace: (input: {
     readonly spaceId: string;
     readonly referenceIds: readonly string[];
@@ -36,6 +37,18 @@ export function createWorkbenchCoordination(input: {
     const result = tail.then(operation, operation);
     tail = result.then(() => undefined, () => undefined);
     return result;
+  };
+  // Internal workflow used by both the public detach command and the Space
+  // deletion cascade. It deliberately does not enter the public queue again;
+  // deleteSpace already owns the outer serialized critical section.
+  const detachKnowledgeWorkflow: SpaceKnowledgeDetachWorkflow = async (detachInput) => {
+    if (await input.spaces.queries.getTree(detachInput.spaceId) === undefined) {
+      throw new WorkbenchCoordinationError(
+        "coordination_space_not_found",
+        `Space not found: ${detachInput.spaceId}`,
+      );
+    }
+    await input.detachKnowledgeFromSpace(detachInput);
   };
 
   return {
@@ -150,10 +163,10 @@ export function createWorkbenchCoordination(input: {
         return serialize(async () => await input.deleteWorkspace(workspaceId));
       },
       deleteSpace(spaceId) {
-        return serialize(async () => await input.deleteSpace(spaceId));
+        return serialize(async () => await input.deleteSpace(spaceId, detachKnowledgeWorkflow));
       },
       detachKnowledgeFromSpace(detachInput) {
-        return serialize(async () => await input.detachKnowledgeFromSpace(detachInput));
+        return serialize(async () => await detachKnowledgeWorkflow(detachInput));
       },
     },
   };

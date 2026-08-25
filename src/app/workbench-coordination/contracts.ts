@@ -23,6 +23,11 @@ export class WorkbenchCoordinationError extends Error {
   }
 }
 
+export type SpaceKnowledgeDetachWorkflow = (input: {
+  readonly spaceId: string;
+  readonly referenceIds: readonly string[];
+}) => Promise<void>;
+
 export type AttachWorkspaceToSpaceInput = {
   readonly spaceId: string;
   readonly rootPath: string;

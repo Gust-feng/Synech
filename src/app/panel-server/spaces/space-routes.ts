@@ -11,11 +11,11 @@ import type { LocalWorkspaceMutationCoordinator } from "../../tool-center/adapte
 import { PanelHttpError, readJsonBody, writeJson } from "../http-utils.js";
 import type { PanelExternalResourceTarget } from "../types.js";
 import type { SpaceConversationDeletionCoordinator } from "./space-conversation-coordinator.js";
-import { createManagedSpaceFolder, deleteManagedSpaceFolder } from "./space-managed-folder-store.js";
 import { attachSpaceReferenceMetadata, createPanelDocumentPreview, writePanelSpaceReferenceContent } from "./space-reference-preview.js";
 import { getManagedAssetPreview, updateManagedAssetCaptionPreview, updateManagedAssetTextPreview } from "../storage/managed-asset-routes.js";
 import { createPanelSpaceReferenceEntry, deletePanelSpaceReferenceEntry, renamePanelSpaceReferenceEntry, updatePanelSpaceReferenceText } from "./space-reference-mutations.js";
 import { resolveSpaceFilesystemReference, type ResolvedSpaceFilesystemReference } from "./space-workspace-reference.js";
+import type { ManagedSpaceFolderApplication } from "./space-reference-application.js";
 
 const titleSchema = z.string().trim().min(1).max(160);
 const referenceSchema = z.discriminatedUnion("kind", [
@@ -61,10 +61,10 @@ export type SpaceReferenceRouteDependencies = {
     readonly queries: Pick<WorkspaceFeature["queries"], "get">;
   };
   readonly workbenchCoordination: Pick<WorkbenchCoordination, "commands">;
+  readonly managedSpaceFolderApplication: ManagedSpaceFolderApplication;
   readonly unlinkExternalReference: (referenceId: string) => Promise<void>;
   readonly spaceConversationDeletion: Pick<SpaceConversationDeletionCoordinator, "assertAvailable">;
   readonly fileMutationCoordinator: Pick<LocalWorkspaceMutationCoordinator, "run" | "runExclusive">;
-  readonly managedSpaceFolderRoot: string;
   readonly flushSpaceKnowledgeSync: () => Promise<void>;
   readonly externalResourceOpener?: (target: PanelExternalResourceTarget) => Promise<void>;
   readonly managedAssets: {
@@ -85,22 +85,8 @@ export async function handlePanelSpaceRoute(
   const managedFolderMatch = /^\/api\/spaces\/([^/]+)\/managed-folders$/u.exec(url.pathname);
   if (managedFolderMatch !== null && request.method === "POST") {
     const spaceId = decode(managedFolderMatch[1]);
-    runtime.spaceConversationDeletion.assertAvailable(spaceId);
     const input = parse(createFolderSchema, await readJsonBody(request), "空间文件夹信息无效。");
-    const item = await runtime.fileMutationCoordinator.run(runtime.managedSpaceFolderRoot, async () => {
-      const folder = await createManagedSpaceFolder(runtime.managedSpaceFolderRoot);
-      try {
-        return await feature.commands.addReference({
-          ...input,
-          spaceId,
-          reference: { kind: "managed_folder", path: folder },
-          actor: { kind: "user" },
-        });
-      } catch (error) {
-        await deleteManagedSpaceFolder(runtime.managedSpaceFolderRoot, folder).catch(() => undefined);
-        throw error;
-      }
-    });
+    const item = await runtime.managedSpaceFolderApplication.create({ spaceId, title: input.title });
     writeJson(response, 201, { ok: true, item });
     return true;
   }

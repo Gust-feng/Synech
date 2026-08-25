@@ -5,7 +5,7 @@ import test from "node:test";
 import {
   createOrdinaryTurnApplication,
   OrdinaryTurnApplicationError,
-} from "../dist/app/panel-server/ordinary/ordinary-turn-application.js";
+} from "../dist/app/application/ordinary-turn-application.js";
 import { ordinaryTurnApplicationHttpError } from "../dist/app/panel-server/request-handler.js";
 
 test("ordinary route delegates turn orchestration to one application command", async () => {
@@ -140,6 +140,11 @@ function createFixture({ conversationId, owner, spaceTree }) {
         events.push(`workspace-admit:${id}`);
         return operation();
       },
+    },
+    async resolveSpaceAccess({ contextInput, requestedSpaceId }) {
+      return requestedSpaceId === undefined
+        ? { contextInput }
+        : { spaceId: requestedSpaceId, contextInput };
     },
     async prepareOrdinaryRunBirth(_input, id) { events.push(`birth:${id}`); return {}; },
   });

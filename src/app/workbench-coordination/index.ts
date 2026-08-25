@@ -1,6 +1,7 @@
 export {
   WorkbenchCoordinationError,
   type AttachWorkspaceToSpaceInput,
+  type SpaceKnowledgeDetachWorkflow,
   type WorkbenchCoordination,
   type WorkbenchCoordinationErrorCode,
 } from "./contracts.js";

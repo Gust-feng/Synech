@@ -1,18 +1,29 @@
-import type { ConversationOwner } from "../../../domain/execution-scope/index.js";
+import type { ConversationOwner } from "../../domain/execution-scope/index.js";
+import type { OrdinaryRunContextInput } from "../../domain/ordinary/index.js";
+import type { ModelRunReasoningEffort } from "../../domain/config/index.js";
+import type { ToolConfirmationPolicy } from "../../domain/tools/index.js";
+import type { ModelRuntimeMode } from "../model-runtime/index.js";
 import type {
   OrdinaryAgentFeature,
   OrdinaryRunBirth,
   SubmitOrdinaryTurnResult,
-} from "../../ordinary-agent/index.js";
-import type { SpaceFeature } from "../../spaces/index.js";
-import type { WorkspaceFeature } from "../../workspaces/index.js";
-import type {
-  ConversationLifecycleCoordinator,
-  SpaceConversationDeletionCoordinator,
-} from "../spaces/space-conversation-coordinator.js";
-import type { WorkspaceDeletionCoordinator } from "../spaces/workspace-deletion-coordinator.js";
-import { resolveConversationSpaceAccess } from "../spaces/space-agent-access.js";
-import type { PanelRunInput } from "../request-parsers.js";
+} from "../ordinary-agent/index.js";
+import type { SpaceFeature } from "../spaces/index.js";
+import type { WorkspaceFeature } from "../workspaces/index.js";
+
+export type OrdinaryTurnInput = {
+  readonly goal: string;
+  readonly submissionId?: string;
+  readonly owner?: ConversationOwner;
+  readonly aiMode?: ModelRuntimeMode;
+  readonly reasoningEffort?: ModelRunReasoningEffort;
+  readonly toolConfirmationPolicy?: ToolConfirmationPolicy;
+  readonly modelOverride?: {
+    readonly profileId: string;
+    readonly model: string;
+  };
+  readonly contextInput?: OrdinaryRunContextInput;
+};
 
 export type OrdinaryTurnApplicationErrorCode =
   | "conversation_owner_required"
@@ -20,7 +31,7 @@ export type OrdinaryTurnApplicationErrorCode =
   | "conversation_owner_conflict"
   | "conversation_space_not_found";
 
-/** Structured application failure. The Panel adapter maps this to HTTP. */
+/** Structured application failure. An adapter maps this to its own protocol. */
 export class OrdinaryTurnApplicationError extends Error {
   readonly name = "OrdinaryTurnApplicationError";
 
@@ -32,19 +43,11 @@ export class OrdinaryTurnApplicationError extends Error {
   }
 }
 
-/**
- * The application-level boundary for submitting one Ordinary turn.
- *
- * HTTP routes should only parse the request and project the result. Owner
- * resolution, Space access freezing, run-birth preparation, and deletion
- * admission are one use case so that future policy changes have one entry
- * point instead of growing another orchestration branch in a route.
- */
 export type OrdinaryTurnApplication = {
   submit(input: {
-      readonly runInput: PanelRunInput;
-      readonly conversationId?: string;
-    }): Promise<OrdinaryTurnApplicationResult>;
+    readonly runInput: OrdinaryTurnInput;
+    readonly conversationId?: string;
+  }): Promise<OrdinaryTurnApplicationResult>;
 };
 
 export type OrdinaryTurnApplicationResult = {
@@ -65,10 +68,29 @@ export type OrdinaryTurnApplicationDependencies = {
     readonly commands: Pick<WorkspaceFeature["commands"], "invalidateMount">;
     readonly queries: Pick<WorkspaceFeature["queries"], "get">;
   };
-  readonly conversationLifecycle: Pick<ConversationLifecycleCoordinator, "assertConversationAvailable" | "submit">;
-  readonly spaceConversationDeletion: Pick<SpaceConversationDeletionCoordinator, "assertAvailable" | "admit">;
-  readonly workspaceDeletion: Pick<WorkspaceDeletionCoordinator, "assertAvailable" | "admit">;
-  readonly prepareOrdinaryRunBirth: (input: PanelRunInput, conversationId?: string) => Promise<OrdinaryRunBirth>;
+  readonly conversationLifecycle: {
+    assertConversationAvailable(conversationId: string): void;
+    submit(input: {
+      readonly owner: ConversationOwner;
+      readonly submissionId: string;
+      readonly runInput: { readonly userMessage: string; readonly context?: OrdinaryRunContextInput };
+      readonly birth: OrdinaryRunBirth;
+    }): Promise<SubmitOrdinaryTurnResult>;
+  };
+  readonly spaceConversationDeletion: {
+    assertAvailable(spaceId: string): void;
+    admit<T>(spaceId: string, operation: () => Promise<T>): Promise<T>;
+  };
+  readonly workspaceDeletion: {
+    assertAvailable(workspaceId: string): void;
+    admit<T>(workspaceId: string, operation: () => Promise<T>): Promise<T>;
+  };
+  readonly resolveSpaceAccess: (input: {
+    readonly conversationId?: string;
+    readonly contextInput?: OrdinaryRunContextInput;
+    readonly requestedSpaceId?: string;
+  }) => Promise<{ readonly spaceId?: string; readonly contextInput?: OrdinaryRunContextInput }>;
+  readonly prepareOrdinaryRunBirth: (input: OrdinaryTurnInput, conversationId?: string) => Promise<OrdinaryRunBirth>;
 };
 
 export function createOrdinaryTurnApplication(
@@ -101,31 +123,22 @@ export function createOrdinaryTurnApplication(
         );
       }
 
-      // Existing conversations always use their canonical owner. A turn may
-      // omit that owner, but it can never select a different scope.
       const owner = canonicalOwner ?? explicitOwner;
       if (owner === undefined) {
         throw new OrdinaryTurnApplicationError("new_conversation_owner_required", "开始新对话前请选择空间或工作区。");
       }
 
       const selectedSpaceId = owner.kind === "space" ? owner.id : undefined;
-      if (owner.kind === "workspace") {
-        // Fast in-process rejection; admission below also checks durable
-        // deletion state around the actual submit.
-        runtime.workspaceDeletion.assertAvailable(owner.id);
-      }
+      if (owner.kind === "workspace") runtime.workspaceDeletion.assertAvailable(owner.id);
 
       const submissionId = conversationId === undefined
         ? runInput.submissionId ?? crypto.randomUUID()
         : runInput.submissionId;
-      const spaceAccess = await resolveConversationSpaceAccess(
-        runtime.spaceFeature,
-        runtime.workspaceFeature,
-        (id) => runtime.ordinaryAgentFeature.queries.getConversationOwner(id),
+      const spaceAccess = await runtime.resolveSpaceAccess({
         conversationId,
-        runInput.contextInput,
-        selectedSpaceId,
-      );
+        contextInput: runInput.contextInput,
+        requestedSpaceId: selectedSpaceId,
+      });
       if (spaceAccess.spaceId !== undefined) {
         runtime.spaceConversationDeletion.assertAvailable(spaceAccess.spaceId);
       }
@@ -133,7 +146,7 @@ export function createOrdinaryTurnApplication(
         throw new OrdinaryTurnApplicationError("conversation_space_not_found", "所选空间不存在。");
       }
 
-      const effectiveRunInput: PanelRunInput = {
+      const effectiveRunInput: OrdinaryTurnInput = {
         ...runInput,
         owner,
         contextInput: spaceAccess.contextInput,
@@ -147,26 +160,10 @@ export function createOrdinaryTurnApplication(
             birth,
           })
         : owner.kind === "workspace"
-          ? await runtime.workspaceDeletion.admit(owner.id, () => submitExistingConversationTurn(
-              runtime,
-              conversationId,
-              owner,
-              effectiveRunInput,
-              birth,
-            ))
-          : await runtime.spaceConversationDeletion.admit(owner.id, () => submitExistingConversationTurn(
-              runtime,
-              conversationId,
-              owner,
-              effectiveRunInput,
-              birth,
-            ));
+          ? await runtime.workspaceDeletion.admit(owner.id, () => submitExistingConversationTurn(runtime, conversationId, owner, effectiveRunInput, birth))
+          : await runtime.spaceConversationDeletion.admit(owner.id, () => submitExistingConversationTurn(runtime, conversationId, owner, effectiveRunInput, birth));
 
-      return {
-        submitted,
-        owner,
-        spaceId: spaceAccess.spaceId,
-      };
+      return { submitted, owner, spaceId: spaceAccess.spaceId };
     },
   };
 }
@@ -175,7 +172,7 @@ async function submitExistingConversationTurn(
   runtime: OrdinaryTurnApplicationDependencies,
   conversationId: string,
   owner: ConversationOwner,
-  input: PanelRunInput,
+  input: OrdinaryTurnInput,
   birth: OrdinaryRunBirth,
 ): Promise<SubmitOrdinaryTurnResult> {
   return runtime.ordinaryAgentFeature.commands.submitTurn({

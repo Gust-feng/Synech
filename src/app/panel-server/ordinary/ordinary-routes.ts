@@ -26,10 +26,11 @@ import {
   parseConversationRollbackInput,
   parseRunInput,
 } from "../request-parsers.js";
+import type { PanelRunInput } from "../request-parsers.js";
 import type { ConversationLifecycleCoordinator, SpaceConversationDeletionCoordinator } from "../spaces/space-conversation-coordinator.js";
 import type { WorkspaceDeletionCoordinator } from "../spaces/workspace-deletion-coordinator.js";
 import { SseResponseWriter } from "../sse-response-writer.js";
-import type { OrdinaryTurnApplication } from "./ordinary-turn-application.js";
+import type { OrdinaryTurnApplication, OrdinaryTurnInput } from "../../application/ordinary-turn-application.js";
 
 const ORDINARY_STREAM_HEARTBEAT_INTERVAL_MS = 5_000;
 const ORDINARY_STREAM_DELTA_COALESCE_MS = 16;
@@ -179,7 +180,7 @@ async function submitTurn(
   conversationId?: string,
 ): Promise<void> {
   const runInput = parseRunInput(await readJsonBody(request));
-  const result = await runtime.ordinaryTurnApplication.submit({ runInput, conversationId });
+  const result = await runtime.ordinaryTurnApplication.submit({ runInput: toOrdinaryTurnInput(runInput), conversationId });
   const run = await projectCommandRun(runtime, result.submitted.run);
   writeJson(response, 202, {
     ok: true,
@@ -192,6 +193,19 @@ async function submitTurn(
     }),
     run: run.view.run,
   });
+}
+
+function toOrdinaryTurnInput(input: PanelRunInput): OrdinaryTurnInput {
+  return {
+    goal: input.goal,
+    ...(input.submissionId === undefined ? {} : { submissionId: input.submissionId }),
+    ...(input.owner === undefined ? {} : { owner: input.owner }),
+    ...(input.aiMode === undefined ? {} : { aiMode: input.aiMode }),
+    ...(input.reasoningEffort === undefined ? {} : { reasoningEffort: input.reasoningEffort }),
+    ...(input.toolConfirmationPolicy === undefined ? {} : { toolConfirmationPolicy: input.toolConfirmationPolicy }),
+    ...(input.modelOverride === undefined ? {} : { modelOverride: input.modelOverride }),
+    ...(input.contextInput === undefined ? {} : { contextInput: input.contextInput }),
+  };
 }
 
 async function assertConversationMutationAvailable(runtime: OrdinaryRouteDependencies, conversationId: string): Promise<void> {

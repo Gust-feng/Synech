@@ -74,11 +74,10 @@ import {
 } from "../workspaces/index.js";
 import {
   createSpaceReferenceUnlinkService,
-  createWorkbenchCoordination,
   type SpaceReferenceUnlinkService,
   type WorkbenchCoordination,
 } from "../workbench-coordination/index.js";
-import { createWorkspaceDeletionCoordinator, type WorkspaceDeletionCoordinator } from "./spaces/workspace-deletion-coordinator.js";
+import type { WorkspaceDeletionCoordinator } from "../workbench-coordination/index.js";
 import {
   applyPendingRestore,
   createDataMaintenance,
@@ -86,7 +85,6 @@ import {
 } from "./storage/data-maintenance.js";
 import { createSpaceReferenceDeletionFilePort } from "./spaces/space-reference-deletion.js";
 import { resolveSpaceFilesystemReference } from "./spaces/space-workspace-reference.js";
-import { deletionLifecycleLockKey } from "./spaces/deletion-lifecycle-lock.js";
 import {
   createOrdinaryConversationTitleGenerator,
 } from "./ordinary/ordinary-conversation-title.js";
@@ -132,9 +130,7 @@ import {
   type WorkbenchProjectionChangeFeed,
 } from "./workbench/workbench-projection-change-feed.js";
 import {
-  createSpaceConversationDeletionCoordinator,
   type SpaceConversationDeletionCoordinator,
-  createConversationLifecycleCoordinator,
   type ConversationLifecycleCoordinator,
 } from "./spaces/space-conversation-coordinator.js";
 import { createSqliteSpaceConversationDeletionJournal } from "./spaces/space-conversation-deletion-journal.js";
@@ -150,6 +146,7 @@ import {
   resolveSkillRoots,
   resolveSubAgentRoots,
 } from "./storage/runtime-asset-roots.js";
+import { createWorkbenchCoordinationRuntime } from "./composition/workbench-coordination-runtime.js";
 
 /**
  * The sole process-lifetime composition root for the local Panel host. Route
@@ -697,110 +694,27 @@ function assemblePanelHost(input: {
       configCenter: input.configCenter,
     }),
   });
-  // 三个删除 / 链接生命周期协调器共享同一把 sentinel 互斥键：彼此串行、与整仓备份互斥，
-  // 但不独占 Product Home 本身，避免盖住 SpaceFeature 引用删除生命周期在同一协调器上申请的
-  // Product Home 子目录锁而自死锁（见 deletion-lifecycle-lock.ts）。
-  const deletionLockKey = deletionLifecycleLockKey(productPaths.state.locks);
-  const spaceConversationDeletion = createSpaceConversationDeletionCoordinator({
-    spaces: spaceFeature,
-    ordinary: ordinaryAgentFeature,
-    personalKnowledge: personalKnowledgeFeature,
-    agentNotes: agentNotesFeature.commands,
-    memory: pathDependencyFeature.commands,
-    processes: processRegistry,
-    processTerminator,
-    journal: spaceConversationDeletionJournal,
-    runExclusive: async (operation) => await fileMutationCoordinator.runExclusive(deletionLockKey, operation),
-  });
-  const workspaceDeletion = createWorkspaceDeletionCoordinator({
-    workspaces: {
-      commands: {
-        deleteWorkspace: workspaceFeature.commands.deleteWorkspace,
-        purgeWorkspace: workspaceFeature.commands.purgeWorkspace,
-      },
-      queries: { get: workspaceFeature.queries.get, listAll: workspaceFeature.queries.listAll },
-    },
-    spaces: {
-      commands: { unlinkReference: spaceFeature.commands.unlinkReference },
-      queries: { listReferencesByWorkspace: spaceFeature.queries.listReferencesByWorkspace },
-    },
-    ordinary: {
-      commands: { deleteConversation: ordinaryAgentFeature.commands.deleteConversation },
-      queries: { listConversationsByOwner: ordinaryAgentFeature.queries.listConversationsByOwner },
-    },
-    agentNotes: agentNotesFeature.commands,
-    memory: pathDependencyFeature.commands,
-    processes: processRegistry,
-    processTerminator,
-    runExclusive: async (operation) => await fileMutationCoordinator.runExclusive(deletionLockKey, operation),
-    runWorkspaceExclusive: async (workspaceId, operation) => {
-      const workspace = await workspaceFeature.queries.get(workspaceId);
-      const rootPath = workspace === undefined
-        ? undefined
-        : workspace.currentMount?.rootPath;
-      return rootPath === undefined ? await operation() : await fileMutationCoordinator.runExclusive(rootPath, operation);
-    },
-  });
-  const conversationLifecycle = createConversationLifecycleCoordinator({
-    ordinary: ordinaryAgentFeature,
-    workspaces: { queries: workspaceFeature.queries },
-    workspaceAdmission: (workspaceId, operation) => workspaceDeletion.admit(workspaceId, operation),
-    spaceAdmission: (spaceId, operation) => spaceConversationDeletion.admit(spaceId, operation),
-    processes: processRegistry,
-    processTerminator,
-    journal: conversationLifecycleJournal,
-    runExclusive: async (operation) => await fileMutationCoordinator.runExclusive(deletionLockKey, operation),
-  });
-  workbenchCoordination = createWorkbenchCoordination({
-    spaces: {
-      commands: {
-        addReference: spaceFeature.commands.addReference,
-        unlinkReference: spaceFeature.commands.unlinkReference,
-      },
-      queries: {
-        getTree: spaceFeature.queries.getTree,
-        getReference: spaceFeature.queries.getReference,
-        listReferencesByWorkspace: spaceFeature.queries.listReferencesByWorkspace,
-      },
-    },
-    workspaces: {
-      commands: {
-        ensureWorkspace: workspaceFeature.commands.ensureWorkspace,
-        reconnectWorkspace: workspaceFeature.commands.reconnectWorkspace,
-        setVisibility: workspaceFeature.commands.setVisibility,
-        discardImplicitWorkspace: workspaceFeature.commands.discardImplicitWorkspace,
-      },
-    },
+  const coordinationRuntime = createWorkbenchCoordinationRuntime({
+    productPaths,
     inspectDirectory: inspectSpaceExternalSource,
-    assertSpaceAvailable: (spaceId) => spaceConversationDeletion.assertAvailable(spaceId),
-    listWorkspaceConversationIds: async (workspaceId) =>
-      (await ordinaryAgentFeature.queries.listConversationsByOwner({ kind: "workspace", id: workspaceId }))
-        .map((conversation) => conversation.conversationId),
-    withWorkspaceAdmission: (workspaceId, operation) => workspaceDeletion.admit(workspaceId, operation),
-    withWorkspacePathLease: async (workspaceId, operation) => {
-      const workspace = await workspaceFeature.queries.get(workspaceId);
-      const rootPath = workspace === undefined
-        ? undefined
-        : workspace.currentMount?.rootPath;
-      return rootPath === undefined
-        ? await operation()
-        : await fileMutationCoordinator.runExclusive(rootPath, operation);
-    },
-    withWorkspaceMountTransitionLease: async (workspaceId, candidateRootPath, operation) => {
-      const workspace = await workspaceFeature.queries.get(workspaceId);
-      const currentRoot = workspace === undefined
-        ? undefined
-        : workspace.currentMount?.rootPath;
-      return await runWithPathLeases(
-        fileMutationCoordinator,
-        currentRoot === undefined ? [candidateRootPath] : [currentRoot, candidateRootPath],
-        operation,
-      );
-    },
-    deleteWorkspace: (workspaceId) => workspaceDeletion.deleteWorkspace(workspaceId),
-    deleteSpace: (spaceId) => spaceConversationDeletion.deleteSpace(spaceId),
-    detachKnowledgeFromSpace: (detachInput) => personalKnowledgeFeature.commands.cleanupSpace(detachInput),
+    spaceFeature,
+    workspaceFeature,
+    ordinaryAgentFeature,
+    personalKnowledgeFeature,
+    agentNotesFeature,
+    pathDependencyFeature,
+    processRegistry,
+    processTerminator,
+    fileMutationCoordinator,
+    spaceConversationDeletionJournal,
+    conversationLifecycleJournal,
   });
+  const {
+    conversationLifecycle,
+    spaceConversationDeletion,
+    workspaceDeletion,
+  } = coordinationRuntime;
+  workbenchCoordination = coordinationRuntime.workbenchCoordination;
   spaceReferenceUnlink = createSpaceReferenceUnlinkService({
     spaces: {
       commands: { unlinkReference: spaceFeature.commands.unlinkReference },
@@ -947,22 +861,6 @@ function managedKnowledgeAssetWriteError(error: unknown): unknown {
  */
 async function canonicalWorkspaceMountIdentity(value: string): Promise<string> {
   return await canonicalSpacePathIdentity(value, (target) => fs.realpath(target));
-}
-
-async function runWithPathLeases<T>(
-  coordinator: Pick<LocalWorkspaceMutationCoordinator, "runExclusive">,
-  paths: readonly string[],
-  operation: () => Promise<T>,
-): Promise<T> {
-  const ordered = [...new Map(paths.map((value) => {
-    const resolved = path.normalize(path.resolve(value));
-    const key = process.platform === "win32" ? resolved.toLowerCase() : resolved;
-    return [key, resolved] as const;
-  })).values()].sort((left, right) => left.localeCompare(right));
-  const acquire = async (index: number): Promise<T> => index >= ordered.length
-    ? await operation()
-    : await coordinator.runExclusive(ordered[index]!, async () => await acquire(index + 1));
-  return await acquire(0);
 }
 
 export async function cleanupPanelHostOwnedProcesses(

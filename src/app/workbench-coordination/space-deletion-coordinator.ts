@@ -9,7 +9,7 @@ import {
   type InMemoryProcessRegistry,
   type ProcessTerminator,
 } from "../runtime-guard/process-registry.js";
-import { WorkbenchCoordinationError } from "./contracts.js";
+import { WorkbenchCoordinationError, type SpaceKnowledgeDetachWorkflow } from "./contracts.js";
 import {
   SPACE_CONVERSATION_DELETION_SCHEMA_VERSION,
   type SpaceConversationDeletionJournal,
@@ -21,7 +21,7 @@ export type SpaceConversationDeletionCoordinator = {
   isDeleting(spaceId: string): boolean;
   assertAvailable(spaceId: string): void;
   admit<T>(spaceId: string, operation: () => Promise<T>): Promise<T>;
-  deleteSpace(spaceId: string): Promise<void>;
+  deleteSpace(spaceId: string, detachKnowledgeFromSpace?: SpaceKnowledgeDetachWorkflow): Promise<void>;
 };
 
 /**
@@ -51,6 +51,8 @@ export function createSpaceConversationDeletionCoordinator(input: {
 }): SpaceConversationDeletionCoordinator {
   const now = input.now ?? (() => new Date().toISOString());
   const runExclusive = input.runExclusive ?? (async <T>(operation: () => Promise<T>) => await operation());
+  const defaultDetachKnowledgeFromSpace: SpaceKnowledgeDetachWorkflow = async (detachInput) =>
+    await input.personalKnowledge.commands.cleanupSpace(detachInput);
   const deleting = new Set<string>();
   const admissionTails = new Map<string, Promise<void>>();
   let tail = Promise.resolve();
@@ -72,7 +74,10 @@ export function createSpaceConversationDeletionCoordinator(input: {
   };
   const deletingError = (id: string) => new WorkbenchCoordinationError("space_deletion_in_progress", `Space ${id} is being deleted.`);
 
-  const resume = async (initial: SpaceConversationDeletionRecord): Promise<void> => {
+  const resume = async (
+    initial: SpaceConversationDeletionRecord,
+    detachKnowledgeFromSpace: SpaceKnowledgeDetachWorkflow = defaultDetachKnowledgeFromSpace,
+  ): Promise<void> => {
     let record = initial;
     if (record.phase === "cleanup_pending") {
       await input.journal.delete(record.deletionId);
@@ -101,7 +106,7 @@ export function createSpaceConversationDeletionCoordinator(input: {
         const referenceIds = record.referenceIds === undefined || record.referenceIds.length === 0
           ? (tree?.entries.map((entry) => entry.item.id) ?? [])
           : record.referenceIds;
-        await input.personalKnowledge.commands.cleanupSpace({ spaceId: record.spaceId, referenceIds });
+        await detachKnowledgeFromSpace({ spaceId: record.spaceId, referenceIds });
         record = await saveCheckpoint(input.journal, { ...record, referenceIds }, "knowledge_cleaned", now());
         checkpoint = "knowledge_cleaned";
       }
@@ -161,7 +166,7 @@ export function createSpaceConversationDeletionCoordinator(input: {
         return operation();
       });
     },
-    deleteSpace(spaceId) {
+    deleteSpace(spaceId, detachKnowledgeFromSpace = defaultDetachKnowledgeFromSpace) {
       deleting.add(spaceId);
       return serialize(() => admitInOrder(spaceId, () => runExclusive(async () => {
         let record = await input.journal.getBySpace(spaceId);
@@ -184,7 +189,7 @@ export function createSpaceConversationDeletionCoordinator(input: {
           };
           await input.journal.save(record);
         }
-        await resume(record);
+        await resume(record, detachKnowledgeFromSpace);
         deleting.delete(spaceId);
       })));
     },
