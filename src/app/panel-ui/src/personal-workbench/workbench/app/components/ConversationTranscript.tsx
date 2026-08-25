@@ -7,7 +7,7 @@
  * 数据权威不变：projectConversationDisplayList 产出什么，这里就渲染什么。
  * 全量可见性不变：工具活动、确认流、失败归因、Sub-Agent 嵌套全部保留。
  */
-import React, { useCallback, useEffect, useMemo, useSyncExternalStore, useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Brain,
   Check,
@@ -24,19 +24,10 @@ import {
   Wrench,
 } from "lucide-react";
 import type { ConversationTurn, ConversationTurnAttachment } from "@ui/contracts/conversation";
-import type { AgentDeliverable, OrdinaryRun, OrdinaryWorkView, TranscriptNode } from "@ui/contracts/run";
+import type { OrdinaryRun, OrdinaryWorkView, TranscriptNode } from "@ui/contracts/run";
 import type { PanelToolCallResult as ToolCallResult } from "@panel-api/ordinary-agent";
 import type { LiveRunBuffer } from "@panel-api/ui-read-model";
 import type { WorklineProjectedTurn } from "@panel-api/ui-read-model";
-import type { LiveRunTranscriptProjection } from "@panel-api/ui-read-model";
-import { projectConversationDisplayList } from "@panel-api/ui-read-model";
-import { shouldCollapseStandaloneTimeline } from "@panel-api/ui-read-model";
-import {
-  getTranscriptCache,
-  subscribeTranscriptCache,
-  transcriptNodesCacheForConversation,
-  transcriptToolResultsCacheForConversation,
-} from "@ui/features/conversations/transcript/store";
 import type { ChatModelOption } from "@ui/contracts/composer";
 import { RichText, StreamingRichText } from "@ui/components/rich-text";
 import { useStreamingText } from "@ui/features/conversations/transcript/use-streaming-text";
@@ -46,6 +37,7 @@ import { toolResultForActivity } from "@ui/features/conversations/transcript/too
 import { ConfirmationCard, type ConfirmationProjection } from "./ConfirmationCard";
 import type { ConversationDisplayItem } from "@panel-api/ui-read-model";
 import type { AssistantWorkflowDisplay } from "@panel-api/ui-read-model";
+import { useConversationTranscriptProjection, type ConversationStandaloneRun } from "./use-conversation-transcript-projection";
 import {
   isVisibleOrdinaryActivityItem,
   resolveActivityToolKind,
@@ -78,15 +70,7 @@ export type ConversationTranscriptProps = {
   readonly pending?: ConfirmationProjection;
   readonly showModelUsage: boolean;
   readonly developerModeEnabled: boolean;
-  readonly standaloneRun?: {
-    readonly currentRunId?: string;
-    readonly runStatus?: string;
-    readonly answer?: string;
-    readonly failure?: { readonly code: string; readonly message: string };
-    readonly deliverable?: AgentDeliverable;
-    readonly runProjection: LiveRunTranscriptProjection & { readonly nodes: readonly TranscriptNode[] };
-    readonly pending?: ConfirmationProjection;
-  };
+  readonly standaloneRun?: ConversationStandaloneRun;
   readonly models: readonly ChatModelOption[];
   readonly selectedModelId: string;
   readonly onDecision: (decision: "approve_once" | "deny" | "guidance", guidance?: string) => void;
@@ -94,49 +78,7 @@ export type ConversationTranscriptProps = {
 };
 
 export function ConversationTranscript(props: ConversationTranscriptProps): React.ReactElement | null {
-  const cachedHistoricalSnapshot = useSyncExternalStore(
-    useCallback(
-      (listener: () => void) => subscribeTranscriptCache(props.conversationId, listener),
-      [props.conversationId],
-    ),
-    getTranscriptCache,
-    getTranscriptCache,
-  );
-  const cachedHistoricalNodes = transcriptNodesCacheForConversation(cachedHistoricalSnapshot, props.conversationId);
-  const cachedHistoricalToolResults = transcriptToolResultsCacheForConversation(
-    cachedHistoricalSnapshot,
-    props.conversationId,
-  );
-  const toolResultsByRunId = useMemo(() => props.currentRunId === undefined
-    ? cachedHistoricalToolResults
-    : {
-        ...cachedHistoricalToolResults,
-        [props.currentRunId]: props.currentRunToolResults,
-      }, [cachedHistoricalToolResults, props.currentRunId, props.currentRunToolResults]);
-  const conversationDisplay = useMemo(() => {
-    const collapseTimeline = shouldCollapseStandaloneTimeline({
-      runStatus: props.standaloneRun?.runStatus,
-      hasPendingConfirmation: props.standaloneRun?.pending !== undefined,
-    });
-    return projectConversationDisplayList({
-      conversationId: props.conversationId,
-      projectedTurns: props.projectedTurns,
-      turns: props.turns,
-      cachedNodesByRunId: cachedHistoricalNodes,
-      currentRunId: props.currentRunId,
-      currentRunNodes: props.currentRunNodes,
-      run: props.run,
-      live: props.live,
-      workView: props.workView,
-      pending: props.pending,
-      standaloneRun: props.standaloneRun === undefined ? undefined : { ...props.standaloneRun, collapseTimeline },
-    });
-  }, [
-    cachedHistoricalNodes, props.conversationId, props.projectedTurns, props.turns,
-    props.currentRunId, props.currentRunNodes, props.run, props.live, props.workView,
-    props.pending, props.standaloneRun,
-  ]);
-
+  const { conversationDisplay, toolResultsByRunId } = useConversationTranscriptProjection(props);
   const items = conversationDisplay.items;
   if (items.length === 0) return null;
 
