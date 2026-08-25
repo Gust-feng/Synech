@@ -11,6 +11,7 @@ import { ordinaryTurnApplicationHttpError } from "../dist/app/panel-server/reque
 test("ordinary route delegates turn orchestration to one application command", async () => {
   const source = await fs.readFile("src/app/panel-server/ordinary/ordinary-routes.ts", "utf8");
   assert.match(source, /ordinaryTurnApplication\.submit/u);
+  assert.doesNotMatch(source, /workbenchCoordination\.commands\.submitOrdinaryTurn/u);
   assert.doesNotMatch(source, /resolveConversationSpaceAccess|prepareOrdinaryRunBirth/u);
 });
 

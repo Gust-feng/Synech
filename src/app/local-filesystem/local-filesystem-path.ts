@@ -2,7 +2,7 @@
  * 中性路径安全模块。
  *
  * 从 space-reference-preview.ts、space-reference-mutations.ts、
- * space-reference-deletion.ts 和 space-managed-folder-store.ts 中提取的
+ * space-reference-deletion.ts 和 managed-space-folder-store.ts 中提取的
  * 重复路径逃逸防止逻辑。不依赖任何 Space/Knowledge 业务概念。
  */
 import path from "node:path";

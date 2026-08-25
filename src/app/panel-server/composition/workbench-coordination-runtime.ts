@@ -1,5 +1,10 @@
 import path from "node:path";
 
+import { createOrdinaryTurnApplication, type OrdinaryTurnApplicationDependencies } from "../../application/ordinary-turn-application.js";
+import {
+  createManagedSpaceFolderApplication,
+} from "../../application/managed-space-folder-application.js";
+import type { ManagedSpaceFolderApplication } from "../../../domain/managed-space-folder.js";
 import type { ProductPaths } from "../../../platform/storage/index.js";
 import type { AgentNotesFeature } from "../../agent-notes/index.js";
 import type { OrdinaryAgentFeature } from "../../ordinary-agent/index.js";
@@ -35,6 +40,8 @@ export type WorkbenchCoordinationRuntime = {
   readonly spaceConversationDeletion: SpaceConversationDeletionCoordinator;
   readonly workspaceDeletion: WorkspaceDeletionCoordinator;
   readonly workbenchCoordination: WorkbenchCoordination;
+  readonly ordinaryTurnApplication: ReturnType<typeof createOrdinaryTurnApplication>;
+  readonly managedSpaceFolderApplication: ManagedSpaceFolderApplication<import("../../spaces/index.js").SpaceReferenceItem>;
 };
 
 /**
@@ -54,8 +61,11 @@ export function createWorkbenchCoordinationRuntime(input: {
   readonly processRegistry: Pick<InMemoryProcessRegistry, "cleanupBySpace" | "cleanupByConversation">;
   readonly processTerminator: ProcessTerminator;
   readonly fileMutationCoordinator: Pick<LocalWorkspaceMutationCoordinator, "runExclusive">;
+  readonly managedSpaceFolderRoot: string;
   readonly spaceConversationDeletionJournal: SpaceConversationDeletionJournal;
   readonly conversationLifecycleJournal: ConversationLifecycleJournal;
+  readonly resolveSpaceAccess: OrdinaryTurnApplicationDependencies["resolveSpaceAccess"];
+  readonly prepareOrdinaryRunBirth: OrdinaryTurnApplicationDependencies["prepareOrdinaryRunBirth"];
 }): WorkbenchCoordinationRuntime {
   const deletionLockKey = deletionLifecycleLockKey(input.productPaths.state.locks);
   const runDeletionExclusive = async <T>(operation: () => Promise<T>): Promise<T> =>
@@ -117,6 +127,25 @@ export function createWorkbenchCoordinationRuntime(input: {
     runExclusive: runDeletionExclusive,
   });
 
+  const ordinaryTurnApplication = createOrdinaryTurnApplication({
+    ordinaryAgentFeature: input.ordinaryAgentFeature,
+    spaceFeature: input.spaceFeature,
+    workspaceFeature: input.workspaceFeature,
+    conversationLifecycle,
+    spaceConversationDeletion,
+    workspaceDeletion,
+    resolveSpaceAccess: input.resolveSpaceAccess,
+    prepareOrdinaryRunBirth: input.prepareOrdinaryRunBirth,
+  });
+  const managedSpaceFolderApplication = createManagedSpaceFolderApplication({
+    addReference: input.spaceFeature.commands.addReference,
+    spaceConversationDeletion,
+    fileMutationCoordinator: {
+      run: async (key, operation) => await input.fileMutationCoordinator.runExclusive(key, operation),
+    },
+    managedSpaceFolderRoot: input.managedSpaceFolderRoot,
+  });
+
   const workbenchCoordination = createWorkbenchCoordination({
     spaces: {
       commands: {
@@ -165,7 +194,14 @@ export function createWorkbenchCoordinationRuntime(input: {
     detachKnowledgeFromSpace: (detachInput) => input.personalKnowledgeFeature.commands.cleanupSpace(detachInput),
   });
 
-  return { conversationLifecycle, spaceConversationDeletion, workspaceDeletion, workbenchCoordination };
+  return {
+    conversationLifecycle,
+    spaceConversationDeletion,
+    workspaceDeletion,
+    workbenchCoordination,
+    ordinaryTurnApplication,
+    managedSpaceFolderApplication,
+  };
 }
 
 async function runWithPathLeases<T>(

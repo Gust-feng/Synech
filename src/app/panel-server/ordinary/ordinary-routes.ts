@@ -38,7 +38,7 @@ const ORDINARY_STREAM_MAX_QUEUED_FRAMES = 256;
 
 export type OrdinaryRouteDependencies = {
   readonly ordinaryAgentFeature: {
-    readonly commands: Pick<OrdinaryAgentFeature["commands"], "renameConversation" | "setConversationPinned" | "rollbackConversation" | "submitTurn" | "cancel" | "decideApproval">;
+    readonly commands: Pick<OrdinaryAgentFeature["commands"], "renameConversation" | "setConversationPinned" | "rollbackConversation" | "cancel" | "decideApproval">;
     readonly queries: Pick<OrdinaryAgentFeature["queries"], "getConversation" | "getConversationOwner" | "listConversations" | "getRun">;
     readonly events: Pick<OrdinaryAgentFeature["events"], "replay" | "subscribe">;
   };

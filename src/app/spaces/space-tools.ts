@@ -1,9 +1,9 @@
-import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { ToolDefinition, ToolExecutionContext, ToolExecutor, ToolJsonSchema, ToolJsonSchemaValue } from "../../domain/tools/index.js";
 import { asOptionalRecord, asRecord, stringOrUndefined } from "../../kernel/values/index.js";
 import type { ContextAttachmentRunContext } from "../tool-center/adapters/context-attachment-access.js";
+import type { ManagedSpaceFolderApplication } from "../../domain/managed-space-folder.js";
 import type { AgentToolRegistryContribution } from "../tool-center/factory.js";
 import {
   attachmentEntries,
@@ -39,8 +39,8 @@ export type SpaceToolOptions = {
   readonly deleteConversation?: (conversationId: string) => Promise<void>;
   /** Revocations observed since this run froze its grants. */
   readonly revocationOverlay?: SpaceRevocationOverlay;
-  /** Host-owned storage root for software-managed Space folders. */
-  readonly managedSpaceFolderRoot?: string;
+  /** Shared application command for software-managed Space folders. */
+  readonly managedSpaceFolderApplication?: ManagedSpaceFolderApplication<SpaceReferenceItem>;
   /** Host-owned file mutation coordinator shared with the file tools. */
   readonly fileMutationCoordinator?: LocalWorkspaceMutationCoordinator;
   /** Filesystem source inspector; defaults to the real filesystem. */
@@ -312,20 +312,15 @@ export function createSpaceCreateManagedFolderTool(options: SpaceToolOptions): T
       const title = stringOrUndefined(record.title);
       if (spaceId === undefined || title === undefined) return invalid("spaceId and title are required.");
       options.assertSpaceAvailable?.(spaceId);
-      if (options.managedSpaceFolderRoot === undefined) {
+      if (options.managedSpaceFolderApplication === undefined) {
         return { status: "space_managed_folder_unavailable", spaceId, message: "The Host managed Space folder storage is not available in this environment." };
       }
       return resultFor(async () => {
-        const root = options.managedSpaceFolderRoot!;
-        await fs.mkdir(root, { recursive: true });
-        const folder = path.join(root, randomUUID());
-        await fs.mkdir(folder);
-        try {
-          return await options.spaces.commands.addReference({ spaceId, title, reference: { kind: "managed_folder", path: folder }, actor: agentActor(context) });
-        } catch (error) {
-          await fs.rm(folder, { recursive: true, force: true }).catch(() => undefined);
-          throw error;
-        }
+        return await options.managedSpaceFolderApplication!.create({
+          spaceId,
+          title,
+          actor: agentActor(context),
+        });
       }, (item) => ({ status: "created", item: spaceReferenceModelView(item) }));
     },
   });

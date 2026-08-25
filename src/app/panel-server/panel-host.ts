@@ -39,7 +39,6 @@ import {
   createFileSystemOrdinaryManagedAttachmentRepository,
   OrdinaryManagedAttachmentRepositoryError,
   type OrdinaryAgentFeature,
-  type OrdinaryRunBirth,
 } from "../ordinary-agent/index.js";
 import {
   createAgentNotesFeature,
@@ -85,6 +84,7 @@ import {
 } from "./storage/data-maintenance.js";
 import { createSpaceReferenceDeletionFilePort } from "./spaces/space-reference-deletion.js";
 import { resolveSpaceFilesystemReference } from "./spaces/space-workspace-reference.js";
+import { resolveConversationSpaceAccess } from "./spaces/space-agent-access.js";
 import {
   createOrdinaryConversationTitleGenerator,
 } from "./ordinary/ordinary-conversation-title.js";
@@ -110,7 +110,6 @@ import { PanelHttpError } from "./http-utils.js";
 import { createOrdinaryAgentRunResourceAcquirer } from "./ordinary/ordinary-agent-run-resources.js";
 import { createHostFeatureAgentToolContributionResolver } from "./ordinary/agent-tool-contributions.js";
 import { resolveTriggeredSkillContexts } from "./settings/skill-service.js";
-import type { PanelRunInput } from "./request-parsers.js";
 import { InMemoryLocalWorkspaceMutationCoordinator } from "../tool-center/adapters/local-workspace-mutation-coordinator.js";
 import type { LocalWorkspaceMutationCoordinator } from "../tool-center/adapters/local-workspace-mutation-coordinator.js";
 import {
@@ -147,6 +146,7 @@ import {
   resolveSubAgentRoots,
 } from "./storage/runtime-asset-roots.js";
 import { createWorkbenchCoordinationRuntime } from "./composition/workbench-coordination-runtime.js";
+import type { ManagedSpaceFolderApplication } from "../../domain/managed-space-folder.js";
 
 /**
  * The sole process-lifetime composition root for the local Panel host. Route
@@ -185,10 +185,11 @@ export type PanelHost = {
   readonly spaceConversationDeletion: SpaceConversationDeletionCoordinator;
   readonly workspaceDeletion: WorkspaceDeletionCoordinator;
   readonly workbenchCoordination: WorkbenchCoordination;
+  readonly ordinaryTurnApplication: import("../application/ordinary-turn-application.js").OrdinaryTurnApplication;
+  readonly managedSpaceFolderApplication: ManagedSpaceFolderApplication<import("../spaces/index.js").SpaceReferenceItem>;
   readonly spaceReferenceUnlink: SpaceReferenceUnlinkService;
   readonly personalKnowledgeFeature: PersonalKnowledgeFeature<import("../panel-api/workbench.js").DocumentPreview>;
   readonly dataMaintenance: DataMaintenance;
-  readonly prepareOrdinaryRunBirth: (input: PanelRunInput, conversationId?: string) => Promise<OrdinaryRunBirth>;
   readonly toolOutputStore: ToolOutputStore;
   readonly database: SqliteRuntimeDatabase;
   readonly managedAssets: ManagedAssetRepository;
@@ -525,6 +526,7 @@ function assemblePanelHost(input: {
   });
   let workbenchCoordination!: WorkbenchCoordination;
   let spaceReferenceUnlink!: SpaceReferenceUnlinkService;
+  let managedSpaceFolderApplication!: ManagedSpaceFolderApplication<import("../spaces/index.js").SpaceReferenceItem>;
   const resolveFeatureToolContributions = createHostFeatureAgentToolContributionResolver({
     agentNotes: agentNotesFeature,
     pathDependencies: pathDependencyFeature,
@@ -534,8 +536,8 @@ function assemblePanelHost(input: {
     assertSpaceAvailable: (spaceId) => spaceConversationDeletion.assertAvailable(spaceId),
     deleteSpace: (spaceId) => workbenchCoordination.commands.deleteSpace(spaceId),
     deleteConversation: (conversationId) => conversationLifecycle.deleteConversation(conversationId),
-    managedSpaceFolderRoot,
     fileMutationCoordinator,
+    managedSpaceFolderApplication: () => managedSpaceFolderApplication,
     attachWorkspaceDirectory: async ({ spaceId, path: workspacePath, title, actor, annotation }) =>
       (await workbenchCoordination.commands.attachWorkspaceToSpace({
         spaceId,
@@ -694,6 +696,7 @@ function assemblePanelHost(input: {
       configCenter: input.configCenter,
     }),
   });
+  let host!: PanelHost;
   const coordinationRuntime = createWorkbenchCoordinationRuntime({
     productPaths,
     inspectDirectory: inspectSpaceExternalSource,
@@ -708,12 +711,23 @@ function assemblePanelHost(input: {
     fileMutationCoordinator,
     spaceConversationDeletionJournal,
     conversationLifecycleJournal,
+    managedSpaceFolderRoot,
+    resolveSpaceAccess: ({ conversationId, contextInput, requestedSpaceId }) => resolveConversationSpaceAccess(
+      spaceFeature,
+      workspaceFeature,
+      (id) => ordinaryAgentFeature.queries.getConversationOwner(id),
+      conversationId,
+      contextInput,
+      requestedSpaceId,
+    ),
+    prepareOrdinaryRunBirth: (runInput, conversationId) => prepareOrdinaryRunBirth(host, runInput, conversationId),
   });
   const {
     conversationLifecycle,
     spaceConversationDeletion,
     workspaceDeletion,
   } = coordinationRuntime;
+  managedSpaceFolderApplication = coordinationRuntime.managedSpaceFolderApplication;
   workbenchCoordination = coordinationRuntime.workbenchCoordination;
   spaceReferenceUnlink = createSpaceReferenceUnlinkService({
     spaces: {
@@ -767,7 +781,6 @@ function assemblePanelHost(input: {
     }),
   ];
 
-  let host!: PanelHost;
   host = {
     isQuiescing: false,
     configCenter: input.configCenter,
@@ -800,10 +813,11 @@ function assemblePanelHost(input: {
     spaceConversationDeletion,
     workspaceDeletion,
     workbenchCoordination,
+    ordinaryTurnApplication: coordinationRuntime.ordinaryTurnApplication,
+    managedSpaceFolderApplication,
     spaceReferenceUnlink,
     personalKnowledgeFeature,
     dataMaintenance,
-    prepareOrdinaryRunBirth: (runInput, conversationId) => prepareOrdinaryRunBirth(host, runInput, conversationId),
     toolOutputStore,
     database,
     managedAssets,

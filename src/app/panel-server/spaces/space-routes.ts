@@ -15,7 +15,7 @@ import { attachSpaceReferenceMetadata, createPanelDocumentPreview, writePanelSpa
 import { getManagedAssetPreview, updateManagedAssetCaptionPreview, updateManagedAssetTextPreview } from "../storage/managed-asset-routes.js";
 import { createPanelSpaceReferenceEntry, deletePanelSpaceReferenceEntry, renamePanelSpaceReferenceEntry, updatePanelSpaceReferenceText } from "./space-reference-mutations.js";
 import { resolveSpaceFilesystemReference, type ResolvedSpaceFilesystemReference } from "./space-workspace-reference.js";
-import type { ManagedSpaceFolderApplication } from "./space-reference-application.js";
+import type { ManagedSpaceFolderApplication } from "../../../domain/managed-space-folder.js";
 
 const titleSchema = z.string().trim().min(1).max(160);
 const referenceSchema = z.discriminatedUnion("kind", [
@@ -61,7 +61,7 @@ export type SpaceReferenceRouteDependencies = {
     readonly queries: Pick<WorkspaceFeature["queries"], "get">;
   };
   readonly workbenchCoordination: Pick<WorkbenchCoordination, "commands">;
-  readonly managedSpaceFolderApplication: ManagedSpaceFolderApplication;
+  readonly managedSpaceFolderApplication: ManagedSpaceFolderApplication<SpaceReferenceItem>;
   readonly unlinkExternalReference: (referenceId: string) => Promise<void>;
   readonly spaceConversationDeletion: Pick<SpaceConversationDeletionCoordinator, "assertAvailable">;
   readonly fileMutationCoordinator: Pick<LocalWorkspaceMutationCoordinator, "run" | "runExclusive">;
@@ -86,7 +86,11 @@ export async function handlePanelSpaceRoute(
   if (managedFolderMatch !== null && request.method === "POST") {
     const spaceId = decode(managedFolderMatch[1]);
     const input = parse(createFolderSchema, await readJsonBody(request), "空间文件夹信息无效。");
-    const item = await runtime.managedSpaceFolderApplication.create({ spaceId, title: input.title });
+    const item = await runtime.managedSpaceFolderApplication.create({
+      spaceId,
+      title: input.title,
+      actor: { kind: "user" },
+    });
     writeJson(response, 201, { ok: true, item });
     return true;
   }

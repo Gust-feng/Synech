@@ -2,9 +2,9 @@ import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-import { isWithinRoot } from "../../local-filesystem/index.js";
+import { isWithinRoot } from "../local-filesystem/index.js";
 
-/** Host-owned storage for directories created from a Space, separate from user-linked workspaces. */
+/** Host-owned storage for directories created from a Space. */
 export async function createManagedSpaceFolder(root: string): Promise<string> {
   await fs.mkdir(root, { recursive: true });
   const folder = path.join(root, randomUUID());

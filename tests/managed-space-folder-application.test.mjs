@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { createManagedSpaceFolderApplication } from "../dist/app/panel-server/spaces/space-reference-application.js";
+import { createManagedSpaceFolderApplication } from "../dist/app/application/managed-space-folder-application.js";
+import { createSpaceCreateManagedFolderTool } from "../dist/app/spaces/space-tools.js";
 
 test("managed-folder Route delegates allocation and membership to one application command", async () => {
   const source = await fs.readFile("src/app/panel-server/spaces/space-routes.ts", "utf8");
@@ -17,13 +18,9 @@ test("managed-folder application creates the folder and adds one Space membershi
   try {
     const events = [];
     const application = createManagedSpaceFolderApplication({
-      spaceFeature: {
-        commands: {
-          async addReference(input) {
-            events.push({ kind: "add", input });
-            return { id: "reference-1", spaceId: input.spaceId, reference: input.reference };
-          },
-        },
+      async addReference(input) {
+        events.push({ kind: "add", input });
+        return { id: "reference-1", spaceId: input.spaceId, reference: input.reference };
       },
       spaceConversationDeletion: {
         assertAvailable(id) { events.push({ kind: "available", id }); },
@@ -38,7 +35,7 @@ test("managed-folder application creates the folder and adds one Space membershi
       managedSpaceFolderRoot: root,
     });
 
-    const item = await application.create({ spaceId: "space-1", title: "Managed" });
+    const item = await application.create({ spaceId: "space-1", title: "Managed", actor: { kind: "user" } });
     assert.equal(item.id, "reference-1");
     assert.deepEqual(events.slice(0, 3), [
       { kind: "available", id: "space-1" },
@@ -56,11 +53,7 @@ test("managed-folder application compensates physical state when Space write fai
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "synech-managed-space-"));
   try {
     const application = createManagedSpaceFolderApplication({
-      spaceFeature: {
-        commands: {
-          async addReference() { throw new Error("space write failed"); },
-        },
-      },
+      async addReference() { throw new Error("space write failed"); },
       spaceConversationDeletion: {
         assertAvailable() {},
         async admit(_id, operation) { return operation(); },
@@ -70,11 +63,41 @@ test("managed-folder application compensates physical state when Space write fai
     });
 
     await assert.rejects(
-      application.create({ spaceId: "space-1", title: "Managed" }),
+      application.create({ spaceId: "space-1", title: "Managed", actor: { kind: "user" } }),
       /space write failed/u,
     );
     assert.deepEqual(await fs.readdir(root), []);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
+});
+
+test("Agent managed-folder tool delegates to the same application command and preserves actor", async () => {
+  const calls = [];
+  const tool = createSpaceCreateManagedFolderTool({
+    spaces: { commands: {}, queries: {} },
+    workspaceRoot: "C:\\workspace",
+    managedSpaceFolderApplication: {
+      async create(input) {
+        calls.push(input);
+        return {
+          id: "reference-1",
+          spaceId: input.spaceId,
+          title: input.title,
+          reference: { kind: "managed_folder", path: "C:\\managed\\folder" },
+        };
+      },
+    },
+  });
+
+  const result = await tool.execute(
+    { spaceId: "space-1", title: "Managed" },
+    { callerAgentId: "agent-1", traceId: "trace-1", goalId: "goal-1", providerCallId: "provider-1" },
+  );
+  assert.equal(result.status, "created");
+  assert.deepEqual(calls, [{
+    spaceId: "space-1",
+    title: "Managed",
+    actor: { kind: "agent", actorId: "agent-1", traceId: "trace-1", goalId: "goal-1", toolCallId: "provider-1" },
+  }]);
 });

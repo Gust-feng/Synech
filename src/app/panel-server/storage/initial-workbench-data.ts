@@ -21,7 +21,7 @@ import {
   type InitialWorkbenchManagedFolderDefinition,
   type InitialWorkbenchNoteDefinition,
 } from "./initial-workbench-content.js";
-import { createManagedSpaceFolder, deleteManagedSpaceFolder } from "../spaces/space-managed-folder-store.js";
+import { createManagedSpaceFolder, deleteManagedSpaceFolder } from "../../application/managed-space-folder-store.js";
 import { ensureDefaultSpace } from "./default-space-initializer.js";
 
 /**

@@ -22,6 +22,7 @@ import type { LocalWorkspaceMutationCoordinator } from "../../tool-center/adapte
 import type { ContextAttachmentRunContext } from "../../tool-center/adapters/context-attachment-access.js";
 import type { ConversationOwner } from "../../../domain/execution-scope/index.js";
 import type { AgentHostRunResources } from "./agent-run-resources.js";
+import type { ManagedSpaceFolderApplication } from "../../../domain/managed-space-folder.js";
 
 export type HostFeatureAgentToolContributionResolver = (input: {
   readonly workspaceRoot: string;
@@ -47,8 +48,8 @@ export function createHostFeatureAgentToolContributionResolver(input: {
   readonly assertSpaceAvailable?: (spaceId: string) => void;
   readonly deleteSpace?: (spaceId: string) => Promise<void>;
   readonly deleteConversation?: (conversationId: string) => Promise<void>;
-  /** Host-owned storage root for software-managed Space folders. */
-  readonly managedSpaceFolderRoot?: string;
+  /** Shared application command for software-managed Space folders. */
+  readonly managedSpaceFolderApplication?: () => ManagedSpaceFolderApplication<import("../../spaces/index.js").SpaceReferenceItem> | undefined;
   /** Host-owned file mutation coordinator shared with the file tools. */
   readonly fileMutationCoordinator?: LocalWorkspaceMutationCoordinator;
   readonly attachWorkspaceDirectory?: (input: {
@@ -71,7 +72,9 @@ export function createHostFeatureAgentToolContributionResolver(input: {
   const revocationOverlay = input.revocationOverlay ?? (input.spaces === undefined
     ? undefined
     : createSpaceRevocationOverlay(input.spaces.events));
-  return ({ workspaceRoot, runContext, memoryOwner, agentNoteVersions, run, memoryFacts, countMemoryTokens }) => [
+  return ({ workspaceRoot, runContext, memoryOwner, agentNoteVersions, run, memoryFacts, countMemoryTokens }) => {
+    const managedSpaceFolderApplication = input.managedSpaceFolderApplication?.();
+    return [
     ...(input.agentNotes === undefined
       ? []
       : [(register: Parameters<AgentToolRegistryContribution>[0]) => register({
@@ -102,7 +105,7 @@ export function createHostFeatureAgentToolContributionResolver(input: {
           assertSpaceAvailable: input.assertSpaceAvailable,
           deleteSpace: input.deleteSpace,
           deleteConversation: input.deleteConversation,
-          ...(input.managedSpaceFolderRoot === undefined ? {} : { managedSpaceFolderRoot: input.managedSpaceFolderRoot }),
+          ...(managedSpaceFolderApplication === undefined ? {} : { managedSpaceFolderApplication }),
           ...(input.fileMutationCoordinator === undefined ? {} : { fileMutationCoordinator: input.fileMutationCoordinator }),
           ...(input.attachWorkspaceDirectory === undefined ? {} : { attachWorkspaceDirectory: input.attachWorkspaceDirectory }),
           ...(input.detachWorkspaceFromSpace === undefined ? {} : { detachWorkspaceFromSpace: input.detachWorkspaceFromSpace }),
@@ -112,7 +115,8 @@ export function createHostFeatureAgentToolContributionResolver(input: {
     ...(input.personalKnowledge === undefined
       ? []
       : [createPersonalKnowledgeToolRegistryContribution({ knowledge: input.personalKnowledge })]),
-  ];
+    ];
+  };
 }
 
 /** Feature contributions selected by the application Host for every Agent run. */

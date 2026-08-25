@@ -28,7 +28,6 @@ import { OrdinaryFeatureError } from "../ordinary-agent/contracts.js";
 import { OrdinaryPanelCursorError } from "./ordinary/ordinary-agent-panel-projection.js";
 import { handlePanelOrdinaryRoute } from "./ordinary/ordinary-routes.js";
 import {
-  createOrdinaryTurnApplication,
   OrdinaryTurnApplicationError,
 } from "../application/ordinary-turn-application.js";
 import { agentMemoryHttpError, handlePanelAgentMemoryRoute } from "./ordinary/agent-memory-routes.js";
@@ -36,8 +35,7 @@ import { AgentNotesError } from "../agent-notes/index.js";
 import { PathDependencyFeatureError } from "../path-dependencies/index.js";
 import { SpaceFeatureError } from "../spaces/index.js";
 import { handlePanelSpaceRoute, spaceFeatureHttpError } from "./spaces/space-routes.js";
-import { createManagedSpaceFolderApplication } from "./spaces/space-reference-application.js";
-import { resolveConversationSpaceAccess } from "./spaces/space-agent-access.js";
+import type { ManagedSpaceFolderApplication } from "../../domain/managed-space-folder.js";
 import { handlePanelSpaceMetadataRoute } from "./spaces/space-metadata-routes.js";
 import { WorkspaceFeatureError } from "../workspaces/index.js";
 import { handlePanelWorkspaceRoute, workspaceFeatureHttpError } from "./spaces/workspace-routes.js";
@@ -169,33 +167,9 @@ function panelUrlHost(host: string): string {
 }
 
 function createPanelRequestHandler(runtime: PanelHost): (request: IncomingMessage, response: ServerResponse) => void {
-  const ordinaryTurnApplication = createOrdinaryTurnApplication({
-    ordinaryAgentFeature: runtime.ordinaryAgentFeature,
-    spaceFeature: runtime.spaceFeature,
-    workspaceFeature: runtime.workspaceFeature,
-    conversationLifecycle: runtime.conversationLifecycle,
-    spaceConversationDeletion: runtime.spaceConversationDeletion,
-    workspaceDeletion: runtime.workspaceDeletion,
-    resolveSpaceAccess: ({ conversationId, contextInput, requestedSpaceId }) => resolveConversationSpaceAccess(
-      runtime.spaceFeature,
-      runtime.workspaceFeature,
-      (id) => runtime.ordinaryAgentFeature.queries.getConversationOwner(id),
-      conversationId,
-      contextInput,
-      requestedSpaceId,
-    ),
-    prepareOrdinaryRunBirth: runtime.prepareOrdinaryRunBirth,
-  });
-  const managedSpaceFolderApplication = createManagedSpaceFolderApplication({
-    spaceFeature: runtime.spaceFeature,
-    spaceConversationDeletion: runtime.spaceConversationDeletion,
-    fileMutationCoordinator: runtime.fileMutationCoordinator,
-    managedSpaceFolderRoot: runtime.managedSpaceFolderRoot,
-  });
-
   return (request, response) => {
     let requestJob: Promise<void>;
-    requestJob = handlePanelRequest(runtime, ordinaryTurnApplication, managedSpaceFolderApplication, request, response).catch((error) => {
+    requestJob = handlePanelRequest(runtime, runtime.managedSpaceFolderApplication, request, response).catch((error) => {
       if (response.headersSent || response.writableEnded) {
         logUnhandledPanelRequestError(request, error);
         if (!response.writableEnded) response.end();
@@ -265,8 +239,7 @@ export function ordinaryTurnApplicationHttpError(error: OrdinaryTurnApplicationE
 
 async function handlePanelRequest(
   runtime: PanelHost,
-  ordinaryTurnApplication: ReturnType<typeof createOrdinaryTurnApplication>,
-  managedSpaceFolderApplication: ReturnType<typeof createManagedSpaceFolderApplication>,
+  managedSpaceFolderApplication: ManagedSpaceFolderApplication<import("../spaces/index.js").SpaceReferenceItem>,
   request: IncomingMessage,
   response: ServerResponse
 ): Promise<void> {
@@ -350,7 +323,7 @@ async function handlePanelRequest(
 
   if (await handlePanelOrdinaryRoute({
     ordinaryAgentFeature: runtime.ordinaryAgentFeature,
-    ordinaryTurnApplication,
+    ordinaryTurnApplication: runtime.ordinaryTurnApplication,
     conversationLifecycle: runtime.conversationLifecycle,
     spaceConversationDeletion: runtime.spaceConversationDeletion,
     workspaceDeletion: runtime.workspaceDeletion,
