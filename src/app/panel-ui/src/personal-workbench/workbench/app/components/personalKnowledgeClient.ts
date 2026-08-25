@@ -2,6 +2,10 @@ import { ApiError, requestJson } from '@ui/api'
 import type { PersonalNoteRevision } from '@panel-api/workbench'
 import type { Assignment, BrainLink, BrainPage, Note, Theme } from './personalKnowledgeTypes'
 import { subscribeWorkbenchProjectionChanges } from '@ui/workbench/projection-changes'
+import {
+  createPersonalNoteSaveState,
+  type PersonalNoteSaveState,
+} from './personalKnowledgeState'
 
 export type { Assignment, BrainLink, BrainPage, Note, PageKind, Theme } from './personalKnowledgeTypes'
 export type { PersonalNoteRevision } from '@panel-api/workbench'
@@ -50,6 +54,7 @@ let loadState: PersonalKnowledgeLoadState = { status: 'idle' }
 const pendingMutations: PendingMutation[] = []
 const pendingNotes = new Map<string, number>()
 const noteErrors = new Map<string, string>()
+const noteSaveStateCache = new Map<string, PersonalNoteSaveState>()
 const blockedNoteIds = new Set<string>()
 const committedLocalNoteRevisions = new Map<string, number>()
 const pendingKnowledgeRefs = new Map<string, number>()
@@ -60,10 +65,17 @@ export function getPersonalKnowledgeSnapshot(): Snapshot { return snapshot }
 export function getPersonalKnowledgeError(): string | undefined { return lastError }
 export function getPersonalKnowledgeLoadState(): PersonalKnowledgeLoadState { return loadState }
 export function isPersonalKnowledgePersistenceEnabled(): boolean { return persistenceEnabled }
-export function getPersonalNoteSaveState(noteId: string): string {
+export function getPersonalNoteSaveState(noteId: string): PersonalNoteSaveState {
   const error = noteErrors.get(noteId)
-  if (error !== undefined) return `error:${error}`
-  return (pendingNotes.get(noteId) ?? 0) > 0 ? 'saving' : 'saved'
+  if (error !== undefined) {
+    const cached = noteSaveStateCache.get(noteId)
+    if (cached?.status === 'error' && cached.message === error) return cached
+    const next = createPersonalNoteSaveState(pendingNotes.get(noteId) ?? 0, error)
+    noteSaveStateCache.set(noteId, next)
+    return next
+  }
+  noteSaveStateCache.delete(noteId)
+  return createPersonalNoteSaveState(pendingNotes.get(noteId) ?? 0, undefined)
 }
 export function getCommittedLocalNoteRevision(noteId: string): number | undefined {
   return committedLocalNoteRevisions.get(noteId)

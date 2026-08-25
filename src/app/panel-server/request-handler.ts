@@ -27,6 +27,10 @@ import { listPanelSkillSettings, refreshPanelSkillSettings, setPanelSkillEnabled
 import { OrdinaryFeatureError } from "../ordinary-agent/contracts.js";
 import { OrdinaryPanelCursorError } from "./ordinary/ordinary-agent-panel-projection.js";
 import { handlePanelOrdinaryRoute } from "./ordinary/ordinary-routes.js";
+import {
+  createOrdinaryTurnApplication,
+  OrdinaryTurnApplicationError,
+} from "./ordinary/ordinary-turn-application.js";
 import { agentMemoryHttpError, handlePanelAgentMemoryRoute } from "./ordinary/agent-memory-routes.js";
 import { AgentNotesError } from "../agent-notes/index.js";
 import { PathDependencyFeatureError } from "../path-dependencies/index.js";
@@ -163,10 +167,19 @@ function panelUrlHost(host: string): string {
 }
 
 function createPanelRequestHandler(runtime: PanelHost): (request: IncomingMessage, response: ServerResponse) => void {
+  const ordinaryTurnApplication = createOrdinaryTurnApplication({
+    ordinaryAgentFeature: runtime.ordinaryAgentFeature,
+    spaceFeature: runtime.spaceFeature,
+    workspaceFeature: runtime.workspaceFeature,
+    conversationLifecycle: runtime.conversationLifecycle,
+    spaceConversationDeletion: runtime.spaceConversationDeletion,
+    workspaceDeletion: runtime.workspaceDeletion,
+    prepareOrdinaryRunBirth: runtime.prepareOrdinaryRunBirth,
+  });
 
   return (request, response) => {
     let requestJob: Promise<void>;
-    requestJob = handlePanelRequest(runtime, request, response).catch((error) => {
+    requestJob = handlePanelRequest(runtime, ordinaryTurnApplication, request, response).catch((error) => {
       if (response.headersSent || response.writableEnded) {
         logUnhandledPanelRequestError(request, error);
         if (!response.writableEnded) response.end();
@@ -178,6 +191,10 @@ function createPanelRequestHandler(runtime: PanelHost): (request: IncomingMessag
       }
       if (error instanceof OrdinaryPanelCursorError) {
         writePanelError(response, new PanelHttpError(400, error.code, error.message));
+        return;
+      }
+      if (error instanceof OrdinaryTurnApplicationError) {
+        writePanelError(response, ordinaryTurnApplicationHttpError(error));
         return;
       }
       if (error instanceof OrdinaryFeatureError) {
@@ -217,8 +234,22 @@ function createPanelRequestHandler(runtime: PanelHost): (request: IncomingMessag
   };
 }
 
+export function ordinaryTurnApplicationHttpError(error: OrdinaryTurnApplicationError): PanelHttpError {
+  switch (error.code) {
+    case "new_conversation_owner_required":
+      return new PanelHttpError(400, "conversation_owner_required", error.message);
+    case "conversation_owner_required":
+      return new PanelHttpError(409, "conversation_owner_required", error.message);
+    case "conversation_owner_conflict":
+      return new PanelHttpError(409, "conversation_owner_conflict", error.message);
+    case "conversation_space_not_found":
+      return new PanelHttpError(404, "conversation_space_not_found", error.message);
+  }
+}
+
 async function handlePanelRequest(
   runtime: PanelHost,
+  ordinaryTurnApplication: ReturnType<typeof createOrdinaryTurnApplication>,
   request: IncomingMessage,
   response: ServerResponse
 ): Promise<void> {
@@ -302,12 +333,10 @@ async function handlePanelRequest(
 
   if (await handlePanelOrdinaryRoute({
     ordinaryAgentFeature: runtime.ordinaryAgentFeature,
-    spaceFeature: runtime.spaceFeature,
-    workspaceFeature: runtime.workspaceFeature,
+    ordinaryTurnApplication,
     conversationLifecycle: runtime.conversationLifecycle,
     spaceConversationDeletion: runtime.spaceConversationDeletion,
     workspaceDeletion: runtime.workspaceDeletion,
-    prepareOrdinaryRunBirth: runtime.prepareOrdinaryRunBirth,
   }, request, response, url)) {
     return;
   }

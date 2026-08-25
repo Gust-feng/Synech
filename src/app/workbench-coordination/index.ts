@@ -9,3 +9,11 @@ export {
   createSpaceReferenceUnlinkService,
   type SpaceReferenceUnlinkService,
 } from "./space-reference-unlink.js";
+export {
+  createWorkspaceDeletionCoordinator,
+  type WorkspaceDeletionCoordinator,
+} from "./workspace-deletion-coordinator.js";
+export {
+  createSpaceConversationDeletionCoordinator,
+  type SpaceConversationDeletionCoordinator,
+} from "./space-deletion-coordinator.js";

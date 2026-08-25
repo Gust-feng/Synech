@@ -1,16 +1,12 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { ConversationOwner } from "../../../domain/execution-scope/index.js";
 import {
   isTerminal,
   isTerminalEvent,
   type OrdinaryAgentFeature,
   type OrdinaryRunActivity,
   type OrdinaryRunActivityCursor,
-  type OrdinaryRunBirth,
   type OrdinaryRunState,
 } from "../../ordinary-agent/index.js";
-import type { SpaceFeature } from "../../spaces/index.js";
-import type { WorkspaceFeature } from "../../workspaces/index.js";
 import { durableOrdinaryRunReplayFromState } from "../../ordinary-agent/activity-replay.js";
 import { nowIso } from "../../../kernel/id.js";
 import {
@@ -30,11 +26,10 @@ import {
   parseConversationRollbackInput,
   parseRunInput,
 } from "../request-parsers.js";
-import type { PanelRunInput } from "../request-parsers.js";
 import type { ConversationLifecycleCoordinator, SpaceConversationDeletionCoordinator } from "../spaces/space-conversation-coordinator.js";
 import type { WorkspaceDeletionCoordinator } from "../spaces/workspace-deletion-coordinator.js";
 import { SseResponseWriter } from "../sse-response-writer.js";
-import { resolveConversationSpaceAccess } from "../spaces/space-agent-access.js";
+import type { OrdinaryTurnApplication } from "./ordinary-turn-application.js";
 
 const ORDINARY_STREAM_HEARTBEAT_INTERVAL_MS = 5_000;
 const ORDINARY_STREAM_DELTA_COALESCE_MS = 16;
@@ -46,17 +41,10 @@ export type OrdinaryRouteDependencies = {
     readonly queries: Pick<OrdinaryAgentFeature["queries"], "getConversation" | "getConversationOwner" | "listConversations" | "getRun">;
     readonly events: Pick<OrdinaryAgentFeature["events"], "replay" | "subscribe">;
   };
-  readonly spaceFeature: {
-    readonly queries: Pick<SpaceFeature["queries"], "getTree">;
-  };
-  readonly workspaceFeature: {
-    readonly commands: Pick<WorkspaceFeature["commands"], "invalidateMount">;
-    readonly queries: Pick<WorkspaceFeature["queries"], "get">;
-  };
-  readonly conversationLifecycle: Pick<ConversationLifecycleCoordinator, "deleteConversation" | "assertConversationAvailable" | "submit">;
-  readonly spaceConversationDeletion: Pick<SpaceConversationDeletionCoordinator, "assertAvailable" | "admit">;
-  readonly workspaceDeletion: Pick<WorkspaceDeletionCoordinator, "assertAvailable" | "admit">;
-  readonly prepareOrdinaryRunBirth: (input: PanelRunInput, conversationId?: string) => Promise<OrdinaryRunBirth>;
+  readonly ordinaryTurnApplication: OrdinaryTurnApplication;
+  readonly conversationLifecycle: Pick<ConversationLifecycleCoordinator, "deleteConversation" | "assertConversationAvailable">;
+  readonly spaceConversationDeletion: Pick<SpaceConversationDeletionCoordinator, "assertAvailable">;
+  readonly workspaceDeletion: Pick<WorkspaceDeletionCoordinator, "assertAvailable">;
 };
 
 export async function handlePanelOrdinaryRoute(
@@ -191,103 +179,19 @@ async function submitTurn(
   conversationId?: string,
 ): Promise<void> {
   const runInput = parseRunInput(await readJsonBody(request));
-  if (conversationId !== undefined) await assertConversationMutationAvailable(runtime, conversationId);
-  const explicitOwner = runInput.owner;
-  const canonicalOwner = conversationId === undefined
-    ? undefined
-    : await runtime.ordinaryAgentFeature.queries.getConversationOwner(conversationId);
-  if (conversationId !== undefined && canonicalOwner === undefined) {
-    throw new PanelHttpError(409, "conversation_owner_required", "Conversation 缺少稳定 owner，不能继续提交。");
-  }
-  if (explicitOwner !== undefined && canonicalOwner !== undefined && !sameConversationOwner(explicitOwner, canonicalOwner)) {
-    throw new PanelHttpError(
-      409,
-      "conversation_owner_conflict",
-      `Conversation ${conversationId} already belongs to ${canonicalOwner.kind} ${canonicalOwner.id}.`,
-    );
-  }
-  // Existing conversations always use their canonical owner. The request may
-  // omit it, but it can never select a different Space/Workspace just for this
-  // turn (and therefore cannot change the memory/tool scope before admission).
-  const owner = canonicalOwner ?? explicitOwner;
-  const selectedSpaceId = owner?.kind === "space" ? owner.id : undefined;
-  if (conversationId === undefined && owner === undefined) {
-    throw new PanelHttpError(400, "conversation_owner_required", "开始新对话前请选择空间或工作区。");
-  }
-  if (owner?.kind === "workspace") {
-    // Fast in-process rejection; the admission wrapper below also checks the
-    // durable Workspace status to cover restart/retry state.
-    runtime.workspaceDeletion.assertAvailable(owner.id);
-  }
-  const submissionId = conversationId === undefined
-    ? runInput.submissionId ?? crypto.randomUUID()
-    : runInput.submissionId;
-  const spaceAccess = await resolveConversationSpaceAccess(
-    runtime.spaceFeature,
-    runtime.workspaceFeature,
-    (conversationId) => runtime.ordinaryAgentFeature.queries.getConversationOwner(conversationId),
-    conversationId,
-    runInput.contextInput,
-    selectedSpaceId,
-  );
-  if (spaceAccess.spaceId !== undefined) {
-    runtime.spaceConversationDeletion.assertAvailable(spaceAccess.spaceId);
-  }
-  if (conversationId === undefined && selectedSpaceId !== undefined && spaceAccess.spaceId !== selectedSpaceId) {
-    throw new PanelHttpError(404, "conversation_space_not_found", "所选空间不存在。");
-  }
-  const effectiveRunInput = {
-    ...runInput,
-    ...(owner === undefined ? {} : { owner }),
-    contextInput: spaceAccess.contextInput,
-  };
-  const birth = await runtime.prepareOrdinaryRunBirth(effectiveRunInput, conversationId);
-  const submitted = conversationId === undefined
-    ? await runtime.conversationLifecycle.submit({
-        owner: owner!,
-        submissionId: submissionId!,
-        runInput: { userMessage: effectiveRunInput.goal, context: effectiveRunInput.contextInput },
-        birth,
-      })
-    : owner?.kind === "workspace"
-      ? await runtime.workspaceDeletion.admit(owner.id, () => runtime.ordinaryAgentFeature.commands.submitTurn({
-          conversationId,
-          owner,
-          submissionId: effectiveRunInput.submissionId,
-          input: { userMessage: effectiveRunInput.goal, context: effectiveRunInput.contextInput },
-          birth,
-        }))
-      : owner?.kind === "space"
-        ? await runtime.spaceConversationDeletion.admit(owner.id, () => runtime.ordinaryAgentFeature.commands.submitTurn({
-            conversationId,
-            owner,
-            submissionId: effectiveRunInput.submissionId,
-            input: { userMessage: effectiveRunInput.goal, context: effectiveRunInput.contextInput },
-            birth,
-          }))
-      : await runtime.ordinaryAgentFeature.commands.submitTurn({
-          conversationId,
-          owner,
-          submissionId: effectiveRunInput.submissionId,
-          input: { userMessage: effectiveRunInput.goal, context: effectiveRunInput.contextInput },
-          birth,
-        });
-  const run = await projectCommandRun(runtime, submitted.run);
+  const result = await runtime.ordinaryTurnApplication.submit({ runInput, conversationId });
+  const run = await projectCommandRun(runtime, result.submitted.run);
   writeJson(response, 202, {
     ok: true,
     conversation: projectOrdinaryPanelConversation({
-      conversation: submitted.conversation,
+      conversation: result.submitted.conversation,
       currentRun: run.view,
       workspaceRun: run.state,
-      owner,
-      spaceId: spaceAccess.spaceId,
+      owner: result.owner,
+      spaceId: result.spaceId,
     }),
     run: run.view.run,
   });
-}
-
-function sameConversationOwner(left: ConversationOwner, right: ConversationOwner): boolean {
-  return left.kind === right.kind && left.id === right.id;
 }
 
 async function assertConversationMutationAvailable(runtime: OrdinaryRouteDependencies, conversationId: string): Promise<void> {

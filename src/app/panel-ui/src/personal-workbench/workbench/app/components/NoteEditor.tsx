@@ -15,6 +15,7 @@ import {
   type PersonalNoteRemoteState,
   type PersonalNoteRevision,
 } from './personalKnowledgeClient'
+import { SAVED_NOTE_SAVE_STATE } from './personalKnowledgeState'
 import './note-conflict.css'
 import { createMarkdownEditorExtensions, isEditorUsable, markdownFromEditor } from './markdownEditor'
 
@@ -39,7 +40,7 @@ export function NoteEditor({ note, onSave, onOpenFocus, onClose, onRestoreAsNew 
   const durableSaveState = useSyncExternalStore(
     subscribePersonalKnowledge,
     () => getPersonalNoteSaveState(note.id),
-    () => 'saved',
+    () => SAVED_NOTE_SAVE_STATE,
   )
   const collected = brain.isCollected(note.id)
 
@@ -130,7 +131,7 @@ export function NoteEditor({ note, onSave, onOpenFocus, onClose, onRestoreAsNew 
       baseRevisionRef.current = committedLocalRevision
     }
     if (note.revision <= baseRevisionRef.current) return
-    if (getPersonalNoteSaveState(note.id) !== 'saved') return
+    if (getPersonalNoteSaveState(note.id).status !== 'saved') return
 
     const draft = currentDraft()
     if (note.title === draft.title && note.bodyMarkdown === draft.bodyMarkdown) {
@@ -148,10 +149,10 @@ export function NoteEditor({ note, onSave, onOpenFocus, onClose, onRestoreAsNew 
       if (checking) return
       checking = true
       try {
-        if (getPersonalNoteSaveState(note.id) === 'saving') return
+        if (getPersonalNoteSaveState(note.id).status === 'saving') return
         const remote = await fetchPersonalNoteRemoteState(note.id)
         if (disposed) return
-        if (getPersonalNoteSaveState(note.id) === 'saving') return
+        if (getPersonalNoteSaveState(note.id).status === 'saving') return
         const committedLocalRevision = getCommittedLocalNoteRevision(note.id)
         if (committedLocalRevision !== undefined && committedLocalRevision > baseRevisionRef.current) {
           baseRevisionRef.current = committedLocalRevision
@@ -254,8 +255,8 @@ export function NoteEditor({ note, onSave, onOpenFocus, onClose, onRestoreAsNew 
         <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: '#6f8778' }} />
         <span className="text-xs shrink-0" style={{ color: 'var(--ui-text-3, #aba39b)' }}>笔记</span>
         <span className="flex items-center gap-1 text-xs shrink-0" style={{ color: 'var(--ui-text-3, #aba39b)' }}>
-          {saved && durableSaveState === 'saved' ? <Check size={12} /> : <span className="w-2 h-2 rounded-full animate-pulse" style={{ background: durableSaveState.startsWith('error:') ? '#b85c52' : 'var(--ui-accent, #6865a7)' }} />}
-          {durableSaveState.startsWith('error:') ? '保存失败' : saved && durableSaveState === 'saved' ? '已保存' : '保存中…'}
+          {saved && durableSaveState.status === 'saved' ? <Check size={12} /> : <span className="w-2 h-2 rounded-full animate-pulse" style={{ background: durableSaveState.status === 'error' ? '#b85c52' : 'var(--ui-accent, #6865a7)' }} />}
+          {durableSaveState.status === 'error' ? '保存失败' : saved && durableSaveState.status === 'saved' ? '已保存' : '保存中…'}
         </span>
         <div className="flex-1" />
         <button onClick={toggleSourceMode} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs transition-colors hover:bg-[var(--ui-hover-tint)]" style={{ color: sourceMode ? 'var(--ui-accent, #6865a7)' : 'var(--ui-text-2, #87827c)' }}>
