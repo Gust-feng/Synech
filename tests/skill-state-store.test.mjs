@@ -40,6 +40,20 @@ test("SkillStateStore serializes concurrent updates and publishes one atomic fil
   }
 });
 
+test("SkillStateStore retains every skill updated concurrently", async () => {
+  const fixture = await skillStateFixture();
+  try {
+    await Promise.all([
+      fixture.store.markUsed("skill-a", "2026-01-01T00:00:00.000Z", { skillId: "a" }),
+      fixture.store.markUsed("skill-b", "2026-01-01T00:00:01.000Z", { skillId: "b" }),
+    ]);
+
+    assert.deepEqual([...((await fixture.store.readStates()).keys())].sort(), ["skill-a", "skill-b"]);
+  } finally {
+    await fixture.release();
+  }
+});
+
 test("SkillStateStore preserves and reports a corrupt state file", async () => {
   const fixture = await skillStateFixture();
   try {
