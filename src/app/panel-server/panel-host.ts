@@ -145,7 +145,7 @@ import {
   resolveSkillRoots,
   resolveSubAgentRoots,
 } from "./storage/runtime-asset-roots.js";
-import { createWorkbenchCoordinationRuntime } from "./composition/workbench-coordination-runtime.js";
+import { createApplicationRuntime } from "./composition/workbench-coordination-runtime.js";
 import type { ManagedSpaceFolderApplication } from "../../domain/managed-space-folder.js";
 import {
   createContextAttachmentUploadApplication,
@@ -706,7 +706,7 @@ function assemblePanelHost(input: {
     resolveManagedAttachmentPath,
   });
   let host!: PanelHost;
-  const coordinationRuntime = createWorkbenchCoordinationRuntime({
+  const applicationRuntime = createApplicationRuntime({
     productPaths,
     inspectDirectory: inspectSpaceExternalSource,
     spaceFeature,
@@ -735,9 +735,9 @@ function assemblePanelHost(input: {
     conversationLifecycle,
     spaceConversationDeletion,
     workspaceDeletion,
-  } = coordinationRuntime;
-  managedSpaceFolderApplication = coordinationRuntime.managedSpaceFolderApplication;
-  workbenchCoordination = coordinationRuntime.workbenchCoordination;
+  } = applicationRuntime;
+  managedSpaceFolderApplication = applicationRuntime.managedSpaceFolderApplication;
+  workbenchCoordination = applicationRuntime.workbenchCoordination;
   spaceReferenceUnlink = createSpaceReferenceUnlinkService({
     spaces: {
       commands: { unlinkReference: spaceFeature.commands.unlinkReference },
@@ -823,7 +823,7 @@ function assemblePanelHost(input: {
     spaceConversationDeletion,
     workspaceDeletion,
     workbenchCoordination,
-    ordinaryTurnApplication: coordinationRuntime.ordinaryTurnApplication,
+    ordinaryTurnApplication: applicationRuntime.ordinaryTurnApplication,
     managedSpaceFolderApplication,
     spaceReferenceUnlink,
     personalKnowledgeFeature,

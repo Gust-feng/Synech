@@ -35,7 +35,7 @@ import type { InMemoryProcessRegistry, ProcessTerminator } from "../../runtime-g
 import type { LocalWorkspaceMutationCoordinator } from "../../tool-center/adapters/local-workspace-mutation-coordinator.js";
 import type { SpaceExternalSourceSnapshot } from "../../spaces/index.js";
 
-export type WorkbenchCoordinationRuntime = {
+export type ApplicationRuntime = {
   readonly conversationLifecycle: ConversationLifecycleCoordinator;
   readonly spaceConversationDeletion: SpaceConversationDeletionCoordinator;
   readonly workspaceDeletion: WorkspaceDeletionCoordinator;
@@ -49,7 +49,7 @@ export type WorkbenchCoordinationRuntime = {
  * The builder owns no policy: all deletion and admission semantics remain in
  * app/workbench-coordination and the Conversation lifecycle coordinator.
  */
-export function createWorkbenchCoordinationRuntime(input: {
+export function createApplicationRuntime(input: {
   readonly productPaths: ProductPaths;
   readonly inspectDirectory: (rootPath: string) => Promise<SpaceExternalSourceSnapshot | undefined>;
   readonly spaceFeature: Pick<SpaceFeature, "commands" | "queries">;
@@ -66,7 +66,7 @@ export function createWorkbenchCoordinationRuntime(input: {
   readonly conversationLifecycleJournal: ConversationLifecycleJournal;
   readonly resolveSpaceAccess: OrdinaryTurnApplicationDependencies["resolveSpaceAccess"];
   readonly prepareOrdinaryRunBirth: OrdinaryTurnApplicationDependencies["prepareOrdinaryRunBirth"];
-}): WorkbenchCoordinationRuntime {
+}): ApplicationRuntime {
   const deletionLockKey = deletionLifecycleLockKey(input.productPaths.state.locks);
   const runDeletionExclusive = async <T>(operation: () => Promise<T>): Promise<T> =>
     await input.fileMutationCoordinator.runExclusive(deletionLockKey, operation);

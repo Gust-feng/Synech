@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { deleteJson, getJson, postJson } from "../../api";
 import { selectLocalContextAttachment } from "../../workbench/attachments";
 import { selectTaskWorkspaceDirectory } from "./workspace-selection";
+import type { ContextAttachment } from "../../contracts/context";
 import type { SpaceSummary, SpaceTree } from "@panel-api/spaces";
 import type { PersonalSpaceProjection } from "../../personal-workbench/space";
 import { subscribeWorkbenchProjectionChanges } from "../../workbench/projection-changes";
@@ -190,8 +191,8 @@ export function useSpaceProjection(enabled = true): {
   const addLocalFile = useCallback(async (spaceId: string): Promise<void> => {
     const attachment = await selectLocalContextAttachment();
     if (attachment === undefined) return;
-    if (attachment.ref.startsWith("local-project:")) {
-      const rootPath = attachment.ref.slice("local-project:".length);
+    if (attachment.localSource?.kind === "project") {
+      const rootPath = attachment.localSource.path;
       await runMutation(`add-workspace:${spaceId}:${rootPath}`, () => postJson(`/api/spaces/${encodeURIComponent(spaceId)}/workspaces`, { rootPath, title: attachment.title }), [spaceId]);
       return;
     }
@@ -284,13 +285,12 @@ function isAbortError(reason: unknown): boolean {
     : reason instanceof Error && reason.name === "AbortError";
 }
 
-function localReferenceFromAttachment(attachment: { readonly kind: string; readonly ref: string }):
+function localReferenceFromAttachment(attachment: { readonly localSource?: ContextAttachment["localSource"] }):
   | { readonly kind: "local_file"; readonly path: string }
   | undefined {
-  if (attachment.ref.startsWith("local-file:")) {
-    return { kind: "local_file", path: attachment.ref.slice("local-file:".length) };
-  }
-  return undefined;
+  return attachment.localSource?.kind === "file"
+    ? { kind: "local_file", path: attachment.localSource.path }
+    : undefined;
 }
 
 function basename(value: string): string {

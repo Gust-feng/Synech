@@ -113,10 +113,18 @@ export type OrdinaryPanelTranscriptNode = {
 
 export type PanelContextAttachmentKind = "workspace" | "file" | "project" | "web";
 
+/** Structured local source facts for UI workflows; runtime `ref` stays unchanged. */
+export type PanelContextAttachmentLocalSource = {
+  readonly kind: "file" | "project";
+  readonly path: string;
+};
+
 export type PanelContextAttachment = {
   readonly attachmentId: string;
   readonly kind: PanelContextAttachmentKind;
   readonly sourceKind: "local_file" | "local_project" | "managed_upload" | "workspace" | "workspace_file" | "workspace_project" | "web" | "unknown";
+  /** Present for system-selected local files/folders; absent for workspace/web/upload sources. */
+  readonly localSource?: PanelContextAttachmentLocalSource;
   readonly ref: string;
   readonly title: string;
   readonly summary: string;

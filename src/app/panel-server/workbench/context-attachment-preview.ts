@@ -111,6 +111,7 @@ export async function createSelectedLocalContextAttachment(
     attachmentId: createId("ctx"),
     kind,
     sourceKind: kind === "project" ? "local_project" : "local_file",
+    localSource: { kind, path: absolutePath },
     ref,
     title,
     summary: safeText(
