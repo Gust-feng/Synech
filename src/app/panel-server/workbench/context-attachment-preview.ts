@@ -7,6 +7,7 @@ import type {
 import { createId } from "../../../kernel/id.js";
 import {
   managedAttachmentRef,
+  parseContextReference,
   serializeContextReference,
   serializePermissionBoundaryRef,
 } from "../../../domain/ordinary/index.js";
@@ -353,8 +354,9 @@ function inferAttachmentKind(value: string): ContextAttachmentKind {
 
 function resolveWorkspacePath(workspaceRoot: string, value: string): string {
   const root = path.resolve(workspaceRoot);
-  const rawPath = value.startsWith("file:") || value.startsWith("project:")
-    ? value.slice(value.indexOf(":") + 1)
+  const parsed = parseContextReference(value);
+  const rawPath = parsed?.scheme === "file" || parsed?.scheme === "project"
+    ? parsed.path
     : value;
   const resolved = path.resolve(root, rawPath);
   const relative = path.relative(root, resolved);

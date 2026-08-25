@@ -7,8 +7,8 @@ import {
   type ChatActiveTranscriptNode,
 } from "./active-projection.js";
 import type { LiveRunBuffer } from "@panel-api/ui-read-model";
-import { firstNonEmptyText } from "@panel-api/ui-read-model";
 import {
+  resolveAssistantAnswer,
   visibleDeliverable,
   type AssistantDeliverableLike,
 } from "@panel-api/ui-read-model";
@@ -84,11 +84,14 @@ export function projectChatActiveView<
     ? visibleResultText(input.detail)
     : undefined;
   const workViewAnswer = input.workView?.answer?.content;
-  const answer = firstNonEmptyText([
-    workViewAnswer,
-    detailAnswer,
-    currentRunAssistantTurn?.content,
-  ]);
+  const resolvedAnswer = resolveAssistantAnswer({
+    runStatus: input.run?.status ?? currentRunAssistantTurn?.status,
+    interruption: currentRunAssistantTurn?.interruption,
+    conversationText: currentRunAssistantTurn?.content,
+    workViewText: workViewAnswer,
+    projection: detailAnswer === undefined ? undefined : { text: detailAnswer },
+  });
+  const answer = resolvedAnswer.source === "none" ? undefined : resolvedAnswer.text;
   const pending = input.workView?.pendingConfirmation ?? input.pendingConfirmation;
   return projectChatActive({
     conversation: input.conversation,

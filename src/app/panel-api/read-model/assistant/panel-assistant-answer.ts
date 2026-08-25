@@ -44,9 +44,9 @@ export function resolveAssistantAnswer(input: {
   }
 
   if (isNonAnswerTerminalStatus(input.runStatus)) return emptyAnswer();
-  if (workView !== undefined) return resolved(workView, "work_view", false);
   if (projection !== undefined) return resolved(projection, "projection", projection.streaming === true);
   if (conversation !== undefined) return resolved(conversation, "session", false);
+  if (workView !== undefined) return resolved(workView, "work_view", false);
   return emptyAnswer();
 }
 

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { isSettledPanelRunStatus } from "@panel-api/ui-read-model";
 import type { TaskStatus } from "../../contracts/common.js";
 
 /** Node-testable queue fact; the Panel composer projects it into its own props contract. */
@@ -203,9 +204,7 @@ export function useAppQueuedMessages(
 }
 
 function queuedMessageMayFollow(run: QueuedMessageDispatchRun): boolean {
-  return !run.requiresUserAction &&
-    (run.status === "completed" || run.status === "failed" ||
-      run.status === "cancelled" || run.status === "blocked");
+  return !run.requiresUserAction && isSettledPanelRunStatus(run.status);
 }
 
 function queuedMessageCanGuide(run: QueuedMessageDispatchRun): boolean {

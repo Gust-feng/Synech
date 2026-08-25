@@ -2,6 +2,8 @@ import type { IdFactory } from "../../kernel/id.js";
 import {
   managedAttachmentId,
   managedAttachmentRef,
+  parseContextReference,
+  parsePermissionBoundaryRef,
 } from "../../domain/ordinary/index.js";
 import { OrdinaryFeatureError, type OrdinaryRunInput } from "./contracts.js";
 import {
@@ -330,11 +332,17 @@ function canonicalManagedAttachmentInput(
       contextRefs,
       permissionBoundaryRefs: [
         ...(input.context.permissionBoundaryRefs ?? []).filter((ref) =>
-          !ref.startsWith("read:uploaded-attachment:")),
+          !isUploadedAttachmentReadPermission(ref)),
         ...records.map((record) => `read:uploaded-attachment:${record.attachmentId}`),
       ],
     },
   };
+}
+
+function isUploadedAttachmentReadPermission(value: string): boolean {
+  const permission = parsePermissionBoundaryRef(value);
+  if (permission?.kind !== "access" || permission.mode !== "read") return false;
+  return parseContextReference(permission.target)?.scheme === "uploaded_attachment";
 }
 
 function attachmentFeatureError(error: unknown): unknown {

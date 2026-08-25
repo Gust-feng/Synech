@@ -4,7 +4,7 @@ import {
 } from "./panel-live-transcript.js";
 import type { LiveRunBuffer } from "../run/panel-run-live-buffer.js";
 import type { WorklineConversationTurn, WorklineProjectedTurn } from "../assistant/panel-assistant-workline.js";
-import { resolveAssistantAnswer } from "../assistant/panel-assistant-answer.js";
+import { isSettledPanelRunStatus, resolveAssistantAnswer } from "../assistant/panel-assistant-answer.js";
 import {
   answerForWorkViewTurn,
   deliverableForWorkViewTurn,
@@ -210,7 +210,7 @@ function canUseTurnContentAsAnswer<TTurn extends WorklineConversationTurn, TPend
 }): boolean {
   if (input.pending !== undefined) return false;
   if (input.run === undefined) return true;
-  if (input.run.status === "completed" || input.run.status === "failed" || input.run.status === "cancelled" || input.run.status === "blocked") {
+  if (isSettledPanelRunStatus(input.run.status)) {
     return true;
   }
   if (input.run.status !== "running" || input.turn.content.trim().length === 0) {
