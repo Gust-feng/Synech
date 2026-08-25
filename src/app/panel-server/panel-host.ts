@@ -18,6 +18,7 @@ import { CapabilityCenter } from "../capability/capability-center.js";
 import {
   captureKnowledgeAsset,
   managedKnowledgeDocumentTarget,
+  observeKnowledgeAssetReadiness,
   readManagedKnowledgeAsset,
   reconcileKnowledgeAssets,
   removeKnowledgeAsset,
@@ -108,7 +109,11 @@ import { resolveTriggeredSkillContexts } from "./settings/skill-service.js";
 import type { PanelRunInput } from "./request-parsers.js";
 import { InMemoryLocalWorkspaceMutationCoordinator } from "../tool-center/adapters/local-workspace-mutation-coordinator.js";
 import type { LocalWorkspaceMutationCoordinator } from "../tool-center/adapters/local-workspace-mutation-coordinator.js";
-import { createDefaultSpaceInitializer, ensureDefaultSpace } from "./storage/default-space-initializer.js";
+import {
+  createInitialWorkbenchDataInitializer,
+  initializeInitialWorkbenchData,
+} from "./storage/initial-workbench-data.js";
+import { ensureDefaultSpace as ensureBaseDefaultSpace } from "./storage/default-space-initializer.js";
 import {
   createManagedAssetsFeature,
   type ManagedAssetRepository,
@@ -433,20 +438,41 @@ function assemblePanelHost(input: {
     readManagedKnowledgeAsset: async (input) =>
       await readManagedKnowledgeAsset(knowledgeAssetRoot, input.page, input),
   });
-  const defaultSpace = createDefaultSpaceInitializer(async () =>
-    await ensureDefaultSpace({
+  const initialWorkbenchData = createInitialWorkbenchDataInitializer(async () =>
+    await initializeInitialWorkbenchData({
+      database,
       spaceFeature,
+      personalKnowledgeFeature,
+      managedAssets,
       managedSpaceRoot,
+      managedSpaceFolderRoot,
     }),
   );
-  knowledgeAssetsReady = personalKnowledgeFeature.queries.snapshot().then(async (snapshot) => {
+  const knowledgeAssetReconciliation = personalKnowledgeFeature.queries.snapshot().then(async (snapshot) => {
     await fileMutationCoordinator.runExclusive(knowledgeAssetRoot, async () => await reconcileKnowledgeAssets(
       knowledgeAssetRoot,
       new Set(snapshot.pages.filter((page) => page.asset?.status === "managed").map((page) => page.refId)),
     ));
   });
-  // Start the default Space initialization early; consumers await the same attempt.
-  void defaultSpace.ensure().catch(() => undefined);
+  knowledgeAssetsReady = observeKnowledgeAssetReadiness(knowledgeAssetReconciliation, (error) => {
+    console.error(
+      "[panel-server] Knowledge asset reconciliation failed; managed Knowledge operations and backups remain unavailable until restart",
+      error,
+    );
+  });
+  // Start initial content materialization early; consumers await the same retryable attempt.
+  void initialWorkbenchData.ensure().catch(() => undefined);
+  const ensurePanelDefaultData = async (): Promise<void> => {
+    try {
+      await knowledgeAssetsReady;
+    } catch {
+      // Space and the rest of Panel remain usable even when the managed
+      // Knowledge directory could not be reconciled on this startup.
+      await ensureBaseDefaultSpace({ spaceFeature, managedSpaceRoot });
+      return;
+    }
+    await initialWorkbenchData.ensure();
+  };
   const spaceKnowledgeSync = Promise.resolve();
   const spaceRevocationOverlay = createSpaceRevocationOverlay(spaceFeature.events);
   const contextAttachmentReadAuthorization = {
@@ -777,7 +803,7 @@ function assemblePanelHost(input: {
     knowledgeAssetRoot,
     managedSpaceFolderRoot,
     knowledgeAssetsReady,
-    ensureDefaultSpace: () => defaultSpace.ensure(),
+    ensureDefaultSpace: ensurePanelDefaultData,
     flushSpaceKnowledgeSync: () => spaceKnowledgeSync,
     flushSpaceProcessCleanup: async () => {
       while (activeSpaceProcessCleanups.size > 0) {
@@ -792,7 +818,7 @@ function assemblePanelHost(input: {
     host.isQuiescing = true;
     await ordinaryAgentFeature.release();
     await pathDependencyFeature.release();
-    await defaultSpace.ensure();
+    await initialWorkbenchData.ensure();
     await personalKnowledgeFeature.release();
     await spaceFeature.release();
   })();

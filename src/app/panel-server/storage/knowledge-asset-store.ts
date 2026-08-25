@@ -4,6 +4,7 @@ import path from "node:path";
 
 import type { KnowledgeAssetReadResult, KnowledgePage } from "../../personal-knowledge/index.js";
 import type { SpaceReferenceItem } from "../../spaces/index.js";
+import { renameWithRetry } from "../../../kernel/fs/atomic-write.js";
 import { PanelHttpError } from "../http-utils.js";
 import {
   MAX_TEXT_PREVIEW_BYTES,
@@ -18,6 +19,25 @@ import type { LocalDocumentMeta } from "./local-document-preview.js";
 
 const MAX_CAPTURE_BYTES = 256 * 1024 * 1024;
 const MAX_CAPTURE_ENTRIES = 5_000;
+const RECONCILIATION_RM_OPTIONS = {
+  recursive: true,
+  force: true,
+  maxRetries: 5,
+  retryDelay: 25,
+} as const;
+
+/**
+ * Observe an eagerly-started reconciliation without replacing its Promise.
+ * The attached rejection branch prevents a process-level unhandled rejection,
+ * while Knowledge consumers still await and receive the original failure.
+ */
+export function observeKnowledgeAssetReadiness(
+  readiness: Promise<void>,
+  onFailure: (error: unknown) => void,
+): Promise<void> {
+  void readiness.catch(onFailure);
+  return readiness;
+}
 
 export async function captureKnowledgeAsset(
   root: string,
@@ -79,25 +99,29 @@ export async function reconcileKnowledgeAssets(root: string, activeAssetIds: Rea
     if (!entry.isDirectory()) continue;
     const entryPath = path.join(root, entry.name);
     if (entry.name.includes(".pending-")) {
-      await fs.rm(entryPath, { recursive: true, force: true });
+      await removeReconciliationDirectory(entryPath);
       continue;
     }
     const deletingAt = entry.name.indexOf(".deleting-");
     if (deletingAt > 0) {
       const assetDirectoryName = entry.name.slice(0, deletingAt);
       if (!activeDirectories.has(assetDirectoryName)) {
-        await fs.rm(entryPath, { recursive: true, force: true });
+        await removeReconciliationDirectory(entryPath);
         continue;
       }
       const assetDirectory = path.join(root, assetDirectoryName);
-      if (await exists(assetDirectory)) await fs.rm(entryPath, { recursive: true, force: true });
-      else await fs.rename(entryPath, assetDirectory);
+      if (await exists(assetDirectory)) await removeReconciliationDirectory(entryPath);
+      else await renameWithRetry(entryPath, assetDirectory);
       continue;
     }
     if (!activeDirectories.has(entry.name)) {
-      await fs.rm(entryPath, { recursive: true, force: true });
+      await removeReconciliationDirectory(entryPath);
     }
   }
+}
+
+async function removeReconciliationDirectory(target: string): Promise<void> {
+  await fs.rm(target, RECONCILIATION_RM_OPTIONS);
 }
 
 async function validateCaptureSource(source: string): Promise<void> {

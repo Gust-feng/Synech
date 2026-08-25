@@ -20,6 +20,19 @@ export class SqliteRuntimeDatabaseIdentityError extends Error {
   }
 }
 
+export class SqliteSchemaVersionError extends Error {
+  readonly code = "sqlite_schema_version_unsupported" as const;
+
+  constructor(
+    readonly owner: string,
+    readonly storedVersion: number,
+    readonly supportedVersion: number,
+  ) {
+    super(`SQLite schema owner ${owner} is at version ${storedVersion}, but this build supports ${supportedVersion}.`);
+    this.name = "SqliteSchemaVersionError";
+  }
+}
+
 /** Host-owned SQLite connection shared by feature-specific repositories. */
 export class SqliteRuntimeDatabase {
   readonly connection: DatabaseSync;
@@ -80,6 +93,12 @@ export class SqliteRuntimeDatabase {
           applied_at TEXT NOT NULL
         ) STRICT
       `);
+      connection.exec(`
+        CREATE TABLE IF NOT EXISTS runtime_initializations (
+          initialization_key TEXT PRIMARY KEY,
+          initialized_at TEXT NOT NULL
+        ) STRICT
+      `);
     } catch (initializationError) {
       try {
         connection.close();
@@ -95,11 +114,16 @@ export class SqliteRuntimeDatabase {
   }
 
   migrate(owner: string, migrations: readonly SqliteMigration[]): void {
+    const ordered = [...migrations].sort((left, right) => left.version - right.version);
+    const supportedVersion = ordered.at(-1)?.version ?? 0;
     const current = this.connection.prepare(
       "SELECT version FROM schema_migrations WHERE owner = ?",
     ).get(owner) as { readonly version: number } | undefined;
     let version = current?.version ?? 0;
-    for (const migration of [...migrations].sort((left, right) => left.version - right.version)) {
+    if (version > supportedVersion) {
+      throw new SqliteSchemaVersionError(owner, version, supportedVersion);
+    }
+    for (const migration of ordered) {
       if (migration.version <= version) continue;
       this.transaction(() => {
         this.connection.exec(migration.sql);
@@ -123,6 +147,18 @@ export class SqliteRuntimeDatabase {
       this.connection.exec("ROLLBACK");
       throw error;
     }
+  }
+
+  hasInitialization(initializationKey: string): boolean {
+    return this.connection.prepare(
+      "SELECT 1 AS found FROM runtime_initializations WHERE initialization_key = ?",
+    ).get(initializationKey) !== undefined;
+  }
+
+  recordInitialization(initializationKey: string): void {
+    this.connection.prepare(
+      "INSERT OR IGNORE INTO runtime_initializations(initialization_key, initialized_at) VALUES (?, ?)",
+    ).run(initializationKey, new Date().toISOString());
   }
 
   health(): {
