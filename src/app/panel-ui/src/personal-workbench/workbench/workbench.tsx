@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { flushSync } from "react-dom";
 import type { CurrentRunProjection } from "../../features/conversations/run/projection";
 import { projectChatActiveView } from "../../features/conversations/transcript/live-view";
@@ -34,12 +34,11 @@ import {
   clearPersonalKnowledgeError,
 } from "./app/components/personalKnowledgeClient";
 import {
-  createInitialWorkbenchNavigationState,
-  reduceWorkbenchNavigation,
   type ConversationOwnerSelection,
   type ConversationSurfaceRequest,
   type WorkbenchView,
 } from "../../workbench/navigation-state";
+import { useWorkbenchNavigation } from "../../workbench/use-workbench-navigation";
 
 export type PersonalWorkbenchProps = {
   readonly personalKnowledgePersistenceEnabled?: boolean;
@@ -87,11 +86,18 @@ type ConversationMode = "normal" | "focus";
 /** Conversation uses one canonical projection and is composed into the active Synech surface. */
 export function PersonalWorkbench(props: PersonalWorkbenchProps) {
   const rootRef = useRef<HTMLDivElement>(null);
-  const [navigation, dispatchNavigation] = useReducer(
-    reduceWorkbenchNavigation,
-    undefined,
-    createInitialWorkbenchNavigationState,
-  );
+  const navigation = useWorkbenchNavigation();
+  const {
+    state: navigationState,
+    navigate: reduceNavigation,
+    setBrainSelection,
+    setSpaceTarget,
+    setActiveSpace,
+    setHomeOwner,
+    focusHomeInput,
+    setConversationSurface,
+    syncContextSelection,
+  } = navigation;
   const {
     view,
     previousView,
@@ -101,7 +107,7 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
     homeOwnerSelection,
     homeFocusRequest,
     conversationSurfaceRequest,
-  } = navigation;
+  } = navigationState;
   const [conversationMode, setConversationModeState] = useState<ConversationMode>("normal");
   const observedViewRef = useRef(view);
   const navigationIntentRef = useRef(view);
@@ -143,8 +149,7 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
 
   useEffect(() => {
     const spaces = props.spaces ?? [];
-    dispatchNavigation({
-      type: "sync-context-selection",
+    syncContextSelection({
       spaceIds: spaces.map((space) => space.spaceId),
       workspaceIds: workspaceProjection.workspaces.map((workspace) => workspace.workspaceId),
     });
@@ -215,12 +220,9 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
       ? effectiveOwner.id
       : (activeSpaceIdRef.current ?? spacesRef.current?.[0]?.spaceId);
     if (targetSpaceId === undefined) return;
-    dispatchNavigation({ type: "set-active-space", id: targetSpaceId });
+    setActiveSpace(targetSpaceId);
     if (conversationId !== undefined) {
-      dispatchNavigation({
-        type: "set-conversation-surface",
-        request: { conversationId, spaceId: targetSpaceId },
-      });
+      setConversationSurface({ conversationId, spaceId: targetSpaceId });
     } else {
       // 会话 id 尚未确定：记录承载空间，等待真实会话落地后由 effect 补写请求。
       pendingSurfaceSpaceRef.current = targetSpaceId;
@@ -240,14 +242,11 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
     const targetSpaceId = conversation.owner.kind === "space"
       ? conversation.owner.id
       : pendingSpaceId;
-    dispatchNavigation({
-      type: "set-conversation-surface",
-      request: { conversationId: conversation.conversationId, spaceId: targetSpaceId },
-    });
+    setConversationSurface({ conversationId: conversation.conversationId, spaceId: targetSpaceId });
     // 只有用户仍停留在空间视图（提交后已导航过去）时才补导航；
     // 用户已主动离开则不劫持，request 仍保留，再次回到该空间时面板照常展示。
     if (navigationIntentRef.current === "space") {
-      dispatchNavigation({ type: "set-active-space", id: targetSpaceId });
+      setActiveSpace(targetSpaceId);
       navigate("space");
     }
   }, [props.conversation]);
@@ -267,7 +266,7 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
     // submission cannot navigate back after the user chose another surface.
     navigationIntentRef.current = target;
     const updateNavigation = (): void => {
-      dispatchNavigation({ type: "navigate", target });
+      reduceNavigation(target);
     };
     if (conversationMode === "focus") {
       setConversationMode("normal", updateNavigation);
@@ -302,7 +301,7 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
           // owner 优先取首页选择器已确定的归属，响应未落地时由 landing effect 补写请求。
           surfaceConversation(conversationRef.current?.conversationId, homeOwnerSelection ?? undefined);
         } else {
-          dispatchNavigation({ type: "focus-home-input" });
+          focusHomeInput();
         }
       });
     },
@@ -369,7 +368,7 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
         onToggleConversationPinned={props.onToggleConversationPinned}
         onDeleteConversation={props.onDeleteConversation}
         onOpenSpace={props.onOpenSpace}
-        onActiveSpaceChange={(id) => dispatchNavigation({ type: "set-active-space", id })}
+        onActiveSpaceChange={(id) => setActiveSpace(id)}
         onCreateSpace={props.onCreateSpace}
         onRenameSpace={props.spaceActions?.rename === undefined
           ? undefined
@@ -390,7 +389,7 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
           conversationState={conversationState}
           onEnterFocus={undefined}
           brainFileTitle={brainSelectedId === null ? null : resolveById(brainSelectedId)?.title ?? null}
-          onBrainRoot={() => dispatchNavigation({ type: "set-brain-selection", id: null })}
+          onBrainRoot={() => setBrainSelection(null)}
         />
 
         <main
@@ -413,15 +412,15 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
                     homeFocusRequest,
                     workspaceProjection,
                     homeOwnerSelection,
-                    onHomeOwnerChange: (owner) => dispatchNavigation({ type: "set-home-owner", owner }),
+                    onHomeOwnerChange: (owner) => setHomeOwner(owner),
                     conversationInput,
                     brainSelectedId,
                     spaceTargetId,
                     activeSpaceId,
-                    onActiveSpaceChange: (id) => dispatchNavigation({ type: "set-active-space", id }),
+                    onActiveSpaceChange: (id) => setActiveSpace(id),
                     conversationMode,
                     conversationSurfaceRequest,
-                    onBrainSelect: (id) => dispatchNavigation({ type: "set-brain-selection", id }),
+                    onBrainSelect: (id) => setBrainSelection(id),
                     navigate,
                     onEnterFocus: () => setConversationMode("focus"),
                     onExitFocus: () => setConversationMode("normal"),
@@ -431,8 +430,8 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
                       // search target after entering the Space surface so it
                       // remains available to SpacePage for this transition.
                       navigate("space");
-                      dispatchNavigation({ type: "set-active-space", id: spaceId });
-                      dispatchNavigation({ type: "set-space-target", id });
+                      setActiveSpace(spaceId);
+                      setSpaceTarget(id);
                     },
                   })}
               </SurfaceErrorBoundary>
