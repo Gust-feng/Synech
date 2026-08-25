@@ -349,7 +349,7 @@ async function runReferenceMutation<T>(
 ): Promise<T> {
   try {
     return await runtime.fileMutationCoordinator.run(spaceReferenceMutationKey(item), async () => {
-      await assertExternalReferenceCurrent(runtime, item);
+      await assertExternalReferenceCurrentUnderLease(runtime, item);
       return await operation();
     });
   } catch (error) {
@@ -367,6 +367,27 @@ async function assertExternalReferenceCurrent(runtime: SpaceReferenceRouteDepend
 }
 
 async function unlinkInvalidExternalReference(runtime: SpaceReferenceRouteDependencies, item: SpaceReferenceItem): Promise<boolean> {
+  if (item.reference.kind !== "local_file" && item.reference.kind !== "workspace_folder") return false;
+  return runtime.fileMutationCoordinator.run(spaceReferenceMutationKey(item), async () => {
+    const current = await runtime.spaceFeature.queries.getReference(item.id);
+    if (current === undefined) return true;
+    return unlinkInvalidExternalReferenceUnderLease(runtime, current);
+  });
+}
+
+async function assertExternalReferenceCurrentUnderLease(
+  runtime: SpaceReferenceRouteDependencies,
+  item: SpaceReferenceItem,
+): Promise<void> {
+  if (await unlinkInvalidExternalReferenceUnderLease(runtime, item)) {
+    throw new PanelHttpError(410, "space_reference_source_missing", "来源路径已不存在或已被替换，当前 Space 引用已移除，请重新添加。");
+  }
+}
+
+async function unlinkInvalidExternalReferenceUnderLease(
+  runtime: SpaceReferenceRouteDependencies,
+  item: SpaceReferenceItem,
+): Promise<boolean> {
   if (item.reference.kind !== "local_file" && item.reference.kind !== "workspace_folder") return false;
   if (await spaceExternalReferenceStatus(item) === "current") return false;
   try {
