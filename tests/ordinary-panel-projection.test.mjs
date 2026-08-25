@@ -9,7 +9,7 @@ import {
   projectOrdinaryPanelConversation,
   projectOrdinaryPanelRunView,
 } from "../dist/app/panel-server/ordinary/ordinary-agent-panel-projection.js";
-import { appendLiveRunEvents } from "../dist/app/panel-api/ui-read-model.js";
+import { appendLiveRunEvents, projectLiveRunTranscript } from "../dist/app/panel-api/ui-read-model.js";
 
 test("cursor round-trips exact stream position and rejects extra facts", () => {
   const cursor = { streamId: "stream-1", sequence: 7 };
@@ -103,6 +103,23 @@ test("reasoning completion keeps its content block identity across panel project
     { contentIndex: 0, reasoning: "分析完成", output: "" },
     { contentIndex: 1, reasoning: "", output: "正式回答" },
   ]);
+});
+
+test("streaming answer joins text blocks only within the latest model request", () => {
+  const live = appendLiveRunEvents("run-1", undefined, [
+    panelEvent("request-1", 1, "model.requested", "model-1"),
+    panelEvent("request-1-text-0", 2, "model.output.delta", "model-1", { contentIndex: 0, delta: "准备读取。" }),
+    panelEvent("request-1-text-1", 3, "model.output.delta", "model-1", { contentIndex: 1, delta: "继续处理。" }),
+    panelEvent("tool-request", 4, "tool.requested", undefined, {
+      toolName: "Read",
+      refs: [{ kind: "tool_call", id: "invocation-1" }],
+    }),
+    panelEvent("request-2", 5, "model.requested", "model-2"),
+    panelEvent("request-2-text-0", 6, "model.output.delta", "model-2", { contentIndex: 0, delta: "最终" }),
+    panelEvent("request-2-text-1", 7, "model.output.delta", "model-2", { contentIndex: 1, delta: "回答" }),
+  ]);
+
+  assert.equal(projectLiveRunTranscript([], live).answer?.text, "最终回答");
 });
 
 test("approval run keeps status copy, owner-scoped confirmation, and continuation facts", () => {
@@ -259,6 +276,19 @@ function activityReplay(activities) {
     cursor: { streamId: "stream-1", sequence: activities.at(-1)?.sequence ?? 0 },
     reset: false,
     activities,
+  };
+}
+
+function panelEvent(id, sequence, type, modelRequestId, overrides = {}) {
+  return {
+    id,
+    runId: "run-1",
+    sequence,
+    type,
+    title: "",
+    status: "running",
+    refs: modelRequestId === undefined ? [] : [{ kind: "model_call", id: modelRequestId }],
+    ...overrides,
   };
 }
 

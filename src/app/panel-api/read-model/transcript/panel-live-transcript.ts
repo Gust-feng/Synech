@@ -164,9 +164,11 @@ export function liveStreamingAnswer(
         left.contentIndex - right.contentIndex ||
         (left.outputStartSequence ?? left.outputSequence ?? 0) - (right.outputStartSequence ?? right.outputSequence ?? 0));
   if (liveTurns.length > 0) {
+    const latestRequestId = liveTurns[liveTurns.length - 1]!.requestId;
+    const latestRequestTurns = liveTurns.filter((turn) => turn.requestId === latestRequestId);
     return {
-      text: liveTurns.map((turn) => turn.output.text).join(""),
-      tone: liveOutputFollowsToolResult(liveTurns[liveTurns.length - 1]!, nodes) ? "formal" : "process",
+      text: latestRequestTurns.map((turn) => turn.output.text).join(""),
+      tone: liveOutputFollowsToolResult(latestRequestTurns[latestRequestTurns.length - 1]!, nodes) ? "formal" : "process",
       streaming: true,
     };
   }
