@@ -168,3 +168,36 @@ test("ConfigCenter serializes concurrent read-modify-write mutations", async () 
   ]);
   assert.equal((await configCenter.getSkillTriggerConfig()).mode, "keyword");
 });
+
+test("a failed ConfigCenter mutation does not block later mutations", async () => {
+  const { configCenter } = await createCenter();
+
+  await assert.rejects(configCenter.updateToolState({ name: "", enabled: false }));
+  await configCenter.updateToolState({ name: "Read", enabled: false });
+
+  assert.deepEqual((await configCenter.listToolStates()).map((state) => state.name), ["Read"]);
+});
+
+test("first settings read cannot overwrite a concurrent first mutation", async () => {
+  let releaseFirstWrite;
+  const firstWriteGate = new Promise((resolve) => { releaseFirstWrite = resolve; });
+  let defaultWrites = 0;
+  const settingsStore = new MemorySettingsStore();
+  settingsStore.writeSettings = async (settings) => {
+    if ((settings.toolStates ?? []).length === 0) {
+      defaultWrites += 1;
+      if (defaultWrites === 1) await firstWriteGate;
+    }
+    settingsStore.value = structuredClone(settings);
+    settingsStore.writes += 1;
+    if ((settings.toolStates ?? []).length > 0) releaseFirstWrite();
+  };
+  const configCenter = new ConfigCenter({ settingsStore, secretStore: new MemorySecretStore() });
+
+  const initialRead = configCenter.getModelProviderConfig();
+  const mutation = configCenter.updateToolState({ name: "Read", enabled: false });
+  setTimeout(() => releaseFirstWrite(), 50);
+  await Promise.all([initialRead, mutation]);
+
+  assert.deepEqual((await configCenter.listToolStates()).map((state) => state.name), ["Read"]);
+});

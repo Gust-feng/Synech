@@ -106,6 +106,7 @@ export type CreateLocalConfigCenterOptions = {
 
 export class ConfigCenter {
   private mutationTail: Promise<void> = Promise.resolve();
+  private settingsRead: Promise<LocalSettings> | undefined;
 
   constructor(private readonly options: ConfigCenterOptions) {}
 
@@ -470,7 +471,18 @@ export class ConfigCenter {
     return next;
   }
 
-  private async readOrCreateSettings(): Promise<LocalSettings> {
+  private readOrCreateSettings(): Promise<LocalSettings> {
+    const active = this.settingsRead;
+    if (active !== undefined) return active;
+    const load = this.readOrCreateSettingsOnce();
+    const tracked = load.finally(() => {
+      if (this.settingsRead === tracked) this.settingsRead = undefined;
+    });
+    this.settingsRead = tracked;
+    return tracked;
+  }
+
+  private async readOrCreateSettingsOnce(): Promise<LocalSettings> {
     const existing = await this.options.settingsStore.readSettings();
     if (existing !== undefined) {
       const parsed = parseLocalSettingsFile(existing);
