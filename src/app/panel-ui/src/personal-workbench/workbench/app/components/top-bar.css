@@ -165,6 +165,24 @@
   line-height: 18px;
 }
 
+.topbar-conversation-status--action {
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  padding: 1px 6px;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.topbar-conversation-status--action:hover {
+  border-color: color-mix(in srgb, currentColor 24%, transparent);
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+
+.topbar-conversation-status--action:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ui-accent) 60%, transparent);
+  outline-offset: 2px;
+}
 .topbar-conversation-status[data-state='attention'] {
   color: var(--ui-status-wait);
 }

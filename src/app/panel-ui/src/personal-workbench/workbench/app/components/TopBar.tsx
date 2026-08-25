@@ -18,6 +18,7 @@ interface TopBarProps {
   /** 对话固定 Owner 徽标，如“空间 · 产品规划”。 */
   surfaceOwner?: string
   conversationState?: LiveConversationState
+  onResumeConversation?: () => void
   onEnterFocus?: () => void
   // 知识库路径面包屑:打开的文件标题(无则在知识库根部);点根部回到知识库列表。
   brainFileTitle: string | null
@@ -36,6 +37,7 @@ export function TopBar({
   surfaceTitle,
   surfaceOwner,
   conversationState,
+  onResumeConversation,
   onEnterFocus,
   brainFileTitle,
   onBrainRoot,
@@ -129,7 +131,7 @@ export function TopBar({
                   </span>
                 )}
                 {conversationStatus !== undefined && (
-                  <ConversationHeaderStatus state={conversationStatus} />
+                  <ConversationHeaderStatus state={conversationStatus} onClick={onResumeConversation} />
                 )}
                 {onEnterFocus !== undefined && (
                   <button
@@ -149,7 +151,7 @@ export function TopBar({
         {/* 非对话视图：运行中 / 待确认仍全局可见，但不劫持用户导航。
             用户显式选择了首页 / 知识库 / 搜索时，只提醒、不强制回到对话页。 */}
         {!isMinimal && conversationStatus !== undefined && (
-          <ConversationHeaderStatus state={conversationStatus} />
+          <ConversationHeaderStatus state={conversationStatus} onClick={onResumeConversation} />
         )}
       </div>
 
@@ -164,12 +166,33 @@ function topBarSectionLabel(view: View): string {
   return '首页'
 }
 
-function ConversationHeaderStatus({ state }: { readonly state: VisibleConversationHeaderState }) {
-  return (
-    <span className="topbar-conversation-status" data-state={state} role="status">
+function ConversationHeaderStatus({
+  state,
+  onClick,
+}: {
+  readonly state: VisibleConversationHeaderState
+  readonly onClick?: () => void
+}) {
+  const label = state === 'working' ? '处理中' : '需要确认'
+  const content = (
+    <>
       <span className="topbar-conversation-status__dot" aria-hidden="true" />
-      {state === 'working' ? '处理中' : '需要确认'}
-    </span>
+      {label}
+    </>
+  )
+  if (onClick === undefined) {
+    return <span className="topbar-conversation-status" data-state={state} role="status">{content}</span>
+  }
+  return (
+    <button
+      type="button"
+      className="topbar-conversation-status topbar-conversation-status--action"
+      data-state={state}
+      aria-label={`${label}，返回当前任务`}
+      onClick={onClick}
+    >
+      {content}
+    </button>
   )
 }
 
