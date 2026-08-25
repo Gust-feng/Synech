@@ -59,6 +59,7 @@ export function createWorkspaceDeletionCoordinator(input: {
   readonly processTerminator: ProcessTerminator;
   /** Shared Product Home lease used by other cross-feature file mutations. */
   readonly runExclusive?: <T>(operation: () => Promise<T>) => Promise<T>;
+  readonly runWorkspaceExclusive?: <T>(workspaceId: string, operation: () => Promise<T>) => Promise<T>;
   readonly now?: () => string;
 }): WorkspaceDeletionCoordinator {
   const deletingWorkspaceIds = new Set<string>();
@@ -67,6 +68,7 @@ export function createWorkspaceDeletionCoordinator(input: {
   const deletedWorkspaceIds = new Set<string>();
   const admissionTails = new Map<string, Promise<void>>();
   const runExclusive = input.runExclusive ?? (async <T>(operation: () => Promise<T>) => await operation());
+  const runWorkspaceExclusive = input.runWorkspaceExclusive ?? (async <T>(_workspaceId: string, operation: () => Promise<T>) => await operation());
   let tail = Promise.resolve();
 
   const serialize = <T>(operation: () => Promise<T>): Promise<T> => {
@@ -141,7 +143,8 @@ export function createWorkspaceDeletionCoordinator(input: {
       // Re-enter the active state while preserving the durable deleting marker.
       deletedWorkspaceIds.delete(workspaceId);
       deletingWorkspaceIds.add(workspaceId);
-      return serialize(async () => await serializeAdmission(workspaceId, async () => await runExclusive(async () => {
+      return serialize(async () => await serializeAdmission(workspaceId, async () => await runExclusive(async () =>
+        await runWorkspaceExclusive(workspaceId, async () => {
         let workspaceMissing = false;
         let completed = false;
         try {
@@ -176,7 +179,7 @@ export function createWorkspaceDeletionCoordinator(input: {
           if (completed) deletedWorkspaceIds.add(workspaceId);
           if (workspaceMissing) deletedWorkspaceIds.delete(workspaceId);
         }
-      })));
+        }))));
     },
   };
 }

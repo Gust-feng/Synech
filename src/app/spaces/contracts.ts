@@ -1,5 +1,5 @@
 /** Durable metadata for the roots visible in one Space. File descendants stay in their owning filesystem. */
-export const SPACE_TREE_SCHEMA_VERSION = "space-tree/v2" as const;
+export const SPACE_TREE_SCHEMA_VERSION = "space-tree/v1" as const;
 
 export type SpaceReference =
   | { readonly kind: "local_file"; readonly path: string }

@@ -32,7 +32,6 @@ import {
   getPersonalKnowledgeLoadState,
   refreshPersonalKnowledge,
   subscribePersonalKnowledge,
-  setActivePersonalKnowledgeSpace,
   setPersonalKnowledgePersistenceEnabled,
   clearPersonalKnowledgeError,
 } from "./app/components/personalKnowledgeClient";
@@ -148,7 +147,7 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
       return firstSpaceId === undefined ? null : { kind: "space", id: firstSpaceId };
     });
     if (props.personalKnowledgePersistenceEnabled && props.spaceLoadState?.loading !== true) {
-      void initializePersonalKnowledge(firstSpaceId).catch(() => undefined);
+      void initializePersonalKnowledge().catch(() => undefined);
     }
   }, [props.personalKnowledgePersistenceEnabled, props.spaceLoadState?.loading, props.spaces, workspaceProjection.workspaces]);
 
@@ -156,10 +155,6 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
     if (props.spaceLoadState?.loading === true) return undefined;
     return warmStartupReferencePreviews(props.spaces ?? []);
   }, [props.spaceLoadState?.loading, props.spaces]);
-
-  useEffect(() => {
-    setActivePersonalKnowledgeSpace(view === "space" ? activeSpaceId ?? undefined : undefined);
-  }, [activeSpaceId, view]);
 
   useEffect(() => {
     const viewChanged = observedViewRef.current !== view;
@@ -455,7 +450,7 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
       {props.bootstrapState.status === "ready" && knowledgeLoadState.status === "error" && (
         <WorkbenchStatusNotice
           message={knowledgeLoadState.message}
-          onRetry={() => void initializePersonalKnowledge(activeSpaceId ?? undefined).catch(() => undefined)}
+          onRetry={() => void initializePersonalKnowledge().catch(() => undefined)}
         />
       )}
 

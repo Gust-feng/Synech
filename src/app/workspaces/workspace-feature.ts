@@ -97,6 +97,7 @@ export function createWorkspaceFeature(input: CreateWorkspaceFeatureInput): Work
               if (mount === undefined || mount.sourceIdentity !== registerInput.sourceIdentity) {
                 throw new WorkspaceFeatureError("workspace_mount_conflict", "The selected directory is not the same filesystem object as the existing Workspace.");
               }
+              assertWorkspaceRootAvailable(snapshot, registerInput.rootPath, current.id);
               mount = { workspaceId: current.id, mountVersion: nextMountVersion(), rootPath: candidateRoot, sourceIdentity: registerInput.sourceIdentity, status: "active", connectedAt: at };
               mounts = [...invalidateActiveMounts(snapshot.mounts, current.id, at), mount];
               workspace = { ...workspace, status: "available", updatedAt: at };
@@ -108,10 +109,7 @@ export function createWorkspaceFeature(input: CreateWorkspaceFeatureInput): Work
             }
             return { workspace, mount: mount!, created: false };
           }
-          const existingRoots = snapshot.mounts
-            .filter((mount) => mount.status === "active" && snapshot.workspaces.some((w) => w.id === mount.workspaceId && w.status === "available"))
-            .map((mount) => mount.rootPath);
-          assertWorkspacePathUniqueness(existingRoots, registerInput.rootPath);
+          assertWorkspaceRootAvailable(snapshot, registerInput.rootPath);
           const at = now();
           const id = createId();
           const workspace: Workspace = {
@@ -174,6 +172,7 @@ export function createWorkspaceFeature(input: CreateWorkspaceFeatureInput): Work
             return { workspace, mount: previousMount };
           }
           const at = now();
+          assertWorkspaceRootAvailable(snapshot, reconnectInput.rootPath, workspace.id);
           const nextMount: WorkspaceMount = {
             workspaceId: workspace.id,
             mountVersion: nextMountVersion(),
@@ -234,6 +233,24 @@ export function createWorkspaceFeature(input: CreateWorkspaceFeatureInput): Work
             mounts: snapshot.mounts,
           });
           publish({ type: "workspace.deleted", workspaceId });
+        });
+      },
+      async discardImplicitWorkspace(workspaceId: string) {
+        assertUsable("discard an implicit Workspace");
+        return serialize(async () => {
+          const snapshot = await input.repository.read();
+          const workspace = requireWorkspace(snapshot, workspaceId);
+          if (workspace.visibility !== "implicit" || workspace.status === "deleting") {
+            throw new WorkspaceFeatureError(
+              "workspace_discard_not_allowed",
+              `Workspace ${workspaceId} is not an attach-only implicit registration.`,
+            );
+          }
+          await input.repository.write({
+            schemaVersion: WORKSPACE_SCHEMA_VERSION,
+            workspaces: snapshot.workspaces.filter((entry) => entry.id !== workspaceId),
+            mounts: snapshot.mounts.filter((mount) => mount.workspaceId !== workspaceId),
+          });
         });
       },
       async purgeWorkspace(workspaceId: string) {
@@ -319,6 +336,19 @@ function currentMountOf(snapshot: WorkspaceSnapshot, workspaceId: string): Works
   const active = mounts.filter((mount) => mount.status === "active");
   const newest = active.length > 0 ? active : mounts;
   return newest.length === 0 ? undefined : newest[newest.length - 1];
+}
+
+function assertWorkspaceRootAvailable(
+  snapshot: WorkspaceSnapshot,
+  candidatePath: string,
+  excludeWorkspaceId?: string,
+): void {
+  const activeRoots = snapshot.mounts
+    .filter((mount) => mount.status === "active" && mount.workspaceId !== excludeWorkspaceId)
+    .filter((mount) => snapshot.workspaces.some((workspace) =>
+      workspace.id === mount.workspaceId && workspace.status === "available"))
+    .map((mount) => mount.rootPath);
+  assertWorkspacePathUniqueness(activeRoots, candidatePath);
 }
 
 function invalidateActiveMounts(

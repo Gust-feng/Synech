@@ -3,8 +3,8 @@ import { z } from "zod";
 import type { OrdinaryAgentFeature } from "../../ordinary-agent/index.js";
 import type { SpaceFeature } from "../../spaces/index.js";
 import type { WorkspaceFeature } from "../../workspaces/index.js";
+import type { WorkbenchCoordination } from "../../workbench-coordination/index.js";
 import { PanelHttpError, readJsonBody, writeJson } from "../http-utils.js";
-import type { SpaceConversationDeletionCoordinator } from "./space-conversation-coordinator.js";
 
 export type SpaceMetadataRouteDependencies = {
   readonly spaceFeature: {
@@ -15,7 +15,7 @@ export type SpaceMetadataRouteDependencies = {
     readonly queries: Pick<OrdinaryAgentFeature["queries"], "listConversationsByOwner" | "getConversation">;
   };
   readonly workspaceFeature: { readonly queries: Pick<WorkspaceFeature["queries"], "get"> };
-  readonly spaceConversationDeletion: Pick<SpaceConversationDeletionCoordinator, "assertAvailable" | "deleteSpace">;
+  readonly workbenchCoordination: Pick<WorkbenchCoordination, "commands">;
   readonly ensureDefaultSpace: () => Promise<void>;
   readonly flushSpaceKnowledgeSync: () => Promise<void>;
 };
@@ -84,7 +84,7 @@ export async function handlePanelSpaceMetadataRoute(
     if (await dependencies.spaceFeature.queries.getTree(spaceId) === undefined) {
       throw new PanelHttpError(404, "space_not_found", "未找到空间。");
     }
-    await dependencies.spaceConversationDeletion.deleteSpace(spaceId);
+    await dependencies.workbenchCoordination.commands.deleteSpace(spaceId);
     await dependencies.flushSpaceKnowledgeSync();
     writeJson(response, 200, { ok: true });
     return true;

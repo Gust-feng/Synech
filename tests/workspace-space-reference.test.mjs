@@ -1,8 +1,15 @@
 import assert from "node:assert/strict";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import { createSpaceFeature, SPACE_TREE_SCHEMA_VERSION } from "../dist/app/spaces/index.js";
 import { createWorkspaceFeature, WORKSPACE_SCHEMA_VERSION } from "../dist/app/workspaces/index.js";
+import { createWorkbenchCoordination } from "../dist/app/workbench-coordination/index.js";
+import { resolveConversationSpaceAccess } from "../dist/app/panel-server/spaces/space-agent-access.js";
+import { resolveSpaceFilesystemReference } from "../dist/app/panel-server/spaces/space-workspace-reference.js";
+import { runReferenceMutation } from "../dist/app/panel-server/spaces/space-routes.js";
 
 test("an implicit Workspace is reused and promoted without changing its identity", async (t) => {
   const feature = createWorkspaceFeature({
@@ -59,6 +66,180 @@ test("Workspace disconnection preserves every Space-owned relationship", async (
   assert.equal((await workspaces.queries.get(workspace.workspace.id))?.status, "disconnected");
   assert.equal((await spaces.queries.getReference(reference.id))?.reference.kind, "workspace");
   assert.deepEqual((await spaces.queries.listReferencesByWorkspace(workspace.workspace.id)).map((item) => item.id), [reference.id]);
+});
+
+test("Workspace reconnect reuses the same nesting policy as first registration", async (t) => {
+  const feature = createWorkspaceFeature({
+    repository: memoryWorkspaceRepository(),
+    idFactory: increasingId("workspace"),
+    mountVersionFactory: increasingId("mount"),
+    now: increasingClock(),
+  });
+  t.after(async () => await feature.release());
+  await feature.ready();
+  const parent = await feature.commands.ensureWorkspace({ rootPath: "C:/projects/root", sourceIdentity: "root-id", visibility: "listed" });
+  await feature.commands.invalidateMount(parent.workspace.id);
+  await feature.commands.ensureWorkspace({ rootPath: "C:/projects/root/sub", sourceIdentity: "child-id", visibility: "listed" });
+
+  await assert.rejects(
+    () => feature.commands.reconnectWorkspace({ workspaceId: parent.workspace.id, rootPath: "C:/projects/root", sourceIdentity: "root-id" }),
+    (error) => error?.code === "workspace_nested_path",
+  );
+});
+
+test("failed Workspace attachment compensates a newly-created implicit registration", async (t) => {
+  const workspaces = createWorkspaceFeature({
+    repository: memoryWorkspaceRepository(),
+    idFactory: () => "workspace-compensated",
+    mountVersionFactory: () => "mount-1",
+    now: increasingClock(),
+  });
+  t.after(async () => await workspaces.release());
+  await workspaces.ready();
+  const coordination = createWorkbenchCoordination({
+    spaces: {
+      commands: {
+        async addReference() { throw new Error("space write failed"); },
+        async unlinkReference() {},
+      },
+      queries: {
+        async getTree() { return { space: { id: "space-1" }, entries: [] }; },
+        async getReference() { return undefined; },
+        async listReferencesByWorkspace() { return []; },
+      },
+    },
+    workspaces: { commands: workspaces.commands },
+    async inspectDirectory() { return { kind: "folder", identity: "folder-id" }; },
+    assertSpaceAvailable() {},
+    async listWorkspaceConversationIds() { return []; },
+    async withWorkspacePathLease(_workspaceId, operation) { return await operation(); },
+    async deleteWorkspace() {},
+    async deleteSpace() {},
+    async detachKnowledgeFromSpace() {},
+  });
+
+  await assert.rejects(
+    () => coordination.commands.attachWorkspaceToSpace({ spaceId: "space-1", rootPath: "C:/projects/root", actor: { kind: "user" } }),
+    /space write failed/u,
+  );
+  assert.deepEqual(await workspaces.queries.listAll(), []);
+});
+
+test("Workspace attachment and detachment are idempotent application commands", async (t) => {
+  const workspaces = createWorkspaceFeature({
+    repository: memoryWorkspaceRepository(),
+    idFactory: () => "workspace-1",
+    mountVersionFactory: () => "mount-1",
+    now: increasingClock(),
+  });
+  const spaces = createSpaceFeature({ repository: memorySpaceRepository(), idFactory: increasingId("reference"), now: increasingClock() });
+  t.after(async () => { await spaces.release(); await workspaces.release(); });
+  await Promise.all([spaces.ready(), workspaces.ready()]);
+  await spaces.commands.createSpace({ id: "space-1", title: "Space" });
+  let leaseHeld = false;
+  const coordination = createWorkbenchCoordination({
+    spaces,
+    workspaces: { commands: workspaces.commands },
+    async inspectDirectory() { return { kind: "folder", identity: "folder-id" }; },
+    assertSpaceAvailable() {},
+    async listWorkspaceConversationIds() { return []; },
+    async withWorkspacePathLease(_workspaceId, operation) {
+      leaseHeld = true;
+      try { return await operation(); } finally { leaseHeld = false; }
+    },
+    async deleteWorkspace() {},
+    async deleteSpace() {},
+    async detachKnowledgeFromSpace() {},
+  });
+
+  const first = await coordination.commands.attachWorkspaceToSpace({ spaceId: "space-1", rootPath: "C:/projects/root", actor: { kind: "user" } });
+  const retry = await coordination.commands.attachWorkspaceToSpace({ spaceId: "space-1", rootPath: "C:/projects/root", actor: { kind: "user" } });
+  assert.equal(retry.item.id, first.item.id);
+  assert.equal((await spaces.queries.listReferencesByWorkspace(first.workspace.id)).length, 1);
+
+  const originalUnlink = spaces.commands.unlinkReference;
+  spaces.commands.unlinkReference = async (referenceId) => {
+    assert.equal(leaseHeld, true);
+    await originalUnlink(referenceId);
+  };
+  await coordination.commands.detachWorkspaceFromSpace(first.item.id);
+  await coordination.commands.detachWorkspaceFromSpace(first.item.id);
+  assert.equal((await spaces.queries.listReferencesByWorkspace(first.workspace.id)).length, 0);
+});
+
+test("local-file resolution rejects a different filesystem object at the same path", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const file = path.join(directory, "reference.txt");
+    await fs.writeFile(file, "first", "utf8");
+    const first = await fs.stat(file, { bigint: true });
+    await fs.rename(file, path.join(directory, "original.txt"));
+    await fs.writeFile(file, "replacement", "utf8");
+    const item = {
+      id: "reference-1",
+      spaceId: "space-1",
+      title: "reference.txt",
+      reference: { kind: "local_file", path: file },
+      sourceIdentity: `${first.dev}:${first.ino}`,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    await assert.rejects(
+      () => resolveSpaceFilesystemReference({ workspaceFeature: unavailableWorkspaceFeature() }, item),
+      (error) => error?.code === "space_reference_source_replaced",
+    );
+  });
+});
+
+test("a queued reference mutation rechecks membership after acquiring the path lease", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const file = path.join(directory, "reference.txt");
+    await fs.writeFile(file, "original", "utf8");
+    const stat = await fs.stat(file, { bigint: true });
+    const item = {
+      id: "reference-1",
+      spaceId: "space-1",
+      title: "reference.txt",
+      reference: { kind: "local_file", path: file },
+      sourceIdentity: `${stat.dev}:${stat.ino}`,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    let executed = false;
+    await assert.rejects(
+      () => runReferenceMutation({
+        spaceFeature: { queries: { async getReference() { return undefined; } } },
+        workspaceFeature: unavailableWorkspaceFeature(),
+        fileMutationCoordinator: { async run(_key, operation) { return await operation(); } },
+      }, item, async () => { executed = true; }),
+      (error) => error?.code === "space_reference_revoked",
+    );
+    assert.equal(executed, false);
+    assert.equal(await fs.readFile(file, "utf8"), "original");
+  });
+});
+
+test("Workspace repository failures are not silently projected as missing Space context", async () => {
+  const spaces = {
+    queries: {
+      async getTree() {
+        return {
+          space: { id: "space-1" },
+          entries: [{ item: { id: "reference-1", spaceId: "space-1", title: "Workspace", reference: { kind: "workspace", workspaceId: "workspace-1" } } }],
+        };
+      },
+    },
+  };
+  const failure = new Error("workspace repository unavailable");
+  await assert.rejects(
+    () => resolveConversationSpaceAccess(
+      spaces,
+      { commands: { async invalidateMount() {} }, queries: { async get() { throw failure; } } },
+      async () => ({ kind: "space", id: "space-1" }),
+      "conversation-1",
+      undefined,
+    ),
+    failure,
+  );
 });
 
 test("moving a Workspace replaces the active mount and releases the historical path", async (t) => {
@@ -135,4 +316,13 @@ function increasingId(prefix) {
 function increasingClock() {
   let seconds = 0;
   return () => `2026-01-01T00:00:${String(seconds++).padStart(2, "0")}.000Z`;
+}
+
+function unavailableWorkspaceFeature() {
+  return { commands: { async invalidateMount() {} }, queries: { async get() { return undefined; } } };
+}
+
+async function withTemporaryDirectory(operation) {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "synech-workspace-baseline-"));
+  try { await operation(directory); } finally { await fs.rm(directory, { recursive: true, force: true }); }
 }

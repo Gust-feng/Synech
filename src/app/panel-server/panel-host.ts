@@ -72,6 +72,10 @@ import {
   createWorkspaceFeature,
   type WorkspaceFeature,
 } from "../workspaces/index.js";
+import {
+  createWorkbenchCoordination,
+  type WorkbenchCoordination,
+} from "../workbench-coordination/index.js";
 import { createWorkspaceDeletionCoordinator, type WorkspaceDeletionCoordinator } from "./spaces/workspace-deletion-coordinator.js";
 import {
   applyPendingRestore,
@@ -181,6 +185,7 @@ export type PanelHost = {
   readonly conversationLifecycle: ConversationLifecycleCoordinator;
   readonly spaceConversationDeletion: SpaceConversationDeletionCoordinator;
   readonly workspaceDeletion: WorkspaceDeletionCoordinator;
+  readonly workbenchCoordination: WorkbenchCoordination;
   readonly personalKnowledgeFeature: PersonalKnowledgeFeature<import("../panel-api/workbench.js").DocumentPreview>;
   readonly dataMaintenance: DataMaintenance;
   readonly prepareOrdinaryRunBirth: (input: PanelRunInput, conversationId?: string) => Promise<OrdinaryRunBirth>;
@@ -518,6 +523,7 @@ function assemblePanelHost(input: {
       );
     }
   });
+  let workbenchCoordination!: WorkbenchCoordination;
   const resolveFeatureToolContributions = createHostFeatureAgentToolContributionResolver({
     agentNotes: agentNotesFeature,
     pathDependencies: pathDependencyFeature,
@@ -525,21 +531,20 @@ function assemblePanelHost(input: {
     personalKnowledge: personalKnowledgeFeature,
     revocationOverlay: spaceRevocationOverlay,
     assertSpaceAvailable: (spaceId) => spaceConversationDeletion.assertAvailable(spaceId),
-    deleteSpace: (spaceId) => spaceConversationDeletion.deleteSpace(spaceId),
+    deleteSpace: (spaceId) => workbenchCoordination.commands.deleteSpace(spaceId),
     deleteConversation: (conversationId) => conversationLifecycle.deleteConversation(conversationId),
     managedSpaceFolderRoot,
     fileMutationCoordinator,
-    ensureWorkspaceDirectory: async ({ path: workspacePath, title }) => {
-      const source = await inspectSpaceExternalSource(workspacePath);
-      if (source?.kind !== "folder") throw new Error(`Workspace directory is unavailable: ${workspacePath}`);
-      const ensured = await workspaceFeature.commands.ensureWorkspace({
+    attachWorkspaceDirectory: async ({ spaceId, path: workspacePath, title, actor, annotation }) =>
+      (await workbenchCoordination.commands.attachWorkspaceToSpace({
+        spaceId,
         rootPath: workspacePath,
-        sourceIdentity: source.identity,
         title,
-        visibility: "implicit",
-      });
-      return { workspaceId: ensured.workspace.id };
-    },
+        actor,
+        ...(annotation === undefined ? {} : { annotation }),
+      })).item,
+    detachWorkspaceFromSpace: (referenceId) =>
+      workbenchCoordination.commands.detachWorkspaceFromSpace(referenceId),
     resolveWorkspaceDirectory: async (workspaceId) => {
       const workspace = await workspaceFeature.queries.get(workspaceId);
       const mount = workspace?.status === "available"
@@ -699,6 +704,13 @@ function assemblePanelHost(input: {
     processes: processRegistry,
     processTerminator,
     runExclusive: async (operation) => await fileMutationCoordinator.runExclusive(deletionLockKey, operation),
+    runWorkspaceExclusive: async (workspaceId, operation) => {
+      const workspace = await workspaceFeature.queries.get(workspaceId);
+      const rootPath = workspace === undefined
+        ? undefined
+        : [...workspace.mounts].reverse().find((mount) => mount.status === "active")?.rootPath;
+      return rootPath === undefined ? await operation() : await fileMutationCoordinator.runExclusive(rootPath, operation);
+    },
   });
   const conversationLifecycle = createConversationLifecycleCoordinator({
     ordinary: ordinaryAgentFeature,
@@ -709,6 +721,44 @@ function assemblePanelHost(input: {
     processTerminator,
     journal: conversationLifecycleJournal,
     runExclusive: async (operation) => await fileMutationCoordinator.runExclusive(deletionLockKey, operation),
+  });
+  workbenchCoordination = createWorkbenchCoordination({
+    spaces: {
+      commands: {
+        addReference: spaceFeature.commands.addReference,
+        unlinkReference: spaceFeature.commands.unlinkReference,
+      },
+      queries: {
+        getTree: spaceFeature.queries.getTree,
+        getReference: spaceFeature.queries.getReference,
+        listReferencesByWorkspace: spaceFeature.queries.listReferencesByWorkspace,
+      },
+    },
+    workspaces: {
+      commands: {
+        ensureWorkspace: workspaceFeature.commands.ensureWorkspace,
+        reconnectWorkspace: workspaceFeature.commands.reconnectWorkspace,
+        setVisibility: workspaceFeature.commands.setVisibility,
+        discardImplicitWorkspace: workspaceFeature.commands.discardImplicitWorkspace,
+      },
+    },
+    inspectDirectory: inspectSpaceExternalSource,
+    assertSpaceAvailable: (spaceId) => spaceConversationDeletion.assertAvailable(spaceId),
+    listWorkspaceConversationIds: async (workspaceId) =>
+      (await ordinaryAgentFeature.queries.listConversationsByOwner({ kind: "workspace", id: workspaceId }))
+        .map((conversation) => conversation.conversationId),
+    withWorkspacePathLease: async (workspaceId, operation) => {
+      const workspace = await workspaceFeature.queries.get(workspaceId);
+      const rootPath = workspace === undefined
+        ? undefined
+        : [...workspace.mounts].reverse().find((mount) => mount.status === "active")?.rootPath;
+      return rootPath === undefined
+        ? await operation()
+        : await fileMutationCoordinator.runExclusive(rootPath, operation);
+    },
+    deleteWorkspace: (workspaceId) => workspaceDeletion.deleteWorkspace(workspaceId),
+    deleteSpace: (spaceId) => spaceConversationDeletion.deleteSpace(spaceId),
+    detachKnowledgeFromSpace: (detachInput) => personalKnowledgeFeature.commands.cleanupSpace(detachInput),
   });
   const projectionChangeUnsubscribers = [
     spaceFeature.events.subscribe((event) => {
@@ -785,6 +835,7 @@ function assemblePanelHost(input: {
     conversationLifecycle,
     spaceConversationDeletion,
     workspaceDeletion,
+    workbenchCoordination,
     personalKnowledgeFeature,
     dataMaintenance,
     prepareOrdinaryRunBirth: (runInput, conversationId) => prepareOrdinaryRunBirth(host, runInput, conversationId),

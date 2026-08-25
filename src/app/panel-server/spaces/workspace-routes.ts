@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { inspectSpaceExternalSource } from "../../spaces/index.js";
 import type { WorkspaceFeature, WorkspaceFeatureError } from "../../workspaces/index.js";
+import type { WorkbenchCoordination } from "../../workbench-coordination/index.js";
 import { PanelHttpError, readJsonBody, writeJson } from "../http-utils.js";
 
 const registerSchema = z.object({
@@ -18,6 +19,7 @@ export type WorkspaceRouteDependencies = {
     readonly commands: Pick<WorkspaceFeature["commands"], "ensureWorkspace" | "setVisibility" | "reconnectWorkspace">;
     readonly queries: Pick<WorkspaceFeature["queries"], "list" | "get">;
   };
+  readonly workbenchCoordination: Pick<WorkbenchCoordination, "commands">;
 };
 
 /**
@@ -60,9 +62,7 @@ export async function handlePanelWorkspaceRoute(
   if (reconnectMatch !== null && request.method === "POST") {
     const workspaceId = decode(reconnectMatch[1]);
     const input = parse(registerSchema, await readJsonBody(request), "工作区路径无效。");
-    const source = await inspectSpaceExternalSource(input.rootPath);
-    if (source?.kind !== "folder") throw new PanelHttpError(400, "workspace_directory_required", "所选路径必须是存在的文件夹。");
-    const reconnected = await feature.commands.reconnectWorkspace({ workspaceId, rootPath: input.rootPath, sourceIdentity: source.identity });
+    const reconnected = await dependencies.workbenchCoordination.commands.reconnectWorkspace({ workspaceId, rootPath: input.rootPath });
     writeJson(response, 200, { ok: true, workspace: reconnected.workspace, mount: reconnected.mount });
     return true;
   }
@@ -73,8 +73,17 @@ export async function handlePanelWorkspaceRoute(
     const workspace = await feature.queries.get(workspaceId);
     if (workspace === undefined) throw new PanelHttpError(404, "workspace_not_found", "工作区不存在。");
     const input = parse(visibilitySchema, await readJsonBody(request), "工作区可见性无效。");
-    const updated = await feature.commands.setVisibility(workspaceId, input.visibility);
+    const updated = input.visibility === "implicit"
+      ? await dependencies.workbenchCoordination.commands.hideWorkspace(workspaceId)
+      : await feature.commands.setVisibility(workspaceId, "listed");
     writeJson(response, 200, { ok: true, workspace: updated });
+    return true;
+  }
+
+  if (visibilityMatch !== null && request.method === "DELETE") {
+    const workspaceId = decode(visibilityMatch[1]);
+    await dependencies.workbenchCoordination.commands.deleteWorkspace(workspaceId);
+    writeJson(response, 200, { ok: true });
     return true;
   }
 
@@ -108,6 +117,7 @@ export function workspaceFeatureHttpError(error: WorkspaceFeatureError): PanelHt
     case "workspace_nested_path":
     case "workspace_mount_conflict":
     case "workspace_not_available":
+    case "workspace_discard_not_allowed":
       return new PanelHttpError(409, error.code, error.message);
     case "workspace_mount_invalid":
       return new PanelHttpError(400, error.code, error.message);

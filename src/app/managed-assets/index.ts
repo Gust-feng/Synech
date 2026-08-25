@@ -21,5 +21,6 @@ export {
   managedAssetCaptionFingerprint,
 } from "./asset-caption.js";
 export { createSqliteManagedAssetRepository } from "./sqlite-repository.js";
+export { parseManagedAsset } from "./managed-asset-validation.js";
 
 export { createManagedAssetsFeature } from "./managed-assets-feature.js";

@@ -1,5 +1,6 @@
 import type { SqliteRuntimeDatabase } from "../../adapters/runtime-storage/index.js";
-import type { ManagedAsset, ManagedAssetRepository } from "./contracts.js";
+import type { ManagedAssetRepository } from "./contracts.js";
+import { parseManagedAsset } from "./managed-asset-validation.js";
 import {
   MAX_MANAGED_ASSET_CAPTION_BYTES,
   replaceManagedAssetCaption,
@@ -35,15 +36,18 @@ export function createSqliteManagedAssetRepository(database: SqliteRuntimeDataba
   return {
     async get(id) {
       const row = selectById.get(id) as { payloadJson: string } | undefined;
-      return row === undefined ? undefined : JSON.parse(row.payloadJson) as ManagedAsset;
+      return row === undefined ? undefined : parseManagedAsset(JSON.parse(row.payloadJson));
     },
     async list() {
       return database.connection.prepare("SELECT payload_json AS payloadJson FROM managed_assets ORDER BY rowid").all()
-        .map((row) => JSON.parse(String((row as { payloadJson: string }).payloadJson)) as ManagedAsset);
+        .map((row) => parseManagedAsset(JSON.parse(String((row as { payloadJson: string }).payloadJson))));
     },
     async upsertMany(assets) {
       database.transaction(() => {
-        for (const asset of assets) upsert.run(asset.id, JSON.stringify(asset));
+        for (const asset of assets) {
+          const value = parseManagedAsset(asset);
+          upsert.run(value.id, JSON.stringify(value));
+        }
       });
     },
     async removeMany(assetIds) {
@@ -58,7 +62,7 @@ export function createSqliteManagedAssetRepository(database: SqliteRuntimeDataba
       return database.transaction(() => {
         const row = selectById.get(input.id) as { payloadJson: string } | undefined;
         if (row === undefined) return { status: "not_found" } as const;
-        const asset = JSON.parse(row.payloadJson) as ManagedAsset;
+        const asset = parseManagedAsset(JSON.parse(row.payloadJson));
         const editable = editableManagedAssetText(asset);
         if (editable === undefined) return { status: "not_editable", kind: asset.kind } as const;
         const currentFingerprint = managedAssetTextFingerprint(editable.text);
@@ -81,7 +85,7 @@ export function createSqliteManagedAssetRepository(database: SqliteRuntimeDataba
       return database.transaction(() => {
         const row = selectById.get(input.id) as { payloadJson: string } | undefined;
         if (row === undefined) return { status: "not_found" } as const;
-        const asset = JSON.parse(row.payloadJson) as ManagedAsset;
+        const asset = parseManagedAsset(JSON.parse(row.payloadJson));
         if (asset.kind !== "image" || asset.image === undefined) return { status: "not_editable", kind: asset.kind } as const;
         const currentFingerprint = managedAssetCaptionFingerprint(asset.image.caption);
         if (currentFingerprint !== input.expectedFingerprint) {

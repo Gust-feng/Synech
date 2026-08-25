@@ -45,8 +45,15 @@ export type SpaceToolOptions = {
   readonly fileMutationCoordinator?: LocalWorkspaceMutationCoordinator;
   /** Filesystem source inspector; defaults to the real filesystem. */
   readonly externalSourceInspector?: SpaceExternalSourceInspector;
-  /** Host composition for turning a complete external directory into an implicit Workspace. */
-  readonly ensureWorkspaceDirectory?: (input: { readonly path: string; readonly title: string }) => Promise<{ readonly workspaceId: string }>;
+  /** Application command for atomically attaching a complete directory through an implicit Workspace. */
+  readonly attachWorkspaceDirectory?: (input: {
+    readonly spaceId: string;
+    readonly path: string;
+    readonly title: string;
+    readonly actor: SpaceReferenceActorRecord;
+    readonly annotation?: SpaceReferenceAnnotationInput;
+  }) => Promise<SpaceReferenceItem>;
+  readonly detachWorkspaceFromSpace?: (referenceId: string) => Promise<void>;
   /** Host composition for resolving a Space Workspace relationship to its current active mount. */
   readonly resolveWorkspaceDirectory?: (workspaceId: string) => Promise<{ readonly path: string; readonly sourceIdentity: string } | undefined>;
 };
@@ -201,8 +208,24 @@ export function createSpaceAddReferenceTool(options: SpaceToolOptions): ToolExec
       if ("error" in resolution) return resolution.error;
       const annotation = parseAgentAnnotation(record.annotation);
       if (annotation === "invalid") return invalid("annotation must be an object with a markdown string.");
+      const actor = agentActor(context);
+      if ("workspacePath" in resolution) {
+        if (options.attachWorkspaceDirectory === undefined) {
+          return { status: "space_reference_source_unavailable", message: "Workspace attachment is unavailable in this environment." };
+        }
+        return resultFor(
+          () => options.attachWorkspaceDirectory!({
+            spaceId,
+            path: resolution.workspacePath,
+            title,
+            actor,
+            ...(annotation === undefined ? {} : { annotation }),
+          }),
+          (item) => ({ status: "added", item: spaceReferenceModelView(item), annotationStatus: item.annotation === undefined ? "missing" : "written" }),
+        );
+      }
       return resultFor(
-        () => options.spaces.commands.addReference({ spaceId, title, reference: resolution.reference, ...(annotation === undefined ? {} : { annotation }), actor: agentActor(context) }),
+        () => options.spaces.commands.addReference({ spaceId, title, reference: resolution.reference, ...(annotation === undefined ? {} : { annotation }), actor }),
         (item) => ({ status: "added", item: spaceReferenceModelView(item), annotationStatus: item.annotation === undefined ? "missing" : "written" }),
       );
     },
@@ -249,16 +272,13 @@ export function createSpaceMountLocalPathTool(options: SpaceToolOptions): ToolEx
           message: `No ${targetKind} exists at ${absolutePath}. Ask the user to verify the path before retrying.`,
         };
       }
-      const reference: SpaceAddableReference = targetKind === "file"
-        ? { kind: "local_file", path: absolutePath }
-        : options.ensureWorkspaceDirectory === undefined
-          ? { kind: "workspace", workspaceId: "" }
-          : { kind: "workspace", workspaceId: (await options.ensureWorkspaceDirectory({ path: absolutePath, title })).workspaceId };
-      if (reference.kind === "workspace" && reference.workspaceId.length === 0) {
+      if (targetKind === "folder" && options.attachWorkspaceDirectory === undefined) {
         return { status: "space_reference_source_unavailable", path: absolutePath, message: "Workspace registration is unavailable in this environment." };
       }
       return resultFor(
-        () => options.spaces.commands.addReference({ spaceId, title, reference, actor: agentActor(context) }),
+        () => targetKind === "folder"
+          ? options.attachWorkspaceDirectory!({ spaceId, path: absolutePath, title, actor: agentActor(context) })
+          : options.spaces.commands.addReference({ spaceId, title, reference: { kind: "local_file", path: absolutePath }, actor: agentActor(context) }),
         (item) => ({
           status: "added",
           item: spaceReferenceModelView(item),
@@ -562,7 +582,12 @@ export function createSpaceUnlinkReferenceTool(options: SpaceToolOptions): ToolE
           message: "Space-owned materials must be deleted through their material workflow.",
         };
       }
-      return resultFor(() => options.spaces.commands.unlinkReference(itemId), () => ({ status: "unlinked", itemId }));
+      return resultFor(
+        () => item.reference.kind === "workspace" && options.detachWorkspaceFromSpace !== undefined
+          ? options.detachWorkspaceFromSpace(itemId)
+          : options.spaces.commands.unlinkReference(itemId),
+        () => ({ status: "unlinked", itemId }),
+      );
     },
   });
 }
@@ -758,6 +783,7 @@ function movableTarget(kind: unknown, id: unknown): { readonly kind: "reference"
 
 type AgentSpaceReferenceResolution =
   | { readonly reference: SpaceAddableReference }
+  | { readonly workspacePath: string }
   | { readonly error: Readonly<Record<string, unknown>> };
 
 async function resolveAgentSpaceReference(
@@ -796,15 +822,13 @@ async function resolveAgentSpaceReference(
         requireFile: false,
         projectPathRequired: false,
       });
-      if (target.rootKind !== "file" && options.ensureWorkspaceDirectory === undefined) {
+      if (target.rootKind !== "file" && options.attachWorkspaceDirectory === undefined) {
         return { error: { status: "space_reference_source_unavailable", message: "Workspace registration is unavailable in this environment." } };
       }
       return {
-        reference: target.rootKind === "file"
-          ? { kind: "local_file", path: target.rootAbsolutePath }
-          : options.ensureWorkspaceDirectory === undefined
-            ? { kind: "workspace", workspaceId: "" }
-            : { kind: "workspace", workspaceId: (await options.ensureWorkspaceDirectory({ path: target.rootAbsolutePath, title: path.basename(target.rootAbsolutePath) })).workspaceId },
+        ...(target.rootKind === "file"
+          ? { reference: { kind: "local_file" as const, path: target.rootAbsolutePath } }
+          : { workspacePath: target.rootAbsolutePath }),
       };
     } catch (error) {
       return {

@@ -15,6 +15,7 @@ import {
 } from "../../spaces/index.js";
 import type { WorkspaceFeature } from "../../workspaces/index.js";
 import { resolveSpaceFilesystemReference } from "./space-workspace-reference.js";
+import { PanelHttpError } from "../http-utils.js";
 
 export type ConversationSpaceAccess = {
   readonly spaceId?: string;
@@ -60,18 +61,22 @@ export async function resolveConversationSpaceAccess(
   if (tree === undefined) return { contextInput };
   const resolvedEntries: readonly (AgentAccessibleSpaceReference | undefined)[] = await Promise.all(tree.entries.map(async (entry): Promise<AgentAccessibleSpaceReference | undefined> => {
     const item = entry.item;
-    if (item.reference.kind === "local_file") {
-      return { item, path: item.reference.path, kind: "file" as const };
-    }
-    if (item.reference.kind === "managed_folder") {
-      return { item, path: item.reference.path, kind: "project" as const };
-    }
-    if (item.reference.kind !== "workspace") return undefined;
+    if (item.reference.kind !== "local_file" && item.reference.kind !== "managed_folder" && item.reference.kind !== "workspace") return undefined;
     try {
       const resolved = await resolveSpaceFilesystemReference({ workspaceFeature: workspaces }, item);
-      return { item, path: resolved.path, kind: "project" as const, sourceIdentity: resolved.sourceIdentity };
-    } catch {
-      return undefined;
+      return {
+        item,
+        path: resolved.path,
+        kind: resolved.sourceKind === "local_file" ? "file" as const : "project" as const,
+        sourceIdentity: resolved.sourceIdentity,
+      };
+    } catch (error) {
+      if (error instanceof PanelHttpError && (
+        error.code === "workspace_not_available" ||
+        error.code === "space_reference_source_missing" ||
+        error.code === "space_reference_source_replaced"
+      )) return undefined;
+      throw error;
     }
   }));
   const fileItems = resolvedEntries.filter((item): item is AgentAccessibleSpaceReference => item !== undefined);

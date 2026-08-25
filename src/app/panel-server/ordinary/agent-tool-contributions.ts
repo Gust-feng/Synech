@@ -51,7 +51,14 @@ export function createHostFeatureAgentToolContributionResolver(input: {
   readonly managedSpaceFolderRoot?: string;
   /** Host-owned file mutation coordinator shared with the file tools. */
   readonly fileMutationCoordinator?: LocalWorkspaceMutationCoordinator;
-  readonly ensureWorkspaceDirectory?: (input: { readonly path: string; readonly title: string }) => Promise<{ readonly workspaceId: string }>;
+  readonly attachWorkspaceDirectory?: (input: {
+    readonly spaceId: string;
+    readonly path: string;
+    readonly title: string;
+    readonly actor: import("../../spaces/index.js").SpaceReferenceActorRecord;
+    readonly annotation?: import("../../spaces/index.js").SpaceReferenceAnnotationInput;
+  }) => Promise<import("../../spaces/index.js").SpaceReferenceItem>;
+  readonly detachWorkspaceFromSpace?: (referenceId: string) => Promise<void>;
   readonly resolveWorkspaceDirectory?: (workspaceId: string) => Promise<{ readonly path: string; readonly sourceIdentity: string } | undefined>;
 }): HostFeatureAgentToolContributionResolver {
   // Shared across runs on purpose: a revocation is permanent, since re-adding a
@@ -92,7 +99,8 @@ export function createHostFeatureAgentToolContributionResolver(input: {
           deleteConversation: input.deleteConversation,
           ...(input.managedSpaceFolderRoot === undefined ? {} : { managedSpaceFolderRoot: input.managedSpaceFolderRoot }),
           ...(input.fileMutationCoordinator === undefined ? {} : { fileMutationCoordinator: input.fileMutationCoordinator }),
-          ...(input.ensureWorkspaceDirectory === undefined ? {} : { ensureWorkspaceDirectory: input.ensureWorkspaceDirectory }),
+          ...(input.attachWorkspaceDirectory === undefined ? {} : { attachWorkspaceDirectory: input.attachWorkspaceDirectory }),
+          ...(input.detachWorkspaceFromSpace === undefined ? {} : { detachWorkspaceFromSpace: input.detachWorkspaceFromSpace }),
           ...(input.resolveWorkspaceDirectory === undefined ? {} : { resolveWorkspaceDirectory: input.resolveWorkspaceDirectory }),
         })]),
     ...(input.personalKnowledge === undefined

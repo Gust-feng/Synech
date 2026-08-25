@@ -24,3 +24,4 @@ export {
   type WorkspacePathNesting,
 } from "./workspace-identity.js";
 export { createWorkspaceFeature, type CreateWorkspaceFeatureInput } from "./workspace-feature.js";
+export { validateWorkspaceSnapshot } from "./workspace-validation.js";

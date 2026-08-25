@@ -38,7 +38,6 @@ export type PersonalNoteRemoteState =
 const EMPTY_SNAPSHOT: Snapshot = { notes: [], pages: [], links: [], themes: [], assignments: [], recentlyOpened: {} }
 let snapshot: Snapshot = EMPTY_SNAPSHOT
 let authoritativeSnapshot: Snapshot = snapshot
-let activeSpaceId: string | undefined
 let loaded = false
 let loading: Promise<void> | undefined
 let refreshing: Promise<void> | undefined
@@ -151,8 +150,7 @@ export async function fetchPersonalNoteRemoteState(noteId: string, signal?: Abor
   }
 }
 
-export function initializePersonalKnowledge(spaceId?: string): Promise<void> {
-  activeSpaceId = spaceId
+export function initializePersonalKnowledge(): Promise<void> {
   if (!persistenceEnabled) {
     loadState = { status: 'ready' }
     emit()
@@ -200,10 +198,6 @@ export function refreshPersonalKnowledge(): Promise<void> {
   return refreshing
 }
 
-export function setActivePersonalKnowledgeSpace(spaceId: string | undefined): void {
-  activeSpaceId = spaceId
-}
-
 export function mutatePersonalKnowledge(
   optimistic: (current: Snapshot) => Snapshot,
   request: (authoritative: Snapshot) => Promise<unknown>,
@@ -233,7 +227,6 @@ export function createPersonalNote(init?: Partial<Pick<Note, 'spaceId' | 'title'
   const now = Date.now()
   const note: Note = {
     id: crypto.randomUUID(),
-    ...(activeSpaceId === undefined ? {} : { spaceId: activeSpaceId }),
     title: '',
     bodyMarkdown: '',
     createdAt: now,

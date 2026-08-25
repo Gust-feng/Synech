@@ -22,8 +22,28 @@ export async function resolveSpaceFilesystemReference(
   dependencies: SpaceWorkspaceReferenceDependencies,
   item: SpaceReferenceItem,
 ): Promise<ResolvedSpaceFilesystemReference> {
-  if (item.reference.kind === "local_file") return { item, path: item.reference.path, sourceKind: "local_file" };
-  if (item.reference.kind === "managed_folder") return { item, path: item.reference.path, sourceKind: "managed_folder" };
+  if (item.reference.kind === "local_file") {
+    const current = await inspectSpaceExternalSource(item.reference.path);
+    if (current?.kind !== "file") {
+      throw new PanelHttpError(409, "space_reference_source_missing", "本地文件引用已不存在。");
+    }
+    if (item.sourceIdentity !== undefined && current.identity !== item.sourceIdentity) {
+      throw new PanelHttpError(409, "space_reference_source_replaced", "本地文件已被其他文件替换，请重新添加引用。");
+    }
+    return {
+      item,
+      path: item.reference.path,
+      sourceKind: "local_file",
+      sourceIdentity: item.sourceIdentity ?? current.identity,
+    };
+  }
+  if (item.reference.kind === "managed_folder") {
+    const current = await inspectSpaceExternalSource(item.reference.path);
+    if (current?.kind !== "folder") {
+      throw new PanelHttpError(409, "space_reference_source_missing", "空间维护的文件夹已不存在。");
+    }
+    return { item, path: item.reference.path, sourceKind: "managed_folder" };
+  }
   if (item.reference.kind !== "workspace") {
     throw new PanelHttpError(409, "space_reference_content_unavailable", "这个引用没有本地文件系统内容。");
   }

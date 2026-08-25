@@ -4,11 +4,10 @@ import type { SqliteRuntimeDatabase } from "../../adapters/runtime-storage/index
 import {
   WORKSPACE_SCHEMA_VERSION,
   WorkspaceFeatureError,
-  type Workspace,
-  type WorkspaceMount,
   type WorkspaceRepository,
   type WorkspaceSnapshot,
 } from "./contracts.js";
+import { validateWorkspaceSnapshot } from "./workspace-validation.js";
 
 const MIGRATIONS = [{
   version: 1,
@@ -17,6 +16,7 @@ const MIGRATIONS = [{
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
       status TEXT NOT NULL CHECK(status IN ('available', 'disconnected', 'deleting')),
+      visibility TEXT NOT NULL CHECK(visibility IN ('listed', 'implicit')),
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     ) STRICT;
@@ -31,25 +31,6 @@ const MIGRATIONS = [{
       invalidated_at TEXT,
       PRIMARY KEY (workspace_id, mount_version)
     ) STRICT;
-
-    CREATE TABLE workspace_links (
-      link_id TEXT PRIMARY KEY,
-      space_id TEXT NOT NULL,
-      workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-      mount_version TEXT NOT NULL,
-      status TEXT NOT NULL CHECK(status IN ('active', 'revoked')),
-      created_at TEXT NOT NULL,
-      revoked_at TEXT
-    ) STRICT;
-    CREATE INDEX workspace_links_space_idx ON workspace_links(space_id);
-    CREATE INDEX workspace_links_workspace_idx ON workspace_links(workspace_id);
-  `,
-}, {
-  version: 2,
-  sql: `
-    ALTER TABLE workspaces ADD COLUMN visibility TEXT NOT NULL DEFAULT 'listed'
-      CHECK(visibility IN ('listed', 'implicit'));
-    DROP TABLE workspace_links;
   `,
 }] as const;
 
@@ -67,14 +48,14 @@ export function createSqliteWorkspaceRepository(database: SqliteRuntimeDatabase)
                  invalidated_at AS invalidatedAt
             FROM workspace_mounts ORDER BY connected_at, mount_version
         `).all().map(rowToMount);
-        return validateSnapshot({ schemaVersion: WORKSPACE_SCHEMA_VERSION, workspaces, mounts });
+        return validateWorkspaceSnapshot({ schemaVersion: WORKSPACE_SCHEMA_VERSION, workspaces, mounts });
       } catch (error) {
         if (error instanceof WorkspaceFeatureError) throw error;
         throw new WorkspaceFeatureError("workspace_repository_failure", "Could not read Workspace snapshot from SQLite.", { cause: error });
       }
     },
     async write(snapshot: WorkspaceSnapshot): Promise<void> {
-      const value = validateSnapshot(snapshot);
+      const value = validateWorkspaceSnapshot(snapshot);
       try {
         writeSnapshot(database, value);
       } catch (error) {
@@ -84,64 +65,29 @@ export function createSqliteWorkspaceRepository(database: SqliteRuntimeDatabase)
   };
 }
 
-function rowToWorkspace(row: unknown): Workspace {
+function rowToWorkspace(row: unknown): unknown {
   const value = row as Record<string, SQLInputValue>;
   return {
     id: String(value.id),
     title: String(value.title),
-    status: value.status as Workspace["status"],
-    visibility: value.visibility as Workspace["visibility"],
+    status: value.status,
+    visibility: value.visibility,
     createdAt: String(value.createdAt),
     updatedAt: String(value.updatedAt),
   };
 }
 
-function rowToMount(row: unknown): WorkspaceMount {
+function rowToMount(row: unknown): unknown {
   const value = row as Record<string, SQLInputValue>;
   return {
     workspaceId: String(value.workspaceId),
     mountVersion: String(value.mountVersion),
     rootPath: String(value.rootPath),
     sourceIdentity: String(value.sourceIdentity),
-    status: value.status as WorkspaceMount["status"],
+    status: value.status,
     connectedAt: String(value.connectedAt),
     ...(value.invalidatedAt === null ? {} : { invalidatedAt: String(value.invalidatedAt) }),
   };
-}
-
-function validateSnapshot(snapshot: WorkspaceSnapshot): WorkspaceSnapshot {
-  if (snapshot.schemaVersion !== WORKSPACE_SCHEMA_VERSION) {
-    throw new WorkspaceFeatureError(
-      "workspace_snapshot_incompatible",
-      `Unsupported Workspace schema ${snapshot.schemaVersion}.`,
-    );
-  }
-  const workspaceIds = new Set(snapshot.workspaces.map((workspace) => workspace.id));
-  for (const mount of snapshot.mounts) {
-    if (!workspaceIds.has(mount.workspaceId)) {
-      throw new WorkspaceFeatureError(
-        "workspace_snapshot_incompatible",
-        `Workspace mount ${mount.mountVersion} references missing Workspace ${mount.workspaceId}.`,
-      );
-    }
-  }
-  for (const workspace of snapshot.workspaces) {
-    const activeMountCount = snapshot.mounts.filter(
-      (mount) => mount.workspaceId === workspace.id && mount.status === "active",
-    ).length;
-    const valid = workspace.status === "available"
-      ? activeMountCount === 1
-      : workspace.status === "disconnected"
-        ? activeMountCount === 0
-        : activeMountCount <= 1;
-    if (!valid) {
-      throw new WorkspaceFeatureError(
-        "workspace_snapshot_incompatible",
-        `Workspace ${workspace.id} status ${workspace.status} is inconsistent with ${activeMountCount} active mounts.`,
-      );
-    }
-  }
-  return snapshot;
 }
 
 function writeSnapshot(database: SqliteRuntimeDatabase, value: WorkspaceSnapshot): void {

@@ -10,7 +10,7 @@
  * - mountVersion：某次真实目录绑定的版本，重新连接时生成新版本。
  */
 
-export const WORKSPACE_SCHEMA_VERSION = "workspaces/v2" as const;
+export const WORKSPACE_SCHEMA_VERSION = "workspaces/v1" as const;
 
 export type WorkspaceStatus = "available" | "disconnected" | "deleting";
 export type WorkspaceVisibility = "listed" | "implicit";
@@ -81,6 +81,7 @@ export type WorkspaceFeatureErrorCode =
   | "workspace_mount_conflict"
   | "workspace_mount_invalid"
   | "workspace_not_available"
+  | "workspace_discard_not_allowed"
   | "workspace_not_deleting"
   | "workspace_invalid_input"
   | "workspace_snapshot_incompatible"
@@ -108,12 +109,17 @@ export type WorkspaceFeature = {
     setVisibility(workspaceId: string, visibility: WorkspaceVisibility): Promise<Workspace>;
     /** 同一文件系统对象的重新连接；不同对象必须注册新 Workspace，不替换旧 mount。 */
     reconnectWorkspace(input: ReconnectWorkspaceInput): Promise<{ readonly workspace: Workspace; readonly mount: WorkspaceMount }>;
-    /** 使当前 mount 失效并撤销所有依赖它的 Space link；返回被撤销的 linkId 列表供 Host 清理 Space 引用。 */
+    /** 使当前 mount 失效；Space membership 保留并投影为 disconnected。 */
     invalidateMount(workspaceId: string, reason?: string): Promise<void>;
     /** 进入 deleting 并发布事件；跨 feature 级联由 Host coordinator 协调。 */
     deleteWorkspace(workspaceId: string): Promise<void>;
     /**
-     * 物理移除 deleting Workspace 的软件侧登记（元数据、mount 与残留 link）。
+     * Compensates a failed cross-feature attach. The coordinator may call this
+     * only after proving the Workspace is implicit and owns no relationships.
+     */
+    discardImplicitWorkspace(workspaceId: string): Promise<void>;
+    /**
+     * 物理移除 deleting Workspace 的软件侧登记（元数据与 mount）。
      * 只能在 deleteWorkspace 之后执行；跨 feature 级联完成后由 Host coordinator 调用。
      */
     purgeWorkspace(workspaceId: string): Promise<void>;

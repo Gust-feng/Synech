@@ -36,6 +36,7 @@ import { handlePanelSpaceMetadataRoute } from "./spaces/space-metadata-routes.js
 import { WorkspaceFeatureError } from "../workspaces/index.js";
 import { handlePanelWorkspaceRoute, workspaceFeatureHttpError } from "./spaces/workspace-routes.js";
 import { PersonalKnowledgeError } from "../personal-knowledge/index.js";
+import { WorkbenchCoordinationError } from "../workbench-coordination/index.js";
 import { handlePanelPersonalKnowledgeRoute, personalKnowledgeHttpError } from "./storage/personal-knowledge-routes.js";
 import { createPanelUsageStatistics } from "./workbench/panel-usage-statistics.js";
 import { handlePanelDataRoute, dataMaintenanceHttpError } from "./storage/data-routes.js";
@@ -158,6 +159,10 @@ function createPanelRequestHandler(runtime: PanelHost): (request: IncomingMessag
       }
       if (error instanceof PersonalKnowledgeError) {
         writePanelError(response, personalKnowledgeHttpError(error));
+        return;
+      }
+      if (error instanceof WorkbenchCoordinationError) {
+        writePanelError(response, workbenchCoordinationHttpError(error));
         return;
       }
       if (error instanceof DataMaintenanceError) {
@@ -284,7 +289,7 @@ async function handlePanelRequest(
     spaceFeature: runtime.spaceFeature,
     workspaceFeature: runtime.workspaceFeature,
     ordinaryAgentFeature: runtime.ordinaryAgentFeature,
-    spaceConversationDeletion: runtime.spaceConversationDeletion,
+    workbenchCoordination: runtime.workbenchCoordination,
     ensureDefaultSpace: runtime.ensureDefaultSpace,
     flushSpaceKnowledgeSync: runtime.flushSpaceKnowledgeSync,
   }, request, response, url)) {
@@ -295,6 +300,7 @@ async function handlePanelRequest(
     spaceFeature: runtime.spaceFeature,
     workspaceFeature: runtime.workspaceFeature,
     spaceConversationDeletion: runtime.spaceConversationDeletion,
+    workbenchCoordination: runtime.workbenchCoordination,
     fileMutationCoordinator: runtime.fileMutationCoordinator,
     managedSpaceFolderRoot: runtime.managedSpaceFolderRoot,
     flushSpaceKnowledgeSync: runtime.flushSpaceKnowledgeSync,
@@ -306,6 +312,7 @@ async function handlePanelRequest(
 
   if (await handlePanelWorkspaceRoute({
     workspaceFeature: runtime.workspaceFeature,
+    workbenchCoordination: runtime.workbenchCoordination,
   }, request, response, url)) {
     return;
   }
@@ -362,6 +369,20 @@ async function handlePanelRequest(
       message: "请求资源不存在。",
     },
   });
+}
+
+function workbenchCoordinationHttpError(error: WorkbenchCoordinationError): PanelHttpError {
+  switch (error.code) {
+    case "coordination_space_not_found":
+    case "coordination_reference_not_found":
+      return new PanelHttpError(404, error.code, error.message);
+    case "coordination_workspace_directory_required":
+      return new PanelHttpError(400, error.code, error.message);
+    case "coordination_reference_kind_invalid":
+      return new PanelHttpError(409, error.code, error.message);
+    case "coordination_attach_compensation_failed":
+      return new PanelHttpError(500, error.code, error.message);
+  }
 }
 
 async function handleUpdateSkillStateRequest(
