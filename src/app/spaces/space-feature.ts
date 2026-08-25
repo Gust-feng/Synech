@@ -282,6 +282,33 @@ export function createSpaceFeature(input: CreateSpaceFeatureInput): SpaceFeature
           return item;
         });
       },
+      refreshReferenceSourceIdentity(itemId) {
+        assertUsable("refresh a reference source identity");
+        return serialize(async () => {
+          const snapshot = await input.repository.read();
+          const current = requireReference(snapshot, itemId);
+          if (current.reference.kind !== "local_file" && current.reference.kind !== "workspace_folder") {
+            throw new SpaceFeatureError(
+              "space_invalid_input",
+              `Space reference ${itemId} does not have an external filesystem identity.`,
+            );
+          }
+          const sourceIdentity = await captureExternalSourceIdentity(
+            current.reference,
+            input.externalSourceInspector,
+          );
+          if (sourceIdentity === undefined || sourceIdentity === current.sourceIdentity) return current;
+          const at = now();
+          const item: SpaceReferenceItem = { ...current, sourceIdentity, updatedAt: at };
+          await input.repository.write({
+            ...snapshot,
+            referenceItems: snapshot.referenceItems.map((entry) => entry.id === itemId ? item : entry),
+            spaces: touchSpaces(snapshot.spaces, [current.spaceId], at),
+          });
+          publish({ type: "space.reference_source_identity_updated", item });
+          return item;
+        });
+      },
       updateReferenceAnnotation({ itemId, expectedRevision, patch, actor }) {
         assertUsable("update a reference annotation");
         return serialize(async () => {

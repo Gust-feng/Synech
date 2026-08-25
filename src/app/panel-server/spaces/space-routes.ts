@@ -51,7 +51,7 @@ const createReferenceEntrySchema = z.object({
 
 export type SpaceReferenceRouteDependencies = {
   readonly spaceFeature: {
-    readonly commands: Pick<SpaceFeature["commands"], "addReference" | "move" | "rename" | "unlinkReference" | "removeReference" | "updateReferenceImageCaption">;
+    readonly commands: Pick<SpaceFeature["commands"], "addReference" | "move" | "rename" | "unlinkReference" | "removeReference" | "refreshReferenceSourceIdentity" | "updateReferenceImageCaption">;
     readonly queries: Pick<SpaceFeature["queries"], "getTree" | "getReference">;
   };
   readonly spaceConversationDeletion: Pick<SpaceConversationDeletionCoordinator, "assertAvailable">;
@@ -242,10 +242,14 @@ export async function handlePanelSpaceRoute(
       ) });
       return true;
     }
-    writeJson(response, 200, {
-      ok: true,
-      preview: await runReferenceMutation(runtime, item, () => updatePanelSpaceReferenceText(item, input)),
+    const preview = await runReferenceMutation(runtime, item, async () => {
+      const updated = await updatePanelSpaceReferenceText(item, input);
+      if (item.reference.kind === "local_file") {
+        await feature.commands.refreshReferenceSourceIdentity(item.id);
+      }
+      return updated;
     });
+    writeJson(response, 200, { ok: true, preview });
     return true;
   }
 

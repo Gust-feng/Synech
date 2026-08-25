@@ -153,6 +153,7 @@ export type SpaceEvent =
   | { readonly type: "space.created"; readonly space: Space }
   | { readonly type: "space.deleted"; readonly spaceId: string; readonly removedReferenceIds: readonly string[] }
   | { readonly type: "space.reference_added"; readonly item: SpaceReferenceItem }
+  | { readonly type: "space.reference_source_identity_updated"; readonly item: SpaceReferenceItem }
   | { readonly type: "space.reference_annotation_updated"; readonly item: SpaceReferenceItem }
   | { readonly type: "space.reference_image_caption_updated"; readonly item: SpaceReferenceItem; readonly relativePath: string }
   | { readonly type: "space.renamed"; readonly target: SpaceTarget; readonly spaceId: string }
@@ -167,6 +168,8 @@ export type SpaceFeature = {
     /** Deletes the Space container and Space-owned assets; external sources remain untouched. */
     deleteSpace(spaceId: string): Promise<void>;
     addReference(input: { readonly id?: string; readonly spaceId: string; readonly title: string; readonly parentId?: string; readonly reference: SpaceAddableReference; readonly annotation?: SpaceReferenceAnnotationInput; readonly actor: SpaceReferenceActorRecord }): Promise<SpaceReferenceItem>;
+    /** Refreshes the captured platform identity after Synech atomically replaces an external source file. */
+    refreshReferenceSourceIdentity(itemId: string): Promise<SpaceReferenceItem>;
     /** Updates the annotation content of one reference with optimistic concurrency; revision advances on success. */
     updateReferenceAnnotation(input: { readonly itemId: string; readonly expectedRevision: number; readonly patch: SpaceReferenceAnnotationPatch; readonly actor: SpaceReferenceActorRecord }): Promise<SpaceReferenceItem>;
     /** Updates one image caption without mutating the referenced image file. */
