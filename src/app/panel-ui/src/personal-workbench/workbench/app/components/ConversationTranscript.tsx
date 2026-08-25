@@ -535,13 +535,18 @@ function ConversationActivityTimeline(props: {
 
       {/* 确认卡片 */}
       {confirmation.current !== undefined && (
-        <div className="ui-activity-confirmation">
+        <motion.div
+          className="ui-activity-confirmation"
+          initial={motionEnabled ? { opacity: 0, y: 6, scale: 0.99 } : false}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          transition={{ duration: MOTION_TIMING.panel, ease: MOTION_EASING.premium }}
+        >
           <ConfirmationCard
             confirmation={confirmation.current}
             busy={props.confirmationBusy}
             onDecision={props.onDecision}
           />
-        </div>
+        </motion.div>
       )}
     </div>
   );
