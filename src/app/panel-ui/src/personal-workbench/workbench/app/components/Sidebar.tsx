@@ -346,7 +346,6 @@ export function Sidebar({
               conversations={orderedConversations.filter((conversation) =>
                 conversation.owner?.kind === 'workspace' && conversation.owner.id === workspace.workspaceId)}
               activeConversationId={activeConversationId}
-              view={view}
               openConversation={openConversation}
               pendingConversationIds={pendingConversationIds}
               renamingConversationId={renamingId}

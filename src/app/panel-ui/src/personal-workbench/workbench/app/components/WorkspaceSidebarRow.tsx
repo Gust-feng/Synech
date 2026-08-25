@@ -13,7 +13,6 @@ import type { ConversationSummary } from '@ui/contracts/conversation'
 import type { PersonalWorkspaceProjection } from '../../../workspace'
 import { conversationStatusMarker } from '@ui/features/conversations/conversation-status-marker'
 import { SidebarConversationScrollArea, SidebarListRow } from './SidebarRows'
-import type { WorkbenchView } from '../../../../workbench/navigation-state'
 
 const WORKSPACE_DOT = '#8a7fa8'
 const CONVERSATION_DOT_PALETTE = ['#6865a7', '#6f9279', '#c18a42', '#6f84a5', '#a66f66'] as const
@@ -33,7 +32,6 @@ export function WorkspaceSidebarRow(props: {
   readonly onReconnect: () => void
   readonly conversations: readonly ConversationSummary[]
   readonly activeConversationId?: string
-  readonly view: WorkbenchView
   readonly openConversation: (conversationId: string) => void
   readonly pendingConversationIds: ReadonlySet<string>
   readonly renamingConversationId: string | null
