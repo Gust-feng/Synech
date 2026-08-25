@@ -3,7 +3,7 @@ import type { ObservationRef } from "../../domain/ordinary/index.js";
 import type { OrdinaryRunContext, OrdinaryRunContextReference } from "../../domain/ordinary/index.js";
 import { normalizeModelFacingText } from "../text-projection/visible-text-safety.js";
 import type { AgentDefinition } from "../agent-prompts/contracts.js";
-import { isConversationOwnerContextRef } from "../../domain/ordinary/index.js";
+import { isConversationOwnerContextRef, parseContextReference } from "../../domain/ordinary/index.js";
 import type { SelectedSkillContext } from "../skills/index.js";
 
 export type OrdinaryAgentModelInput = {
@@ -177,7 +177,9 @@ function isModelVisibleContextRef(
   if (ref.kind === "user_goal" || ref.kind === "runtime") {
     return false;
   }
-  if (ref.kind === "workspace" && (ref.ref === `workspace:${runContext.goalId}` || ref.ref.startsWith("workspace:goal-"))) {
+  const parsed = parseContextReference(ref.ref, ref.kind);
+  if (ref.kind === "workspace" && parsed?.scheme === "workspace" &&
+      (parsed.value === runContext.goalId || parsed.value.startsWith("goal-"))) {
     return false;
   }
   return ref.kind === "workspace" || ref.kind === "file" || ref.kind === "project" || ref.kind === "web";
@@ -193,8 +195,8 @@ function modelSafeContextRef(
   if (pathGranted) {
     return ref;
   }
-  const normalized = ref.toLowerCase();
-  return normalized.startsWith("local-file:") || normalized.startsWith("local-project:")
+  const parsed = parseContextReference(ref);
+  return parsed?.scheme === "local_file" || parsed?.scheme === "local_project"
     ? undefined
     : ref;
 }

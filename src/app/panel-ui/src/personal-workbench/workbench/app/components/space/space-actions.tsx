@@ -93,7 +93,7 @@ export function InlineName({
 
 export function canCollectSpaceReference(item: SpaceItem): boolean {
   return item.domainKind === 'local_file'
-    || item.domainKind === 'workspace_folder'
+    || item.domainKind === 'workspace'
     || item.domainKind === 'managed_folder'
 }
 

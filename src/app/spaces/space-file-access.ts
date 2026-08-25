@@ -1,6 +1,9 @@
+import {
+  parsePermissionBoundaryRef,
+  serializePermissionBoundaryRef,
+} from "../../domain/ordinary/index.js";
+
 const SPACE_REFERENCE_ATTACHMENT_PREFIX = "space-reference:";
-const SPACE_REFERENCE_WRITE_PREFIX = "write:space-reference:";
-const SPACE_SCOPE_PREFIX = "scope:space:";
 
 /** Stable run-context identities shared by Space grant creation and execution. */
 export function spaceReferenceAttachmentId(referenceId: string): string {
@@ -14,23 +17,23 @@ export function spaceReferenceIdFromAttachmentId(value: string): string | undefi
 }
 
 export function spaceReferenceWritePermission(referenceId: string): string {
-  return `${SPACE_REFERENCE_WRITE_PREFIX}${referenceId}`;
+  return serializePermissionBoundaryRef({ kind: "space_reference_write", referenceId });
 }
 
 export function isSpaceReferenceWritePermission(value: string): boolean {
-  return value.startsWith(SPACE_REFERENCE_WRITE_PREFIX);
+  return parsePermissionBoundaryRef(value)?.kind === "space_reference_write";
 }
 
 /** Internal run-context owner fact added by the Host after request parsing. */
 export function spaceScopePermission(spaceId: string): string {
-  return `${SPACE_SCOPE_PREFIX}${spaceId}`;
+  return serializePermissionBoundaryRef({ kind: "space_scope", spaceId });
 }
 
 export function spaceScopeIdFromPermissions(values: readonly string[]): string | undefined {
   const owners = [...new Set(values
-    .filter((value) => value.startsWith(SPACE_SCOPE_PREFIX))
-    .map((value) => value.slice(SPACE_SCOPE_PREFIX.length))
-    .filter((value) => value.length > 0))];
+    .map(parsePermissionBoundaryRef)
+    .filter((value): value is Extract<NonNullable<typeof value>, { readonly kind: "space_scope" }> => value?.kind === "space_scope")
+    .map((value) => value.spaceId))];
   if (owners.length > 1) {
     throw new Error(`Run context contains multiple Space owners: ${owners.join(", ")}.`);
   }
@@ -39,5 +42,5 @@ export function spaceScopeIdFromPermissions(values: readonly string[]): string |
 
 /** Whether the permission set belongs to a Space-owned run (any Space owner). */
 export function hasSpaceOwnerScope(values: readonly string[]): boolean {
-  return values.some((value) => value.startsWith(SPACE_SCOPE_PREFIX));
+  return values.some((value) => parsePermissionBoundaryRef(value)?.kind === "space_scope");
 }

@@ -184,7 +184,7 @@ function projectTransition(
     case "run.completed": return {
       ...base,
       type: "final.result",
-      title: "已回答",
+      title: "",
       summary: undefined,
       status: "completed",
     };

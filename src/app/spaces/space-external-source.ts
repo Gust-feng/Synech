@@ -36,12 +36,12 @@ export async function spaceExternalReferenceStatus(
   item: SpaceReferenceItem,
   inspect: SpaceExternalSourceInspector = inspectSpaceExternalSource,
 ): Promise<SpaceExternalReferenceStatus> {
-  if (item.reference.kind !== "local_file" && item.reference.kind !== "workspace_folder") {
+  if (item.reference.kind !== "local_file") {
     return "current";
   }
   return await spaceExternalSourceStatus({
     path: item.reference.path,
-    kind: item.reference.kind === "local_file" ? "file" : "folder",
+    kind: "file",
     sourceIdentity: item.sourceIdentity,
   }, inspect);
 }

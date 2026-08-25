@@ -56,14 +56,14 @@ export function createPersonalKnowledgeFeature<TManagedAssetTextWriteResult exte
     commands: {
       async createNote(noteInput) {
         return await run(async () => {
-          const spaceId = required(noteInput.spaceId, "spaceId");
-          if (!await options.spaceExists(spaceId)) {
+          const spaceId = noteInput.spaceId === undefined ? undefined : required(noteInput.spaceId, "spaceId");
+          if (spaceId !== undefined && !await options.spaceExists(spaceId)) {
             throw new PersonalKnowledgeError("personal_knowledge_invalid_input", `Space ${spaceId} does not exist.`);
           }
           const now = Date.now();
           const note = {
             id: noteInput.id === undefined ? randomUUID() : required(noteInput.id, "id"),
-            spaceId,
+            ...(spaceId === undefined ? {} : { spaceId }),
             title: noteInput.title ?? "",
             bodyMarkdown: noteInput.bodyMarkdown ?? "",
             createdAt: now,
@@ -71,7 +71,11 @@ export function createPersonalKnowledgeFeature<TManagedAssetTextWriteResult exte
             revision: 1,
           };
           await repository.execute({ type: "note.create", note, actor: noteInput.actor ?? SYSTEM_ACTOR, changeSummary: noteInput.changeSummary });
-          publish({ type: "personal_knowledge.note_created", noteId: note.id, spaceId: note.spaceId });
+          publish({
+            type: "personal_knowledge.note_created",
+            noteId: note.id,
+            ...(note.spaceId === undefined ? {} : { spaceId: note.spaceId }),
+          });
           return note;
         });
       },
@@ -487,7 +491,7 @@ function readNotePage(
     refId: note.id,
     kind: "note",
     title: note.title,
-    spaceId: note.spaceId,
+    ...(note.spaceId === undefined ? {} : { spaceId: note.spaceId }),
     bodyMarkdown,
     truncated,
     revision: note.revision,

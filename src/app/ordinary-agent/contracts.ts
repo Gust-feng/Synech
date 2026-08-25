@@ -14,7 +14,7 @@ import type {
   ToolCallProgress,
   ToolCallRequest,
   ToolCallResult,
-  ToolConfirmationPolicy,
+  ToolRunAccessPolicy,
 } from "../../domain/tools/index.js";
 import type { ModelRuntimeMode } from "../model-runtime/contracts.js";
 import type {
@@ -161,7 +161,7 @@ export type OrdinaryRunBirth = {
   /** 模型可见的 Owner 与环境上下文，随 Run 出生事实冻结。 */
   readonly ownerContext?: string;
   readonly informationAccess: SanitizedInformationAccessConfig;
-  readonly toolConfirmationPolicy: ToolConfirmationPolicy;
+  readonly accessPolicy: ToolRunAccessPolicy;
 };
 
 export type OrdinaryRunInput = {
@@ -581,6 +581,7 @@ export type OrdinaryConversationTurnReadModel =
       readonly runId: string;
       readonly content: string;
       readonly status: OrdinaryRunStatus["kind"];
+      readonly failure?: { readonly code: string; readonly message: string };
       /** Quiet product treatment for a terminal run whose live continuation cannot resume. */
       readonly interruption?: "user_cancelled" | "runtime_stopped";
       readonly model: SanitizedModelProviderConfig;

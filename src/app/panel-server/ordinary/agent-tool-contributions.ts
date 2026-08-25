@@ -51,6 +51,8 @@ export function createHostFeatureAgentToolContributionResolver(input: {
   readonly managedSpaceFolderRoot?: string;
   /** Host-owned file mutation coordinator shared with the file tools. */
   readonly fileMutationCoordinator?: LocalWorkspaceMutationCoordinator;
+  readonly ensureWorkspaceDirectory?: (input: { readonly path: string; readonly title: string }) => Promise<{ readonly workspaceId: string }>;
+  readonly resolveWorkspaceDirectory?: (workspaceId: string) => Promise<{ readonly path: string; readonly sourceIdentity: string } | undefined>;
 }): HostFeatureAgentToolContributionResolver {
   // Shared across runs on purpose: a revocation is permanent, since re-adding a
   // reference mints a new id rather than reviving the revoked one.
@@ -90,6 +92,8 @@ export function createHostFeatureAgentToolContributionResolver(input: {
           deleteConversation: input.deleteConversation,
           ...(input.managedSpaceFolderRoot === undefined ? {} : { managedSpaceFolderRoot: input.managedSpaceFolderRoot }),
           ...(input.fileMutationCoordinator === undefined ? {} : { fileMutationCoordinator: input.fileMutationCoordinator }),
+          ...(input.ensureWorkspaceDirectory === undefined ? {} : { ensureWorkspaceDirectory: input.ensureWorkspaceDirectory }),
+          ...(input.resolveWorkspaceDirectory === undefined ? {} : { resolveWorkspaceDirectory: input.resolveWorkspaceDirectory }),
         })]),
     ...(input.personalKnowledge === undefined
       ? []

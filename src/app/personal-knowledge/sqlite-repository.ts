@@ -20,7 +20,7 @@ const MIGRATIONS = [{
   sql: `
     CREATE TABLE personal_notes (
       id TEXT PRIMARY KEY,
-      space_id TEXT NOT NULL,
+      space_id TEXT,
       title TEXT NOT NULL,
       body_markdown TEXT NOT NULL,
       position INTEGER NOT NULL,
@@ -123,7 +123,7 @@ export function createSqlitePersonalKnowledgeRepository(database: SqliteRuntimeD
           const value = row as Record<string, SQLInputValue>;
           return {
             id: String(value.id),
-            spaceId: String(value.spaceId),
+            ...(value.spaceId === null ? {} : { spaceId: String(value.spaceId) }),
             title: String(value.title),
             bodyMarkdown: String(value.bodyMarkdown),
             revision: Number(value.revision),
@@ -262,7 +262,9 @@ export function createSqlitePersonalKnowledgeRepository(database: SqliteRuntimeD
           "SELECT id, title, space_id AS spaceId, created_at AS createdAt FROM personal_notes",
         ).all() as Record<string, SQLInputValue>[];
         const noteTitles = new Map(noteRows.map((row) => [String(row.id), String(row.title)]));
-        const pageSpaceIds = new Map(noteRows.map((row) => [String(row.id), String(row.spaceId)]));
+        const pageSpaceIds = new Map(noteRows.flatMap((row) => row.spaceId === null
+          ? []
+          : [[String(row.id), String(row.spaceId)] as const]));
         // 未收藏的 UI 笔记也属于 Agent 可枚举的个人笔记；已收藏的以知识页为准，避免重复。
         const collectedNoteRefIds = new Set(pages.filter((page) => page.kind === "note").map((page) => page.refId));
         const noteCandidates = noteRows
@@ -302,7 +304,9 @@ export function createSqlitePersonalKnowledgeRepository(database: SqliteRuntimeD
           refId: page.refId,
           kind: page.kind,
           ...(titleOf(page) === undefined ? {} : { title: titleOf(page) }),
-          ...(page.kind === "note" ? { spaceId: pageSpaceIds.get(page.refId) } : {}),
+          ...(page.kind === "note" && pageSpaceIds.get(page.refId) !== undefined
+            ? { spaceId: pageSpaceIds.get(page.refId)! }
+            : {}),
           collectedAt: page.collectedAt,
         }));
         const last = sliced[sliced.length - 1];
@@ -436,7 +440,7 @@ function executeCommand(database: SqliteRuntimeDatabase, command: PersonalKnowle
         database.connection.prepare(`
           INSERT INTO personal_notes(id, space_id, title, body_markdown, position, revision, created_at, updated_at)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(command.note.id, command.note.spaceId, command.note.title, command.note.bodyMarkdown, position, command.note.revision, command.note.createdAt, command.note.updatedAt);
+        `).run(command.note.id, command.note.spaceId ?? null, command.note.title, command.note.bodyMarkdown, position, command.note.revision, command.note.createdAt, command.note.updatedAt);
         insertNoteRevision(database, {
           noteId: command.note.id, revision: 1, operation: "create", title: command.note.title,
           bodyMarkdown: command.note.bodyMarkdown, actor: command.actor, changeSummary: command.changeSummary,
@@ -594,26 +598,7 @@ function executeCommand(database: SqliteRuntimeDatabase, command: PersonalKnowle
 function cleanupSpace(database: SqliteRuntimeDatabase, spaceId: string, referenceIds: readonly string[]): void {
   const sourceReferenceIds = new Set(referenceIds);
   database.transaction(() => {
-    const noteIds = database.connection.prepare(
-      "SELECT id FROM personal_notes WHERE space_id = ?",
-    ).all(spaceId).map((row) => String((row as Record<string, SQLInputValue>).id));
-
-    if (noteIds.length > 0) {
-      const deleteNotePages = database.connection.prepare("DELETE FROM knowledge_pages WHERE ref_id = ?");
-      const deleteLinks = database.connection.prepare("DELETE FROM knowledge_links WHERE from_ref_id = ? OR to_ref_id = ?");
-      const deleteAssignments = database.connection.prepare("DELETE FROM knowledge_theme_assignments WHERE ref_id = ?");
-      const deleteRecentlyOpened = database.connection.prepare("DELETE FROM knowledge_recently_opened WHERE ref_id = ?");
-      const deleteRevisions = database.connection.prepare("DELETE FROM personal_note_revisions WHERE note_id = ?");
-      const deleteNotes = database.connection.prepare("DELETE FROM personal_notes WHERE id = ?");
-      for (const noteId of noteIds) {
-        deleteLinks.run(noteId, noteId);
-        deleteAssignments.run(noteId);
-        deleteRecentlyOpened.run(noteId);
-        deleteNotePages.run(noteId);
-        deleteRevisions.run(noteId);
-        deleteNotes.run(noteId);
-      }
-    }
+    database.connection.prepare("UPDATE personal_notes SET space_id = NULL WHERE space_id = ?").run(spaceId);
 
     if (sourceReferenceIds.size === 0) return;
     const pages = database.connection.prepare(
@@ -754,7 +739,7 @@ function noteWriteError(database: SqliteRuntimeDatabase, id: string): PersonalKn
 function personalNoteFromRow(value: Record<string, SQLInputValue>): PersonalNote {
   return {
     id: String(value.id),
-    spaceId: String(value.spaceId),
+    ...(value.spaceId === null ? {} : { spaceId: String(value.spaceId) }),
     title: String(value.title),
     bodyMarkdown: String(value.bodyMarkdown),
     revision: Number(value.revision),
@@ -801,7 +786,7 @@ function searchResultFromRow(value: Record<string, SQLInputValue>): PersonalKnow
   return {
     note: {
       id: String(value.id),
-      spaceId: String(value.spaceId),
+      ...(value.spaceId === null ? {} : { spaceId: String(value.spaceId) }),
       title: String(value.title),
       revision: Number(value.revision),
       createdAt: Number(value.createdAt),

@@ -4,6 +4,7 @@ import type {
 } from "../assistant/panel-assistant-message-output.js";
 import type { LiveRunBuffer } from "../run/panel-run-live-buffer.js";
 import type { WorklineConversationTurn, WorklineProjectedTurn } from "../assistant/panel-assistant-workline.js";
+import { resolveAssistantAnswer } from "../assistant/panel-assistant-answer.js";
 import type { ConfirmationIdentity } from "../transcript/panel-transcript-confirmation-projection.js";
 import {
   projectConversationWorkflowDisplay,
@@ -78,6 +79,7 @@ export function projectConversationDisplayList<
     readonly currentRunId?: string;
     readonly runStatus?: string;
     readonly answer?: string;
+    readonly failure?: { readonly code: string; readonly message: string };
     readonly deliverable?: AssistantDeliverableLike;
     readonly runProjection: LiveRunTranscriptProjection & {
       readonly nodes: readonly TNode[];
@@ -150,6 +152,7 @@ function standaloneWorkflowProjectionInput<
     readonly currentRunId?: string;
     readonly runStatus?: string;
     readonly answer?: string;
+    readonly failure?: { readonly code: string; readonly message: string };
     readonly deliverable?: AssistantDeliverableLike;
     readonly runProjection: LiveRunTranscriptProjection & {
       readonly nodes: readonly TNode[];
@@ -161,6 +164,7 @@ function standaloneWorkflowProjectionInput<
   readonly key: string;
   readonly runId?: string;
   readonly content: string;
+  readonly failure?: { readonly code: string; readonly message: string };
   readonly deliverable?: AssistantDeliverableLike;
   readonly transcriptNodes: readonly TNode[];
   readonly pending?: TPending;
@@ -176,6 +180,7 @@ function standaloneWorkflowProjectionInput<
     key: facts.key,
     runId: standaloneRun.currentRunId,
     content: facts.content,
+    failure: standaloneRun.failure,
     deliverable: standaloneRun.deliverable,
     terminalStatus: facts.terminalStatus,
     transcriptNodes: standaloneRun.runProjection.nodes,
@@ -214,6 +219,7 @@ function standaloneAssistantFacts<
     readonly currentRunId?: string;
     readonly runStatus?: string;
     readonly answer?: string;
+    readonly failure?: { readonly code: string; readonly message: string };
     readonly runProjection: LiveRunTranscriptProjection & {
       readonly nodes: readonly TNode[];
     };
@@ -233,17 +239,24 @@ function standaloneAssistantFacts<
     ? standaloneRun.runProjection.answer
     : undefined;
   const refreshing = isStandaloneRefreshingStatus(standaloneRun.runStatus);
-  const content = liveStreamingAnswer?.text ?? standaloneRun.answer ?? standaloneRun.runProjection.answer?.text ?? "";
+  const answer = resolveAssistantAnswer({
+    runStatus: standaloneRun.runStatus,
+    live: liveStreamingAnswer,
+    workViewText: standaloneRun.answer,
+    projection: standaloneRun.runProjection.answer?.streaming === false
+      ? standaloneRun.runProjection.answer
+      : undefined,
+  });
   return {
     key: `${conversationId ?? "standalone"}:${standaloneRun.currentRunId ?? "standalone-assistant"}`,
-    content,
+    content: answer.text,
     terminalStatus: standaloneRun.runStatus === undefined
       ? undefined
       : assistantTerminalStatus(standaloneRun.runStatus),
-    live: refreshing && liveStreamingAnswer !== undefined,
+    live: refreshing && answer.streaming,
     keepStreamMounted: refreshing,
     animateOnMount: false,
-    liveTone: liveStreamingAnswer?.tone ?? standaloneRun.runProjection.answer?.tone,
+    liveTone: answer.tone ?? standaloneRun.runProjection.answer?.tone,
   };
 }
 

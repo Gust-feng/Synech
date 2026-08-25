@@ -8,6 +8,8 @@ import type { SpaceEvent } from "../../spaces/index.js";
 const DEFAULT_HISTORY_LIMIT = 256;
 const ALL_OWNERS: readonly WorkbenchProjectionOwner[] = [
   "spaces",
+  "workspaces",
+  "managed_assets",
   "mounted_files",
   "personal_knowledge",
   "conversations",
@@ -62,7 +64,11 @@ export function projectionChangeFromPersonalKnowledge(
 ): WorkbenchProjectionChangeInput {
   switch (event.type) {
     case "personal_knowledge.note_created":
-      return { owners: ["personal_knowledge"], spaceIds: [event.spaceId], noteIds: [event.noteId] };
+      return {
+        owners: ["personal_knowledge"],
+        ...(event.spaceId === undefined ? {} : { spaceIds: [event.spaceId] }),
+        noteIds: [event.noteId],
+      };
     case "personal_knowledge.note_updated":
     case "personal_knowledge.note_deleted":
       return { owners: ["personal_knowledge"], noteIds: [event.noteId] };

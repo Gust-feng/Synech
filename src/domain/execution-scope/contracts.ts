@@ -13,14 +13,8 @@ export type ConversationOwner =
   | { readonly kind: "space"; readonly id: string }
   | { readonly kind: "workspace"; readonly id: string };
 
-/**
- * Run 级确认模式。
- *
- * "confirm_each" 与中性工具层的 ToolConfirmationPolicy("prompt") 对应，每轮执行前
- * 通过 ToolCenter 取得用户确认；"full_access" 是 Run 级冻结模式，同时覆盖 Shell
- * 确认和文件工具路径集合限制，但仍受明确删除/撤权 deny 约束。
- */
-export type ConfirmationPolicy = "confirm_each" | "full_access";
+export type ExecutionApprovalMode = "prompt" | "bypass";
+export type ExecutionFilesystemScope = "owner_only" | "unrestricted";
 
 /** Space 对某个 Workspace 的一次有效引用授权（mountVersion 校验 + linkId 追溯）。 */
 export type WorkspaceGrant = {
@@ -49,7 +43,10 @@ export type ConversationExecutionScope = {
   readonly managedRoot?: string;
   readonly workspaceGrants: readonly WorkspaceGrant[];
   readonly attachmentGrants: readonly AttachmentGrant[];
-  readonly confirmationPolicy: ConfirmationPolicy;
+  readonly accessPolicy: {
+    readonly approvalMode: ExecutionApprovalMode;
+    readonly filesystemScope: ExecutionFilesystemScope;
+  };
 };
 
 /** owner 的稳定字符串键，用于对话列表按 owner 分组、去重与 read-model 关联。 */

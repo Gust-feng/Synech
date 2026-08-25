@@ -56,6 +56,7 @@ export interface ManagedAssetRepository {
 export type ManagedAssetEvent = {
   readonly type: "managed_asset.changed";
   readonly assetId: string;
+  readonly operation: "replaced" | "text_updated" | "caption_updated" | "removed";
 };
 
 /** 资产 feature 的公开 command/query/event facade。 */
@@ -63,6 +64,8 @@ export type ManagedAssetsFeature = {
   readonly commands: {
     replace(asset: ManagedAsset): Promise<void>;
     updateText(input: UpdateManagedAssetTextInput): Promise<UpdateManagedAssetTextResult>;
+    updateCaption(input: UpdateManagedAssetCaptionInput): Promise<UpdateManagedAssetCaptionResult>;
+    removeMany(assetIds: readonly string[]): Promise<void>;
   };
   readonly queries: {
     get(id: string): Promise<ManagedAsset | undefined>;

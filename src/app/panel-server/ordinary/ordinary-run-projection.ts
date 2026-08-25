@@ -6,6 +6,7 @@ import type {
   OrdinaryPanelRunEvent as RunEvent,
 } from "../../panel-api/ordinary-agent.js";
 import type { OrdinaryRunActivityCursor, OrdinaryRunState } from "../../ordinary-agent/contracts.js";
+import { parseContextReference } from "../../../domain/ordinary/index.js";
 import type {
   OrdinaryPanelCapabilityResolution,
   OrdinaryPanelRun,
@@ -48,6 +49,7 @@ export function projectContextAttachments(run: OrdinaryRunState): readonly Conte
   return (run.input.context?.contextRefs ?? []).map((ref, index) => ({
     attachmentId: ref.attachmentId ?? `${run.runId}:context:${index}`,
     kind: ref.kind,
+    sourceKind: contextAttachmentSourceKind(ref.ref, ref.kind),
     ref: ref.ref,
     title: ref.title ?? attachmentTitle(ref.kind, ref.ref),
     summary: ref.summary ?? ref.ref,
@@ -69,6 +71,21 @@ export function projectContextAttachments(run: OrdinaryRunState): readonly Conte
     status: ref.metadata?.available === false ? "blocked" : "ready",
     warning: ref.metadata?.available === false ? "��上下文当前不可用。" : undefined,
   }));
+}
+
+function contextAttachmentSourceKind(
+  ref: string,
+  kind: ContextAttachment["kind"],
+): ContextAttachment["sourceKind"] {
+  const parsed = parseContextReference(ref, kind);
+  if (parsed?.scheme === "local_file") return "local_file";
+  if (parsed?.scheme === "local_project") return "local_project";
+  if (parsed?.scheme === "uploaded_attachment") return "managed_upload";
+  if (parsed?.scheme === "workspace" && kind === "workspace") return "workspace";
+  if (parsed?.scheme === "workspace" || parsed?.scheme === "file") return "workspace_file";
+  if (parsed?.scheme === "project") return "workspace_project";
+  if (parsed?.scheme === "web" || parsed?.scheme === "http_url") return "web";
+  return "unknown";
 }
 
 export function pendingConfirmationFrom(run: OrdinaryRunState): OwnerScopedConfirmationRequest | undefined {
@@ -106,7 +123,7 @@ export function workHeadline(run: OrdinaryRunState): string {
   if (isQuietInterruption(run)) return "";
   switch (run.status.kind) {
     case "awaiting_approval": return "待处理";
-    case "completed": return "已回答";
+    case "completed": return "";
     case "failed": return "未完成";
     case "cancelled": return "已取消";
     case "blocked": return "需要处理";
@@ -180,7 +197,7 @@ export function workSummary(toolCount: number, contextCount: number, pending: bo
 export function modelRequestSummary(reason: "initial" | "after_tool" | "after_approval"): string {
   if (reason === "after_tool") return "分析工具结果";
   if (reason === "after_approval") return "继续处理确认结果";
-  return "思考中";
+  return "";
 }
 
 function attachmentTitle(kind: "workspace" | "file" | "project" | "web", ref: string): string {

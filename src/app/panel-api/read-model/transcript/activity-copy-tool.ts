@@ -206,10 +206,11 @@ export function toolActivityExpandedSections(
   if (display?.kind === "command_summary") {
     const sections: ActivityExpandedSection[] = [];
     const command = commandText(display);
-    if (command !== undefined) sections.push({ title: "命令", content: `$ ${command}`, format: "console" });
+    if (command !== undefined) sections.push({ sectionId: "command", title: "命令", content: `$ ${command}`, format: "console" });
     const output = commandOutputForActivity(display);
     if (output !== undefined) {
       sections.push({
+        sectionId: "output",
         title: "输出",
         content: output,
         format: "console",
@@ -223,13 +224,14 @@ export function toolActivityExpandedSections(
     const results = visibleResults.map((result) => searchResultLine(result.title, result.source, result.url));
     if (results.length > 0) {
       return [{
+        sectionId: "sources",
         title: "来源",
         content: results.join("\n"),
         format: "source_list",
         items: visibleResults.map(searchResultItem),
       }];
     }
-    return display.message === undefined ? [] : [{ title: "提示", content: display.message }];
+    return display.message === undefined ? [] : [{ sectionId: "message", title: "提示", content: display.message }];
   }
   if (display?.kind === "web_fetch") {
     const source = sourceSection("来源", { title: display.title ?? display.url, url: display.url });
@@ -238,14 +240,14 @@ export function toolActivityExpandedSections(
   if (display?.kind === "http_response") {
     return display.bodyPreview === undefined
       ? []
-      : [{ title: "内容预览", content: display.bodyPreview, format: "code" }];
+      : [{ sectionId: "content_preview", title: "内容预览", content: display.bodyPreview, format: "code" }];
   }
   if (display?.kind === "agent_task") {
-    return display.result === undefined ? [] : [{ title: "结果", content: display.result }];
+    return display.result === undefined ? [] : [{ sectionId: "result", title: "结果", content: display.result }];
   }
   if (display?.kind === "generic_tool_summary") return genericToolSections(display, copy);
   if (display?.kind === "raw_tool_result" && display.value !== undefined) {
-    return [{ title: "原始结果", content: rawToolResultText(display.value), format: "code" }];
+    return [{ sectionId: "raw_result", title: "原始结果", content: rawToolResultText(display.value), format: "code" }];
   }
   return [];
 }
@@ -299,7 +301,7 @@ export function sourceSection(
   const content = cleanToolTargetText(input.title) ?? cleanToolTargetText(input.url);
   if (content === undefined) return undefined;
   const href = httpHref(input.url);
-  return { title, content, format: href === undefined ? "plain" : "source", href };
+  return { sectionId: "source", title, content, format: href === undefined ? "plain" : "source", href };
 }
 
 export function urlLikeValue(value: string | undefined): string | undefined {
@@ -382,7 +384,7 @@ function genericToolSections(
   const sections: ActivityExpandedSection[] = [];
   const summary = cleanGenericSummaryText(display.summary);
   if (summary !== undefined && !genericTextAlreadyRepresented(summary, sections, copy)) {
-    sections.push({ title: "内容", content: summary });
+    sections.push({ sectionId: "content", title: "内容", content: summary });
   }
   const items = uniqueStrings(
     (display.items ?? [])
@@ -390,7 +392,7 @@ function genericToolSections(
       .filter((value) => value.length > 0)
       .filter((value) => !genericTextAlreadyRepresented(value, sections, copy)),
   );
-  if (items.length > 0) sections.push({ title: "条目", content: items.join("\n"), format: "list" });
+  if (items.length > 0) sections.push({ sectionId: "items", title: "条目", content: items.join("\n"), format: "list" });
   return sections;
 }
 

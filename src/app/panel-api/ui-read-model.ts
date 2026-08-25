@@ -40,6 +40,8 @@ export type {
 } from "./read-model/transcript/panel-live-transcript.js";
 export { projectChatWorkline } from "./read-model/assistant/panel-assistant-workline.js";
 export type { ChatWorklineProjection, WorklineProjectedTurn, WorklineTaskStatus } from "./read-model/assistant/panel-assistant-workline.js";
+export { isSettledPanelRunStatus, resolveAssistantAnswer } from "./read-model/assistant/panel-assistant-answer.js";
+export type { ResolvedAssistantAnswer } from "./read-model/assistant/panel-assistant-answer.js";
 export { firstNonEmptyText, hasNonEmptyText } from "./read-model/assistant/panel-assistant-output.js";
 export { activityVisibleNodes, isLowValueUserDecisionNode, nodesForRun } from "./read-model/transcript/panel-transcript-node-projection.js";
 export { visibleDeliverable } from "./read-model/assistant/panel-assistant-message-output.js";
@@ -47,6 +49,11 @@ export type { AssistantDeliverableLike } from "./read-model/assistant/panel-assi
 export { visibleResultText, visibleRunProblem } from "./read-model/assistant/panel-assistant-run-output.js";
 export type { AssistantRunDetailLike, AssistantWorkViewProblemLike } from "./read-model/assistant/panel-assistant-run-output.js";
 export type { ConfirmationIdentity } from "./read-model/transcript/panel-transcript-confirmation-projection.js";
+export { projectConfirmationDisplay } from "./read-model/confirmation/panel-confirmation-display.js";
+export type {
+  ConfirmationDisplayProjection,
+  DisplayableConfirmation,
+} from "./read-model/confirmation/panel-confirmation-display.js";
 export type {
   ActivityExpandedItem,
   ActivityExpandedSection,

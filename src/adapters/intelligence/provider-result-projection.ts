@@ -1,7 +1,7 @@
 import { isContextOverflow, type AssistantMessage, type ImageContent, type Usage } from "@earendil-works/pi-ai";
 import type { ModelInputAttachment, ModelMessage, ModelToolCall, ModelUsage } from "../../domain/intelligence/index.js";
 import { normalizeToolFactValue } from "../../domain/tools/index.js";
-import { modelFailureKindFromError } from "../../kernel/intelligence/failures.js";
+import { modelFailureKindFromFacts } from "../../kernel/intelligence/failures.js";
 
 /**
  * Convert a Pi AssistantMessage to the neutral ModelMessage. The provider-side
@@ -82,8 +82,26 @@ export function providerFailureFromAssistant(
   }
   if (assistant.stopReason !== "error") return undefined;
   const error = assistant.errorMessage ?? "Provider returned an error stop reason.";
+  const diagnostic = [...(assistant.diagnostics ?? [])].reverse().find((item) =>
+    item.type === "provider_transport_failure" || item.type === "pi_messages_response_failure");
+  const status = finiteInteger(diagnostic?.details?.status);
+  const code = diagnostic?.error?.code ?? stringOrNumber(diagnostic?.details?.code);
+  const incompleteReason = assistant.providerMetadata?.incompleteReason;
   return {
     error,
-    errorCode: modelFailureKindFromError(new Error(error)),
+    errorCode: modelFailureKindFromFacts({
+      ...(incompleteReason === "content_filter" ? { explicitKind: "content_filtered" as const } : {}),
+      ...(status === undefined ? {} : { status }),
+      ...(code === undefined ? {} : { code }),
+      ...(diagnostic?.error?.name === undefined ? {} : { name: diagnostic.error.name }),
+    }),
   };
+}
+
+function finiteInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : undefined;
+}
+
+function stringOrNumber(value: unknown): string | number | undefined {
+  return typeof value === "string" || typeof value === "number" ? value : undefined;
 }

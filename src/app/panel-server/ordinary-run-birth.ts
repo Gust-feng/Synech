@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type { ConversationOwner } from "../../domain/execution-scope/index.js";
+import { toolRunAccessPolicyFromPreset } from "../../domain/tools/index.js";
 import { memoryOwnersForConversation } from "../../domain/memory/index.js";
 import { createOpenAITokenCounter } from "../context-maintenance/index.js";
 import {
@@ -106,7 +107,7 @@ export async function prepareOrdinaryRunBirth(
     workspaceSelection: "explicit",
     ownerContext: [ownerBlock, formatEnvironmentContext(capabilitySnapshot.commandShell)].join("\n\n"),
     informationAccess,
-    toolConfirmationPolicy: input.toolConfirmationPolicy ?? toolConfirmation.policy,
+    accessPolicy: toolRunAccessPolicyFromPreset(input.toolConfirmationPolicy ?? toolConfirmation.policy),
   };
 }
 

@@ -5,7 +5,7 @@ import type {
   PendingConfirmation,
   TranscriptConfirmation,
 } from "@ui/contracts/run";
-import { projectConfirmationDisplay } from "@ui/features/conversations/transcript/confirmation-display";
+import { projectConfirmationDisplay } from "@panel-api/ui-read-model";
 
 export type ConfirmationProjection =
   | PendingConfirmation
@@ -48,9 +48,9 @@ export function ConfirmationCard(props: {
         />
         <div className="min-w-0 space-y-1">
           {view.title.length > 0 && <strong className="block text-xs font-medium">{view.title}</strong>}
-          {view.showActionPreview && (
+          {view.description !== undefined && (
             <p className="whitespace-pre-wrap text-xs leading-5" style={{ color: "var(--ui-text-2)" }}>
-              {view.actionPreview}
+              {view.description}
             </p>
           )}
         </div>

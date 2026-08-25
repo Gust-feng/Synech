@@ -6,6 +6,9 @@ import type {
 } from "../../domain/ordinary/index.js";
 import {
   createOrdinaryRunContext,
+  parseContextReference,
+  parsePermissionBoundaryRef,
+  parseUserPermissionBoundaryRef,
   type OrdinaryRunContext,
   type OrdinaryRunContextReference,
 } from "../../domain/ordinary/index.js";
@@ -122,20 +125,17 @@ function hasLocalPathPermission(
   ref: OrdinaryRunContextReferenceInputAdapter,
   permissionRefs: readonly string[],
 ): boolean {
-  const prefix = ref.kind === "file" && ref.ref.toLowerCase().startsWith("local-file:")
-    ? "local-file"
-    : ref.kind === "project" && ref.ref.toLowerCase().startsWith("local-project:")
-      ? "local-project"
-      : undefined;
-  if (prefix === undefined) return false;
-  const rawPath = ref.ref.slice(`${prefix}:`.length);
+  const target = parseContextReference(ref.ref, ref.kind);
+  if (target?.scheme !== "local_file" && target?.scheme !== "local_project") return false;
+  const rawPath = target.path;
   if (!path.isAbsolute(rawPath)) return false;
   const canonicalPath = comparableAbsolutePath(rawPath);
   return permissionRefs.some((permission) => {
-    const permissionPrefix = `read:${prefix}:`;
-    if (!permission.startsWith(permissionPrefix)) return false;
-    const permissionPath = permission.slice(permissionPrefix.length);
-    return path.isAbsolute(permissionPath) && comparableAbsolutePath(permissionPath) === canonicalPath;
+    const parsedPermission = parsePermissionBoundaryRef(permission);
+    if (parsedPermission?.kind !== "access" || parsedPermission.mode !== "read") return false;
+    const permissionTarget = parseContextReference(parsedPermission.target, ref.kind);
+    return permissionTarget?.scheme === target.scheme && path.isAbsolute(permissionTarget.path) &&
+      comparableAbsolutePath(permissionTarget.path) === canonicalPath;
   });
 }
 
@@ -252,39 +252,11 @@ function parseContextKind(value: unknown): OrdinaryRunContextReferenceInputAdapt
 }
 
 function isAuthorizedContextRef(ref: string, kind: OrdinaryRunContextReferenceInputAdapter["kind"]): boolean {
-  const normalized = ref.toLowerCase();
-  if (kind === "file" && normalized.startsWith("local-file:")) {
-    return true;
-  }
-  if (kind === "file" && normalized.startsWith("uploaded-attachment:")) {
-    return true;
-  }
-  if (kind === "project" && normalized.startsWith("local-project:")) {
-    return true;
-  }
-  if (kind === "web") {
-    return normalized.startsWith("web:") || normalized.startsWith("http://") || normalized.startsWith("https://");
-  }
-  if (kind === "file") {
-    return normalized.startsWith("file:") || normalized.startsWith("local-file:") || normalized.startsWith("workspace:");
-  }
-  if (kind === "project") {
-    return normalized.startsWith("project:") || normalized.startsWith("local-project:") || normalized.startsWith("workspace:");
-  }
-  return normalized.startsWith("workspace:");
+  return parseContextReference(ref, kind) !== undefined;
 }
 
 function isAuthorizedPermissionRef(ref: string): boolean {
-  const normalized = ref.toLowerCase();
-  if (normalized.startsWith("read:local-file:") || normalized.startsWith("read:local-project:")) {
-    return true;
-  }
-  return (
-    ref.startsWith("read:") ||
-    ref.startsWith("execute:") ||
-    ref.startsWith("deny:") ||
-    ref.startsWith("ask:")
-  );
+  return parseUserPermissionBoundaryRef(ref) !== undefined;
 }
 
 function previewText(text: string): { readonly text: string; readonly truncated: boolean } {

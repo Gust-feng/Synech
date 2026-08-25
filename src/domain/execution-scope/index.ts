@@ -5,8 +5,9 @@ export {
 } from "./contracts.js";
 export type {
   AttachmentGrant,
-  ConfirmationPolicy,
   ConversationExecutionScope,
   ConversationOwner,
+  ExecutionApprovalMode,
+  ExecutionFilesystemScope,
   WorkspaceGrant,
 } from "./contracts.js";

@@ -10,7 +10,7 @@ export type PersonalSpaceItemProjection = {
   readonly kind:
     | "folder"
     | "local_file"
-    | "workspace_folder"
+    | "workspace"
     | "managed_folder"
     | "managed_asset"
     | "web_reference"
@@ -21,6 +21,8 @@ export type PersonalSpaceItemProjection = {
   readonly openUrl?: string;
   readonly referenceId?: string;
   readonly assetId?: string;
+  readonly workspaceId?: string;
+  readonly workspaceStatus?: "available" | "disconnected" | "deleting";
   readonly children?: readonly PersonalSpaceItemProjection[];
 };
 
@@ -44,6 +46,7 @@ export type PersonalSpaceActions = {
   readonly rename?: (target: PersonalSpaceRenameTarget, title: string) => void | Promise<void>;
   /** Removes only the Space link and preserves the referenced source. */
   readonly unlinkReference?: (itemId: string) => void | Promise<void>;
+  readonly reconnectWorkspace?: (workspaceId: string) => void | Promise<void>;
   /** Removes the Space reference; the backend owns the physical deletion policy. */
   readonly removeReference?: (itemId: string) => void | Promise<void>;
 };

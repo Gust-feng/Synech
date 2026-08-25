@@ -9,6 +9,7 @@ import type {
   OrdinaryRunStatus,
 } from "./contracts.js";
 import { OrdinaryFeatureError } from "./contracts.js";
+import { isTerminal } from "./run-lifecycle-policy.js";
 
 export function createTerminalSettlement(input: {
   readonly finalizeSession?: (runId: string, target?: AgentSessionEntryRef | null) => Promise<void>;
@@ -295,17 +296,6 @@ function rollbackLeafRef(state: OrdinaryRunState): AgentSessionEntryRef | null {
   if (state.session.phase === "rollbackable") return state.session.endLeafRef;
   if (state.session.phase === "started") return state.session.startLeafRef;
   return null;
-}
-
-function isTerminal(
-  state: OrdinaryRunState,
-): state is OrdinaryRunState & {
-  readonly status: Extract<OrdinaryRunStatus, { readonly kind: "completed" | "failed" | "cancelled" | "blocked" }>;
-} {
-  return state.status.kind === "completed" ||
-    state.status.kind === "failed" ||
-    state.status.kind === "cancelled" ||
-    state.status.kind === "blocked";
 }
 
 function cloneToolResult(result: ToolCallResult): ToolCallResult {

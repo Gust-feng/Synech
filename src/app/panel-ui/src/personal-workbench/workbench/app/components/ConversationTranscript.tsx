@@ -82,6 +82,7 @@ export type ConversationTranscriptProps = {
     readonly currentRunId?: string;
     readonly runStatus?: string;
     readonly answer?: string;
+    readonly failure?: { readonly code: string; readonly message: string };
     readonly deliverable?: AgentDeliverable;
     readonly runProjection: LiveRunTranscriptProjection & { readonly nodes: readonly TranscriptNode[] };
     readonly pending?: ConfirmationProjection;
@@ -454,7 +455,7 @@ function ConversationThinkingBlock(props: { readonly items: readonly ActivityIte
     .map((item) => item.copy.expandedDetail ?? item.copy.detail)
     .filter((value): value is string => value !== undefined && value.trim().length > 0)
     .join("\n\n");
-  // 思考进行中平滑逐字显示；思考完成或终态替换时立即结算为权威内容。
+  // reasoning 流平滑逐字显示；终态内容到达时立即结算为权威内容。
   const displayed = useStreamingText(text, thinkingInProgress);
   if (displayed.length === 0) return null;
   return (

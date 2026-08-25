@@ -473,12 +473,12 @@ function ordinaryToolBoundary(
       goalId: input.runId,
       conversationId: input.conversationId,
       resourceScope: workspacePathAuthorization?.resourceScope,
-      confirmationPolicy: input.birth.toolConfirmationPolicy,
+      accessPolicy: input.birth.accessPolicy,
     },
     permission: {
       callerAgentId: definition.agentId,
       allowedTools,
-      confirmationPolicy: input.birth.toolConfirmationPolicy,
+      accessPolicy: input.birth.accessPolicy,
     },
   };
 }

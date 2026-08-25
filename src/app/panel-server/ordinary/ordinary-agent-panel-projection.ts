@@ -108,7 +108,7 @@ export function projectOrdinaryPanelRunView(input: {
     throw new Error(`Completed Ordinary run ${input.run.runId} has no projected Session answer`);
   }
   const answer = input.run.status.kind === "completed"
-    ? { title: "已回答", content: completedAnswer!, evidenceRefs: [], nextActions: [] }
+    ? { title: "", content: completedAnswer!, evidenceRefs: [], nextActions: [] }
     : undefined;
   const transcriptNodes = projectOrdinaryTranscriptNodes(input.run, input.fullReplay.activities);
   const contextAttachments = projectContextAttachments(input.run);

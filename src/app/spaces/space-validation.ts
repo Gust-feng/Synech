@@ -17,7 +17,7 @@ export const MAX_SPACE_REFERENCE_IMAGE_CAPTION_LENGTH = 16 * 1024;
 
 export const spaceReferenceSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("local_file"), path: z.string().min(1) }).strict(),
-  z.object({ kind: z.literal("workspace_folder"), path: z.string().min(1) }).strict(),
+  z.object({ kind: z.literal("workspace"), workspaceId: z.string().min(1) }).strict(),
   z.object({ kind: z.literal("managed_folder"), path: z.string().min(1) }).strict(),
   z.object({ kind: z.literal("asset_folder") }).strict(),
   z.object({ kind: z.literal("managed_asset"), assetId: z.string().min(1) }).strict(),

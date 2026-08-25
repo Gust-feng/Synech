@@ -38,6 +38,8 @@ export type ActivityExpandedItem = {
 };
 
 export type ActivityExpandedSection = {
+  /** Stable semantic identity. Titles are presentation copy and never control behavior. */
+  readonly sectionId: string;
   readonly title: string;
   readonly content: string;
   readonly format?: "plain" | "code" | "console" | "list" | "diagnostics" | "source" | "source_list" | "path_list" | "quote" | "diff";
@@ -126,7 +128,7 @@ export function activityLineForNode(node: ProjectableTranscriptNode): ActivityLi
   }
   if (node.kind === "system") {
     if (isModelRequestNode(node)) {
-      return { detail: node.summary?.trim() || "思考中" };
+      return undefined;
     }
     if (isContextCompactionNode(node)) {
       return contextCompactionActivityCopy(node);
@@ -206,15 +208,10 @@ export function activityItemsForNodes(nodes: readonly ProjectableTranscriptNode[
 export function displayActivityItemsForNodes(nodes: readonly ProjectableTranscriptNode[]): readonly ActivityItem[] {
   const items: ActivityItem[] = [];
   const requestedToolItemIndexByCall = new Map<string, number>();
-  const failureCauseKeysByRun = new Map<string, Set<string>>();
   for (const node of nodes) {
     const copy = activityLineForNode(node);
     if (copy === undefined) continue;
     const item = activityItemFromNode(node, copy);
-    if (isRedundantRunFailureItem(node, item, failureCauseKeysByRun)) {
-      continue;
-    }
-    recordFailureCauseKey(node, item, failureCauseKeysByRun);
     const toolCallId = toolCallIdForActivityNode(node);
     if (toolCallId !== undefined && node.kind === "tool") {
       const previousIndex = requestedToolItemIndexByCall.get(toolCallId);
@@ -231,54 +228,11 @@ export function displayActivityItemsForNodes(nodes: readonly ProjectableTranscri
     }
     items.push(
       item.copy.expandedDetail !== undefined && item.expandedSections === undefined
-        ? { ...item, expandedSections: [{ title: "详情", content: item.copy.expandedDetail }] }
+        ? { ...item, expandedSections: [{ sectionId: "details", title: "详情", content: item.copy.expandedDetail }] }
         : item,
     );
   }
   return nestDelegatedActivityItems(items);
-}
-
-function isRedundantRunFailureItem(
-  node: ProjectableTranscriptNode,
-  item: ActivityItem,
-  failureCauseKeysByRun: ReadonlyMap<string, ReadonlySet<string>>,
-): boolean {
-  if (!isRunFailureNode(node)) {
-    return false;
-  }
-  const key = failureCauseKey(item);
-  return key.length > 0 && failureCauseKeysByRun.get(node.runId)?.has(key) === true;
-}
-
-function recordFailureCauseKey(
-  node: ProjectableTranscriptNode,
-  item: ActivityItem,
-  failureCauseKeysByRun: Map<string, Set<string>>,
-): void {
-  if (!isFailureCauseNode(node)) {
-    return;
-  }
-  const key = failureCauseKey(item);
-  if (key.length === 0) {
-    return;
-  }
-  const existing = failureCauseKeysByRun.get(node.runId) ?? new Set<string>();
-  existing.add(key);
-  failureCauseKeysByRun.set(node.runId, existing);
-}
-
-function isFailureCauseNode(node: ProjectableTranscriptNode): boolean {
-  return !isRunFailureNode(node) &&
-    (node.phase === "failed" || node.phase === "blocked" || node.phase === "cancelled");
-}
-
-function isRunFailureNode(node: ProjectableTranscriptNode): boolean {
-  return node.kind === "system" &&
-    (node.eventType === "run.failed" || node.eventType === "run.blocked" || node.eventType === "run.cancelled");
-}
-
-function failureCauseKey(item: ActivityItem): string {
-  return item.copy.detail.replace(/\s+/g, " ").trim();
 }
 
 function activityItemFromNode(node: ProjectableTranscriptNode, copy: ActivityLineCopy): ActivityItem {
@@ -433,15 +387,16 @@ function activityExpandedSectionsForNode(
       ? "未报告"
       : `${totalTokens}（输入 ${inputTokens ?? 0}，输出 ${outputTokens ?? 0}）`;
     sections.push({
+      sectionId: "execution_metrics",
       title: "执行统计",
       content: `模型轮次：${node.delegatedExecution.modelRounds}\n工具调用：${node.delegatedExecution.toolCallCount}\nToken：${tokenSummary}`,
       format: "plain",
     });
   }
   if (node.error !== undefined) {
-    sections.push({ title: "错误", content: node.error, format: "diagnostics", tone: "danger" });
+    sections.push({ sectionId: "error", title: "错误", content: node.error, format: "diagnostics", tone: "danger" });
   }
-  const fallback = copy.expandedDetail === undefined ? [] : [{ title: "详情", content: copy.expandedDetail }];
+  const fallback = copy.expandedDetail === undefined ? [] : [{ sectionId: "details", title: "详情", content: copy.expandedDetail }];
   const allSections = dedupeExpandedSections(appendSectionsWithoutDuplicateContent(sections, fallback));
   return allSections.length === 0 ? undefined : allSections;
 }
@@ -507,7 +462,7 @@ function mergedToolExpandedDetail(
 }
 
 function fallbackExpandedSections(copy: ActivityLineCopy): readonly ActivityExpandedSection[] {
-  return copy.expandedDetail === undefined ? [] : [{ title: "详情", content: copy.expandedDetail }];
+  return copy.expandedDetail === undefined ? [] : [{ sectionId: "details", title: "详情", content: copy.expandedDetail }];
 }
 
 function dedupeExpandedSections(sections: readonly ActivityExpandedSection[]): readonly ActivityExpandedSection[] {
@@ -519,7 +474,7 @@ function dedupeExpandedSections(sections: readonly ActivityExpandedSection[]): r
     if (title.length === 0 || content.length === 0) {
       continue;
     }
-    const key = `${title}\u0000${content}`;
+    const key = `${section.sectionId}\u0000${content}`;
     if (seen.has(key)) {
       continue;
     }
@@ -537,7 +492,7 @@ function appendSectionsWithoutDuplicateContent(
   const result = [...base];
   for (const section of incoming) {
     const content = section.content.trim();
-    if (content.length > 0 && seenContent.has(content) && section.title.trim() !== "文件") {
+    if (content.length > 0 && seenContent.has(content) && section.sectionId !== "files") {
       continue;
     }
     if (content.length > 0) {
@@ -594,11 +549,12 @@ export function readableThinkingText(value: string): string | undefined {
 }
 
 export function readableThinkingCopy(value: string): ActivityLineCopy | undefined {
+  const detail = readableThinkingText(value);
   const expandedDetail = readableExpandedModelText(value);
-  if (expandedDetail.length === 0) return undefined;
+  if (detail === undefined || expandedDetail.length === 0) return undefined;
   return {
-    detail: "思考中",
-    expandedDetail,
+    detail,
+    ...(detail === expandedDetail ? {} : { expandedDetail }),
   };
 }
 

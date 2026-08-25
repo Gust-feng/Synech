@@ -32,6 +32,8 @@ export type PersonalNoteRevision = {
 /** Identifies a Panel projection whose authoritative backend facts changed. */
 export type WorkbenchProjectionOwner =
   | "spaces"
+  | "workspaces"
+  | "managed_assets"
   | "mounted_files"
   | "personal_knowledge"
   | "conversations";
@@ -47,6 +49,7 @@ export type WorkbenchProjectionChange = {
   readonly spaceIds?: readonly string[];
   readonly referenceIds?: readonly string[];
   readonly noteIds?: readonly string[];
+  readonly managedAssetIds?: readonly string[];
   /** 会话事实变化；消费方需重读会话投影。 */
   readonly conversationIds?: readonly string[];
 };
@@ -63,7 +66,7 @@ export type DocumentPresentation = {
 
 export type DocumentSourceKind =
   | "local_file"
-  | "workspace_folder"
+  | "workspace"
   | "managed_folder"
   | "knowledge_asset"
   | "asset_folder"

@@ -52,7 +52,7 @@ export function collectStartupReferencePreviewPlan(
         continue
       }
       if (item.openable === false || item.kind === 'generated_artifact') continue
-      if (item.kind === 'workspace_folder' || item.kind === 'managed_folder') {
+      if (item.kind === 'workspace' || item.kind === 'managed_folder') {
         if (folderTargets.length < MAX_STARTUP_FOLDERS) add(folderTargets, item)
         continue
       }

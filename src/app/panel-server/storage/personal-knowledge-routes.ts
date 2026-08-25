@@ -30,7 +30,7 @@ export type PersonalKnowledgeRouteDependencies = {
 
 const createNoteSchema = z.object({
   id: id.optional(),
-  spaceId: id,
+  spaceId: id.optional(),
   title: z.string().max(1_000).optional(),
   bodyMarkdown: z.string().max(10_000_000).optional(),
 }).strict();

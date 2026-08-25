@@ -9,6 +9,7 @@ import {
   projectOrdinaryPanelConversation,
   projectOrdinaryPanelRunView,
 } from "../dist/app/panel-server/ordinary/ordinary-agent-panel-projection.js";
+import { projectOrdinaryConversation } from "../dist/app/ordinary-agent/conversation-projection.js";
 import { appendLiveRunEvents, projectLiveRunTranscript } from "../dist/app/panel-api/ui-read-model.js";
 
 test("cursor round-trips exact stream position and rejects extra facts", () => {
@@ -105,6 +106,20 @@ test("reasoning completion keeps its content block identity across panel project
   ]);
 });
 
+test("completed snapshots use structured content without parsing localized summaries", () => {
+  const live = appendLiveRunEvents("run-1", undefined, [
+    panelEvent("request", 1, "model.requested", "model-1"),
+    panelEvent("output-delta", 2, "model.output.delta", "model-1", { delta: "流式正文" }),
+    panelEvent("output-summary", 3, "model.output.completed", "model-1", { summary: "任意完成摘要" }),
+    panelEvent("reasoning-delta", 4, "model.reasoning.delta", "model-1", { delta: "真实思考" }),
+    panelEvent("reasoning-summary", 5, "model.reasoning.completed", "model-1", { summary: "任意思考摘要" }),
+    panelEvent("output-authoritative", 6, "model.output.completed", "model-1", { delta: "权威最终正文" }),
+  ]);
+
+  assert.equal(live.turns[0].output.text, "权威最终正文");
+  assert.equal(live.turns[0].reasoning.text, "真实思考");
+});
+
 test("streaming answer joins text blocks only within the latest model request", () => {
   const live = appendLiveRunEvents("run-1", undefined, [
     panelEvent("request-1", 1, "model.requested", "model-1"),
@@ -164,15 +179,39 @@ test("completed run projects the final Session answer and completion copy", () =
   const view = projectOrdinaryPanelRunView({ run, fullReplay: replay });
 
   assert.equal(view.run.status, "completed");
-  assert.equal(view.workView.headline, "已回答");
+  assert.equal(view.workView.headline, "");
   assert.deepEqual(view.workView.answer, {
-    title: "已回答",
+    title: "",
     content: "Final answer",
     evidenceRefs: [],
     nextActions: [],
   });
   assert.equal(view.detail.stopReason, "completed");
   assert.equal(view.detail.continuationAvailability, "none");
+});
+
+test("failed conversation turns keep failure facts separate from assistant content", () => {
+  const base = runState();
+  const conversation = projectOrdinaryConversation({
+    control: {
+      state: {
+        conversationId: "conversation-1",
+        createdAt: "2026-08-24T00:00:00.000Z",
+      },
+      savedAt: "2026-08-24T00:00:02.000Z",
+    },
+    runs: [{
+      ...base,
+      birth: { ...base.birth, config: modelProfile() },
+      status: { kind: "failed", error: { code: "provider_failed", message: "模型请求失败。" } },
+    }],
+  });
+
+  assert.deepEqual(conversation.turns[1].content, "");
+  assert.deepEqual(conversation.turns[1].failure, {
+    code: "provider_failed",
+    message: "模型请求失败。",
+  });
 });
 
 test("conversation filters owner context and preserves encoded attachment media URL", () => {

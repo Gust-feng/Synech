@@ -328,9 +328,7 @@ function appendCompletedReasoningSnapshot(
 ): TextStreamAssembly {
   const authoritative = event.delta ?? event.detail?.preview;
   const summary = event.summary?.trim() ?? "";
-  const next = (authoritative ?? (current.text.trim().length === 0 || !isGenericCompletedReasoningSummary(summary)
-    ? summary
-    : "")).trim();
+  const next = (authoritative ?? (current.text.trim().length > 0 ? current.text : summary)).trim();
   if (next.length === 0) return current;
   return {
     text: next,
@@ -344,8 +342,9 @@ function appendCompletedOutputSnapshot(
   event: RunEventLike
 ): TextStreamAssembly {
   const next = completedOutputFragment(current.text, event);
-  const hasAuthoritativePreview = (event.detail?.preview?.trim().length ?? 0) > 0;
-  const text = hasAuthoritativePreview
+  const hasAuthoritativeContent = (event.delta?.trim().length ?? 0) > 0 ||
+    (event.detail?.preview?.trim().length ?? 0) > 0;
+  const text = hasAuthoritativeContent
     ? next
     : current.text.trim().length > 0 ? current.text : next;
   if (text.length === 0) return current;
@@ -358,34 +357,14 @@ function appendCompletedOutputSnapshot(
 
 function completedOutputFragment(
   currentText: string,
-  event: Pick<RunEventLike, "summary" | "detail">
+  event: Pick<RunEventLike, "delta" | "summary" | "detail">
 ): string {
-  const preview = event.detail?.preview?.trim();
-  if (preview !== undefined && preview.length > 0) {
-    return preview;
+  const authoritative = event.delta?.trim() || event.detail?.preview?.trim();
+  if (authoritative !== undefined && authoritative.length > 0) {
+    return authoritative;
   }
   const summary = event.summary?.trim() ?? "";
-  if (summary.length === 0) {
-    return "";
-  }
-  if (currentText.trim().length > 0 && isGenericCompletedBodySummary(summary)) {
-    return "";
-  }
-  return summary;
-}
-
-function isGenericCompletedBodySummary(value: string): boolean {
-  const normalized = value.replace(/[。.!！?？；;:：、，,\s]/g, "");
-  return normalized === "内容已整理" ||
-    normalized === "内容已整理并已进入报告或详情" ||
-    normalized === "回答完成" ||
-    normalized === "回复完成" ||
-    normalized === "已回答";
-}
-
-function isGenericCompletedReasoningSummary(value: string): boolean {
-  const normalized = value.replace(/[。.!！?？；;:：、，,\s]/g, "");
-  return normalized === "思考完成" || normalized === "推理完成" || normalized === "已完成思考";
+  return currentText.trim().length > 0 ? currentText : summary;
 }
 
 function uniqueStrings(values: readonly string[]): readonly string[] {

@@ -44,18 +44,20 @@ export interface SpaceItem {
   assetId?: string
   relativePath?: string
   externalChild?: boolean
+  workspaceId?: string
+  workspaceStatus?: "available" | "disconnected" | "deleting"
 }
 
 /** 可挂载文件系统（工作区文件夹 / 受管文件夹）的来源种类。 */
 export type FileSystemFolderKind = Extract<
   PersonalSpaceItemProjection['kind'],
-  'workspace_folder' | 'managed_folder'
+  'workspace' | 'managed_folder'
 >
 
 export function isFileSystemFolderKind(
   kind: PersonalSpaceItemProjection['kind'],
 ): kind is FileSystemFolderKind {
-  return kind === 'workspace_folder' || kind === 'managed_folder'
+  return kind === 'workspace' || kind === 'managed_folder'
 }
 
 type ReferencePresentationKindResolver = (
@@ -75,7 +77,7 @@ function visualItemType(
 ): SpaceItem['type'] {
   switch (kind) {
     case 'folder':
-    case 'workspace_folder':
+    case 'workspace':
     case 'managed_folder':
       return 'folder'
     case 'web_reference':
@@ -105,6 +107,8 @@ export function projectSpaceItem(
     openable: item.openable,
     referenceId: item.referenceId,
     assetId: item.assetId,
+    workspaceId: item.workspaceId,
+    workspaceStatus: item.workspaceStatus,
   }
 }
 
@@ -296,7 +300,7 @@ export function useMountedTree(options: UseMountedTreeOptions): UseMountedTreeRe
     const root = getItem(projectedTree, referenceId)
     return root !== undefined && isFileSystemFolderKind(root.domainKind)
       ? root.domainKind
-      : 'workspace_folder'
+      : 'workspace'
   }
 
   // 核心：按 referenceId + relativePath 拉取目录，revision 守卫丢弃过期响应。

@@ -3,7 +3,7 @@
  *
  * 本模块只负责 `reference.kind` 业务分派：
  * - web_page / 非本地类型直接返回对应预览或 unsupported
- * - local_file / workspace_folder / managed_folder 委托给
+ * - local_file / Workspace / managed_folder 委托给
  *   local-document-preview.ts 的共享本地文件系统预览逻辑
  *
  * 纯机械性文件系统操作（路径安全、MIME 识别、文本解码、指纹计算等）
@@ -21,6 +21,7 @@ import {
 } from "../storage/local-document-preview.js";
 import { normalizeRelativePath } from "../../local-filesystem/index.js";
 import { documentPresentation } from "../storage/document-preview-presentation.js";
+import type { ResolvedSpaceFilesystemReference } from "./space-workspace-reference.js";
 
 export type PanelDocumentPreview = DocumentPreview;
 
@@ -33,13 +34,14 @@ export async function createPanelDocumentPreview(
   relativePath = "",
   contentBaseUrl?: string,
   contentTypeHintPath?: string,
+  resolved?: ResolvedSpaceFilesystemReference,
 ): Promise<PanelDocumentPreview> {
   const normalizedRelativePath = item.reference.kind === "local_file"
-    || item.reference.kind === "workspace_folder"
+    || item.reference.kind === "workspace"
     || item.reference.kind === "managed_folder"
     ? safeNormalizeRelativePath(relativePath)
     : relativePath;
-  const preview = await buildPanelDocumentPreview(item, normalizedRelativePath, contentBaseUrl, contentTypeHintPath);
+  const preview = await buildPanelDocumentPreview(item, normalizedRelativePath, contentBaseUrl, contentTypeHintPath, resolved);
   return attachSpaceReferenceMetadata(preview, item, normalizedRelativePath);
 }
 
@@ -70,6 +72,7 @@ async function buildPanelDocumentPreview(
   relativePath: string,
   contentBaseUrl?: string,
   contentTypeHintPath?: string,
+  resolved?: ResolvedSpaceFilesystemReference,
 ): Promise<DocumentPreview> {
   if (item.reference.kind === "web_page") {
     const content = { kind: "web" as const, url: item.reference.url };
@@ -83,7 +86,7 @@ async function buildPanelDocumentPreview(
       content,
     };
   }
-  if (item.reference.kind !== "local_file" && item.reference.kind !== "workspace_folder" && item.reference.kind !== "managed_folder") {
+  if (item.reference.kind !== "local_file" && item.reference.kind !== "workspace" && item.reference.kind !== "managed_folder") {
     const content = { kind: "unavailable" as const, message: "这个引用需要由它的来源功能提供预览。" };
     return {
       itemId: item.id,
@@ -97,10 +100,12 @@ async function buildPanelDocumentPreview(
   }
 
   const meta: LocalDocumentMeta = { itemId: item.id, title: item.title, sourceKind: item.reference.kind };
+  const rootPath = resolved?.path ?? (item.reference.kind === "workspace" ? undefined : item.reference.path);
+  if (rootPath === undefined) throw new PanelHttpError(409, "workspace_not_available", "工作区当前不可用。");
   if (item.reference.kind === "local_file" && relativePath.length > 0) {
     throw new PanelHttpError(400, "invalid_space_reference_path", "文件引用不接受子路径。");
   }
-  return buildLocalDocumentPreview(item.reference.path, relativePath, meta, { contentBaseUrl, contentTypeHintPath });
+  return buildLocalDocumentPreview(rootPath, relativePath, meta, { contentBaseUrl, contentTypeHintPath });
 }
 
 export async function writePanelSpaceReferenceContent(
@@ -109,22 +114,25 @@ export async function writePanelSpaceReferenceContent(
   response: ServerResponse,
   relativePath = "",
   contentTypeHintPath?: string,
+  resolved?: ResolvedSpaceFilesystemReference,
 ): Promise<void> {
-  if (item.reference.kind !== "local_file" && item.reference.kind !== "workspace_folder" && item.reference.kind !== "managed_folder") {
+  if (item.reference.kind !== "local_file" && item.reference.kind !== "workspace" && item.reference.kind !== "managed_folder") {
     throw new PanelHttpError(409, "space_reference_content_unavailable", "这个引用没有可读取的文件内容。");
   }
   const normalized = safeNormalizeRelativePath(relativePath);
   if (item.reference.kind === "local_file" && normalized.length > 0) {
     throw new PanelHttpError(400, "invalid_space_reference_path", "文件引用不接受子路径。");
   }
-  await streamLocalDocumentContent(item.reference.path, normalized, request, response, contentTypeHintPath);
+  const rootPath = resolved?.path ?? (item.reference.kind === "workspace" ? undefined : item.reference.path);
+  if (rootPath === undefined) throw new PanelHttpError(409, "workspace_not_available", "工作区当前不可用。");
+  await streamLocalDocumentContent(rootPath, normalized, request, response, contentTypeHintPath);
 }
 
 function referenceSource(item: SpaceReferenceItem): string {
   switch (item.reference.kind) {
     case "local_file":
-    case "workspace_folder":
     case "managed_folder": return item.reference.path;
+    case "workspace": return item.reference.workspaceId;
     case "asset_folder": return item.title;
     case "managed_asset": return item.reference.assetId;
     case "web_page": return item.reference.url;

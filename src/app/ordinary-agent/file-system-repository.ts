@@ -15,6 +15,7 @@ import {
   type OrdinaryRunSummary,
 } from "./contracts.js";
 import { assertOrdinaryToolFactGraph } from "./state.js";
+import { isTerminalStatus } from "./run-lifecycle-policy.js";
 
 const MANIFEST_SCHEMA_VERSION = "ordinary-run-manifest/v1" as const;
 
@@ -232,7 +233,10 @@ const birthSchema = z.object({
       maxResults: z.number().nonnegative(), secretConfigured: z.boolean(), status: z.enum(["ready", "no-provider", "disabled"]), updatedAt: z.string(),
     }).passthrough(),
   }).passthrough(),
-  toolConfirmationPolicy: z.enum(["prompt", "full_access"]),
+  accessPolicy: z.object({
+    approvalMode: z.enum(["prompt", "bypass"]),
+    filesystemScope: z.enum(["owner_only", "unrestricted"]),
+  }).strict(),
 }).strict().superRefine((birth, context) => {
   if (birth.agentNoteVersions === undefined) return;
   if (birth.agentNoteVersions.owner.scope.kind !== birth.memoryOwner.kind ||
@@ -415,7 +419,7 @@ const rawStateSchema = z.object({
       context.addIssue({ code: "custom", message: "timeline identity or sequence is invalid", path: ["timeline", index] });
     }
   });
-  const terminal = ["completed", "failed", "cancelled", "blocked"].includes(state.status.kind);
+  const terminal = isTerminalStatus(state.status);
   if (terminal !== (state.timestamps.terminalAt !== undefined)) {
     context.addIssue({ code: "custom", message: "terminal status and terminalAt must agree", path: ["timestamps", "terminalAt"] });
   }

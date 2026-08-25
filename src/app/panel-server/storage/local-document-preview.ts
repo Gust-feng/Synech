@@ -2,7 +2,7 @@
  * 本地文件/文件夹引用的共享预览、内容流式传输和文本编辑。
  *
  * 从 space-reference-preview.ts 和 space-reference-mutations.ts 中提取的
- * 本地文件系统预览构建逻辑。Space（用于 local_file / workspace_folder /
+ * 本地文件系统预览构建逻辑。Space（用于 local_file / Workspace /
  * managed_folder 引用类型）和 Knowledge（用于受管资产文件夹）共同使用本模块，
  * 避免跨模块业务函数依赖。
  *

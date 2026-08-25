@@ -1,8 +1,13 @@
-import { sanitizeFailureCopy, userVisibleAnswer } from "./panel-assistant-visible-text.js";
+import { sanitizeFailureCopy } from "./panel-assistant-visible-text.js";
 
 export type AssistantFailureParts = {
-  readonly previous: string;
+  readonly code: string;
   readonly error: string;
+};
+
+export type AssistantFailureFact = {
+  readonly code: string;
+  readonly message: string;
 };
 
 export type AssistantTerminalStatus = "failed" | "blocked" | "cancelled";
@@ -55,55 +60,17 @@ export type FailureEchoTranscriptNode = {
   }[];
 };
 
-export function assistantFailureParts(content: string): AssistantFailureParts {
-  const visible = userVisibleAnswer(content).trim();
-  const marker = "\n\n错误信息：";
-  const markerIndex = visible.lastIndexOf(marker);
-  if (markerIndex >= 0) {
-    return {
-      previous: visible.slice(0, markerIndex).trim(),
-      error: `错误信息：${sanitizeFailureCopy(visible.slice(markerIndex + marker.length))}`,
-    };
-  }
-  return {
-    previous: "",
-    error: sanitizeFailureCopy(visible),
-  };
+export function assistantFailureParts(failure: AssistantFailureFact | undefined): AssistantFailureParts | undefined {
+  if (failure === undefined) return undefined;
+  return { code: failure.code, error: sanitizeFailureCopy(failure.message) };
 }
 
 export function transcriptNodesWithoutFailureEcho<TNode extends FailureEchoTranscriptNode>(
   nodes: readonly TNode[] | undefined,
-  failure: AssistantFailureParts | undefined,
+  terminalStatus: AssistantTerminalStatus | undefined,
 ): readonly TNode[] | undefined {
-  if (nodes === undefined || failure === undefined) {
-    return nodes;
-  }
-  const comparableError = comparableFailureText(failure.error);
-  if (comparableError.length === 0) {
-    return nodes;
-  }
-  const filtered = nodes.filter((node) => !isFailureEchoNode(node, comparableError));
+  if (nodes === undefined || terminalStatus === undefined) return nodes;
+  const terminalEventType = `run.${terminalStatus}`;
+  const filtered = nodes.filter((node) => !(node.kind === "system" && node.eventType === terminalEventType));
   return filtered.length === nodes.length ? nodes : filtered;
-}
-
-function isFailureEchoNode(node: FailureEchoTranscriptNode, comparableError: string): boolean {
-  if (node.kind === "body" || node.kind === "answer") {
-    return false;
-  }
-  if (isFailureSystemNode(node)) {
-    return true;
-  }
-  const comparableNodeText = comparableFailureText(node.text ?? node.summary ?? node.title);
-  return comparableNodeText.length > 0 && comparableNodeText === comparableError;
-}
-
-function isFailureSystemNode(node: FailureEchoTranscriptNode): boolean {
-  return node.kind === "system" &&
-    (node.phase === "failed" || node.phase === "blocked" || node.phase === "cancelled");
-}
-
-function comparableFailureText(value: string): string {
-  return sanitizeFailureCopy(userVisibleAnswer(value).replace(/^错误信息[:：]\s*/u, ""))
-    .replace(/\s+/g, " ")
-    .trim();
 }

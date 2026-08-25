@@ -4,22 +4,20 @@ import { z } from "zod";
 import { inspectSpaceExternalSource } from "../../spaces/index.js";
 import type { WorkspaceFeature, WorkspaceFeatureError } from "../../workspaces/index.js";
 import { PanelHttpError, readJsonBody, writeJson } from "../http-utils.js";
-import type { WorkspaceDeletionCoordinator } from "./workspace-deletion-coordinator.js";
 
 const registerSchema = z.object({
   rootPath: z.string().trim().min(1).max(4_096),
 }).strict();
 
-const linkSchema = z.object({
-  spaceId: z.string().min(1),
+const visibilitySchema = z.object({
+  visibility: z.enum(["listed", "implicit"]),
 }).strict();
 
 export type WorkspaceRouteDependencies = {
   readonly workspaceFeature: {
-    readonly commands: Pick<WorkspaceFeature["commands"], "registerWorkspace" | "linkWorkspaceToSpace" | "unlinkWorkspaceFromSpace">;
-    readonly queries: Pick<WorkspaceFeature["queries"], "list" | "listLinksBySpace">;
+    readonly commands: Pick<WorkspaceFeature["commands"], "ensureWorkspace" | "setVisibility" | "reconnectWorkspace">;
+    readonly queries: Pick<WorkspaceFeature["queries"], "list" | "get">;
   };
-  readonly workspaceDeletion: Pick<WorkspaceDeletionCoordinator, "admit" | "deleteWorkspace">;
 };
 
 /**
@@ -47,9 +45,10 @@ export async function handlePanelWorkspaceRoute(
       if (source === undefined || source.kind !== "folder") {
         throw new PanelHttpError(400, "workspace_directory_required", "所选路径必须是存在的文件夹。");
       }
-      const registered = await feature.commands.registerWorkspace({
+      const registered = await feature.commands.ensureWorkspace({
         rootPath: input.rootPath,
         sourceIdentity: source.identity,
+        visibility: "listed",
       });
       writeJson(response, 201, { ok: true, workspace: registered.workspace, mount: registered.mount });
       return true;
@@ -57,42 +56,25 @@ export async function handlePanelWorkspaceRoute(
     return false;
   }
 
-  const linkMatch = /^\/api\/workspaces\/([^/]+)\/links$/u.exec(url.pathname);
-  if (linkMatch !== null) {
-    if (request.method === "POST") {
-      const workspaceId = decode(linkMatch[1]);
-      const input = parse(linkSchema, await readJsonBody(request), "链接参数无效。");
-      const link = await dependencies.workspaceDeletion.admit(workspaceId, () =>
-        feature.commands.linkWorkspaceToSpace({ spaceId: input.spaceId, workspaceId }));
-      writeJson(response, 201, { ok: true, link });
-      return true;
-    }
-    if (request.method === "DELETE") {
-      const workspaceId = decode(linkMatch[1]);
-      const input = parse(linkSchema, await readJsonBody(request), "链接参数无效。");
-      await dependencies.workspaceDeletion.admit(workspaceId, async () => {
-        const links = await feature.queries.listLinksBySpace(input.spaceId);
-        const target = links.find((link) => link.workspaceId === workspaceId && link.status === "active");
-        if (target === undefined) {
-          throw new PanelHttpError(404, "workspace_link_not_found", "未找到该工作区引用。");
-        }
-        await feature.commands.unlinkWorkspaceFromSpace(target.linkId);
-      });
-      writeJson(response, 200, { ok: true });
-      return true;
-    }
-    return false;
+  const reconnectMatch = /^\/api\/workspaces\/([^/]+)\/reconnect$/u.exec(url.pathname);
+  if (reconnectMatch !== null && request.method === "POST") {
+    const workspaceId = decode(reconnectMatch[1]);
+    const input = parse(registerSchema, await readJsonBody(request), "工作区路径无效。");
+    const source = await inspectSpaceExternalSource(input.rootPath);
+    if (source?.kind !== "folder") throw new PanelHttpError(400, "workspace_directory_required", "所选路径必须是存在的文件夹。");
+    const reconnected = await feature.commands.reconnectWorkspace({ workspaceId, rootPath: input.rootPath, sourceIdentity: source.identity });
+    writeJson(response, 200, { ok: true, workspace: reconnected.workspace, mount: reconnected.mount });
+    return true;
   }
 
-  const deleteMatch = /^\/api\/workspaces\/([^/]+)$/u.exec(url.pathname);
-  if (deleteMatch !== null && request.method === "DELETE") {
-    const workspaceId = decode(deleteMatch[1]);
-    // deleteWorkspace is idempotent and is also the explicit retry path for a
-    // cascade that persisted `deleting` before a later cleanup step failed.
-    // Calling assertAvailable here would make that durable retry impossible in
-    // the same process.
-    await dependencies.workspaceDeletion.deleteWorkspace(workspaceId);
-    writeJson(response, 200, { ok: true });
+  const visibilityMatch = /^\/api\/workspaces\/([^/]+)$/u.exec(url.pathname);
+  if (visibilityMatch !== null && request.method === "PATCH") {
+    const workspaceId = decode(visibilityMatch[1]);
+    const workspace = await feature.queries.get(workspaceId);
+    if (workspace === undefined) throw new PanelHttpError(404, "workspace_not_found", "工作区不存在。");
+    const input = parse(visibilitySchema, await readJsonBody(request), "工作区可见性无效。");
+    const updated = await feature.commands.setVisibility(workspaceId, input.visibility);
+    writeJson(response, 200, { ok: true, workspace: updated });
     return true;
   }
 
@@ -120,13 +102,11 @@ export function workspaceFeatureHttpError(error: WorkspaceFeatureError): PanelHt
     case "workspace_feature_released":
       return new PanelHttpError(503, "panel_runtime_quiescing", "面板正在关闭，不能接受新的请求。");
     case "workspace_not_found":
-    case "workspace_link_not_found":
       return new PanelHttpError(404, error.code, error.message);
     case "workspace_duplicate_path":
     case "workspace_duplicate_identity":
     case "workspace_nested_path":
     case "workspace_mount_conflict":
-    case "workspace_link_conflict":
     case "workspace_not_available":
       return new PanelHttpError(409, error.code, error.message);
     case "workspace_mount_invalid":

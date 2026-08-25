@@ -144,6 +144,7 @@ export function projectStandaloneAssistantWorkflowDisplay<
   readonly key: string;
   readonly runId?: string;
   readonly content: string;
+  readonly failure?: { readonly code: string; readonly message: string };
   readonly deliverable?: AssistantDeliverableLike;
   readonly terminalStatus?: AssistantTerminalStatus;
   readonly transcriptNodes?: readonly TNode[];
@@ -165,14 +166,14 @@ export function projectStandaloneAssistantWorkflowDisplay<
   const previousWorkflow = previousRunWorkflow ?? (previous?.standaloneAssistant?.key === input.key
     ? previous.standaloneAssistant.workflow
     : undefined);
-  const failure = input.terminalStatus === undefined ? undefined : assistantFailureParts(input.content);
+  const failure = input.terminalStatus === undefined ? undefined : assistantFailureParts(input.failure);
   const workflowTranscriptNodes = transcriptNodesWithoutFailureEcho(
     input.transcriptNodes,
-    failure,
+    input.terminalStatus,
   );
   const workflow = projectStableAssistantWorkflowDisplay({
     previous: previousWorkflow,
-    content: failure?.previous ?? input.content,
+    content: failure === undefined ? input.content : "",
     deliverable: failure === undefined ? input.deliverable : undefined,
     transcriptNodes: workflowTranscriptNodes,
     pending: input.pending,

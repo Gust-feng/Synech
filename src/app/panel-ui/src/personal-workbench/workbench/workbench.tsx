@@ -158,8 +158,8 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
   }, [props.spaceLoadState?.loading, props.spaces]);
 
   useEffect(() => {
-    if (activeSpaceId !== null) setActivePersonalKnowledgeSpace(activeSpaceId);
-  }, [activeSpaceId]);
+    setActivePersonalKnowledgeSpace(view === "space" ? activeSpaceId ?? undefined : undefined);
+  }, [activeSpaceId, view]);
 
   useEffect(() => {
     const viewChanged = observedViewRef.current !== view;
@@ -360,7 +360,8 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
           onRetry: workspaceProjection.refresh,
         }}
         onAddWorkspace={workspaceProjection.addWorkspace}
-        onDeleteWorkspace={workspaceProjection.deleteWorkspace}
+        onHideWorkspace={workspaceProjection.hideWorkspace}
+        onReconnectWorkspace={workspaceProjection.reconnectWorkspace}
         activeSpaceId={activeSpaceId}
         activeConversationId={props.conversation?.conversationId}
         onNavigate={navigate}
@@ -563,6 +564,10 @@ function renderView(input: {
     return <SearchPage
       onNavigate={input.navigate}
       onOpenInSpace={input.onOpenInSpace}
+      onOpenInKnowledge={(id) => {
+        input.onBrainSelect(id);
+        input.navigate("brain");
+      }}
       // Search opens the same Conversation projection used by the Synech host.
       onOpenConversation={input.onOpenConversationInSurface}
       spaces={input.props.spaces ?? []}
@@ -609,6 +614,7 @@ function ConversationSurface(props: {
         currentRunId: active.currentRunId,
         runStatus: props.props.currentRun.run?.status,
         answer: active.answer,
+        failure: props.props.currentRun.detail?.error,
         deliverable: active.deliverable,
         runProjection: active.currentRunProjection,
         pending: active.pending,

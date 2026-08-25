@@ -18,9 +18,9 @@ export function createManagedAssetsFeature(repository: ManagedAssetRepository): 
     tail = result.then(() => undefined, () => undefined);
     return result;
   };
-  const publish = (assetId: string): void => {
+  const publish = (event: ManagedAssetEvent): void => {
     for (const listener of [...listeners]) {
-      try { listener({ type: "managed_asset.changed", assetId }); } catch { /* Observers cannot alter a committed asset update. */ }
+      try { listener(event); } catch { /* Observers cannot alter a committed asset update. */ }
     }
   };
 
@@ -29,14 +29,31 @@ export function createManagedAssetsFeature(repository: ManagedAssetRepository): 
       async replace(asset: ManagedAsset) {
         await run(async () => {
           await repository.upsertMany([asset]);
-          publish(asset.id);
+          publish({ type: "managed_asset.changed", assetId: asset.id, operation: "replaced" });
         });
       },
       async updateText(input) {
         return await run(async () => {
           const result = await repository.updateText(input);
-          if (result.status === "updated") publish(input.id);
+          if (result.status === "updated") publish({ type: "managed_asset.changed", assetId: input.id, operation: "text_updated" });
           return result;
+        });
+      },
+      async updateCaption(input) {
+        return await run(async () => {
+          const result = await repository.updateCaption(input);
+          if (result.status === "updated") publish({ type: "managed_asset.changed", assetId: input.id, operation: "caption_updated" });
+          return result;
+        });
+      },
+      async removeMany(assetIds) {
+        await run(async () => {
+          const ids = [...new Set(assetIds.filter((assetId) => assetId.length > 0))];
+          if (ids.length === 0) return;
+          await repository.removeMany(ids);
+          for (const assetId of ids) {
+            publish({ type: "managed_asset.changed", assetId, operation: "removed" });
+          }
         });
       },
     },

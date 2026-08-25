@@ -83,26 +83,33 @@ export function createFailedModelResponseFromError(input: {
 }
 
 export function modelFailureKindFromError(error: unknown): ModelFailureKind {
-  const message = rawModelErrorMessage(error).toLowerCase();
-  if (/\bcontent[ _-]?filter(?:ed)?\b/.test(message)) {
-    return "content_filtered";
-  }
-  if (/\b(timeout|timed out|etimedout)\b/.test(message)) {
-    return "provider_timeout";
-  }
-  if (/\b(network|connection error|fetch failed|terminated|econnreset|econnrefused|enotfound|eai_again|socket|dns)\b/.test(message) ||
-    message.includes("other side closed")) {
-    return "provider_network";
-  }
-  if (/\b(unauthorized|forbidden|auth|401|403)\b/.test(message)) {
-    return "provider_auth";
-  }
-  if (/\b(rate limit|rate_limit|too many requests|429)\b/.test(message)) {
-    return "provider_rate_limit";
-  }
-  if (/\b(config|configuration|missing model|missing provider|base url|api[_ -]?key)\b/.test(message)) {
-    return "provider_config";
-  }
+  const chain = modelErrorChain(error);
+  return modelFailureKindFromFacts({
+    explicitKind: firstFailureKind(chain),
+    status: firstFiniteIntegerField(chain, ["status", "statusCode"]),
+    code: firstStringOrNumberField(chain, ["code", "errorCode"]),
+    name: firstStringOrNumberField(chain, ["name"]),
+  });
+}
+
+export function modelFailureKindFromFacts(input: {
+  readonly explicitKind?: ModelFailureKind;
+  readonly status?: number;
+  readonly code?: string | number;
+  readonly name?: string | number;
+}): ModelFailureKind {
+  if (input.explicitKind !== undefined) return input.explicitKind;
+  if (input.status === 401 || input.status === 403) return "provider_auth";
+  if (input.status === 408 || input.status === 504) return "provider_timeout";
+  if (input.status === 429) return "provider_rate_limit";
+
+  const code = String(input.code ?? input.name ?? "").trim().toLowerCase();
+  if (CONTENT_FILTER_CODES.has(code)) return "content_filtered";
+  if (TIMEOUT_CODES.has(code)) return "provider_timeout";
+  if (NETWORK_CODES.has(code)) return "provider_network";
+  if (AUTH_CODES.has(code)) return "provider_auth";
+  if (RATE_LIMIT_CODES.has(code)) return "provider_rate_limit";
+  if (CONFIG_CODES.has(code)) return "provider_config";
   return "provider_response";
 }
 
@@ -161,7 +168,7 @@ function errorChainMessage(value: unknown): string | undefined {
 
 function readErrorField(
   value: unknown,
-  field: typeof MODEL_ERROR_NESTED_FIELDS[number],
+  field: string,
 ): unknown {
   if (!isObjectLike(value)) {
     return undefined;
@@ -172,6 +179,56 @@ function readErrorField(
     return undefined;
   }
 }
+
+function firstFailureKind(values: readonly unknown[]): ModelFailureKind | undefined {
+  for (const value of values) {
+    for (const field of ["failureKind", "kind"] as const) {
+      const candidate = readErrorField(value, field);
+      if (isModelFailureKind(candidate)) return candidate;
+    }
+  }
+  return undefined;
+}
+
+function firstFiniteIntegerField(values: readonly unknown[], fields: readonly string[]): number | undefined {
+  for (const value of values) {
+    for (const field of fields) {
+      const candidate = readErrorField(value, field);
+      if (typeof candidate === "number" && Number.isFinite(candidate)) return Math.trunc(candidate);
+    }
+  }
+  return undefined;
+}
+
+function firstStringOrNumberField(values: readonly unknown[], fields: readonly string[]): string | number | undefined {
+  for (const value of values) {
+    for (const field of fields) {
+      const candidate = readErrorField(value, field);
+      if (typeof candidate === "string" || typeof candidate === "number") return candidate;
+    }
+  }
+  return undefined;
+}
+
+function isModelFailureKind(value: unknown): value is ModelFailureKind {
+  return value === "request_validation" || value === "provider_config" || value === "provider_auth" ||
+    value === "provider_rate_limit" || value === "provider_timeout" || value === "provider_network" ||
+    value === "provider_response" || value === "content_filtered" || value === "output_truncated" ||
+    value === "output_validation";
+}
+
+const CONTENT_FILTER_CODES = new Set(["content_filter", "content_filtered", "safety", "safety_filter"]);
+const TIMEOUT_CODES = new Set(["abort_err", "etimedout", "timeout", "request_timeout", "gateway_timeout"]);
+const NETWORK_CODES = new Set([
+  "econnreset", "econnrefused", "enotfound", "eai_again", "epipe", "network_error", "fetch_failed",
+]);
+const AUTH_CODES = new Set([
+  "invalid_api_key", "authentication_error", "authorization_error", "permission_denied", "unauthorized", "forbidden",
+]);
+const RATE_LIMIT_CODES = new Set(["rate_limit", "rate_limit_exceeded", "too_many_requests"]);
+const CONFIG_CODES = new Set([
+  "missing_api_key", "missing_model", "missing_provider", "invalid_base_url", "provider_config",
+]);
 
 function isObjectLike(value: unknown): value is object {
   return (typeof value === "object" && value !== null) || typeof value === "function";

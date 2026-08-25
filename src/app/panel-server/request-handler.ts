@@ -259,6 +259,7 @@ async function handlePanelRequest(
   if (await handlePanelOrdinaryRoute({
     ordinaryAgentFeature: runtime.ordinaryAgentFeature,
     spaceFeature: runtime.spaceFeature,
+    workspaceFeature: runtime.workspaceFeature,
     conversationLifecycle: runtime.conversationLifecycle,
     spaceConversationDeletion: runtime.spaceConversationDeletion,
     workspaceDeletion: runtime.workspaceDeletion,
@@ -281,6 +282,7 @@ async function handlePanelRequest(
 
   if (await handlePanelSpaceMetadataRoute({
     spaceFeature: runtime.spaceFeature,
+    workspaceFeature: runtime.workspaceFeature,
     ordinaryAgentFeature: runtime.ordinaryAgentFeature,
     spaceConversationDeletion: runtime.spaceConversationDeletion,
     ensureDefaultSpace: runtime.ensureDefaultSpace,
@@ -291,26 +293,26 @@ async function handlePanelRequest(
 
   if (await handlePanelSpaceRoute({
     spaceFeature: runtime.spaceFeature,
+    workspaceFeature: runtime.workspaceFeature,
     spaceConversationDeletion: runtime.spaceConversationDeletion,
     fileMutationCoordinator: runtime.fileMutationCoordinator,
     managedSpaceFolderRoot: runtime.managedSpaceFolderRoot,
     flushSpaceKnowledgeSync: runtime.flushSpaceKnowledgeSync,
     externalResourceOpener: runtime.externalResourceOpener,
-    managedAssets: runtime.managedAssets,
+    managedAssets: runtime.managedAssetFeature,
   }, request, response, url)) {
     return;
   }
 
   if (await handlePanelWorkspaceRoute({
     workspaceFeature: runtime.workspaceFeature,
-    workspaceDeletion: runtime.workspaceDeletion,
   }, request, response, url)) {
     return;
   }
 
   if (await handlePanelManagedAssetRoute({
     ensureDefaultSpace: runtime.ensureDefaultSpace,
-    managedAssets: runtime.managedAssets,
+    managedAssets: runtime.managedAssetFeature,
   }, request, response, url)) {
     return;
   }

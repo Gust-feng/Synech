@@ -11,6 +11,7 @@ export * from "./memory-fact-repository.js";
 export * from "./model-input.js";
 export * from "./model-input-attachments.js";
 export * from "./ordinary-agent-feature.js";
+export * from "./run-lifecycle-policy.js";
 export * from "./tool-execution-observation-gateway.js";
 export * from "./state.js";
 export * from "./tool-runtime-metrics.js";

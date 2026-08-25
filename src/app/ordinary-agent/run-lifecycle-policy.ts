@@ -1,9 +1,25 @@
 import { executionErrorFacts } from "../execution-errors/index.js";
-import { OrdinaryFeatureError, type OrdinaryRunEvent, type OrdinaryRunState } from "./contracts.js";
+import {
+  OrdinaryFeatureError,
+  type OrdinaryRunEvent,
+  type OrdinaryRunState,
+  type OrdinaryRunStatus,
+} from "./contracts.js";
 
-export function isTerminal(state: OrdinaryRunState): boolean {
-  return state.status.kind === "completed" || state.status.kind === "failed" ||
-    state.status.kind === "cancelled" || state.status.kind === "blocked";
+export type TerminalOrdinaryRunStatus = Extract<
+  OrdinaryRunStatus,
+  { readonly kind: "completed" | "failed" | "cancelled" | "blocked" }
+>;
+
+export function isTerminalStatus(status: OrdinaryRunStatus): status is TerminalOrdinaryRunStatus {
+  return status.kind === "completed" || status.kind === "failed" ||
+    status.kind === "cancelled" || status.kind === "blocked";
+}
+
+export function isTerminal(
+  state: OrdinaryRunState,
+): state is OrdinaryRunState & { readonly status: TerminalOrdinaryRunStatus } {
+  return isTerminalStatus(state.status);
 }
 
 export function isTerminalEvent(event: OrdinaryRunEvent): boolean {

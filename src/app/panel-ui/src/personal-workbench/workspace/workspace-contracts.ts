@@ -3,10 +3,10 @@ export type PersonalWorkspaceProjection = {
   readonly title: string;
   readonly status: "available" | "disconnected" | "deleting";
   readonly rootPath?: string;
-  readonly linkCount: number;
 };
 
 export type PersonalWorkspaceActions = {
   readonly addWorkspace?: () => Promise<void>;
   readonly refresh?: () => Promise<void>;
+  readonly reconnectWorkspace?: (workspaceId: string) => Promise<void>;
 };

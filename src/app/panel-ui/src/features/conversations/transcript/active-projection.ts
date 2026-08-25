@@ -4,9 +4,15 @@ import {
   type LiveTranscriptNode,
   type LiveRunTranscriptProjection,
 } from "@panel-api/ui-read-model";
-import { projectChatWorkline, type ChatWorklineProjection, type WorklineTaskStatus } from "@panel-api/ui-read-model";
+import {
+  isSettledPanelRunStatus,
+  projectChatWorkline,
+  resolveAssistantAnswer,
+  type ChatWorklineProjection,
+  type WorklineTaskStatus,
+} from "@panel-api/ui-read-model";
 import type { LiveRunBuffer } from "@panel-api/ui-read-model";
-import { firstNonEmptyText, hasNonEmptyText } from "@panel-api/ui-read-model";
+import { hasNonEmptyText } from "@panel-api/ui-read-model";
 import {
   isLowValueUserDecisionNode,
   nodesForRun,
@@ -18,6 +24,7 @@ export type ChatActiveConversationTurn = {
   readonly title?: string;
   readonly content: string;
   readonly status: string;
+  readonly interruption?: "user_cancelled" | "runtime_stopped";
   readonly runId?: string;
   readonly attachments?: readonly {
     readonly attachmentId: string;
@@ -111,13 +118,23 @@ export function projectChatActive<TDeliverable, TPending>(
   })
     ? currentRunAssistantTurn?.content
     : undefined;
-  const answer = pending === undefined ? firstNonEmptyText([
-    input.workViewAnswer,
-    input.detailAnswer,
-    turnContentAnswer,
-  ]) : undefined;
   const liveAnswer = currentRunProjection.answer;
-  const running = input.run !== undefined && !terminalStatuses.has(input.run.status);
+  const resolvedAnswer = pending === undefined ? resolveAssistantAnswer({
+    runStatus: input.run?.status ?? currentRunAssistantTurn?.status,
+    interruption: currentRunAssistantTurn?.interruption,
+    live: liveAnswer?.streaming === true ? liveAnswer : undefined,
+    conversationText: turnContentAnswer,
+    workViewText: input.workViewAnswer,
+    projection: liveAnswer?.streaming === false
+      ? liveAnswer
+      : input.detailAnswer === undefined
+        ? undefined
+        : { text: input.detailAnswer },
+  }) : undefined;
+  const answer = resolvedAnswer === undefined || resolvedAnswer.source === "none"
+    ? undefined
+    : resolvedAnswer.text;
+  const running = input.run !== undefined && !isSettledPanelRunStatus(input.run.status);
   const statusNotice = shouldShowStatusNotice(input.problem, input.appError, input.run, currentRunAssistantTurn)
     ? input.problem
     : undefined;
@@ -157,7 +174,6 @@ export function projectChatActive<TDeliverable, TPending>(
   };
 }
 
-const terminalStatuses = new Set<WorklineTaskStatus>(["completed", "failed", "cancelled", "blocked"]);
 const terminalProblemStatuses = new Set<WorklineTaskStatus>(["failed", "cancelled", "blocked"]);
 const refreshingStatuses = new Set<WorklineTaskStatus>(["queued", "planning", "running", "pending"]);
 
@@ -171,7 +187,7 @@ function canUseConversationTurnAsAnswer<TPending>(input: {
 }): boolean {
   if (input.turn === undefined || input.pending !== undefined) return false;
   if (input.run === undefined) return true;
-  if (terminalStatuses.has(input.run.status)) return true;
+  if (isSettledPanelRunStatus(input.run.status)) return true;
   if (input.run.status !== "running" || input.turn.content.trim().length === 0) {
     return false;
   }

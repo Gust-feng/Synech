@@ -1,5 +1,6 @@
 import type { OrdinaryAgentFeature } from "../../ordinary-agent/index.js";
 import type { WorkspaceFeature } from "../../workspaces/index.js";
+import type { SpaceFeature } from "../../spaces/index.js";
 import type { AgentNotesFeature } from "../../agent-notes/index.js";
 import type { PathDependencyFeature } from "../../path-dependencies/index.js";
 import {
@@ -38,9 +39,13 @@ export type WorkspaceDeletionCoordinator = {
  */
 export function createWorkspaceDeletionCoordinator(input: {
   readonly workspaces: {
-    readonly commands: Pick<WorkspaceFeature["commands"], "deleteWorkspace" | "purgeWorkspace" | "unlinkWorkspaceFromSpace">;
+    readonly commands: Pick<WorkspaceFeature["commands"], "deleteWorkspace" | "purgeWorkspace">;
     readonly queries: Pick<WorkspaceFeature["queries"], "get"> &
-      Partial<Pick<WorkspaceFeature["queries"], "list">>;
+      Partial<Pick<WorkspaceFeature["queries"], "listAll">>;
+  };
+  readonly spaces: {
+    readonly commands: Pick<SpaceFeature["commands"], "unlinkReference">;
+    readonly queries: Pick<SpaceFeature["queries"], "listReferencesByWorkspace">;
   };
   readonly ordinary: {
     readonly commands: Pick<OrdinaryAgentFeature["commands"], "deleteConversation">;
@@ -88,7 +93,7 @@ export function createWorkspaceDeletionCoordinator(input: {
         // deliberately no phase replay: without a durable cascade journal,
         // purging a deleting row on startup could orphan its conversations or
         // owner memory. Explicit DELETE remains the recovery operation.
-        const workspaces = await input.workspaces.queries.list?.() ?? [];
+        const workspaces = await input.workspaces.queries.listAll?.() ?? [];
         for (const workspace of workspaces) {
           if (workspace.status === "deleting") deletingWorkspaceIds.add(workspace.id);
         }
@@ -158,9 +163,9 @@ export function createWorkspaceDeletionCoordinator(input: {
           }
           await input.memory?.deleteByOwner({ kind: "workspace", id: workspaceId });
           await input.agentNotes.deleteByOwner({ kind: "workspace", id: workspaceId });
-          const activeLinks = workspace.links.filter((link) => link.status === "active");
-          for (const link of activeLinks) {
-            await input.workspaces.commands.unlinkWorkspaceFromSpace(link.linkId);
+          const references = await input.spaces.queries.listReferencesByWorkspace(workspaceId);
+          for (const reference of references) {
+            await input.spaces.commands.unlinkReference(reference.id);
           }
           await input.workspaces.commands.purgeWorkspace(workspaceId);
           completed = true;

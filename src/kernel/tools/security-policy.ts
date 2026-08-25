@@ -31,7 +31,7 @@ export function evaluateToolCallSecurity(input: {
   // without the user seeing them, even when the tool's static metadata allows
   // confirmation-free reads (e.g. HttpRequest GET).
   if (input.metadata.requiresConfirmation === true || isSideEffectHttpSubmission(input.request)) {
-    if (input.context.confirmationPolicy === "full_access") {
+    if (input.context.accessPolicy?.approvalMode === "bypass") {
       return { decision: "allow", reason: "Full access mode allows confirmation-gated tool calls." };
     }
     return approvalDecision({
@@ -78,7 +78,7 @@ function approvalDecision(input: {
     500
   );
   const consequence = compactPolicyText(
-    confirmationConsequence(presentation.displayName, affectedResources),
+    confirmationConsequence(presentation.displayName),
     500
   );
   return {
@@ -99,9 +99,8 @@ function confirmationActionSummary(displayName: string, affectedResources: reado
     : `${displayName}：${affectedResources.join("、")}`;
 }
 
-function confirmationConsequence(displayName: string, affectedResources: readonly string[]): string {
-  const target = affectedResources.length === 0 ? "" : `目标：${affectedResources.join("、")}。`;
-  return `${target}批准后只执行本次${displayName}。`;
+function confirmationConsequence(displayName: string): string {
+  return `批准后只执行本次${displayName}。`;
 }
 
 const SIDE_EFFECT_HTTP_METHODS = new Set(["POST", "PUT", "DELETE", "PATCH"]);

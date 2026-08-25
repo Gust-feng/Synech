@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { activityItemsForNodes } from "../dist/app/panel-api/read-model/transcript/panel-transcript-activity-copy.js";
+import {
+  activityItemsForNodes,
+  displayActivityItemsForNodes,
+} from "../dist/app/panel-api/read-model/transcript/panel-transcript-activity-copy.js";
 
 test("file diff copy keeps operation, path, diff section, and line delta", () => {
   const item = activityItem("Edit", {
@@ -15,6 +18,7 @@ test("file diff copy keeps operation, path, diff section, and line delta", () =>
   assert.deepEqual(item.lead, { action: "编辑", subject: "src/example.ts", monospace: true });
   assert.deepEqual(item.lineDelta, { added: 1, removed: 1 });
   assert.deepEqual(item.expandedSections, [{
+    sectionId: "change_preview",
     title: "差异预览",
     content: "@@ -1 +1 @@\n-old\n+new",
     format: "diff",
@@ -38,6 +42,7 @@ test("directory copy exposes declared entries and unreadable samples", () => {
   assert.deepEqual(item.lead, { action: "查看", subject: "当前目录", monospace: true });
   assert.deepEqual(item.expandedSections, [
     {
+      sectionId: "entries",
       title: "条目",
       content: "src/\nREADME.md",
       format: "path_list",
@@ -46,7 +51,7 @@ test("directory copy exposes declared entries and unreadable samples", () => {
         { title: "README.md", monospace: true },
       ],
     },
-    { title: "异常目录", content: "private · EACCES", format: "list", tone: "warning" },
+    { sectionId: "unreadable_entries", title: "异常目录", content: "private · EACCES", format: "list", tone: "warning" },
   ]);
 });
 
@@ -61,6 +66,7 @@ test("file search copy uses explicit query and match positions", () => {
   assert.deepEqual(item.copy, { label: "搜索", detail: "ToolCenter" });
   assert.equal(item.toolKind, "search");
   assert.deepEqual(item.expandedSections, [{
+    sectionId: "matches",
     title: "匹配位置",
     content: "src/tool-center.ts:42 - class ToolCenter",
     format: "path_list",
@@ -78,6 +84,7 @@ test("web search copy renders only declared result sources", () => {
   assert.deepEqual(item.copy, { label: "搜索", detail: "Synech" });
   assert.deepEqual(item.lead, { action: "搜索", subject: "Synech" });
   assert.deepEqual(item.expandedSections, [{
+    sectionId: "sources",
     title: "来源",
     content: "Synech · Docs",
     format: "source_list",
@@ -100,8 +107,8 @@ test("command copy separates command and canonical output", () => {
   assert.deepEqual(item.copy, { label: "命令", detail: "终端" });
   assert.deepEqual(item.lead, { action: "运行", subject: "终端" });
   assert.deepEqual(item.expandedSections, [
-    { title: "命令", content: "$ pnpm test", format: "console" },
-    { title: "输出", content: "all tests passed", format: "console", tone: undefined },
+    { sectionId: "command", title: "命令", content: "$ pnpm test", format: "console" },
+    { sectionId: "output", title: "输出", content: "all tests passed", format: "console", tone: undefined },
   ]);
 });
 
@@ -122,10 +129,44 @@ test("unknown tool copy stays raw without inferring URL or file meaning", () => 
   assert.equal(item.toolKind, "other");
   assert.deepEqual(item.lead, { action: "工具", subject: "server__inspect" });
   assert.deepEqual(item.expandedSections, [{
+    sectionId: "raw_result",
     title: "原始结果",
     content: JSON.stringify(value, undefined, 2),
     format: "code",
   }]);
+});
+
+test("default activity copy hides model lifecycle labels and shows actual reasoning", () => {
+  const items = displayActivityItemsForNodes([
+    {
+      nodeId: "model-request",
+      runId: "run-1",
+      sequence: 1,
+      eventType: "model.requested",
+      kind: "system",
+      phase: "executing",
+      title: "",
+      summary: "思考中",
+      timestamp: "2026-08-24T00:00:00.000Z",
+      refs: [{ kind: "model_call", id: "model-1" }],
+    },
+    {
+      nodeId: "reasoning",
+      runId: "run-1",
+      sequence: 2,
+      eventType: "model.reasoning.delta",
+      kind: "thinking",
+      phase: "noted",
+      title: "思考",
+      text: "先核对现有实现，再决定最小改动。",
+      timestamp: "2026-08-24T00:00:01.000Z",
+      refs: [{ kind: "model_call", id: "model-1" }],
+    },
+  ]);
+
+  assert.equal(items.length, 1);
+  assert.equal(items[0].copy.detail, "先核对现有实现，再决定最小改动。");
+  assert.notEqual(items[0].copy.detail, "思考中");
 });
 
 function activityItem(toolName, display) {

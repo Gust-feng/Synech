@@ -126,6 +126,7 @@ export function fileActivityExpandedSections(
     const entries = visibleEntries.map(directoryEntryTitle);
     if (entries.length > 0) {
       sections.push({
+        sectionId: "entries",
         title: "条目",
         content: entries.join("\n"),
         format: "path_list",
@@ -139,7 +140,7 @@ export function fileActivityExpandedSections(
         .join(" · "))
       .filter((value) => value.length > 0);
     if ((unreadable?.length ?? 0) > 0) {
-      sections.push({ title: "异常目录", content: unreadable!.join("\n"), format: "list", tone: "warning" });
+      sections.push({ sectionId: "unreadable_entries", title: "异常目录", content: unreadable!.join("\n"), format: "list", tone: "warning" });
     }
     return sections;
   }
@@ -147,6 +148,7 @@ export function fileActivityExpandedSections(
     const visibleMatches = display.matches.slice(0, EXPANDED_FILE_SEARCH_MATCHES_LIMIT);
     const matches = visibleMatches.map(fileSearchMatchLine);
     return matches.length === 0 ? [] : [{
+      sectionId: "matches",
       title: "匹配位置",
       content: matches.join("\n"),
       format: "path_list",
@@ -161,21 +163,23 @@ export function fileActivityExpandedSections(
     });
     if (source?.format === "source") sections.push(source);
     if (display.contentPreview !== undefined && source?.format !== "source") {
-      sections.push({ title: "内容", content: display.contentPreview, format: "code" });
+      sections.push({ sectionId: "content", title: "内容", content: display.contentPreview, format: "code" });
     }
-    if (display.error !== undefined) sections.push({ title: "错误", content: display.error, tone: "danger" });
+    if (display.error !== undefined) sections.push({ sectionId: "error", title: "错误", content: display.error, tone: "danger" });
     return sections;
   }
   if (display?.kind === "file_change_group") {
     const previews = display.files.flatMap((file) => {
       const preview = cleanFilePreviewContent(file.preview);
       return preview === undefined ? [] : [{
+        sectionId: `file_preview:${file.path}`,
         title: file.path,
         content: preview,
         format: filePreviewLooksLikeDiff(preview) ? "diff" as const : "code" as const,
       }];
     });
     return previews.length > 0 ? previews : [{
+      sectionId: "files",
       title: "文件",
       content: display.files.map((file) => file.path).join("\n"),
       format: "path_list",
@@ -186,6 +190,7 @@ export function fileActivityExpandedSections(
     const preview = filePreviewContentForActivity(display, node, copy);
     if (preview !== undefined) {
       return [{
+        sectionId: "change_preview",
         title: filePreviewSectionTitle(display),
         content: preview,
         format: display.kind === "file_diff_preview" || filePreviewLooksLikeDiff(preview) ? "diff" : "code",
@@ -194,7 +199,7 @@ export function fileActivityExpandedSections(
     if (node.phase !== "completed") {
       const summary = fileChangeSummary(display);
       if (summary !== undefined) {
-        return [{ title: "变更", content: summary, tone: fileOperationTone(fileDisplayOperation(display)) }];
+        return [{ sectionId: "change_summary", title: "变更", content: summary, tone: fileOperationTone(fileDisplayOperation(display)) }];
       }
     }
   }

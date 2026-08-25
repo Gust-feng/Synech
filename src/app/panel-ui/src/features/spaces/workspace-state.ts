@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { selectTaskWorkspaceDirectory } from "./workspace-selection";
 import type { PersonalWorkspaceProjection } from "../../personal-workbench/workspace";
+import { subscribeWorkbenchProjectionChanges } from "../../workbench/projection-changes";
 
 const workspaceSummarySchema = z.object({
   id: z.string(),
@@ -11,7 +12,7 @@ const workspaceSummarySchema = z.object({
   currentMount: z.object({
     rootPath: z.string(),
   }).optional(),
-  linkCount: z.number(),
+  visibility: z.enum(["listed", "implicit"]),
 });
 
 const workspacesResponseSchema = z.object({
@@ -26,8 +27,9 @@ export type WorkspaceProjectionState = {
   readonly error?: string;
   readonly refresh: () => Promise<void>;
   readonly addWorkspace: () => Promise<void>;
-  /** 移除工作区登记：外部文件夹与知识副本保留，直属对话按删除流程收口。 */
-  readonly deleteWorkspace: (workspaceId: string) => Promise<void>;
+  /** 仅移出侧栏；Workspace 身份、外部文件、Space 引用和历史对话全部保留。 */
+  readonly hideWorkspace: (workspaceId: string) => Promise<void>;
+  readonly reconnectWorkspace: (workspaceId: string) => Promise<void>;
 };
 
 export function useWorkspaceProjection(enabled: boolean): WorkspaceProjectionState {
@@ -58,7 +60,6 @@ export function useWorkspaceProjection(enabled: boolean): WorkspaceProjectionSta
         title: workspace.title,
         status: workspace.status,
         rootPath: workspace.currentMount?.rootPath,
-        linkCount: workspace.linkCount,
       })));
       setError(undefined);
     } catch (requestError) {
@@ -96,11 +97,15 @@ export function useWorkspaceProjection(enabled: boolean): WorkspaceProjectionSta
     }
   }, [enabled, mutationPending, refresh]);
 
-  const deleteWorkspace = useCallback(async (workspaceId: string) => {
+  const hideWorkspace = useCallback(async (workspaceId: string) => {
     if (!enabled || mutationPending) return;
     setMutationPending(true);
     try {
-      const response = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}`, { method: "DELETE" });
+      const response = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ visibility: "implicit" }),
+      });
       if (!response.ok) {
         const body = await response.json().catch(() => undefined) as { error?: { code?: string; message?: string } } | undefined;
         throw new Error(body?.error?.message ?? `HTTP ${response.status}`);
@@ -109,6 +114,30 @@ export function useWorkspaceProjection(enabled: boolean): WorkspaceProjectionSta
       await refresh();
     } catch (requestError) {
       setError(workspaceErrorText(requestError, "移除工作区失败。"));
+    } finally {
+      setMutationPending(false);
+    }
+  }, [enabled, mutationPending, refresh]);
+
+  const reconnectWorkspace = useCallback(async (workspaceId: string) => {
+    if (!enabled || mutationPending) return;
+    const directory = await selectTaskWorkspaceDirectory();
+    if (directory === undefined) return;
+    setMutationPending(true);
+    try {
+      const response = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/reconnect`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ rootPath: directory }),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => undefined) as { error?: { message?: string } } | undefined;
+        throw new Error(body?.error?.message ?? `HTTP ${response.status}`);
+      }
+      setError(undefined);
+      await refresh();
+    } catch (requestError) {
+      setError(workspaceErrorText(requestError, "重新连接工作区失败。"));
     } finally {
       setMutationPending(false);
     }
@@ -130,7 +159,14 @@ export function useWorkspaceProjection(enabled: boolean): WorkspaceProjectionSta
     };
   }, [enabled, refresh]);
 
-  return { workspaces, loading, mutationPending, error, refresh, addWorkspace, deleteWorkspace };
+  useEffect(() => {
+    if (!enabled) return undefined;
+    return subscribeWorkbenchProjectionChanges((change) => {
+      if (change.owners.includes("workspaces")) void refresh();
+    });
+  }, [enabled, refresh]);
+
+  return { workspaces, loading, mutationPending, error, refresh, addWorkspace, hideWorkspace, reconnectWorkspace };
 }
 
 function workspaceErrorText(error: unknown, fallback: string): string {

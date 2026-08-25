@@ -19,6 +19,7 @@ import type {
 } from "./contracts.js";
 import type { OrdinaryToolMetricsSnapshot } from "./tool-runtime-metrics.js";
 import { OrdinaryFeatureError } from "./contracts.js";
+import { isTerminalStatus } from "./run-lifecycle-policy.js";
 
 export type OrdinaryRunTransition =
   | { readonly type: "start" }
@@ -116,7 +117,7 @@ export function transitionOrdinaryRun(input: {
   readonly eventId: string;
 }): OrdinaryRunState {
   const nextStatus = statusAfter(input.state.status, input.transition);
-  const terminalAt = isTerminal(nextStatus) ? input.recordedAt : undefined;
+  const terminalAt = isTerminalStatus(nextStatus) ? input.recordedAt : undefined;
   const event = eventForTransition({
     eventId: input.eventId,
     runId: input.state.runId,
@@ -1121,11 +1122,6 @@ function assertStatus(status: OrdinaryRunStatus, allowed: readonly OrdinaryRunSt
   if (!allowed.includes(status.kind)) {
     throw new Error(`Cannot ${action} an Ordinary run in ${status.kind} status`);
   }
-}
-
-function isTerminal(status: OrdinaryRunStatus): boolean {
-  return status.kind === "completed" || status.kind === "failed" ||
-    status.kind === "cancelled" || status.kind === "blocked";
 }
 
 function nextSequence(events: readonly OrdinaryRunEvent[]): number {

@@ -9,7 +9,12 @@ import { stringOrUndefined } from "../../../kernel/values/index.js";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { OrdinaryRunContext, OrdinaryRunContextReference } from "../../../domain/ordinary/index.js";
-import { managedAttachmentId } from "../../../domain/ordinary/index.js";
+import {
+  managedAttachmentId,
+  parseContextReference,
+  parsePermissionBoundaryRef,
+  serializeContextReference,
+} from "../../../domain/ordinary/index.js";
 import { isConversationOwnerContextRef } from "../../../domain/ordinary/index.js";
 
 export type ContextAttachmentToolOptions = {
@@ -255,33 +260,33 @@ async function resolveAttachmentRoot(
   workspaceRoot: string,
   resolveManagedAttachmentPath: ((attachmentId: string) => Promise<string | undefined>) | undefined,
 ): Promise<{ readonly kind: "file" | "project"; readonly absolutePath: string } | undefined> {
-  const normalized = ref.ref.toLowerCase();
-  const attachmentId = managedAttachmentId(ref.ref);
+  const parsed = parseContextReference(ref.ref, ref.kind);
+  const attachmentId = parsed?.scheme === "uploaded_attachment" ? parsed.attachmentId : managedAttachmentId(ref.ref);
   if (ref.kind === "file" && attachmentId !== undefined) {
     const absolutePath = await resolveManagedAttachmentPath?.(attachmentId);
     return absolutePath !== undefined && path.isAbsolute(absolutePath)
       ? { kind: "file", absolutePath: path.resolve(absolutePath) }
       : undefined;
   }
-  if (ref.kind === "file" && normalized.startsWith("local-file:")) {
-    const absolutePath = ref.ref.slice("local-file:".length);
+  if (ref.kind === "file" && parsed?.scheme === "local_file") {
+    const absolutePath = parsed.path;
     return path.isAbsolute(absolutePath) ? { kind: "file", absolutePath: path.resolve(absolutePath) } : undefined;
   }
-  if (ref.kind === "project" && normalized.startsWith("local-project:")) {
-    const absolutePath = ref.ref.slice("local-project:".length);
+  if (ref.kind === "project" && parsed?.scheme === "local_project") {
+    const absolutePath = parsed.path;
     return path.isAbsolute(absolutePath) ? { kind: "project", absolutePath: path.resolve(absolutePath) } : undefined;
   }
-  if (ref.kind === "file" && normalized.startsWith("file:")) {
-    return { kind: "file", absolutePath: resolveInsideRoot(workspaceRoot, ref.ref.slice("file:".length)).absolutePath };
+  if (ref.kind === "file" && parsed?.scheme === "file") {
+    return { kind: "file", absolutePath: resolveInsideRoot(workspaceRoot, parsed.path).absolutePath };
   }
-  if (ref.kind === "project" && normalized.startsWith("project:")) {
-    return { kind: "project", absolutePath: resolveInsideRoot(workspaceRoot, ref.ref.slice("project:".length) || ".").absolutePath };
+  if (ref.kind === "project" && parsed?.scheme === "project") {
+    return { kind: "project", absolutePath: resolveInsideRoot(workspaceRoot, parsed.path || ".").absolutePath };
   }
   if (ref.kind === "workspace") {
     return { kind: "project", absolutePath: path.resolve(workspaceRoot) };
   }
-  if ((ref.kind === "file" || ref.kind === "project") && normalized.startsWith("workspace:")) {
-    const relative = ref.ref.slice("workspace:".length);
+  if ((ref.kind === "file" || ref.kind === "project") && parsed?.scheme === "workspace") {
+    const relative = parsed.value;
     return {
       kind: ref.kind === "file" ? "file" : "project",
       absolutePath: resolveInsideRoot(workspaceRoot, relative || ".").absolutePath,
@@ -307,41 +312,36 @@ function isUserVisibleAttachmentRef(ref: OrdinaryRunContextReference, runContext
   if (ref.kind === "user_goal" || ref.kind === "runtime") {
     return false;
   }
-  if (ref.kind === "workspace" && (ref.ref === `workspace:${runContext.goalId}` || ref.ref.startsWith("workspace:goal-"))) {
+  const parsed = parseContextReference(ref.ref, ref.kind);
+  if (ref.kind === "workspace" && parsed?.scheme === "workspace" &&
+      (parsed.value === runContext.goalId || parsed.value.startsWith("goal-"))) {
     return false;
   }
   return ref.kind === "workspace" || ref.kind === "file" || ref.kind === "project" || ref.kind === "web";
 }
 
 function isAttachmentReadAuthorized(ref: OrdinaryRunContextReference, permissionBoundaryRefs: readonly string[]): boolean {
-  const permissions = new Set(permissionBoundaryRefs);
-  const normalized = ref.ref.toLowerCase();
-  if (ref.kind === "file" && normalized.startsWith("local-file:")) {
-    return permissions.has(`read:local-file:${ref.ref.slice("local-file:".length)}`);
+  const parsed = parseContextReference(ref.ref, ref.kind);
+  if (parsed === undefined) return false;
+  if (parsed.scheme === "local_file" || parsed.scheme === "local_project" || parsed.scheme === "uploaded_attachment") {
+    return hasReadPermission(permissionBoundaryRefs, serializeContextReference(parsed));
   }
-  const attachmentId = managedAttachmentId(ref.ref);
-  if (ref.kind === "file" && attachmentId !== undefined) {
-    return permissions.has(`read:uploaded-attachment:${attachmentId}`);
+  if (parsed.scheme === "file" || parsed.scheme === "project") {
+    return hasReadPermission(permissionBoundaryRefs, serializeContextReference(parsed)) ||
+      hasReadPermission(permissionBoundaryRefs, "workspace:current-task");
   }
-  if (ref.kind === "project" && normalized.startsWith("local-project:")) {
-    return permissions.has(`read:local-project:${ref.ref.slice("local-project:".length)}`);
+  if (parsed.scheme === "workspace" || ref.kind === "workspace") {
+    return hasReadPermission(permissionBoundaryRefs, "workspace:current-task");
   }
-  if (ref.kind === "file" && normalized.startsWith("file:")) {
-    return permissions.has(`read:file:${ref.ref.slice("file:".length)}`) || permissions.has("read:workspace:current-task");
-  }
-  if (ref.kind === "project" && normalized.startsWith("project:")) {
-    return permissions.has(`read:project:${ref.ref.slice("project:".length) || "."}`) || permissions.has("read:workspace:current-task");
-  }
-  if ((ref.kind === "file" || ref.kind === "project") && normalized.startsWith("workspace:")) {
-    return permissions.has("read:workspace:current-task");
-  }
-  if (ref.kind === "workspace") {
-    return permissions.has("read:workspace:current-task");
-  }
-  if (ref.kind === "web") {
-    return permissions.has("read:web");
-  }
+  if (parsed.scheme === "web" || parsed.scheme === "http_url") return hasReadPermission(permissionBoundaryRefs, "web");
   return false;
+}
+
+function hasReadPermission(permissionBoundaryRefs: readonly string[], target: string): boolean {
+  return permissionBoundaryRefs.some((value) => {
+    const permission = parsePermissionBoundaryRef(value);
+    return permission?.kind === "access" && permission.mode === "read" && permission.target === target;
+  });
 }
 
 function attachmentEntryId(ref: OrdinaryRunContextReference, index: number): string {
@@ -402,9 +402,9 @@ function isTextExtension(extension: string): boolean {
 }
 
 function modelSafeRef(ref: string, pathGranted: boolean): string | undefined {
-  const normalized = ref.toLowerCase();
-  if (normalized.startsWith("uploaded-attachment:")) return undefined;
-  if (normalized.startsWith("local-file:") || normalized.startsWith("local-project:")) {
+  const parsed = parseContextReference(ref);
+  if (parsed?.scheme === "uploaded_attachment") return undefined;
+  if (parsed?.scheme === "local_file" || parsed?.scheme === "local_project") {
     return pathGranted ? ref : undefined;
   }
   return ref;

@@ -94,6 +94,7 @@ function projectConversationTurn(turn: OrdinaryConversationTurnReadModel): Ordin
     title: "",
     content: turn.content,
     status: conversationTurnStatus(turn.status),
+    failure: turn.failure,
     interruption: turn.interruption,
     createdAt: turn.createdAt,
     updatedAt: turn.updatedAt,

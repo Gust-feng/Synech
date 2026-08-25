@@ -16,7 +16,7 @@ const WINDOWS_UNSUPPORTED_DIRECTORY_FSYNC_CODES = new Set(["EINVAL", "EPERM", "E
  * 跨 Space 重叠引用是合法状态，串行化是它的并发安全边界。
  */
 export function spaceReferenceMutationKey(item: SpaceReferenceItem): string {
-  if (item.reference.kind !== "local_file" && item.reference.kind !== "workspace_folder" && item.reference.kind !== "managed_folder") {
+  if (item.reference.kind !== "local_file" && item.reference.kind !== "managed_folder") {
     return item.id;
   }
   const absolute = path.resolve(item.reference.path);

@@ -1,7 +1,16 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ConversationOwner } from "../../../domain/execution-scope/index.js";
-import type { OrdinaryAgentFeature, OrdinaryRunActivity, OrdinaryRunActivityCursor, OrdinaryRunBirth, OrdinaryRunState } from "../../ordinary-agent/index.js";
+import {
+  isTerminal,
+  isTerminalEvent,
+  type OrdinaryAgentFeature,
+  type OrdinaryRunActivity,
+  type OrdinaryRunActivityCursor,
+  type OrdinaryRunBirth,
+  type OrdinaryRunState,
+} from "../../ordinary-agent/index.js";
 import type { SpaceFeature } from "../../spaces/index.js";
+import type { WorkspaceFeature } from "../../workspaces/index.js";
 import { durableOrdinaryRunReplayFromState } from "../../ordinary-agent/activity-replay.js";
 import { nowIso } from "../../../kernel/id.js";
 import {
@@ -39,6 +48,10 @@ export type OrdinaryRouteDependencies = {
   };
   readonly spaceFeature: {
     readonly queries: Pick<SpaceFeature["queries"], "getTree">;
+  };
+  readonly workspaceFeature: {
+    readonly commands: Pick<WorkspaceFeature["commands"], "invalidateMount">;
+    readonly queries: Pick<WorkspaceFeature["queries"], "get">;
   };
   readonly conversationLifecycle: Pick<ConversationLifecycleCoordinator, "deleteConversation" | "assertConversationAvailable" | "submit">;
   readonly spaceConversationDeletion: Pick<SpaceConversationDeletionCoordinator, "assertAvailable" | "admit">;
@@ -211,6 +224,7 @@ async function submitTurn(
     : runInput.submissionId;
   const spaceAccess = await resolveConversationSpaceAccess(
     runtime.spaceFeature,
+    runtime.workspaceFeature,
     (conversationId) => runtime.ordinaryAgentFeature.queries.getConversationOwner(conversationId),
     conversationId,
     runInput.contextInput,
@@ -542,15 +556,8 @@ function requestCursor(url: URL, request: IncomingMessage): OrdinaryRunActivityC
   return parseOrdinaryPanelCursor(raw ?? undefined);
 }
 
-function isTerminal(run: OrdinaryRunState): boolean {
-  return run.status.kind === "completed" || run.status.kind === "failed" ||
-    run.status.kind === "cancelled" || run.status.kind === "blocked";
-}
-
 function isTerminalTransition(activity: OrdinaryRunActivity): boolean {
-  if (activity.type !== "run.transition") return false;
-  return activity.event.type === "run.completed" || activity.event.type === "run.failed" ||
-    activity.event.type === "run.cancelled" || activity.event.type === "run.blocked";
+  return activity.type === "run.transition" && isTerminalEvent(activity.event);
 }
 
 function decode(value: string | undefined): string {

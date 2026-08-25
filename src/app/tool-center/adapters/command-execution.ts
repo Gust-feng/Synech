@@ -159,7 +159,7 @@ export function commandProcessFacts(
         ? cwd.resourceScope.ownerId
         : undefined,
     referenceId: cwd.resourceId,
-    authorizationMode: context.confirmationPolicy === "full_access" ? "full_access" : "confirm_each",
+    authorizationMode: context.accessPolicy?.approvalMode === "bypass" ? "full_access" : "confirm_each",
   };
 }
 

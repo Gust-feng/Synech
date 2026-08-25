@@ -120,6 +120,7 @@ export function projectOrdinaryConversation(input: {
       runId: run.runId,
       content: assistantContent(run, input.completedAssistantTextByRunId?.get(run.runId)),
       status: run.status.kind,
+      ...assistantFailure(run),
       ...interruptionProjection(run),
       model: structuredClone(run.birth.config),
       createdAt: run.timestamps.createdAt,
@@ -166,11 +167,22 @@ function assistantContent(run: OrdinaryRunState, completedAssistantText: string 
       }
       return completedAssistantText;
     }
-    case "failed": return run.status.error.message;
+    case "failed": return "";
     case "cancelled": return "";
-    case "blocked": return run.status.reason.message;
+    case "blocked": return "";
     default: return "";
   }
+}
+
+function assistantFailure(
+  run: OrdinaryRunState,
+): { readonly failure?: { readonly code: string; readonly message: string } } {
+  if (run.status.kind === "failed") return { failure: structuredClone(run.status.error) };
+  if (run.status.kind === "blocked") return { failure: structuredClone(run.status.reason) };
+  if (run.status.kind === "cancelled") {
+    return { failure: { code: "run_cancelled", message: run.status.reason } };
+  }
+  return {};
 }
 
 function interruptionProjection(

@@ -12,6 +12,7 @@ import { PanelHttpError, readJsonBody, writeJson } from "../http-utils.js";
 import { parseContextAttachmentPreviewRequest } from "../request-parsers.js";
 import type { PanelContextAttachmentMediaEntry, PanelContextAttachmentSelection } from "../types.js";
 import type { OrdinaryAgentFeature } from "../../ordinary-agent/index.js";
+import { parseContextReference } from "../../../domain/ordinary/index.js";
 
 export type PanelContextRouteRuntime = {
   readonly directoryPicker?: () => Promise<string | undefined>;
@@ -428,22 +429,22 @@ async function resolveAttachmentFilePath(
   ref: string,
   workspaceRoot: string | undefined,
 ): Promise<string | undefined> {
-  if (ref.startsWith("uploaded-attachment:")) {
-    const attachmentId = ref.slice("uploaded-attachment:".length);
-    return attachmentId.length === 0 ? undefined : await runtime.resolveManagedAttachmentPath(attachmentId);
+  const parsed = parseContextReference(ref);
+  if (parsed?.scheme === "uploaded_attachment") {
+    return await runtime.resolveManagedAttachmentPath(parsed.attachmentId);
   }
-  if (ref.startsWith("local-file:")) {
-    const absolutePath = ref.slice("local-file:".length);
+  if (parsed?.scheme === "local_file") {
+    const absolutePath = parsed.path;
     return path.isAbsolute(absolutePath) ? path.resolve(absolutePath) : undefined;
   }
   if (workspaceRoot === undefined) {
     return undefined;
   }
-  if (ref.startsWith("file:")) {
-    return resolveWorkspaceFilePath(workspaceRoot, ref.slice("file:".length));
+  if (parsed?.scheme === "file") {
+    return resolveWorkspaceFilePath(workspaceRoot, parsed.path);
   }
-  if (ref.startsWith("workspace:")) {
-    const relativePath = ref.slice("workspace:".length);
+  if (parsed?.scheme === "workspace") {
+    const relativePath = parsed.value;
     if (relativePath.length === 0 || relativePath === "current" || relativePath.startsWith("goal-")) {
       return undefined;
     }

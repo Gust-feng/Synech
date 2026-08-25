@@ -85,10 +85,10 @@ function safeConversationAttachmentSummary(attachment: ContextAttachment): strin
   if (parts.length > 0) {
     return parts.join(" · ");
   }
-  if (attachment.ref.startsWith("local-file:")) {
+  if (attachment.sourceKind === "local_file") {
     return "本地文件";
   }
-  if (attachment.ref.startsWith("local-project:")) {
+  if (attachment.sourceKind === "local_project") {
     return "本地文件夹";
   }
   return attachment.summary;
@@ -158,8 +158,8 @@ export async function uploadContextAttachmentFiles(
   return attachments;
 }
 
-export function isManagedUploadAttachment(attachment: Pick<ContextAttachment, "ref">): boolean {
-  return attachment.ref.startsWith("uploaded-attachment:");
+export function isManagedUploadAttachment(attachment: Pick<ContextAttachment, "sourceKind">): boolean {
+  return attachment.sourceKind === "managed_upload";
 }
 
 export async function discardManagedUploadAttachment(attachmentId: string): Promise<void> {
@@ -182,6 +182,7 @@ export function blockedContextAttachment(input: {
   return {
     attachmentId: `blocked:${input.kind}:${input.value}:${input.createdAt ?? Date.now()}`,
     kind: input.kind,
+    sourceKind: "unknown",
     ref: input.value,
     title: input.kind === "web" ? "网页不可用" : "上下文不可用",
     summary: message,

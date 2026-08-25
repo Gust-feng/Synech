@@ -428,7 +428,7 @@ export type ToolSecurityDecision =
 export type ToolSecurityEvaluationContext = {
   readonly platform: NodeJS.Platform;
   readonly approvedConfirmationIds?: readonly string[];
-  readonly confirmationPolicy?: ToolConfirmationPolicy;
+  readonly accessPolicy?: ToolRunAccessPolicy;
   readonly workspaceRoot?: string;
 };
 
@@ -457,7 +457,7 @@ export type ToolExecutionContext = {
   /** Provider-side call id, exposed only when an adapter truly needs it. */
   readonly providerCallId?: string;
   readonly approvedConfirmationIds?: readonly string[];
-  readonly confirmationPolicy?: ToolConfirmationPolicy;
+  readonly accessPolicy?: ToolRunAccessPolicy;
   readonly abortSignal?: AbortSignal;
   /** Live-only bounded execution evidence. Reporting must never change the tool outcome. */
   readonly reportProgress?: (progress: ToolExecutionProgress) => void;
@@ -486,10 +486,24 @@ export type ToolPermissionCheck = {
   readonly callerAgentId: string;
   readonly allowedTools: readonly string[];
   readonly approvedConfirmationIds?: readonly string[];
-  readonly confirmationPolicy?: ToolConfirmationPolicy;
+  readonly accessPolicy?: ToolRunAccessPolicy;
 };
 
+/** User-facing preset accepted by config and composer APIs. */
 export type ToolConfirmationPolicy = "prompt" | "full_access";
+
+export type ToolApprovalMode = "prompt" | "bypass";
+export type ToolFilesystemScope = "owner_only" | "unrestricted";
+export type ToolRunAccessPolicy = {
+  readonly approvalMode: ToolApprovalMode;
+  readonly filesystemScope: ToolFilesystemScope;
+};
+
+export function toolRunAccessPolicyFromPreset(preset: ToolConfirmationPolicy): ToolRunAccessPolicy {
+  return preset === "full_access"
+    ? { approvalMode: "bypass", filesystemScope: "unrestricted" }
+    : { approvalMode: "prompt", filesystemScope: "owner_only" };
+}
 
 export type SandboxOperation =
   | "read"

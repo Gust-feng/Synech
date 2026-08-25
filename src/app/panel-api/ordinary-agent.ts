@@ -116,6 +116,7 @@ export type PanelContextAttachmentKind = "workspace" | "file" | "project" | "web
 export type PanelContextAttachment = {
   readonly attachmentId: string;
   readonly kind: PanelContextAttachmentKind;
+  readonly sourceKind: "local_file" | "local_project" | "managed_upload" | "workspace" | "workspace_file" | "workspace_project" | "web" | "unknown";
   readonly ref: string;
   readonly title: string;
   readonly summary: string;
@@ -275,6 +276,7 @@ export type OrdinaryPanelConversationTurn = {
   readonly title: string;
   readonly content: string;
   readonly status: OrdinaryPanelConversationTurnStatus;
+  readonly failure?: { readonly code: string; readonly message: string };
   readonly interruption?: "user_cancelled" | "runtime_stopped";
   readonly createdAt: string;
   readonly updatedAt: string;

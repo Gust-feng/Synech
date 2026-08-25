@@ -5,6 +5,9 @@ import type { ModelCapabilities } from "../../domain/config/index.js";
 import type { ModelInputAttachment, ModelMessage } from "../../domain/intelligence/index.js";
 import {
   managedAttachmentId,
+  parseContextReference,
+  parsePermissionBoundaryRef,
+  serializeContextReference,
   type OrdinaryRunContext,
   type OrdinaryRunContextReference,
 } from "../../domain/ordinary/index.js";
@@ -184,39 +187,49 @@ async function resolveReadableFileRef(
   if (ref.kind !== "file") {
     return undefined;
   }
-  const attachmentId = managedAttachmentId(ref.ref);
+  const parsed = parseContextReference(ref.ref, ref.kind);
+  const attachmentId = parsed?.scheme === "uploaded_attachment"
+    ? parsed.attachmentId
+    : managedAttachmentId(ref.ref);
   if (attachmentId !== undefined) {
-    if (!permissionRefs.includes(`read:uploaded-attachment:${attachmentId}`)) return undefined;
+    if (!hasReadPermission(permissionRefs, `uploaded-attachment:${attachmentId}`)) return undefined;
     const absolutePath = await resolveManagedAttachmentPath?.(attachmentId);
     return absolutePath !== undefined && path.isAbsolute(absolutePath)
       ? { absolutePath: path.resolve(absolutePath) }
       : undefined;
   }
-  if (ref.ref.startsWith("local-file:")) {
-    const absolutePath = ref.ref.slice("local-file:".length);
-    if (!path.isAbsolute(absolutePath) || !permissionRefs.includes(`read:local-file:${absolutePath}`)) {
+  if (parsed?.scheme === "local_file") {
+    const absolutePath = parsed.path;
+    if (!path.isAbsolute(absolutePath) || !hasReadPermission(permissionRefs, serializeContextReference(parsed))) {
       return undefined;
     }
     return { absolutePath: path.resolve(absolutePath) };
   }
-  if (ref.ref.startsWith("file:")) {
-    const relativePath = ref.ref.slice("file:".length);
-    if (!permissionRefs.includes(`read:file:${relativePath}`)) {
+  if (parsed?.scheme === "file") {
+    const relativePath = parsed.path;
+    if (!hasReadPermission(permissionRefs, serializeContextReference(parsed))) {
       return undefined;
     }
     return resolveWorkspaceRelativeFile(workspaceRoot, relativePath);
   }
-  if (ref.ref.startsWith("workspace:")) {
-    const relativePath = ref.ref.slice("workspace:".length);
+  if (parsed?.scheme === "workspace") {
+    const relativePath = parsed.value;
     if (relativePath.length === 0 || relativePath === "current" || relativePath.startsWith("goal-")) {
       return undefined;
     }
-    if (!permissionRefs.includes("read:workspace:current-task")) {
+    if (!hasReadPermission(permissionRefs, "workspace:current-task")) {
       return undefined;
     }
     return resolveWorkspaceRelativeFile(workspaceRoot, relativePath);
   }
   return undefined;
+}
+
+function hasReadPermission(permissionRefs: readonly string[], target: string): boolean {
+  return permissionRefs.some((value) => {
+    const permission = parsePermissionBoundaryRef(value);
+    return permission?.kind === "access" && permission.mode === "read" && permission.target === target;
+  });
 }
 
 function resolveWorkspaceRelativeFile(

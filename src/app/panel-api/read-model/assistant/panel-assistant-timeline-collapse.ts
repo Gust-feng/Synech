@@ -141,7 +141,7 @@ export function activeTimelineStatus(input: {
 }
 
 export function isSettledTimelineStatus(status: string | undefined): boolean {
-  return status === "completed" || status === "failed" || status === "cancelled" || status === "blocked";
+  return isSettledPanelRunStatus(status);
 }
 
 function collapseOwnerStatus(input: {
@@ -202,3 +202,4 @@ function activityStatusTarget(value: string | undefined): string | undefined {
   }
   return target.length <= 56 ? target : `${target.slice(0, 55).trimEnd()}…`;
 }
+import { isSettledPanelRunStatus } from "./panel-assistant-answer.js";

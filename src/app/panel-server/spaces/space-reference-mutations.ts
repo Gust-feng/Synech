@@ -27,23 +27,27 @@ import {
   createDirectory,
   deleteEntry,
 } from "../../local-filesystem/index.js";
+import type { ResolvedSpaceFilesystemReference } from "./space-workspace-reference.js";
 
 export async function updatePanelSpaceReferenceText(
   item: SpaceReferenceItem,
   input: { readonly relativePath?: string; readonly expectedFingerprint: string; readonly text: string },
   previewOptions?: { readonly contentBaseUrl?: string; readonly contentTypeHintPath?: string },
+  resolved?: ResolvedSpaceFilesystemReference,
 ): Promise<DocumentPreview> {
-  if (item.reference.kind !== "local_file" && item.reference.kind !== "workspace_folder" && item.reference.kind !== "managed_folder") {
+  if (item.reference.kind !== "local_file" && item.reference.kind !== "workspace" && item.reference.kind !== "managed_folder") {
     throw new PanelHttpError(409, "space_reference_content_unavailable", "这个引用没有可读取的文件内容。");
   }
   const relativePath = input.relativePath ?? "";
   const meta: LocalDocumentMeta = { itemId: item.id, title: item.title, sourceKind: item.reference.kind };
+  const rootPath = resolved?.path ?? (item.reference.kind === "workspace" ? undefined : item.reference.path);
+  if (rootPath === undefined) throw new PanelHttpError(409, "workspace_not_available", "工作区当前不可用。");
   const normalized = safeNormalize(relativePath);
   if (item.reference.kind === "local_file" && normalized.length > 0) {
     throw new PanelHttpError(400, "invalid_space_reference_path", "文件引用不接受子路径。");
   }
   return updateLocalDocumentText(
-    item.reference.path,
+    rootPath,
     normalized,
     { expectedFingerprint: input.expectedFingerprint, text: input.text },
     meta,
@@ -54,16 +58,17 @@ export async function updatePanelSpaceReferenceText(
 export async function renamePanelSpaceReferenceEntry(
   item: SpaceReferenceItem,
   input: { readonly relativePath: string; readonly name: string },
+  resolved?: ResolvedSpaceFilesystemReference,
 ): Promise<{ readonly relativePath: string }> {
   const relativePath = normalizeMutableEntryPath(item, input.relativePath);
   const name = normalizeEntryName(input.name);
-  const source = await resolveMutableSource(item, relativePath);
+  const source = await resolveMutableSource(item, relativePath, resolved);
 
   const parentRelativePath = path.posix.dirname(relativePath) === "." ? "" : path.posix.dirname(relativePath);
   const destinationRelativePath = safeJoinRelative(parentRelativePath, name);
   if (destinationRelativePath === relativePath) return { relativePath };
 
-  const destination = await resolveMutableDestination(item, destinationRelativePath);
+  const destination = await resolveMutableDestination(item, destinationRelativePath, resolved);
   const result = await renameEntry(source, destination);
   if (!result.ok) {
     const error = result.error;
@@ -77,9 +82,10 @@ export async function renamePanelSpaceReferenceEntry(
 export async function deletePanelSpaceReferenceEntry(
   item: SpaceReferenceItem,
   relativePathValue: string,
+  resolved?: ResolvedSpaceFilesystemReference,
 ): Promise<void> {
   const relativePath = normalizeMutableEntryPath(item, relativePathValue);
-  const source = await resolveMutableSource(item, relativePath);
+  const source = await resolveMutableSource(item, relativePath, resolved);
   const result = await deleteEntry(source);
   if (!result.ok) {
     if (result.error.kind === "not_found") {
@@ -92,13 +98,14 @@ export async function deletePanelSpaceReferenceEntry(
 export async function createPanelSpaceReferenceEntry(
   item: SpaceReferenceItem,
   input: { readonly parentRelativePath: string; readonly name: string; readonly kind: "file" | "directory" },
+  resolved?: ResolvedSpaceFilesystemReference,
 ): Promise<{ readonly relativePath: string }> {
-  if (item.reference.kind !== "workspace_folder" && item.reference.kind !== "managed_folder") {
+  if (item.reference.kind !== "workspace" && item.reference.kind !== "managed_folder") {
     throw new PanelHttpError(409, "space_reference_entry_mutation_unavailable", "只有工作区或软件受管文件夹中可以新建文件。");
   }
   const parentRelativePath = safeNormalize(input.parentRelativePath);
   const relativePath = safeJoinRelative(parentRelativePath, normalizeEntryName(input.name));
-  const destination = await resolveMutableDestination(item, relativePath);
+  const destination = await resolveMutableDestination(item, relativePath, resolved);
   const result = input.kind === "directory" ? await createDirectory(destination) : await createFile(destination);
   if (!result.ok) {
     if (result.error.kind === "already_exists") {
@@ -112,7 +119,7 @@ export async function createPanelSpaceReferenceEntry(
 // ─── helpers ──────────────────────────────────────────────────────
 
 function normalizeMutableEntryPath(item: SpaceReferenceItem, value: string): string {
-  if (item.reference.kind !== "workspace_folder" && item.reference.kind !== "managed_folder") {
+  if (item.reference.kind !== "workspace" && item.reference.kind !== "managed_folder") {
     throw new PanelHttpError(409, "space_reference_entry_mutation_unavailable", "只有工作区或软件受管文件夹中的条目可以执行此操作。");
   }
   const normalized = safeNormalize(value);
@@ -144,23 +151,27 @@ function safeJoinRelative(parent: string, child: string): string {
   }
 }
 
-async function resolveMutableSource(item: SpaceReferenceItem, relativePath: string): Promise<string> {
-  if (item.reference.kind !== "workspace_folder" && item.reference.kind !== "managed_folder") {
+async function resolveMutableSource(item: SpaceReferenceItem, relativePath: string, resolved?: ResolvedSpaceFilesystemReference): Promise<string> {
+  if (item.reference.kind !== "workspace" && item.reference.kind !== "managed_folder") {
     throw new PanelHttpError(409, "space_reference_entry_mutation_unavailable", "只有工作区或软件受管文件夹中的条目可以执行此操作。");
   }
+  const rootPath = resolved?.path ?? (item.reference.kind === "managed_folder" ? item.reference.path : undefined);
+  if (rootPath === undefined) throw new PanelHttpError(409, "workspace_not_available", "工作区当前不可用。");
   try {
-    return await resolveWithinRoot(item.reference.path, relativePath);
+    return await resolveWithinRoot(rootPath, relativePath);
   } catch {
     throw new PanelHttpError(400, "invalid_space_reference_path", "引用子路径超出了文件夹范围。");
   }
 }
 
-async function resolveMutableDestination(item: SpaceReferenceItem, relativePath: string): Promise<string> {
-  if (item.reference.kind !== "workspace_folder" && item.reference.kind !== "managed_folder") {
+async function resolveMutableDestination(item: SpaceReferenceItem, relativePath: string, resolved?: ResolvedSpaceFilesystemReference): Promise<string> {
+  if (item.reference.kind !== "workspace" && item.reference.kind !== "managed_folder") {
     throw new PanelHttpError(409, "space_reference_entry_mutation_unavailable", "只有工作区或软件受管文件夹中的条目可以执行此操作。");
   }
+  const rootPath = resolved?.path ?? (item.reference.kind === "managed_folder" ? item.reference.path : undefined);
+  if (rootPath === undefined) throw new PanelHttpError(409, "workspace_not_available", "工作区当前不可用。");
   try {
-    return await resolveDestinationWithinRoot(item.reference.path, relativePath);
+    return await resolveDestinationWithinRoot(rootPath, relativePath);
   } catch (error) {
     if (error instanceof LocalFilesystemPathError && error.code === "root_missing") {
       throw new PanelHttpError(404, "space_reference_source_missing", "工作区文件夹已不存在。");

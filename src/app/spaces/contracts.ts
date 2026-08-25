@@ -1,9 +1,9 @@
 /** Durable metadata for the roots visible in one Space. File descendants stay in their owning filesystem. */
-export const SPACE_TREE_SCHEMA_VERSION = "space-tree/v1" as const;
+export const SPACE_TREE_SCHEMA_VERSION = "space-tree/v2" as const;
 
 export type SpaceReference =
   | { readonly kind: "local_file"; readonly path: string }
-  | { readonly kind: "workspace_folder"; readonly path: string }
+  | { readonly kind: "workspace"; readonly workspaceId: string }
   | { readonly kind: "managed_folder"; readonly path: string }
   | { readonly kind: "asset_folder" }
   | { readonly kind: "managed_asset"; readonly assetId: string }
@@ -13,10 +13,8 @@ export type SpaceReference =
 /** References that may be created through the ordinary Space reference command. */
 export type SpaceAddableReference = SpaceReference;
 
-/** The two user-owned filesystem sources. They are links only; Space never owns their content. */
-export type SpaceExternalFileReference =
-  | Extract<SpaceReference, { readonly kind: "local_file" }>
-  | Extract<SpaceReference, { readonly kind: "workspace_folder" }>;
+/** User-owned single-file source. Complete external directories are Workspace objects. */
+export type SpaceExternalFileReference = Extract<SpaceReference, { readonly kind: "local_file" }>;
 
 export type Space = {
   readonly id: string;
@@ -31,7 +29,7 @@ export type SpaceReferenceItem = {
   readonly title: string;
   readonly parentId?: string;
   readonly reference: SpaceReference;
-  /** Stable platform identity for an external source; never used as a model-facing path. */
+  /** Stable platform identity for a direct local-file source; Workspace identity belongs to WorkspaceFeature. */
   readonly sourceIdentity?: string;
   /** Agent/user-maintained understanding of the source. It is never the source body itself. */
   readonly annotation?: SpaceReferenceAnnotation;
@@ -185,6 +183,7 @@ export type SpaceFeature = {
     list(): Promise<readonly SpaceSummary[]>;
     getTree(spaceId: string): Promise<SpaceTree | undefined>;
     getReference(itemId: string): Promise<SpaceReferenceItem | undefined>;
+    listReferencesByWorkspace(workspaceId: string): Promise<readonly SpaceReferenceItem[]>;
   };
   readonly events: { subscribe(listener: (event: SpaceEvent) => void): () => void };
   /** Stops admission, drains accepted commands, and leaves no formal deletion journal on success. */

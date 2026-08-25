@@ -5,7 +5,6 @@ import {
   WORKSPACE_SCHEMA_VERSION,
   WorkspaceFeatureError,
   type Workspace,
-  type WorkspaceLink,
   type WorkspaceMount,
   type WorkspaceRepository,
   type WorkspaceSnapshot,
@@ -45,6 +44,13 @@ const MIGRATIONS = [{
     CREATE INDEX workspace_links_space_idx ON workspace_links(space_id);
     CREATE INDEX workspace_links_workspace_idx ON workspace_links(workspace_id);
   `,
+}, {
+  version: 2,
+  sql: `
+    ALTER TABLE workspaces ADD COLUMN visibility TEXT NOT NULL DEFAULT 'listed'
+      CHECK(visibility IN ('listed', 'implicit'));
+    DROP TABLE workspace_links;
+  `,
 }] as const;
 
 export function createSqliteWorkspaceRepository(database: SqliteRuntimeDatabase): WorkspaceRepository {
@@ -53,7 +59,7 @@ export function createSqliteWorkspaceRepository(database: SqliteRuntimeDatabase)
     async read(): Promise<WorkspaceSnapshot> {
       try {
         const workspaces = database.connection.prepare(
-          "SELECT id, title, status, created_at AS createdAt, updated_at AS updatedAt FROM workspaces ORDER BY created_at, id",
+          "SELECT id, title, status, visibility, created_at AS createdAt, updated_at AS updatedAt FROM workspaces ORDER BY created_at, id",
         ).all().map(rowToWorkspace);
         const mounts = database.connection.prepare(`
           SELECT workspace_id AS workspaceId, mount_version AS mountVersion, root_path AS rootPath,
@@ -61,13 +67,7 @@ export function createSqliteWorkspaceRepository(database: SqliteRuntimeDatabase)
                  invalidated_at AS invalidatedAt
             FROM workspace_mounts ORDER BY connected_at, mount_version
         `).all().map(rowToMount);
-        const links = database.connection.prepare(`
-          SELECT link_id AS linkId, space_id AS spaceId, workspace_id AS workspaceId,
-                 mount_version AS mountVersion, status, created_at AS createdAt,
-                 revoked_at AS revokedAt
-            FROM workspace_links ORDER BY created_at, link_id
-        `).all().map(rowToLink);
-        return validateSnapshot({ schemaVersion: WORKSPACE_SCHEMA_VERSION, workspaces, mounts, links });
+        return validateSnapshot({ schemaVersion: WORKSPACE_SCHEMA_VERSION, workspaces, mounts });
       } catch (error) {
         if (error instanceof WorkspaceFeatureError) throw error;
         throw new WorkspaceFeatureError("workspace_repository_failure", "Could not read Workspace snapshot from SQLite.", { cause: error });
@@ -90,6 +90,7 @@ function rowToWorkspace(row: unknown): Workspace {
     id: String(value.id),
     title: String(value.title),
     status: value.status as Workspace["status"],
+    visibility: value.visibility as Workspace["visibility"],
     createdAt: String(value.createdAt),
     updatedAt: String(value.updatedAt),
   };
@@ -108,19 +109,6 @@ function rowToMount(row: unknown): WorkspaceMount {
   };
 }
 
-function rowToLink(row: unknown): WorkspaceLink {
-  const value = row as Record<string, SQLInputValue>;
-  return {
-    linkId: String(value.linkId),
-    spaceId: String(value.spaceId),
-    workspaceId: String(value.workspaceId),
-    mountVersion: String(value.mountVersion),
-    status: value.status as WorkspaceLink["status"],
-    createdAt: String(value.createdAt),
-    ...(value.revokedAt === null ? {} : { revokedAt: String(value.revokedAt) }),
-  };
-}
-
 function validateSnapshot(snapshot: WorkspaceSnapshot): WorkspaceSnapshot {
   if (snapshot.schemaVersion !== WORKSPACE_SCHEMA_VERSION) {
     throw new WorkspaceFeatureError(
@@ -128,17 +116,42 @@ function validateSnapshot(snapshot: WorkspaceSnapshot): WorkspaceSnapshot {
       `Unsupported Workspace schema ${snapshot.schemaVersion}.`,
     );
   }
+  const workspaceIds = new Set(snapshot.workspaces.map((workspace) => workspace.id));
+  for (const mount of snapshot.mounts) {
+    if (!workspaceIds.has(mount.workspaceId)) {
+      throw new WorkspaceFeatureError(
+        "workspace_snapshot_incompatible",
+        `Workspace mount ${mount.mountVersion} references missing Workspace ${mount.workspaceId}.`,
+      );
+    }
+  }
+  for (const workspace of snapshot.workspaces) {
+    const activeMountCount = snapshot.mounts.filter(
+      (mount) => mount.workspaceId === workspace.id && mount.status === "active",
+    ).length;
+    const valid = workspace.status === "available"
+      ? activeMountCount === 1
+      : workspace.status === "disconnected"
+        ? activeMountCount === 0
+        : activeMountCount <= 1;
+    if (!valid) {
+      throw new WorkspaceFeatureError(
+        "workspace_snapshot_incompatible",
+        `Workspace ${workspace.id} status ${workspace.status} is inconsistent with ${activeMountCount} active mounts.`,
+      );
+    }
+  }
   return snapshot;
 }
 
 function writeSnapshot(database: SqliteRuntimeDatabase, value: WorkspaceSnapshot): void {
   database.transaction(() => {
-    database.connection.exec("PRAGMA defer_foreign_keys = ON; DELETE FROM workspace_links; DELETE FROM workspace_mounts; DELETE FROM workspaces");
+    database.connection.exec("PRAGMA defer_foreign_keys = ON; DELETE FROM workspace_mounts; DELETE FROM workspaces");
     const insertWorkspace = database.connection.prepare(
-      "INSERT INTO workspaces(id, title, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+      "INSERT INTO workspaces(id, title, status, visibility, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
     );
     for (const workspace of value.workspaces) {
-      insertWorkspace.run(workspace.id, workspace.title, workspace.status, workspace.createdAt, workspace.updatedAt);
+      insertWorkspace.run(workspace.id, workspace.title, workspace.status, workspace.visibility, workspace.createdAt, workspace.updatedAt);
     }
     const insertMount = database.connection.prepare(`
       INSERT INTO workspace_mounts(workspace_id, mount_version, root_path, source_identity, status, connected_at, invalidated_at)
@@ -153,21 +166,6 @@ function writeSnapshot(database: SqliteRuntimeDatabase, value: WorkspaceSnapshot
         mount.status,
         mount.connectedAt,
         mount.invalidatedAt ?? null,
-      );
-    }
-    const insertLink = database.connection.prepare(`
-      INSERT INTO workspace_links(link_id, space_id, workspace_id, mount_version, status, created_at, revoked_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `);
-    for (const link of value.links) {
-      insertLink.run(
-        link.linkId,
-        link.spaceId,
-        link.workspaceId,
-        link.mountVersion,
-        link.status,
-        link.createdAt,
-        link.revokedAt ?? null,
       );
     }
   });

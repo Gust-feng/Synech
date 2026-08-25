@@ -131,7 +131,7 @@ export class ToolCenter implements ToolExecutionGateway {
         invocationId: toolInvocationId(factRequest),
         providerCallId: factRequest.providerCallId,
         approvedConfirmationIds: permission.approvedConfirmationIds,
-        confirmationPolicy: permission.confirmationPolicy,
+        accessPolicy: permission.accessPolicy,
       });
     } catch (error) {
       if (isAbortSignalAborted(context.abortSignal) && isAbortError(error)) {
@@ -381,7 +381,7 @@ export class ToolCenter implements ToolExecutionGateway {
       context: {
         platform: this.platform,
         approvedConfirmationIds: permission.approvedConfirmationIds,
-        confirmationPolicy: permission.confirmationPolicy,
+        accessPolicy: permission.accessPolicy,
       },
     });
     if (securityDecision.decision === "blocked") {

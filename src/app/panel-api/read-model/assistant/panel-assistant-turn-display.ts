@@ -104,7 +104,7 @@ export function projectStableAssistantTurnDisplay<
   const terminalStatus = input.projectedTurn.turn.interruption === undefined
     ? assistantTerminalStatus(input.projectedTurn.turn.status)
     : undefined;
-  const failure = terminalStatus === undefined ? undefined : assistantFailureParts(assistant.content);
+  const failure = terminalStatus === undefined ? undefined : assistantFailureParts(input.projectedTurn.turn.failure);
   const projectedNodes = assistant.runProjection.nodes as readonly TNode[];
   const interruptionNodes = input.projectedTurn.turn.interruption === undefined
     ? projectedNodes
@@ -112,11 +112,11 @@ export function projectStableAssistantTurnDisplay<
         !(node.kind === "system" && (node.phase === "cancelled" || node.phase === "blocked")));
   const workflowTranscriptNodes = transcriptNodesWithoutFailureEcho(
     interruptionNodes,
-    failure,
+    terminalStatus,
   );
   const workflowInput: AssistantWorkflowProjectionInput<TTurn, TNode, TDeliverable, TPending> = {
     turn: input.projectedTurn.turn,
-    content: failure?.previous ?? assistant.content,
+    content: failure === undefined ? assistant.content : "",
     deliverable: failure === undefined ? assistant.deliverable : undefined,
     transcriptNodes: workflowTranscriptNodes,
     pending: assistant.pending,

@@ -1,6 +1,7 @@
 export type PersonalNote = {
   readonly id: string;
-  readonly spaceId: string;
+  /** Optional organization link. Knowledge remains alive when its source Space is deleted. */
+  readonly spaceId?: string;
   readonly title: string;
   readonly bodyMarkdown: string;
   readonly createdAt: number;
@@ -88,7 +89,7 @@ export type ManagedKnowledgeAssetReadPort = (input: {
 }) => Promise<KnowledgeAssetReadResult>;
 
 export type KnowledgePageReadResult =
-  | { readonly status: "note"; readonly refId: string; readonly kind: "note"; readonly title: string; readonly spaceId: string; readonly bodyMarkdown: string; readonly truncated: boolean; readonly revision: number; readonly continuation?: string }
+  | { readonly status: "note"; readonly refId: string; readonly kind: "note"; readonly title: string; readonly spaceId?: string; readonly bodyMarkdown: string; readonly truncated: boolean; readonly revision: number; readonly continuation?: string }
   | { readonly status: "space_reference"; readonly refId: string; readonly relativePath: string; readonly content: KnowledgeAssetReadResult }
   | { readonly status: "missing"; readonly refId: string; readonly message: string };
 
@@ -131,7 +132,7 @@ export type PersonalKnowledgeSearchResult = {
 };
 
 export type PersonalKnowledgeEvent =
-  | { readonly type: "personal_knowledge.note_created"; readonly noteId: string; readonly spaceId: string }
+  | { readonly type: "personal_knowledge.note_created"; readonly noteId: string; readonly spaceId?: string }
   | { readonly type: "personal_knowledge.note_updated"; readonly noteId: string }
   | { readonly type: "personal_knowledge.note_deleted"; readonly noteId: string }
   | { readonly type: "personal_knowledge.changed"; readonly refIds?: readonly string[] };
@@ -178,7 +179,7 @@ export type PersonalKnowledgeManagedAssetTextUpdate<TWriteResult> = {
 
 export type PersonalKnowledgeFeature<TManagedAssetTextWriteResult extends { readonly fingerprint?: string } = { readonly fingerprint?: string }> = {
   readonly commands: {
-    createNote(input: { readonly id?: string; readonly spaceId: string; readonly title?: string; readonly bodyMarkdown?: string; readonly actor?: PersonalKnowledgeActor; readonly changeSummary?: string }): Promise<PersonalNote>;
+    createNote(input: { readonly id?: string; readonly spaceId?: string; readonly title?: string; readonly bodyMarkdown?: string; readonly actor?: PersonalKnowledgeActor; readonly changeSummary?: string }): Promise<PersonalNote>;
     updateNote(input: { readonly id: string; readonly expectedRevision: number; readonly title?: string; readonly bodyMarkdown?: string; readonly actor?: PersonalKnowledgeActor; readonly changeSummary?: string }): Promise<void>;
     /** 把笔记完整内容恢复到历史 revision，写出新 revision；陈旧 expectedRevision 拒绝。 */
     restoreNote(input: { readonly id: string; readonly expectedRevision: number; readonly targetRevision: number; readonly actor?: PersonalKnowledgeActor; readonly changeSummary?: string }): Promise<void>;
@@ -196,7 +197,7 @@ export type PersonalKnowledgeFeature<TManagedAssetTextWriteResult extends { read
     createTheme(input: { readonly name: string; readonly actor: PersonalKnowledgeActor }): Promise<{ readonly theme: KnowledgeTheme; readonly created: boolean }>;
     assignTheme(input: { readonly themeId: string; readonly refIds: readonly string[]; readonly actor: PersonalKnowledgeActor }): Promise<{ readonly themeId: string; readonly assigned: readonly string[]; readonly unchanged: readonly string[] }>;
     unassignTheme(input: { readonly themeId: string; readonly refIds: readonly string[]; readonly actor: PersonalKnowledgeActor }): Promise<{ readonly themeId: string; readonly unassigned: readonly string[]; readonly locked: readonly string[] }>;
-    /** Deletes Space-owned notes and detaches copied knowledge assets from Space references. */
+    /** Detaches notes and copied assets from a deleted Space without deleting Knowledge-owned content. */
     cleanupSpace(input: { readonly spaceId: string; readonly referenceIds: readonly string[] }): Promise<void>;
     execute(command: Exclude<PersonalKnowledgeCommand, {
       readonly type: "note.create" | "note.update" | "note.delete" | "note.reorder" | "knowledge.uncollect" | "space.cleanup";

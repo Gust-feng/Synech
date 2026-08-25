@@ -23,7 +23,6 @@ import {
 } from "./space-file-access.js";
 import {
   inspectSpaceExternalSource,
-  spaceExternalReferenceStatus,
   type SpaceExternalSourceInspector,
 } from "./space-external-source.js";
 import { SpaceFeatureError, type SpaceAddableReference, type SpaceFeature, type SpaceReference, type SpaceReferenceActorRecord, type SpaceReferenceAnnotation, type SpaceReferenceAnnotationInput, type SpaceReferenceAnnotationPatch, type SpaceReferenceItem, type SpaceTarget } from "./contracts.js";
@@ -46,6 +45,10 @@ export type SpaceToolOptions = {
   readonly fileMutationCoordinator?: LocalWorkspaceMutationCoordinator;
   /** Filesystem source inspector; defaults to the real filesystem. */
   readonly externalSourceInspector?: SpaceExternalSourceInspector;
+  /** Host composition for turning a complete external directory into an implicit Workspace. */
+  readonly ensureWorkspaceDirectory?: (input: { readonly path: string; readonly title: string }) => Promise<{ readonly workspaceId: string }>;
+  /** Host composition for resolving a Space Workspace relationship to its current active mount. */
+  readonly resolveWorkspaceDirectory?: (workspaceId: string) => Promise<{ readonly path: string; readonly sourceIdentity: string } | undefined>;
 };
 
 /** All Agent-visible operations on the reference-only SpaceTree feature. */
@@ -248,7 +251,12 @@ export function createSpaceMountLocalPathTool(options: SpaceToolOptions): ToolEx
       }
       const reference: SpaceAddableReference = targetKind === "file"
         ? { kind: "local_file", path: absolutePath }
-        : { kind: "workspace_folder", path: absolutePath };
+        : options.ensureWorkspaceDirectory === undefined
+          ? { kind: "workspace", workspaceId: "" }
+          : { kind: "workspace", workspaceId: (await options.ensureWorkspaceDirectory({ path: absolutePath, title })).workspaceId };
+      if (reference.kind === "workspace" && reference.workspaceId.length === 0) {
+        return { status: "space_reference_source_unavailable", path: absolutePath, message: "Workspace registration is unavailable in this environment." };
+      }
       return resultFor(
         () => options.spaces.commands.addReference({ spaceId, title, reference, actor: agentActor(context) }),
         (item) => ({
@@ -297,7 +305,7 @@ export function createSpaceCreateManagedFolderTool(options: SpaceToolOptions): T
   });
 }
 
-/** 在 workspace_folder / managed_folder 引用根内新建文件或目录条目。 */
+/** 在 Workspace / managed_folder 引用根内新建文件或目录条目。 */
 export function createSpaceCreateEntryTool(options: SpaceToolOptions): ToolExecutor {
   return tool({
     name: "SpaceCreateEntry",
@@ -323,10 +331,10 @@ export function createSpaceCreateEntryTool(options: SpaceToolOptions): ToolExecu
       if (!validEntryName(name)) return invalid("name is invalid.");
       const relativePath = joinEntryPath(parentRelativePath, name);
       if (relativePath === undefined) return invalid("parentRelativePath is invalid.");
-      return mutateEntry(options, current.item, async () => {
+      return mutateEntry(options, current.item, current.rootPath, async () => {
         let target: string;
         try {
-          target = await resolveDestinationWithinRoot(current.item.reference.path, relativePath);
+          target = await resolveDestinationWithinRoot(current.rootPath, relativePath);
         } catch {
           return { status: "space_reference_entry_path_invalid", itemId, message: "The entry path is outside the reference root." };
         }
@@ -338,7 +346,7 @@ export function createSpaceCreateEntryTool(options: SpaceToolOptions): ToolExecu
   });
 }
 
-/** 重命名 workspace_folder / managed_folder 引用根内的文件或目录条目。 */
+/** 重命名 Workspace / managed_folder 引用根内的文件或目录条目。 */
 export function createSpaceRenameEntryTool(options: SpaceToolOptions): ToolExecutor {
   return tool({
     name: "SpaceRenameEntry",
@@ -361,10 +369,10 @@ export function createSpaceRenameEntryTool(options: SpaceToolOptions): ToolExecu
       if ("error" in current) return current.error;
       if (relativePath.length === 0) return invalid("relativePath cannot be the reference root.");
       if (!validEntryName(name)) return invalid("name is invalid.");
-      return mutateEntry(options, current.item, async () => {
+      return mutateEntry(options, current.item, current.rootPath, async () => {
         let source: string;
         try {
-          source = await resolveWithinRoot(current.item.reference.path, relativePath);
+          source = await resolveWithinRoot(current.rootPath, relativePath);
         } catch {
           return { status: "space_reference_entry_path_invalid", itemId, message: "The entry path is outside the reference root." };
         }
@@ -373,7 +381,7 @@ export function createSpaceRenameEntryTool(options: SpaceToolOptions): ToolExecu
         if (destinationRelativePath === undefined) return invalid("name is invalid.");
         let destination: string;
         try {
-          destination = await resolveDestinationWithinRoot(current.item.reference.path, destinationRelativePath);
+          destination = await resolveDestinationWithinRoot(current.rootPath, destinationRelativePath);
         } catch {
           return { status: "space_reference_entry_path_invalid", itemId, message: "The destination is outside the reference root." };
         }
@@ -385,7 +393,7 @@ export function createSpaceRenameEntryTool(options: SpaceToolOptions): ToolExecu
   });
 }
 
-/** 删除 workspace_folder / managed_folder 引用根内的文件或目录条目。 */
+/** 删除 Workspace / managed_folder 引用根内的文件或目录条目。 */
 export function createSpaceDeleteEntryTool(options: SpaceToolOptions): ToolExecutor {
   return tool({
     name: "SpaceDeleteEntry",
@@ -403,10 +411,10 @@ export function createSpaceDeleteEntryTool(options: SpaceToolOptions): ToolExecu
       const current = await requireMutableFolderReference(options, itemId);
       if ("error" in current) return current.error;
       if (relativePath.length === 0) return invalid("relativePath cannot be the reference root.");
-      return mutateEntry(options, current.item, async () => {
+      return mutateEntry(options, current.item, current.rootPath, async () => {
         let source: string;
         try {
-          source = await resolveWithinRoot(current.item.reference.path, relativePath);
+          source = await resolveWithinRoot(current.rootPath, relativePath);
         } catch {
           return { status: "space_reference_entry_path_invalid", itemId, message: "The entry path is outside the reference root." };
         }
@@ -442,15 +450,16 @@ export function createSpaceUpdateCaptionTool(options: SpaceToolOptions): ToolExe
       if (item === undefined) return { status: "space_reference_not_found", itemId };
       options.assertSpaceAvailable?.(item.spaceId);
       if (item.reference.kind !== "local_file"
-        && item.reference.kind !== "workspace_folder"
+        && item.reference.kind !== "workspace"
         && item.reference.kind !== "managed_folder") {
         return { status: "space_reference_caption_unavailable", itemId, message: "Only file and folder references can own image captions." };
       }
       if (item.reference.kind === "local_file" && relativePath.length > 0) {
         return invalid("A local file reference caption must use the root path.");
       }
-      const sourceStatus = await spaceExternalReferenceStatus(item);
-      if (sourceStatus !== "current") {
+      const workspaceCurrent = item.reference.kind !== "workspace"
+        || await options.resolveWorkspaceDirectory?.(item.reference.workspaceId) !== undefined;
+      if (!workspaceCurrent) {
         return { status: "space_reference_source_missing", itemId, message: "The source path no longer exists or was replaced." };
       }
       const expectedRevision = item.imageCaptions?.[relativePath]?.revision ?? 0;
@@ -787,10 +796,15 @@ async function resolveAgentSpaceReference(
         requireFile: false,
         projectPathRequired: false,
       });
+      if (target.rootKind !== "file" && options.ensureWorkspaceDirectory === undefined) {
+        return { error: { status: "space_reference_source_unavailable", message: "Workspace registration is unavailable in this environment." } };
+      }
       return {
         reference: target.rootKind === "file"
           ? { kind: "local_file", path: target.rootAbsolutePath }
-          : { kind: "workspace_folder", path: target.rootAbsolutePath },
+          : options.ensureWorkspaceDirectory === undefined
+            ? { kind: "workspace", workspaceId: "" }
+            : { kind: "workspace", workspaceId: (await options.ensureWorkspaceDirectory({ path: target.rootAbsolutePath, title: path.basename(target.rootAbsolutePath) })).workspaceId },
       };
     } catch (error) {
       return {
@@ -808,7 +822,7 @@ async function resolveAgentSpaceReference(
 
 function isExternalReference(reference: SpaceReference): boolean {
   return reference.kind === "local_file" ||
-    reference.kind === "workspace_folder" ||
+    reference.kind === "workspace" ||
     reference.kind === "web_page" ||
     reference.kind === "generated_artifact";
 }
@@ -818,7 +832,7 @@ function isSpaceOwnedMaterial(reference: SpaceReference): boolean {
 }
 
 function isMovableSpaceMaterial(reference: SpaceReference): boolean {
-  return reference.kind !== "local_file" && reference.kind !== "workspace_folder";
+  return reference.kind !== "local_file" && reference.kind !== "workspace";
 }
 
 async function resultFor<T>(operation: () => Promise<T>, project: (value: T) => unknown): Promise<unknown> {
@@ -851,24 +865,23 @@ function isExpectedSpaceOperationError(code: SpaceFeatureError["code"]): boolean
 /** 引用内条目操作允许的 folder 引用形态（kind 已收窄为可写文件夹）。 */
 type MutableFolderReferenceItem = SpaceReferenceItem & {
   readonly reference:
-    | { readonly kind: "workspace_folder"; readonly path: string }
+    | { readonly kind: "workspace"; readonly workspaceId: string }
     | { readonly kind: "managed_folder"; readonly path: string };
 };
 
 /**
  * 解析引用内条目操作的目标引用：必须存在、空间可用、kind 为
- * workspace_folder / managed_folder、引用根当前有效。失效的外部引用
- * 按 18 号指南在真实访问边界移除并明确失败。
+ * Workspace / managed_folder、引用根当前有效。失效 Workspace 保留 Space 关系。
  */
 async function requireMutableFolderReference(
   options: SpaceToolOptions,
   itemId: string,
-): Promise<{ readonly item: MutableFolderReferenceItem } | { readonly error: Readonly<Record<string, unknown>> }> {
+): Promise<{ readonly item: MutableFolderReferenceItem; readonly rootPath: string } | { readonly error: Readonly<Record<string, unknown>> }> {
   const item = await options.spaces.queries.getReference(itemId);
   if (item === undefined) return { error: { status: "space_reference_not_found", itemId } };
   options.assertSpaceAvailable?.(item.spaceId);
   const reference = item.reference;
-  if (reference.kind !== "workspace_folder" && reference.kind !== "managed_folder") {
+  if (reference.kind !== "workspace" && reference.kind !== "managed_folder") {
     return {
       error: {
         status: "space_reference_entry_mutation_unavailable",
@@ -877,33 +890,31 @@ async function requireMutableFolderReference(
       },
     };
   }
-  let current = true;
-  if (reference.kind === "workspace_folder") {
-    current = await spaceExternalReferenceStatus(item) === "current";
-  } else {
-    const stat = await fs.stat(reference.path).catch(() => undefined);
-    current = stat !== undefined && stat.isDirectory();
-  }
-  if (!current) {
-    await options.spaces.commands.unlinkReference(itemId).catch(() => undefined);
+  const workspace = reference.kind === "workspace"
+    ? await options.resolveWorkspaceDirectory?.(reference.workspaceId)
+    : undefined;
+  const rootPath = reference.kind === "workspace" ? workspace?.path : reference.path;
+  const stat = rootPath === undefined ? undefined : await fs.stat(rootPath).catch(() => undefined);
+  if (rootPath === undefined || stat?.isDirectory() !== true) {
     return {
       error: {
         status: "space_reference_source_missing",
         itemId,
-        message: "The source path no longer exists or was replaced; the reference was removed from this Space.",
+        message: "The Workspace is disconnected or the managed folder is missing; the Space reference was preserved.",
       },
     };
   }
-  return { item: { ...item, reference } };
+  return { item: { ...item, reference }, rootPath };
 }
 
 /** 条目变更通过 Host 共享的 file mutation coordinator 串行化，与文件工具一致。 */
 async function mutateEntry<T>(
   options: SpaceToolOptions,
   item: SpaceReferenceItem,
+  rootPath: string,
   operation: () => Promise<T>,
 ): Promise<T> {
-  const key = `space-reference:${item.id}`;
+  const key = rootPath;
   if (options.fileMutationCoordinator === undefined) return await operation();
   return await options.fileMutationCoordinator.run(key, operation);
 }

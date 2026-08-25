@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import type { OrdinaryRunContext } from "../../domain/ordinary/index.js";
+import { parseContextReference, type OrdinaryRunContext } from "../../domain/ordinary/index.js";
+import { confirmationIdForToolCall } from "../../kernel/tools/index.js";
 import type {
   AuthorizedLocalWorkspacePath,
   LocalWorkspacePathAuthorization,
@@ -50,12 +51,13 @@ export function createSpaceRunPathAuthorization(
   return {
     resourceScope,
     async resolve(request): Promise<AuthorizedLocalWorkspacePath> {
+      const unrestricted = hasUnrestrictedFilesystemAccess(request);
       const requestedPath = absoluteRequestedPath({
         requestedPath: request.requestedPath,
         operation: request.operation,
         workspaceRoot: request.workspaceRoot,
         grants,
-        fullAccess: request.context.confirmationPolicy === "full_access",
+        unrestricted,
       });
       const resolution = await resolveSpacePath({ requestedPath, grants, identity });
       if (resolution.outcome === "mount_conflict") {
@@ -72,13 +74,12 @@ export function createSpaceRunPathAuthorization(
             await spaceExternalSourceStatus(grant, input.externalSourceInspector) !== "current") {
           if (input.onInvalidReference !== undefined) {
             await input.onInvalidReference(resolution.referenceId);
-            throw new Error(`Space reference ${resolution.referenceId} no longer points to its original source and was removed from this Space.`);
+            throw new Error(`Space reference ${resolution.referenceId} no longer has an active Workspace mount.`);
           }
           throw new Error(`Space reference ${resolution.referenceId} no longer points to its original source.`);
         }
       }
 
-      const unrestricted = request.operation === "execute" || request.context.confirmationPolicy === "full_access";
       if (resolution.outcome === "outside_reference" && !unrestricted) {
         throw new Error(
           `${requestedPath} is not inside any Space reference authorized for this run. To write into a new folder, mount it first with SpaceMountLocalPath (the user confirms the path), or ask the user to provide the target folder in this conversation.`,
@@ -131,11 +132,11 @@ function absoluteRequestedPath(input: {
   readonly operation: LocalWorkspacePathOperation;
   readonly workspaceRoot: string;
   readonly grants: readonly SpacePathGrant[];
-  readonly fullAccess: boolean;
+  readonly unrestricted: boolean;
 }): string {
   const requested = input.requestedPath.trim().length === 0 ? "." : input.requestedPath.trim();
   if (path.isAbsolute(requested)) return path.resolve(requested);
-  if (input.operation !== "execute" && !input.fullAccess) {
+  if (!input.unrestricted) {
     const folderGrants = input.grants.filter((grant) => grant.kind === "folder");
     if (folderGrants.length !== 1) {
       throw new Error("Space file tools require an absolute path when the run has zero or multiple folder references.");
@@ -145,17 +146,25 @@ function absoluteRequestedPath(input: {
   return path.resolve(input.workspaceRoot, requested);
 }
 
+function hasUnrestrictedFilesystemAccess(
+  request: Parameters<NonNullable<LocalWorkspacePathAuthorization>["resolve"]>[0],
+): boolean {
+  if (request.context.accessPolicy?.filesystemScope === "unrestricted") return true;
+  const invocationId = request.context.invocationId;
+  return request.operation === "execute" && invocationId !== undefined &&
+    request.context.approvedConfirmationIds?.includes(confirmationIdForToolCall(invocationId)) === true;
+}
+
 function localGrant(
   ref: string,
   kind: OrdinaryRunContext["contextRefs"][number]["kind"],
 ): { readonly kind: "file" | "folder"; readonly path: string } | undefined {
-  if (kind === "file" && ref.toLowerCase().startsWith("local-file:")) {
-    const value = ref.slice("local-file:".length);
-    return path.isAbsolute(value) ? { kind: "file", path: path.resolve(value) } : undefined;
+  const parsed = parseContextReference(ref, kind);
+  if (parsed?.scheme === "local_file" && path.isAbsolute(parsed.path)) {
+    return { kind: "file", path: path.resolve(parsed.path) };
   }
-  if (kind === "project" && ref.toLowerCase().startsWith("local-project:")) {
-    const value = ref.slice("local-project:".length);
-    return path.isAbsolute(value) ? { kind: "folder", path: path.resolve(value) } : undefined;
+  if (parsed?.scheme === "local_project" && path.isAbsolute(parsed.path)) {
+    return { kind: "folder", path: path.resolve(parsed.path) };
   }
   return undefined;
 }

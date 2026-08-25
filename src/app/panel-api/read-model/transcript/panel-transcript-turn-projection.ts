@@ -4,6 +4,7 @@ import {
 } from "./panel-live-transcript.js";
 import type { LiveRunBuffer } from "../run/panel-run-live-buffer.js";
 import type { WorklineConversationTurn, WorklineProjectedTurn } from "../assistant/panel-assistant-workline.js";
+import { resolveAssistantAnswer } from "../assistant/panel-assistant-answer.js";
 import {
   answerForWorkViewTurn,
   deliverableForWorkViewTurn,
@@ -105,15 +106,21 @@ export function projectAssistantTranscriptTurn<
   );
   const pending = pendingForTurn(input.pending, displayRunId);
   const liveAnswer = runProjection.answer?.streaming === true ? runProjection.answer : undefined;
-  const settledAnswerFallback = runProjection.answer?.streaming === false ? runProjection.answer.text : "";
   const turnContentAnswer = canUseTurnContentAsAnswer({
     run: input.run,
     pending,
     turn,
     nodes: runProjection.nodes,
   }) ? turn.content : "";
-  const turnAnswer = answerForWorkViewTurn(input.workView, displayRunId, turnContentAnswer);
-  const content = liveAnswer?.text ?? (turnAnswer.trim().length > 0 ? turnAnswer : settledAnswerFallback);
+  const answer = resolveAssistantAnswer({
+    runStatus: input.run?.status ?? turn.status,
+    interruption: turn.interruption,
+    live: liveAnswer,
+    conversationText: turnContentAnswer,
+    workViewText: answerForWorkViewTurn(input.workView, displayRunId, ""),
+    projection: runProjection.answer?.streaming === false ? runProjection.answer : undefined,
+  });
+  const content = answer.text;
   const deliverable = deliverableForWorkViewTurn(input.workView, displayRunId, content);
   const keepStreamMounted = live !== undefined || refreshingRun || unclaimedRunningTurn;
   const shellKey = input.assistantTurnSlotKey ?? assistantTurnSlotKey(input.turns, input.turnIndex);
@@ -132,10 +139,10 @@ export function projectAssistantTranscriptTurn<
     pending,
     content,
     deliverable,
-    live: liveAnswer !== undefined,
+    live: answer.streaming,
     keepStreamMounted,
-    animateOnMount: liveAnswer !== undefined || animateFromObservedShell,
-    liveTone: liveAnswer?.tone ?? runProjection.answer?.tone,
+    animateOnMount: answer.streaming || animateFromObservedShell,
+    liveTone: answer.tone ?? runProjection.answer?.tone,
   };
 }
 

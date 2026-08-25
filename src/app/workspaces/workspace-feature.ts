@@ -1,13 +1,12 @@
 import {
   WORKSPACE_SCHEMA_VERSION,
   WorkspaceFeatureError,
-  type RegisterWorkspaceInput,
+  type EnsureWorkspaceInput,
   type ReconnectWorkspaceInput,
   type Workspace,
   type WorkspaceDetail,
   type WorkspaceEvent,
   type WorkspaceFeature,
-  type WorkspaceLink,
   type WorkspaceMount,
   type WorkspaceRepository,
   type WorkspaceSnapshot,
@@ -69,43 +68,57 @@ export function createWorkspaceFeature(input: CreateWorkspaceFeatureInput): Work
     const newest = active.length > 0 ? active : mounts;
     return newest.length === 0 ? undefined : newest[newest.length - 1];
   };
-  const requireActiveMount = (snapshot: WorkspaceSnapshot, workspaceId: string): WorkspaceMount => {
-    const mount = latestMountOf(snapshot, workspaceId);
-    if (mount === undefined || mount.status !== "active") {
-      throw new WorkspaceFeatureError("workspace_mount_invalid", `Workspace has no active mount: ${workspaceId}`);
-    }
-    return mount;
-  };
-  const requireAvailable = (workspace: Workspace): void => {
-    if (workspace.status !== "available") {
-      throw new WorkspaceFeatureError("workspace_not_available", `Workspace is ${workspace.status}: ${workspace.id}`);
-    }
-  };
-
   return {
     ready: () => startup,
     commands: {
-      async registerWorkspace(registerInput: RegisterWorkspaceInput) {
-        assertUsable("register a Workspace");
+      async ensureWorkspace(registerInput: EnsureWorkspaceInput) {
+        assertUsable("ensure a Workspace");
         return serialize(async () => {
           const snapshot = await input.repository.read();
+          const candidateRoot = canonicalWorkspacePathIdentity(registerInput.rootPath);
+          const identityMount = snapshot.mounts.find((mount) => mount.sourceIdentity === registerInput.sourceIdentity);
+          const pathMount = snapshot.mounts.find((mount) => canonicalWorkspacePathIdentity(mount.rootPath) === candidateRoot && mount.status === "active");
+          if (identityMount !== undefined && pathMount !== undefined && identityMount.workspaceId !== pathMount.workspaceId) {
+            throw new WorkspaceFeatureError("workspace_mount_conflict", "The selected path and filesystem identity belong to different Workspaces.");
+          }
+          const existingMount = identityMount ?? pathMount;
+          if (existingMount !== undefined) {
+            const current = requireWorkspace(snapshot, existingMount.workspaceId);
+            if (current.status === "deleting") throw new WorkspaceFeatureError("workspace_not_available", `Workspace is deleting: ${current.id}`);
+            if (pathMount !== undefined && pathMount.sourceIdentity !== registerInput.sourceIdentity) {
+              throw new WorkspaceFeatureError("workspace_mount_conflict", "The selected path is bound to a different Workspace object.");
+            }
+            const at = now();
+            const visibility = current.visibility === "listed" || registerInput.visibility === "listed" ? "listed" : "implicit";
+            let workspace: Workspace = visibility === current.visibility ? current : { ...current, visibility, updatedAt: at };
+            let mount = latestMountOf(snapshot, current.id);
+            let mounts = snapshot.mounts;
+            if (mount?.status !== "active" || canonicalWorkspacePathIdentity(mount.rootPath) !== candidateRoot) {
+              if (mount === undefined || mount.sourceIdentity !== registerInput.sourceIdentity) {
+                throw new WorkspaceFeatureError("workspace_mount_conflict", "The selected directory is not the same filesystem object as the existing Workspace.");
+              }
+              mount = { workspaceId: current.id, mountVersion: nextMountVersion(), rootPath: candidateRoot, sourceIdentity: registerInput.sourceIdentity, status: "active", connectedAt: at };
+              mounts = [...invalidateActiveMounts(snapshot.mounts, current.id, at), mount];
+              workspace = { ...workspace, status: "available", updatedAt: at };
+            }
+            if (workspace !== current || mounts !== snapshot.mounts) {
+              await input.repository.write({ schemaVersion: WORKSPACE_SCHEMA_VERSION, workspaces: snapshot.workspaces.map((entry) => entry.id === current.id ? workspace : entry), mounts });
+              if (workspace.visibility !== current.visibility) publish({ type: "workspace.visibility_changed", workspace });
+              if (mounts !== snapshot.mounts) publish({ type: "workspace.reconnected", workspaceId: workspace.id, mount: mount! });
+            }
+            return { workspace, mount: mount!, created: false };
+          }
           const existingRoots = snapshot.mounts
-            .filter((mount) => mount.status === "active" || snapshot.workspaces.some((w) => w.id === mount.workspaceId && w.status === "available"))
+            .filter((mount) => mount.status === "active" && snapshot.workspaces.some((w) => w.id === mount.workspaceId && w.status === "available"))
             .map((mount) => mount.rootPath);
           assertWorkspacePathUniqueness(existingRoots, registerInput.rootPath);
-          const duplicateIdentity = snapshot.mounts.some((mount) => mount.sourceIdentity === registerInput.sourceIdentity);
-          if (duplicateIdentity) {
-            throw new WorkspaceFeatureError(
-              "workspace_duplicate_identity",
-              "The same filesystem object is already registered as a Workspace.",
-            );
-          }
           const at = now();
           const id = createId();
           const workspace: Workspace = {
             id,
             title: registerInput.title ?? pathBasename(registerInput.rootPath),
             status: "available",
+            visibility: registerInput.visibility,
             createdAt: at,
             updatedAt: at,
           };
@@ -121,10 +134,21 @@ export function createWorkspaceFeature(input: CreateWorkspaceFeatureInput): Work
             schemaVersion: WORKSPACE_SCHEMA_VERSION,
             workspaces: [...snapshot.workspaces, workspace],
             mounts: [...snapshot.mounts, mount],
-            links: snapshot.links,
           });
           publish({ type: "workspace.registered", workspace, mount });
-          return { workspace, mount };
+          return { workspace, mount, created: true };
+        });
+      },
+      async setVisibility(workspaceId, visibility) {
+        assertUsable("change Workspace visibility");
+        return serialize(async () => {
+          const snapshot = await input.repository.read();
+          const current = requireWorkspace(snapshot, workspaceId);
+          if (current.visibility === visibility) return current;
+          const workspace: Workspace = { ...current, visibility, updatedAt: now() };
+          await input.repository.write({ schemaVersion: WORKSPACE_SCHEMA_VERSION, workspaces: snapshot.workspaces.map((entry) => entry.id === workspaceId ? workspace : entry), mounts: snapshot.mounts });
+          publish({ type: "workspace.visibility_changed", workspace });
+          return workspace;
         });
       },
       async reconnectWorkspace(reconnectInput: ReconnectWorkspaceInput) {
@@ -132,6 +156,9 @@ export function createWorkspaceFeature(input: CreateWorkspaceFeatureInput): Work
         return serialize(async () => {
           const snapshot = await input.repository.read();
           const workspace = requireWorkspace(snapshot, reconnectInput.workspaceId);
+          if (workspace.status === "deleting") {
+            throw new WorkspaceFeatureError("workspace_not_available", `Workspace is deleting: ${workspace.id}`);
+          }
           const previousMount = latestMountOf(snapshot, workspace.id);
           if (previousMount === undefined) {
             throw new WorkspaceFeatureError("workspace_mount_invalid", `Workspace has no mount to reconnect: ${workspace.id}`);
@@ -143,8 +170,8 @@ export function createWorkspaceFeature(input: CreateWorkspaceFeatureInput): Work
             );
           }
           const candidate = canonicalWorkspacePathIdentity(reconnectInput.rootPath);
-          if (previousMount.rootPath === candidate) {
-            throw new WorkspaceFeatureError("workspace_mount_conflict", "Reconnect must point to a different path than the current mount.");
+          if (previousMount.status === "active" && canonicalWorkspacePathIdentity(previousMount.rootPath) === candidate && workspace.status === "available") {
+            return { workspace, mount: previousMount };
           }
           const at = now();
           const nextMount: WorkspaceMount = {
@@ -163,8 +190,7 @@ export function createWorkspaceFeature(input: CreateWorkspaceFeatureInput): Work
           const updatedSnapshot: WorkspaceSnapshot = {
             schemaVersion: WORKSPACE_SCHEMA_VERSION,
             workspaces: snapshot.workspaces.map((entry) => entry.id === workspace.id ? nextWorkspace : entry),
-            mounts: [...snapshot.mounts, nextMount],
-            links: snapshot.links,
+            mounts: [...invalidateActiveMounts(snapshot.mounts, workspace.id, at), nextMount],
           };
           await input.repository.write(updatedSnapshot);
           publish({ type: "workspace.reconnected", workspaceId: workspace.id, mount: nextMount });
@@ -176,20 +202,9 @@ export function createWorkspaceFeature(input: CreateWorkspaceFeatureInput): Work
         return serialize(async () => {
           const snapshot = await input.repository.read();
           const workspace = requireWorkspace(snapshot, workspaceId);
-          const mount = currentMountOf(snapshot, workspaceId);
-          if (mount === undefined || mount.status !== "active") return [];
+          const activeMounts = snapshot.mounts.filter((mount) => mount.workspaceId === workspaceId && mount.status === "active");
+          if (activeMounts.length === 0) return;
           const at = now();
-          const invalidatedMount: WorkspaceMount = {
-            ...mount,
-            status: "invalidated",
-            invalidatedAt: at,
-          };
-          const revokedLinkIds: string[] = [];
-          const links = snapshot.links.map((link) => {
-            if (link.workspaceId !== workspaceId || link.status !== "active") return link;
-            revokedLinkIds.push(link.linkId);
-            return { ...link, status: "revoked" as const, revokedAt: at };
-          });
           const nextWorkspace: Workspace = {
             ...workspace,
             status: "disconnected",
@@ -198,66 +213,11 @@ export function createWorkspaceFeature(input: CreateWorkspaceFeatureInput): Work
           await input.repository.write({
             schemaVersion: WORKSPACE_SCHEMA_VERSION,
             workspaces: snapshot.workspaces.map((entry) => entry.id === workspaceId ? nextWorkspace : entry),
-            mounts: snapshot.mounts.map((entry) => entry === mount ? invalidatedMount : entry),
-            links,
+            mounts: invalidateActiveMounts(snapshot.mounts, workspaceId, at),
           });
-          publish({ type: "workspace.mount_invalidated", workspaceId, mountVersion: mount.mountVersion });
-          for (const link of links) {
-            if (revokedLinkIds.includes(link.linkId)) publish({ type: "workspace.link_revoked", link });
+          for (const mount of activeMounts) {
+            publish({ type: "workspace.mount_invalidated", workspaceId, mountVersion: mount.mountVersion });
           }
-          return revokedLinkIds;
-        });
-      },
-      async linkWorkspaceToSpace(linkInput: { readonly spaceId: string; readonly workspaceId: string }) {
-        assertUsable("link a Workspace to a Space");
-        return serialize(async () => {
-          const snapshot = await input.repository.read();
-          const workspace = requireWorkspace(snapshot, linkInput.workspaceId);
-          requireAvailable(workspace);
-          const duplicate = snapshot.links.some(
-            (link) => link.status === "active" && link.spaceId === linkInput.spaceId && link.workspaceId === linkInput.workspaceId,
-          );
-          if (duplicate) {
-            throw new WorkspaceFeatureError("workspace_link_conflict", "This Space already links the Workspace.");
-          }
-          const mount = requireActiveMount(snapshot, workspace.id);
-          const at = now();
-          const link: WorkspaceLink = {
-            linkId: createId(),
-            spaceId: linkInput.spaceId,
-            workspaceId: workspace.id,
-            mountVersion: mount.mountVersion,
-            status: "active",
-            createdAt: at,
-          };
-          await input.repository.write({
-            schemaVersion: WORKSPACE_SCHEMA_VERSION,
-            workspaces: snapshot.workspaces,
-            mounts: snapshot.mounts,
-            links: [...snapshot.links, link],
-          });
-          publish({ type: "workspace.link_created", link });
-          return link;
-        });
-      },
-      async unlinkWorkspaceFromSpace(linkId: string) {
-        assertUsable("unlink a Workspace");
-        return serialize(async () => {
-          const snapshot = await input.repository.read();
-          const link = snapshot.links.find((entry) => entry.linkId === linkId);
-          if (link === undefined) {
-            throw new WorkspaceFeatureError("workspace_link_not_found", `Workspace link not found: ${linkId}`);
-          }
-          if (link.status !== "active") return;
-          const at = now();
-          const revoked: WorkspaceLink = { ...link, status: "revoked", revokedAt: at };
-          await input.repository.write({
-            schemaVersion: WORKSPACE_SCHEMA_VERSION,
-            workspaces: snapshot.workspaces,
-            mounts: snapshot.mounts,
-            links: snapshot.links.map((entry) => entry.linkId === linkId ? revoked : entry),
-          });
-          publish({ type: "workspace.link_revoked", link: revoked });
         });
       },
       async deleteWorkspace(workspaceId: string) {
@@ -272,7 +232,6 @@ export function createWorkspaceFeature(input: CreateWorkspaceFeatureInput): Work
             schemaVersion: WORKSPACE_SCHEMA_VERSION,
             workspaces: snapshot.workspaces.map((entry) => entry.id === workspaceId ? next : entry),
             mounts: snapshot.mounts,
-            links: snapshot.links,
           });
           publish({ type: "workspace.deleted", workspaceId });
         });
@@ -294,7 +253,6 @@ export function createWorkspaceFeature(input: CreateWorkspaceFeatureInput): Work
             schemaVersion: WORKSPACE_SCHEMA_VERSION,
             workspaces: snapshot.workspaces.filter((entry) => entry.id !== workspaceId),
             mounts: snapshot.mounts.filter((mount) => mount.workspaceId !== workspaceId),
-            links: snapshot.links.filter((link) => link.workspaceId !== workspaceId),
           });
         });
       },
@@ -302,14 +260,26 @@ export function createWorkspaceFeature(input: CreateWorkspaceFeatureInput): Work
     queries: {
       async list() {
         const snapshot = await serialize(() => input.repository.read());
+        return snapshot.workspaces.filter((workspace) => workspace.visibility === "listed").map((workspace) => ({
+          id: workspace.id,
+          title: workspace.title,
+          status: workspace.status,
+          visibility: workspace.visibility,
+          createdAt: workspace.createdAt,
+          updatedAt: workspace.updatedAt,
+          currentMount: currentMountOf(snapshot, workspace.id),
+        }));
+      },
+      async listAll() {
+        const snapshot = await serialize(() => input.repository.read());
         return snapshot.workspaces.map((workspace) => ({
           id: workspace.id,
           title: workspace.title,
           status: workspace.status,
+          visibility: workspace.visibility,
           createdAt: workspace.createdAt,
           updatedAt: workspace.updatedAt,
           currentMount: currentMountOf(snapshot, workspace.id),
-          linkCount: snapshot.links.filter((link) => link.workspaceId === workspace.id && link.status === "active").length,
         }));
       },
       async get(workspaceId: string) {
@@ -319,21 +289,17 @@ export function createWorkspaceFeature(input: CreateWorkspaceFeatureInput): Work
         return {
           ...workspace,
           mounts: snapshot.mounts.filter((mount) => mount.workspaceId === workspaceId),
-          links: snapshot.links.filter((link) => link.workspaceId === workspaceId),
         } satisfies WorkspaceDetail;
-      },
-      async getLink(linkId: string) {
-        const snapshot = await serialize(() => input.repository.read());
-        return snapshot.links.find((link) => link.linkId === linkId);
-      },
-      async listLinksBySpace(spaceId: string) {
-        const snapshot = await serialize(() => input.repository.read());
-        return snapshot.links.filter((link) => link.spaceId === spaceId);
       },
       async findByRootPath(rootPath: string) {
         const snapshot = await serialize(() => input.repository.read());
         const candidate = canonicalWorkspacePathIdentity(rootPath);
         const mount = snapshot.mounts.find((entry) => canonicalWorkspacePathIdentity(entry.rootPath) === candidate && entry.status === "active");
+        return mount === undefined ? undefined : snapshot.workspaces.find((workspace) => workspace.id === mount.workspaceId);
+      },
+      async findBySourceIdentity(sourceIdentity: string) {
+        const snapshot = await serialize(() => input.repository.read());
+        const mount = snapshot.mounts.find((entry) => entry.sourceIdentity === sourceIdentity);
         return mount === undefined ? undefined : snapshot.workspaces.find((workspace) => workspace.id === mount.workspaceId);
       },
     },
@@ -353,6 +319,16 @@ function currentMountOf(snapshot: WorkspaceSnapshot, workspaceId: string): Works
   const active = mounts.filter((mount) => mount.status === "active");
   const newest = active.length > 0 ? active : mounts;
   return newest.length === 0 ? undefined : newest[newest.length - 1];
+}
+
+function invalidateActiveMounts(
+  mounts: readonly WorkspaceMount[],
+  workspaceId: string,
+  invalidatedAt: string,
+): readonly WorkspaceMount[] {
+  return mounts.map((mount) => mount.workspaceId === workspaceId && mount.status === "active"
+    ? { ...mount, status: "invalidated" as const, invalidatedAt }
+    : mount);
 }
 
 function pathBasename(rootPath: string): string {

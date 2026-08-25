@@ -9,6 +9,11 @@ import type { PanelToolCallResult as ToolCallResult } from "@panel-api/ordinary-
 import type { PanelToolFactValue as ToolFactValue } from "@panel-api/tool-display";
 import { CopyActionButton } from "@ui/components/copy-action-button";
 
+const HIDDEN_SECTION_TITLE_IDS = new Set([
+  "details", "content", "content_preview", "result", "message", "source", "sources",
+  "items", "entries", "matches", "summary", "excerpt", "page_excerpt", "output",
+]);
+
 const PRIMARY_LIST_LIMIT = 8;
 
 export function ActivityEvidencePanel(props: {
@@ -59,7 +64,7 @@ function StructuredActivityEvidencePanel(props: {
       <div className="agent-evidence-panel" data-tool-kind="search">
         {sourceSections.map((section, index) => (
           <GenericEvidenceSection
-            key={`${section.title}-${index}`}
+            key={`${section.sectionId}-${index}`}
             section={section}
             hideTitle
           />
@@ -96,7 +101,7 @@ function StructuredActivityEvidencePanel(props: {
           ? null
           : (
             <GenericEvidenceSection
-              key={`${section.title}-${index}`}
+              key={`${section.sectionId}-${index}`}
               section={section}
               hideTitle={shouldHideSectionTitle(section)}
             />
@@ -218,14 +223,14 @@ function CommandEvidence(props: {
   readonly item: ActivityItem;
   readonly sections: readonly ActivityExpandedSection[];
 }): React.ReactElement {
-  const command = props.sections.find((section) => section.title === "命令");
-  const output = props.sections.find((section) => section.title === "输出") ??
+  const command = props.sections.find((section) => section.sectionId === "command");
+  const output = props.sections.find((section) => section.sectionId === "output") ??
     props.sections.find((section) => section.format === "console" && section !== command);
   const rest = props.sections.filter((section) =>
     section !== command &&
     section !== output &&
     section.format !== "diagnostics" &&
-    section.title !== "更多信息"
+    section.sectionId !== "more_info"
   );
   const tone = props.item.phase === "failed" || props.item.phase === "blocked" || output?.tone === "danger"
     ? "danger"
@@ -252,7 +257,7 @@ function CommandEvidence(props: {
       </section>
       {rest.map((section, index) => (
         <GenericEvidenceSection
-          key={`${section.title}-${index}`}
+          key={`${section.sectionId}-${index}`}
           section={section}
           hideTitle={shouldHideSectionTitle(section)}
         />
@@ -272,7 +277,7 @@ function FileChangeEvidence(props: {
       <div className="agent-evidence-panel" data-tool-kind="edit">
         {props.sections.map((section, index) => (
           <GenericEvidenceSection
-            key={`${section.title}-${index}`}
+            key={`${section.sectionId}-${index}`}
             section={section}
             hideTitle={shouldHideSectionTitle(section)}
           />
@@ -287,12 +292,12 @@ function FileChangeEvidence(props: {
         {fileSections.map((section, index) => (
           fileSections.length === 1
             ? (
-              <section className="agent-file-evidence" key={`${section.title}-${index}`}>
+              <section className="agent-file-evidence" key={`${section.sectionId}-${index}`}>
                 <NativeSectionContent section={section} />
               </section>
             )
             : (
-              <details className="agent-file-evidence" key={`${section.title}-${index}`}>
+              <details className="agent-file-evidence" key={`${section.sectionId}-${index}`}>
                 <summary>
                   <FileText size={14} strokeWidth={1.8} aria-hidden="true" />
                   <span>{section.title}</span>
@@ -305,7 +310,7 @@ function FileChangeEvidence(props: {
       </div>
       {rest.map((section, index) => (
         <GenericEvidenceSection
-          key={`${section.title}-${index}`}
+          key={`${section.sectionId}-${index}`}
           section={section}
           hideTitle={shouldHideSectionTitle(section)}
         />
@@ -331,11 +336,11 @@ function ReadEvidence(props: {
         if (sourceRepeatsLead(section, props.item)) {
           return section.href === undefined
             ? null
-            : <SourceOnlyLink href={section.href} key={`${section.title}-${index}`} />;
+            : <SourceOnlyLink href={section.href} key={`${section.sectionId}-${index}`} />;
         }
         return (
           <GenericEvidenceSection
-            key={`${section.title}-${index}`}
+            key={`${section.sectionId}-${index}`}
             section={section}
             hideTitle={shouldHideSectionTitle(section)}
           />
@@ -436,10 +441,7 @@ function shouldHideSectionTitle(section: ActivityExpandedSection): boolean {
   if (section.format === "diagnostics" || section.tone === "danger" || section.tone === "warning") {
     return false;
   }
-  if (
-    ["详情", "内容", "内容预览", "结果", "提示", "来源", "条目", "匹配位置", "摘要", "摘录", "页面摘录", "输出"]
-      .includes(section.title)
-  ) {
+  if (HIDDEN_SECTION_TITLE_IDS.has(section.sectionId)) {
     return true;
   }
   if (section.format === "code" || section.format === "console" || section.format === "diff") {
@@ -621,6 +623,7 @@ function expandedDetailSectionsForItem(item: ActivityItem): readonly ActivityExp
     return undefined;
   }
   return [{
+    sectionId: "details",
     title: "详情",
     content: item.copy.expandedDetail,
     format: item.tone === "thinking" ? "quote" : "plain",

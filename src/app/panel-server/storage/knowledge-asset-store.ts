@@ -24,13 +24,16 @@ export async function captureKnowledgeAsset(
   assetId: string,
   item: SpaceReferenceItem,
   relativePath = "",
+  resolvedRootPath?: string,
 ): Promise<NonNullable<KnowledgePage["asset"]>> {
-  if (item.reference.kind !== "local_file" && item.reference.kind !== "workspace_folder" && item.reference.kind !== "managed_folder") {
+  if (item.reference.kind !== "local_file" && item.reference.kind !== "workspace" && item.reference.kind !== "managed_folder") {
     throw new PanelHttpError(409, "knowledge_asset_capture_unavailable", "当前来源暂不支持复制到知识库。");
   }
+  const rootPath = resolvedRootPath ?? (item.reference.kind === "workspace" ? undefined : item.reference.path);
+  if (rootPath === undefined) throw new PanelHttpError(409, "workspace_not_available", "工作区当前不可用。");
   let source: string;
   try {
-    source = await resolveWithinRoot(item.reference.path, relativePath);
+    source = await resolveWithinRoot(rootPath, relativePath);
   } catch {
     throw new PanelHttpError(400, "invalid_space_reference_path", "引用子路径超出了文件夹范围。");
   }

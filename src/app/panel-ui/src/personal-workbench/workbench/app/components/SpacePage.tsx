@@ -29,7 +29,7 @@ import {
   SpaceExplorer,
 } from './space/space-tree'
 
-/** Space 组合资料树、笔记与所属对话；外部 Workspace 始终作为只读引用。 */
+/** Space 组合资料树、笔记与所属对话；Workspace 引用为 Space Run 提供完整读写授权根。 */
 
 interface SpacePageProps {
   onNavigate: (v: View) => void
@@ -344,7 +344,7 @@ export function SpacePage({
 
   function handleDeleteItem(item: SpaceItem) {
     if (item.externalChild) return
-    if (item.domainKind === 'local_file' || item.domainKind === 'workspace_folder' || item.domainKind === 'web_reference' || item.domainKind === 'generated_artifact') return
+    if (item.domainKind === 'local_file' || item.domainKind === 'workspace' || item.domainKind === 'web_reference' || item.domainKind === 'generated_artifact') return
     if (item.domainKind === 'managed_folder') {
       const removeReference = actions?.removeReference
       if (removeReference === undefined) return
@@ -390,6 +390,11 @@ export function SpacePage({
       await actions.unlinkReference!(item.id)
       setSelectedId((current) => current === item.id ? null : current)
     })
+  }
+
+  function handleReconnectWorkspace(item: SpaceItem) {
+    if (item.workspaceId === undefined || actions?.reconnectWorkspace === undefined) return
+    void runSpaceAction(() => actions.reconnectWorkspace!(item.workspaceId!))
   }
 
   async function handleOpenReference(item: SpaceItem) {
@@ -524,6 +529,7 @@ export function SpacePage({
             onSelect: selectTreeItem,
             onRename: (item, name) => { void handleRenameItem(item, name) },
             onUnlink: handleUnlinkItem,
+            onReconnectWorkspace: handleReconnectWorkspace,
             onDelete: handleDeleteItem,
             onCreateEntry: beginCreateReferenceFile,
             onToggleExpand: toggleExpanded,

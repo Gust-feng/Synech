@@ -55,8 +55,9 @@ interface SidebarProps {
     readonly onRetry: () => void | Promise<void>
   }
   onAddWorkspace?: () => void | Promise<void>
-  /** 移除工作区登记（外部文件夹与知识副本保留）。 */
-  onDeleteWorkspace?: (workspaceId: string) => void | Promise<void>
+  /** 仅移出侧栏；外部文件、Space 引用与历史对话保留。 */
+  onHideWorkspace?: (workspaceId: string) => void | Promise<void>
+  onReconnectWorkspace?: (workspaceId: string) => void | Promise<void>
   activeSpaceId: string | null
   activeConversationId?: string
   onOpenConversation: (conversationId: string) => boolean | Promise<boolean>
@@ -89,7 +90,8 @@ export function Sidebar({
   workspaces = [],
   workspaceLoadState,
   onAddWorkspace,
-  onDeleteWorkspace,
+  onHideWorkspace,
+  onReconnectWorkspace,
   activeSpaceId,
   activeConversationId,
   onOpenConversation,
@@ -123,7 +125,7 @@ export function Sidebar({
   const [openingConversationId, setOpeningConversationId] = useState<string | null>(null)
   const conversationOpenRequestRef = useRef(0)
   const [pendingSpaceDeletion, setPendingSpaceDeletion] = useState<{ readonly id: string; readonly label: string } | null>(null)
-  const [pendingWorkspaceDeletion, setPendingWorkspaceDeletion] = useState<{ readonly id: string; readonly label: string } | null>(null)
+  const [pendingWorkspaceRemoval, setPendingWorkspaceRemoval] = useState<{ readonly id: string; readonly label: string } | null>(null)
 
   async function openConversation(conversationId: string) {
     if (openingConversationId === conversationId || pendingConversationIds.has(conversationId)) return
@@ -196,12 +198,12 @@ export function Sidebar({
     }
   }
 
-  function confirmWorkspaceDeletion(): void {
-    const pending = pendingWorkspaceDeletion
-    if (pending === null || onDeleteWorkspace === undefined) return
-    setPendingWorkspaceDeletion(null)
+  function confirmWorkspaceRemoval(): void {
+    const pending = pendingWorkspaceRemoval
+    if (pending === null || onHideWorkspace === undefined) return
+    setPendingWorkspaceRemoval(null)
     try {
-      const result = onDeleteWorkspace(pending.id)
+      const result = onHideWorkspace(pending.id)
       void Promise.resolve(result).catch(() => undefined)
     } catch {
       // The owner projects the mutation error; the sidebar only closes its confirmation surface.
@@ -344,7 +346,8 @@ export function Sidebar({
             <WorkspaceRow
               key={workspace.workspaceId}
               workspace={workspace}
-              onDelete={() => setPendingWorkspaceDeletion({ id: workspace.workspaceId, label: workspace.title })}
+              onDelete={() => setPendingWorkspaceRemoval({ id: workspace.workspaceId, label: workspace.title })}
+              onReconnect={() => { void onReconnectWorkspace?.(workspace.workspaceId) }}
               conversations={orderedConversations.filter((conversation) =>
                 conversation.owner?.kind === 'workspace' && conversation.owner.id === workspace.workspaceId)}
               activeConversationId={activeConversationId}
@@ -405,15 +408,15 @@ export function Sidebar({
       />
 
       <ActionConfirmationDialog
-        request={pendingWorkspaceDeletion === null ? undefined : {
+        request={pendingWorkspaceRemoval === null ? undefined : {
           eyebrow: '工作区操作',
-          title: `移除工作区“${pendingWorkspaceDeletion.label}”`,
-          description: '工作区将从侧边栏移除，其直属对话一并收口。',
-          consequence: '电脑上的文件夹和知识副本不会被删除。',
+          title: `将“${pendingWorkspaceRemoval.label}”移出侧栏`,
+          description: '真实目录、空间引用和历史对话都会保留；重新添加同一目录即可恢复。',
+          consequence: '这不会删除电脑上的任何文件。',
           confirmLabel: '移除工作区',
         }}
-        onCancel={() => setPendingWorkspaceDeletion(null)}
-        onConfirm={confirmWorkspaceDeletion}
+        onCancel={() => setPendingWorkspaceRemoval(null)}
+        onConfirm={confirmWorkspaceRemoval}
       />
 
     </aside>
@@ -443,6 +446,7 @@ const WORKSPACE_DOT = '#8a7fa8'
 function WorkspaceRow(props: {
   readonly workspace: PersonalWorkspaceProjection
   readonly onDelete: () => void
+  readonly onReconnect: () => void
   readonly conversations: readonly ConversationSummary[]
   readonly activeConversationId?: string
   readonly view: View
@@ -471,6 +475,7 @@ function WorkspaceRow(props: {
         onRename={() => undefined}
         onCancelRename={() => undefined}
         actions={[
+          ...(props.workspace.status === 'disconnected' ? [{ label: '重新连接', icon: <AlertCircle size={12}/>, onClick: props.onReconnect }] : []),
           { label: '移除工作区', icon: <Trash2 size={12}/>, danger: true, onClick: props.onDelete },
         ]}
         meta={

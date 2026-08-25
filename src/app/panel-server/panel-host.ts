@@ -59,7 +59,6 @@ import {
   hasSpaceOwnerScope,
   inspectSpaceExternalSource,
   spaceReferenceIdFromAttachmentId,
-  spaceExternalReferenceStatus,
   type SpaceFeature,
 } from "../spaces/index.js";
 import {
@@ -79,6 +78,7 @@ import {
   type DataMaintenance,
 } from "./storage/data-maintenance.js";
 import { createSpaceReferenceDeletionFilePort } from "./spaces/space-reference-deletion.js";
+import { resolveSpaceFilesystemReference } from "./spaces/space-workspace-reference.js";
 import { deletionLifecycleLockKey } from "./spaces/deletion-lifecycle-lock.js";
 import {
   createOrdinaryConversationTitleGenerator,
@@ -379,11 +379,10 @@ function assemblePanelHost(input: {
       deleteOwnedAssets: async (assetIds) => await managedAssets.removeMany(assetIds),
     },
   });
-  const unlinkSpaceExternalReference = async (referenceId: string): Promise<void> => {
-    try {
-      await spaceFeature.commands.unlinkReference(referenceId);
-    } catch (error) {
-      if (!(error instanceof Error && "code" in error && error.code === "space_reference_not_found")) throw error;
+  const invalidateSpaceReferenceAccess = async (referenceId: string): Promise<void> => {
+    const item = await spaceFeature.queries.getReference(referenceId);
+    if (item?.reference.kind === "workspace") {
+      await workspaceFeature.commands.invalidateMount(item.reference.workspaceId);
     }
   };
   const workspaceFeature: WorkspaceFeature = createWorkspaceFeature({
@@ -399,15 +398,18 @@ function assemblePanelHost(input: {
     captureSpaceReference: async ({ assetId, referenceId, relativePath }) => {
       const item = await spaceFeature.queries.getReference(referenceId);
       if (item === undefined) return undefined;
-      if (await spaceExternalReferenceStatus(item) !== "current") {
-        await unlinkSpaceExternalReference(referenceId);
+      const resolved = item.reference.kind === "local_file" || item.reference.kind === "workspace" || item.reference.kind === "managed_folder"
+        ? await resolveSpaceFilesystemReference({ workspaceFeature }, item)
+        : undefined;
+      const asset = await captureKnowledgeAsset(knowledgeAssetRoot, assetId, item, relativePath, resolved?.path);
+      if (item.reference.kind !== "workspace") return asset;
+      try {
+        await resolveSpaceFilesystemReference({ workspaceFeature }, item);
+        return asset;
+      } catch {
+        await removeKnowledgeAsset(knowledgeAssetRoot, assetId);
         return undefined;
       }
-      const asset = await captureKnowledgeAsset(knowledgeAssetRoot, assetId, item, relativePath);
-      if (await spaceExternalReferenceStatus(item) === "current") return asset;
-      await removeKnowledgeAsset(knowledgeAssetRoot, assetId);
-      await unlinkSpaceExternalReference(referenceId);
-      return undefined;
     },
     removeManagedAsset: async (itemId) => await removeKnowledgeAsset(knowledgeAssetRoot, itemId),
     stageManagedAssetRemoval: async (itemId) => await stageKnowledgeAssetRemoval(knowledgeAssetRoot, itemId),
@@ -456,9 +458,8 @@ function assemblePanelHost(input: {
       if (item === undefined) {
         throw new Error(`Space reference ${referenceId} was removed and is no longer readable.`);
       }
-      if (await spaceExternalReferenceStatus(item) === "current") return;
-      await unlinkSpaceExternalReference(referenceId);
-      throw new Error(`Space reference ${referenceId} no longer points to its original source and was removed.`);
+      if (item.reference.kind !== "workspace") return;
+      await resolveSpaceFilesystemReference({ workspaceFeature }, item);
     },
   };
   const activeSpaceProcessCleanups = new Set<Promise<void>>();
@@ -502,6 +503,30 @@ function assemblePanelHost(input: {
     deleteConversation: (conversationId) => conversationLifecycle.deleteConversation(conversationId),
     managedSpaceFolderRoot,
     fileMutationCoordinator,
+    ensureWorkspaceDirectory: async ({ path: workspacePath, title }) => {
+      const source = await inspectSpaceExternalSource(workspacePath);
+      if (source?.kind !== "folder") throw new Error(`Workspace directory is unavailable: ${workspacePath}`);
+      const ensured = await workspaceFeature.commands.ensureWorkspace({
+        rootPath: workspacePath,
+        sourceIdentity: source.identity,
+        title,
+        visibility: "implicit",
+      });
+      return { workspaceId: ensured.workspace.id };
+    },
+    resolveWorkspaceDirectory: async (workspaceId) => {
+      const workspace = await workspaceFeature.queries.get(workspaceId);
+      const mount = workspace?.status === "available"
+        ? [...workspace.mounts].reverse().find((entry) => entry.status === "active")
+        : undefined;
+      if (mount === undefined) return undefined;
+      const source = await inspectSpaceExternalSource(mount.rootPath);
+      if (source?.kind !== "folder" || source.identity !== mount.sourceIdentity) {
+        await workspaceFeature.commands.invalidateMount(workspaceId);
+        return undefined;
+      }
+      return { path: mount.rootPath, sourceIdentity: mount.sourceIdentity };
+    },
   });
   const capabilityCenter = new CapabilityCenter({
     configCenter: input.configCenter,
@@ -564,7 +589,7 @@ function assemblePanelHost(input: {
         runContext,
         workspaceRoot,
         revocationOverlay: spaceRevocationOverlay,
-        onInvalidReference: unlinkSpaceExternalReference,
+        onInvalidReference: invalidateSpaceReferenceAccess,
       }),
     resolveSubAgentRoots: (workspaceRoot) =>
       input.resolveSubAgentRoots?.({ executionRoot: workspaceRoot }) ?? input.subAgentRoots,
@@ -632,9 +657,12 @@ function assemblePanelHost(input: {
       commands: {
         deleteWorkspace: workspaceFeature.commands.deleteWorkspace,
         purgeWorkspace: workspaceFeature.commands.purgeWorkspace,
-        unlinkWorkspaceFromSpace: workspaceFeature.commands.unlinkWorkspaceFromSpace,
       },
-      queries: { get: workspaceFeature.queries.get, list: workspaceFeature.queries.list },
+      queries: { get: workspaceFeature.queries.get, listAll: workspaceFeature.queries.listAll },
+    },
+    spaces: {
+      commands: { unlinkReference: spaceFeature.commands.unlinkReference },
+      queries: { listReferencesByWorkspace: spaceFeature.queries.listReferencesByWorkspace },
     },
     ordinary: {
       commands: { deleteConversation: ordinaryAgentFeature.commands.deleteConversation },
@@ -668,6 +696,26 @@ function assemblePanelHost(input: {
     }),
     personalKnowledgeFeature.events.subscribe((event) => {
       projectionChanges.publish(projectionChangeFromPersonalKnowledge(event));
+    }),
+    managedAssetFeature.events.subscribe((event) => {
+      projectionChanges.publish({
+        owners: ["managed_assets"],
+        managedAssetIds: [event.assetId],
+      });
+    }),
+    workspaceFeature.events.subscribe((event) => {
+      const workspaceId = event.type === "workspace.registered" || event.type === "workspace.visibility_changed"
+        ? event.workspace.id
+        : event.workspaceId;
+      projectionChanges.publish({ owners: ["workspaces"] });
+      void spaceFeature.queries.listReferencesByWorkspace(workspaceId).then((references) => {
+        if (references.length === 0) return;
+        projectionChanges.publish({
+          owners: ["spaces"],
+          spaceIds: [...new Set(references.map((reference) => reference.spaceId))],
+          referenceIds: references.map((reference) => reference.id),
+        });
+      }).catch(() => undefined);
     }),
     fileMutationCoordinator.events.subscribe(() => {
       projectionChanges.publish({ owners: ["mounted_files"] });

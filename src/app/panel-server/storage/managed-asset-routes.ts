@@ -11,6 +11,7 @@ import {
   type UpdateManagedAssetTextInput,
   type UpdateManagedAssetTextResult,
   type ManagedAsset,
+  type ManagedAssetsFeature,
   managedAssetTextFingerprint,
 } from "../../managed-assets/index.js";
 import { PanelHttpError, readJsonBody, writeJson } from "../http-utils.js";
@@ -20,9 +21,8 @@ import { documentPresentation } from "./document-preview-presentation.js";
 type ManagedAssetRouteRuntime = {
   readonly ensureDefaultSpace: () => Promise<void>;
   readonly managedAssets: {
-    get(id: string): Promise<ManagedAsset | undefined>;
-    updateText(input: UpdateManagedAssetTextInput): Promise<UpdateManagedAssetTextResult>;
-    updateCaption(input: UpdateManagedAssetCaptionInput): Promise<UpdateManagedAssetCaptionResult>;
+    readonly commands: Pick<ManagedAssetsFeature["commands"], "updateText" | "updateCaption">;
+    readonly queries: Pick<ManagedAssetsFeature["queries"], "get">;
   };
 };
 
@@ -49,7 +49,7 @@ export async function handlePanelManagedAssetRoute(
   const previewMatch = /^\/api\/managed-assets\/([^/]+)\/preview$/u.exec(url.pathname);
   if (previewMatch !== null && request.method === "GET") {
     await runtime.ensureDefaultSpace();
-    const preview = await getManagedAssetPreview(runtime.managedAssets, decode(previewMatch[1]));
+    const preview = await getManagedAssetPreview(runtime.managedAssets.queries, decode(previewMatch[1]));
     writeJson(response, 200, { ok: true, preview });
     return true;
   }
@@ -63,7 +63,7 @@ export async function handlePanelManagedAssetRoute(
       throw new PanelHttpError(400, "invalid_managed_asset_input", "请求资产与路径中的资产不一致。");
     }
     writeJson(response, 200, { ok: true, preview: await updateManagedAssetTextPreview(
-      runtime.managedAssets,
+      runtime.managedAssets.commands,
       { assetId, expectedFingerprint: input.expectedFingerprint, text: input.text },
     ) });
     return true;
@@ -78,7 +78,7 @@ export async function handlePanelManagedAssetRoute(
       throw new PanelHttpError(400, "invalid_managed_asset_input", "请求资产与路径中的资产不一致。");
     }
     writeJson(response, 200, { ok: true, preview: await updateManagedAssetCaptionPreview(
-      runtime.managedAssets,
+      runtime.managedAssets.commands,
       { assetId, expectedFingerprint: input.expectedFingerprint, caption: input.caption },
     ) });
     return true;

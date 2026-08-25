@@ -1,6 +1,6 @@
 export type PanelSpaceReference =
   | { readonly kind: "local_file"; readonly path: string }
-  | { readonly kind: "workspace_folder"; readonly path: string }
+  | { readonly kind: "workspace"; readonly workspaceId: string }
   | { readonly kind: "managed_folder"; readonly path: string }
   | { readonly kind: "asset_folder" }
   | { readonly kind: "managed_asset"; readonly assetId: string }
@@ -30,6 +30,11 @@ export type PanelSpaceReferenceItem = {
   readonly parentId?: string;
   readonly reference: PanelSpaceReference;
   readonly sourceIdentity?: string;
+  readonly workspace?: {
+    readonly status: "available" | "disconnected" | "deleting";
+    readonly rootPath?: string;
+    readonly mountVersion?: string;
+  };
   readonly annotation?: PanelSpaceReferenceAnnotation;
   readonly imageCaptions?: Readonly<Record<string, {
     readonly text: string;

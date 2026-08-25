@@ -58,7 +58,7 @@ function spaceReferenceKindLabel(kind: PersonalSpaceItemProjection['kind']): str
   switch (kind) {
     case 'folder': return '文件夹'
     case 'local_file': return '本地文件引用'
-    case 'workspace_folder': return '工作区文件夹引用'
+    case 'workspace': return '工作区引用'
     case 'managed_folder': return '软件文件夹'
     case 'managed_asset': return '托管资产'
     case 'web_reference': return '网页引用'
@@ -102,12 +102,14 @@ interface SearchPageProps {
   conversations: readonly ConversationSummary[]
   /** 在空间里打开某个笔记/材料。 */
   onOpenInSpace: (spaceId: string, id: string) => void
+  /** 打开不再归属于 Space 的长期 Knowledge 条目。 */
+  onOpenInKnowledge: (id: string) => void
   onOpenConversation: (conversationId: string) => boolean | Promise<boolean>
 }
 
 const searchMemory: { query: string; filter: FilterType } = { query: '', filter: 'all' }
 
-export function SearchPage({ onNavigate, onOpenInSpace, onOpenConversation, spaces, conversations }: SearchPageProps) {
+export function SearchPage({ onNavigate, onOpenInSpace, onOpenInKnowledge, onOpenConversation, spaces, conversations }: SearchPageProps) {
   const { notes } = useNotes()
   const [query, setQuery] = useState(searchMemory.query)
   const [debouncedQuery, setDebouncedQuery] = useState(searchMemory.query)
@@ -156,7 +158,7 @@ export function SearchPage({ onNavigate, onOpenInSpace, onOpenConversation, spac
           id: n.id,
           name: n.title || '无标题',
           type: 'note',
-          space: spaceTitles.get(n.spaceId) ?? '未归属空间',
+          space: n.spaceId === undefined ? '未归属空间' : spaceTitles.get(n.spaceId) ?? '未归属空间',
           snippet: makeSnippet(n.bodyMarkdown, debouncedQuery, '(空笔记)'),
           haystack: `${n.title} ${n.bodyMarkdown}`,
           spaceId: n.spaceId,
@@ -165,7 +167,7 @@ export function SearchPage({ onNavigate, onOpenInSpace, onOpenConversation, spac
           id: note.id,
           name: note.title || '无标题',
           type: 'note',
-          space: spaceTitles.get(note.spaceId) ?? '未归属空间',
+          space: note.spaceId === undefined ? '未归属空间' : spaceTitles.get(note.spaceId) ?? '未归属空间',
           snippet: snippet || '(空笔记)',
           haystack: `${note.title} ${debouncedQuery}`,
           spaceId: note.spaceId,
@@ -222,6 +224,8 @@ export function SearchPage({ onNavigate, onOpenInSpace, onOpenConversation, spac
       if (opened !== false) onNavigate('space')
     } else if (result.spaceId !== undefined) {
       onOpenInSpace(result.spaceId, result.id)
+    } else if (result.type === 'note') {
+      onOpenInKnowledge(result.id)
     }
   }
 

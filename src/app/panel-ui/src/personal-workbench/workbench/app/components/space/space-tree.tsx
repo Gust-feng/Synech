@@ -16,6 +16,7 @@ import {
   Pencil,
   Plus,
   Search,
+  RefreshCw,
   Trash2,
   Unlink,
 } from 'lucide-react'
@@ -207,6 +208,7 @@ function SpaceReferencesSection({
   onSelect,
   onRename,
   onUnlink,
+  onReconnectWorkspace,
   onDelete,
   onCreateEntry,
   onToggleExpand,
@@ -228,6 +230,7 @@ function SpaceReferencesSection({
   onSelect: (id: string) => void
   onRename: (item: SpaceItem, name: string) => void
   onUnlink: (item: SpaceItem) => void
+  onReconnectWorkspace: (item: SpaceItem) => void
   onDelete: (item: SpaceItem) => void
   onCreateEntry: (item: SpaceItem) => void
   onToggleExpand: (id: string) => void
@@ -287,6 +290,7 @@ function SpaceReferencesSection({
             selectedId={selectedId}
             onRename={onRename}
             onUnlink={onUnlink}
+            onReconnectWorkspace={onReconnectWorkspace}
             onDelete={onDelete}
             onCreateEntry={onCreateEntry}
             renameEnabled={actions?.rename !== undefined}
@@ -341,6 +345,7 @@ function TreeNode({
   selectedId,
   onRename,
   onUnlink,
+  onReconnectWorkspace,
   onDelete,
   onCreateEntry,
   renameEnabled,
@@ -360,6 +365,7 @@ function TreeNode({
   selectedId: string | null
   onRename: (item: SpaceItem, name: string) => void
   onUnlink: (item: SpaceItem) => void
+  onReconnectWorkspace: (item: SpaceItem) => void
   onDelete: (item: SpaceItem) => void
   onCreateEntry: (item: SpaceItem) => void
   renameEnabled: boolean
@@ -383,11 +389,12 @@ function TreeNode({
     && item.referenceId !== undefined
     && item.domainKind === 'managed_folder'
   const canRename = !item.externalChild
-    && item.domainKind !== 'workspace_folder'
+    && item.domainKind !== 'workspace'
     && renameEnabled
   const canUnlink = !item.externalChild
-    && (item.domainKind === 'workspace_folder' || item.domainKind === 'local_file' || item.domainKind === 'web_reference' || item.domainKind === 'generated_artifact')
+    && (item.domainKind === 'workspace' || item.domainKind === 'local_file' || item.domainKind === 'web_reference' || item.domainKind === 'generated_artifact')
     && unlinkEnabled
+  const canReconnect = !item.externalChild && item.domainKind === 'workspace' && item.workspaceStatus === 'disconnected'
   const canRemove = (isManagedFolder && removeManagedFolderEnabled
     || (!item.externalChild && item.domainKind === 'folder' && removeEnabled))
   const paddingLeft = 10 + depth * 14
@@ -449,13 +456,14 @@ function TreeNode({
           </span>
         )}
 
-        {!editing && (canCreateExternalEntry || canRename || canUnlink || canRemove) && (
+        {!editing && (canCreateExternalEntry || canRename || canReconnect || canUnlink || canRemove) && (
           <FloatingMenu
             label={`${item.name}操作`}
             visible={hovered}
             actions={[
               ...(canCreateExternalEntry ? [{ label: '新建文件', icon: <FilePlus size={12} />, onClick: () => onCreateEntry(item) }] : []),
               ...(canRename ? [{ label: '重命名', icon: <Pencil size={12} />, onClick: () => setEditing(true) }] : []),
+              ...(canReconnect ? [{ label: '重新连接', icon: <RefreshCw size={12} />, onClick: () => onReconnectWorkspace(item) }] : []),
               ...(canUnlink ? [{ label: '移除引用', icon: <Unlink size={12} />, onClick: () => onUnlink(item) }] : []),
               ...(canRemove ? [{ label: deleteLabelFor(item), icon: <Trash2 size={12} />, danger: true, onClick: () => onDelete(item) }] : []),
             ]}
@@ -484,6 +492,7 @@ function TreeNode({
               selectedId={selectedId}
               onRename={onRename}
               onUnlink={onUnlink}
+              onReconnectWorkspace={onReconnectWorkspace}
               onDelete={onDelete}
               onCreateEntry={onCreateEntry}
               renameEnabled={renameEnabled}

@@ -1,5 +1,6 @@
 import { requestJson } from '@ui/api'
 import type { DocumentCaptionUpdateInput, DocumentPreview, DocumentTextUpdateInput } from '@panel-api/workbench'
+import { subscribeWorkbenchProjectionChanges } from '@ui/workbench/projection-changes'
 
 export type { DocumentPreview } from '@panel-api/workbench'
 
@@ -13,6 +14,12 @@ const previewListeners = new Map<string, Set<() => void>>()
 const previewCacheVersions = new Map<string, number>()
 const pendingPreviewNotifications = new Set<string>()
 let previewNotificationTimer: ReturnType<typeof setTimeout> | undefined
+
+subscribeWorkbenchProjectionChanges((change) => {
+  if (!change.reset && !change.owners.includes('managed_assets')) return
+  invalidateDocumentPreviews(undefined, '/api/spaces/references')
+  invalidateDocumentPreviews(undefined, '/api/managed-assets')
+})
 
 export function subscribeReferencePreviewCache(listener: () => void, apiBase = '/api/spaces/references'): () => void {
   const listeners = previewListeners.get(apiBase) ?? new Set<() => void>()

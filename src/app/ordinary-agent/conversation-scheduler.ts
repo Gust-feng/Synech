@@ -1,4 +1,5 @@
 import type { OrdinaryRunState } from "./contracts.js";
+import { isTerminal } from "./run-lifecycle-policy.js";
 
 export type OrdinaryRunSchedulingFacts = {
   readonly unsettledToolWork: boolean;
@@ -10,7 +11,7 @@ export function isSchedulingBarrierCleared(
   state: OrdinaryRunState,
   facts: OrdinaryRunSchedulingFacts,
 ): boolean {
-  if (!isTerminalForScheduling(state) ||
+  if (!isTerminal(state) ||
       state.pendingToolRound !== undefined ||
       state.pendingNestedToolCalls !== undefined ||
       facts.unsettledToolWork ||
@@ -41,11 +42,4 @@ export function orderedConversationRuns(
   return [...runs]
     .filter((run) => run.turn.conversationId === conversationId)
     .sort((left, right) => left.turn.ordinal - right.turn.ordinal);
-}
-
-function isTerminalForScheduling(state: OrdinaryRunState): boolean {
-  return state.status.kind === "completed" ||
-    state.status.kind === "failed" ||
-    state.status.kind === "cancelled" ||
-    state.status.kind === "blocked";
 }

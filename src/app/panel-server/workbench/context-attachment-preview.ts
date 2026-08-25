@@ -5,7 +5,11 @@ import type {
   PanelContextAttachmentKind as ContextAttachmentKind,
 } from "../../panel-api/ordinary-agent.js";
 import { createId } from "../../../kernel/id.js";
-import { managedAttachmentRef } from "../../../domain/ordinary/index.js";
+import {
+  managedAttachmentRef,
+  serializeContextReference,
+  serializePermissionBoundaryRef,
+} from "../../../domain/ordinary/index.js";
 
 const MAX_FILE_PREVIEW_BYTES = 96_000;
 const MAX_FILE_PREVIEW_CHARS = 8_000;
@@ -92,8 +96,9 @@ export async function createSelectedLocalContextAttachment(
   const actualKind = stat?.isDirectory() === true ? "project" : "file";
   const kind = stat === undefined ? input.kind : actualKind;
   const title = safeText(path.basename(absolutePath) || absolutePath, 120);
-  const refPrefix = kind === "project" ? "local-project" : "local-file";
-  const ref = `${refPrefix}:${absolutePath}`;
+  const ref = serializeContextReference(kind === "project"
+    ? { scheme: "local_project", path: absolutePath }
+    : { scheme: "local_file", path: absolutePath });
   const preview = stat === undefined
     ? undefined
     : kind === "project"
@@ -104,6 +109,7 @@ export async function createSelectedLocalContextAttachment(
   return {
     attachmentId: createId("ctx"),
     kind,
+    sourceKind: kind === "project" ? "local_project" : "local_file",
     ref,
     title,
     summary: safeText(
@@ -111,7 +117,7 @@ export async function createSelectedLocalContextAttachment(
       280
     ),
     readonlyPreview: preview,
-    permissionRefs: [kind === "project" ? `read:local-project:${absolutePath}` : `read:local-file:${absolutePath}`],
+    permissionRefs: [readPermission(ref)],
     readonlyPreviewMeta: {
       available,
       title,
@@ -135,14 +141,16 @@ export async function createUploadedContextAttachment(
   const title = safeText(path.basename(input.originalName) || path.basename(absolutePath) || "attachment", 120);
   const mimeType = safeText(input.mimeType ?? mimeTypeForPath(title) ?? mimeTypeForPath(absolutePath) ?? "application/octet-stream", 160);
   const preview = await fileReadonlyPreview(absolutePath, title, stat.size, mimeType);
+  const ref = managedAttachmentRef(input.attachmentId);
   return {
     attachmentId: input.attachmentId,
     kind: "file",
-    ref: managedAttachmentRef(input.attachmentId),
+    sourceKind: "managed_upload",
+    ref,
     title,
     summary: safeText(`上传附件：${title} · ${stat.size} bytes${preview?.truncated === true ? " · 预览已截断" : ""}`, 280),
     readonlyPreview: preview,
-    permissionRefs: [`read:uploaded-attachment:${input.attachmentId}`],
+    permissionRefs: [readPermission(ref)],
     readonlyPreviewMeta: {
       available: true,
       title,
@@ -159,13 +167,14 @@ function workspaceAttachment(workspaceRoot: string, raw: CreateContextAttachment
   return {
     attachmentId: createId("ctx"),
     kind: "workspace",
-    ref: "workspace:current",
+    sourceKind: "workspace",
+    ref: serializeContextReference({ scheme: "workspace", value: "current" }),
     title: label,
     summary: safeText(raw.summary ?? "允许本轮任务使用当前工作区上下文。", 280),
     readonlyPreview: raw.summary === undefined
       ? undefined
       : { title: label, text: safeText(raw.summary, MAX_FILE_PREVIEW_CHARS), truncated: false },
-    permissionRefs: ["read:workspace:current-task"],
+    permissionRefs: [readPermission("workspace:current-task")],
     readonlyPreviewMeta: { available: true, title: label },
     status: "ready",
   };
@@ -193,14 +202,20 @@ async function fileSystemAttachment(input: {
   return {
     attachmentId: createId("ctx"),
     kind: input.kind,
-    ref: `${input.kind}:${relativePath || "."}`,
+    sourceKind: input.kind === "project" ? "workspace_project" : "workspace_file",
+    ref: serializeContextReference(input.kind === "file"
+      ? { scheme: "file", path: relativePath || "." }
+      : { scheme: "project", path: relativePath || "." }),
     title,
     summary: safeText(input.raw.summary ?? defaultFileSystemSummary(input.kind, relativePath, stat), 280),
     readonlyPreview,
     permissionRefs:
       input.kind === "file"
-        ? [`read:file:${relativePath}`]
-        : ["read:workspace:current-task", `read:project:${relativePath || "."}`],
+        ? [readPermission(serializeContextReference({ scheme: "file", path: relativePath }))]
+        : [
+            readPermission("workspace:current-task"),
+            readPermission(serializeContextReference({ scheme: "project", path: relativePath || "." })),
+          ],
     readonlyPreviewMeta: {
       available: stat !== undefined && isExpectedKind,
       title,
@@ -226,14 +241,19 @@ function webAttachment(value: string, raw: CreateContextAttachmentPreviewInput):
   return {
     attachmentId: createId("ctx"),
     kind: "web",
-    ref: `web:${url.toString()}`,
+    sourceKind: "web",
+    ref: serializeContextReference({ scheme: "web", value: url.toString() }),
     title,
     summary: safeText(raw.summary ?? `网页引用：${url.toString()}`, 280),
     readonlyPreview: { title, text: safeText(url.toString(), MAX_FILE_PREVIEW_CHARS), truncated: false },
-    permissionRefs: ["read:web"],
+    permissionRefs: [readPermission("web")],
     readonlyPreviewMeta: { available: true, title },
     status: "ready",
   };
+}
+
+function readPermission(target: string): string {
+  return serializePermissionBoundaryRef({ kind: "access", mode: "read", target });
 }
 
 async function fileReadonlyPreview(

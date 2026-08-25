@@ -38,7 +38,7 @@ export type PersonalNoteRemoteState =
 const EMPTY_SNAPSHOT: Snapshot = { notes: [], pages: [], links: [], themes: [], assignments: [], recentlyOpened: {} }
 let snapshot: Snapshot = EMPTY_SNAPSHOT
 let authoritativeSnapshot: Snapshot = snapshot
-let activeSpaceId = 'personal-unassigned'
+let activeSpaceId: string | undefined
 let loaded = false
 let loading: Promise<void> | undefined
 let refreshing: Promise<void> | undefined
@@ -152,7 +152,7 @@ export async function fetchPersonalNoteRemoteState(noteId: string, signal?: Abor
 }
 
 export function initializePersonalKnowledge(spaceId?: string): Promise<void> {
-  if (spaceId !== undefined) activeSpaceId = spaceId
+  activeSpaceId = spaceId
   if (!persistenceEnabled) {
     loadState = { status: 'ready' }
     emit()
@@ -200,7 +200,7 @@ export function refreshPersonalKnowledge(): Promise<void> {
   return refreshing
 }
 
-export function setActivePersonalKnowledgeSpace(spaceId: string): void {
+export function setActivePersonalKnowledgeSpace(spaceId: string | undefined): void {
   activeSpaceId = spaceId
 }
 
@@ -233,7 +233,7 @@ export function createPersonalNote(init?: Partial<Pick<Note, 'spaceId' | 'title'
   const now = Date.now()
   const note: Note = {
     id: crypto.randomUUID(),
-    spaceId: activeSpaceId,
+    ...(activeSpaceId === undefined ? {} : { spaceId: activeSpaceId }),
     title: '',
     bodyMarkdown: '',
     createdAt: now,
@@ -245,7 +245,12 @@ export function createPersonalNote(init?: Partial<Pick<Note, 'spaceId' | 'title'
     (current) => ({ ...current, notes: [note, ...current.notes] }),
     () => requestJson('/api/personal-knowledge/notes', {
       method: 'POST',
-      body: JSON.stringify({ id: note.id, spaceId: note.spaceId, title: note.title, bodyMarkdown: note.bodyMarkdown }),
+      body: JSON.stringify({
+        id: note.id,
+        ...(note.spaceId === undefined ? {} : { spaceId: note.spaceId }),
+        title: note.title,
+        bodyMarkdown: note.bodyMarkdown,
+      }),
     }),
     note.id,
   )

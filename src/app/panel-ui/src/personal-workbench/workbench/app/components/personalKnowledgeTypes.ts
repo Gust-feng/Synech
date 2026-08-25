@@ -1,6 +1,6 @@
 export interface Note {
   id: string
-  spaceId: string
+  spaceId?: string
   title: string
   bodyMarkdown: string
   createdAt: number

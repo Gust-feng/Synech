@@ -258,6 +258,7 @@ export function createSpaceFeature(input: CreateSpaceFeatureInput): SpaceFeature
           requireSpace(snapshot, spaceId);
           if (parentId !== undefined) requireParent(snapshot, spaceId, parentId);
           assertManagedAssetUnique(snapshot, reference);
+          assertWorkspaceReferenceUnique(snapshot, spaceId, reference);
           await assertExternalPathUnique(snapshot, spaceId, reference, input.workspaceMountIdentity);
           const validatedReference = validateSpaceReference(reference);
           const sourceIdentity = await captureExternalSourceIdentity(validatedReference, input.externalSourceInspector);
@@ -287,7 +288,7 @@ export function createSpaceFeature(input: CreateSpaceFeatureInput): SpaceFeature
         return serialize(async () => {
           const snapshot = await input.repository.read();
           const current = requireReference(snapshot, itemId);
-          if (current.reference.kind !== "local_file" && current.reference.kind !== "workspace_folder") {
+          if (current.reference.kind !== "local_file") {
             throw new SpaceFeatureError(
               "space_invalid_input",
               `Space reference ${itemId} does not have an external filesystem identity.`,
@@ -342,7 +343,7 @@ export function createSpaceFeature(input: CreateSpaceFeatureInput): SpaceFeature
           const snapshot = await input.repository.read();
           const current = requireReference(snapshot, itemId);
           if (current.reference.kind !== "local_file"
-            && current.reference.kind !== "workspace_folder"
+            && current.reference.kind !== "workspace"
             && current.reference.kind !== "managed_folder") {
             throw new SpaceFeatureError("space_reference_image_caption_invalid", `Space reference ${itemId} cannot own image captions.`);
           }
@@ -432,7 +433,7 @@ export function createSpaceFeature(input: CreateSpaceFeatureInput): SpaceFeature
         const snapshot = await input.repository.read();
         return snapshot.spaces.map((space) => ({
           ...space,
-          folderCount: snapshot.referenceItems.filter((item) => item.spaceId === space.id && (item.reference.kind === "workspace_folder" || item.reference.kind === "managed_folder" || item.reference.kind === "asset_folder")).length,
+          folderCount: snapshot.referenceItems.filter((item) => item.spaceId === space.id && (item.reference.kind === "workspace" || item.reference.kind === "managed_folder" || item.reference.kind === "asset_folder")).length,
           referenceItemCount: snapshot.referenceItems.filter((item) => item.spaceId === space.id).length,
         }));
       },
@@ -450,6 +451,11 @@ export function createSpaceFeature(input: CreateSpaceFeatureInput): SpaceFeature
         assertUsable("read a reference");
         await waitUntilUsable();
         return (await input.repository.read()).referenceItems.find((entry) => entry.id === itemId);
+      },
+      async listReferencesByWorkspace(workspaceId) {
+        assertUsable("list Workspace references");
+        await waitUntilUsable();
+        return (await input.repository.read()).referenceItems.filter((entry) => entry.reference.kind === "workspace" && entry.reference.workspaceId === workspaceId);
       },
     },
     events: {
@@ -547,7 +553,7 @@ function managedAssetIds(items: readonly SpaceReferenceItem[]): readonly string[
 }
 
 function assertMovableReference(reference: SpaceReferenceItem["reference"]): void {
-  if (reference.kind === "local_file" || reference.kind === "workspace_folder") {
+  if (reference.kind === "local_file" || reference.kind === "workspace") {
     throw new SpaceFeatureError(
       "space_invalid_move",
       `${reference.kind} is an external link and cannot be moved between Spaces.`,
@@ -557,7 +563,7 @@ function assertMovableReference(reference: SpaceReferenceItem["reference"]): voi
 
 function isExternalReference(reference: SpaceReferenceItem["reference"]): boolean {
   return reference.kind === "local_file"
-    || reference.kind === "workspace_folder"
+    || reference.kind === "workspace"
     || reference.kind === "web_page"
     || reference.kind === "generated_artifact";
 }
@@ -595,28 +601,23 @@ async function assertExternalPathUnique(
   reference: SpaceReferenceItem["reference"],
   identify: CreateSpaceFeatureInput["workspaceMountIdentity"],
 ): Promise<void> {
-  if (reference.kind !== "workspace_folder" && reference.kind !== "local_file") return;
+  if (reference.kind !== "local_file") return;
   const identity = await workspaceMountIdentity(reference.path, identify);
   for (const item of snapshot.referenceItems) {
     if (item.spaceId !== spaceId) continue;
-    if (item.reference.kind !== "workspace_folder" && item.reference.kind !== "local_file") continue;
+    if (item.reference.kind !== "local_file") continue;
     const existing = await workspaceMountIdentity(item.reference.path, identify);
     if (existing === identity) {
       throw new SpaceFeatureError("space_workspace_mount_conflict", "This filesystem path is already linked to this Space");
     }
-    if (item.reference.kind === "workspace_folder" && isMountAncestor(existing, identity)) {
-      throw new SpaceFeatureError("space_workspace_mount_conflict", "This filesystem path is inside another linked workspace folder in this Space");
-    }
-    if (reference.kind === "workspace_folder" && isMountAncestor(identity, existing)) {
-      throw new SpaceFeatureError("space_workspace_mount_conflict", "Another linked filesystem path is inside this workspace folder in this Space");
-    }
   }
 }
 
-/** 判断 `ancestor` 是否为 `candidate` 的严格祖先目录，按已规范化的挂载身份做段边界比较。 */
-function isMountAncestor(ancestor: string, candidate: string): boolean {
-  const prefix = ancestor.endsWith("/") ? ancestor : `${ancestor}/`;
-  return candidate.length > prefix.length && candidate.startsWith(prefix);
+function assertWorkspaceReferenceUnique(snapshot: SpaceTreeSnapshot, spaceId: string, reference: SpaceReferenceItem["reference"]): void {
+  if (reference.kind !== "workspace") return;
+  if (snapshot.referenceItems.some((item) => item.spaceId === spaceId && item.reference.kind === "workspace" && item.reference.workspaceId === reference.workspaceId)) {
+    throw new SpaceFeatureError("space_workspace_mount_conflict", "This Workspace is already referenced by this Space");
+  }
 }
 
 async function workspaceMountIdentity(value: string, identify: CreateSpaceFeatureInput["workspaceMountIdentity"]): Promise<string> {
@@ -628,15 +629,15 @@ async function captureExternalSourceIdentity(
   reference: SpaceReference,
   inspect: SpaceExternalSourceInspector | undefined,
 ): Promise<string | undefined> {
-  if (inspect === undefined || (reference.kind !== "local_file" && reference.kind !== "workspace_folder")) {
+  if (inspect === undefined || reference.kind !== "local_file") {
     return undefined;
   }
   const source = await inspect(reference.path);
-  const expectedKind = reference.kind === "local_file" ? "file" : "folder";
+  const expectedKind = "file";
   if (source === undefined || source.kind !== expectedKind) {
     throw new SpaceFeatureError(
       "space_invalid_input",
-      `The ${reference.kind === "local_file" ? "file" : "workspace folder"} source does not exist at ${reference.path}.`,
+      `The local file source does not exist at ${reference.path}.`,
     );
   }
   return source.identity;

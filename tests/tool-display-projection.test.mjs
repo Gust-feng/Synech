@@ -132,6 +132,7 @@ test("raw transcript activity shows the original fact instead of inferred source
   assert.equal(items[0].toolKind, "other");
   assert.equal(items[0].lead.action, "工具");
   assert.deepEqual(items[0].expandedSections, [{
+    sectionId: "raw_result",
     title: "原始结果",
     content: JSON.stringify(output, undefined, 2),
     format: "code",

@@ -256,6 +256,7 @@ export function App(): React.ReactElement {
         addWebReference: spaceProjection.addWebReference,
         rename: spaceProjection.rename,
         unlinkReference: spaceProjection.unlinkReference,
+        reconnectWorkspace: spaceProjection.reconnectWorkspace,
         removeReference: spaceProjection.removeReference,
       }}
       onOpenSettings={() => openSettings("models")}

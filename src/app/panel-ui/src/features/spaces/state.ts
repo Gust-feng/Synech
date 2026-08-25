@@ -34,6 +34,7 @@ export function useSpaceProjection(enabled = true): {
   readonly addWebReference: (spaceId: string, title: string, url: string) => Promise<void>;
   readonly rename: (target: { readonly kind: "space" | "reference"; readonly id: string }, title: string) => Promise<void>;
   readonly unlinkReference: (itemId: string) => Promise<void>;
+  readonly reconnectWorkspace: (workspaceId: string) => Promise<void>;
   readonly removeReference: (itemId: string) => Promise<void>;
   readonly openReference: (spaceId: string, itemId: string) => Promise<void>;
   readonly refresh: () => Promise<void>;
@@ -195,6 +196,11 @@ export function useSpaceProjection(enabled = true): {
   const addLocalFile = useCallback(async (spaceId: string): Promise<void> => {
     const attachment = await selectLocalContextAttachment();
     if (attachment === undefined) return;
+    if (attachment.ref.startsWith("local-project:")) {
+      const rootPath = attachment.ref.slice("local-project:".length);
+      await runMutation(`add-workspace:${spaceId}:${rootPath}`, () => postJson(`/api/spaces/${encodeURIComponent(spaceId)}/workspaces`, { rootPath, title: attachment.title }), [spaceId]);
+      return;
+    }
     const reference = localReferenceFromAttachment(attachment);
     if (reference === undefined) throw new Error("所选内容不能作为空间引用。");
     await runMutation(`add-local-file:${spaceId}:${attachment.ref}`, () => postJson(`/api/spaces/${encodeURIComponent(spaceId)}/references`, {
@@ -206,9 +212,9 @@ export function useSpaceProjection(enabled = true): {
   const addWorkspaceFolder = useCallback(async (spaceId: string): Promise<void> => {
     const directory = await selectTaskWorkspaceDirectory();
     if (directory === undefined) return;
-    await runMutation(`add-workspace:${spaceId}:${directory}`, () => postJson(`/api/spaces/${encodeURIComponent(spaceId)}/references`, {
+    await runMutation(`add-workspace:${spaceId}:${directory}`, () => postJson(`/api/spaces/${encodeURIComponent(spaceId)}/workspaces`, {
       title: basename(directory),
-      reference: { kind: "workspace_folder", path: directory },
+      rootPath: directory,
     }), [spaceId]);
   }, [runMutation]);
 
@@ -241,6 +247,12 @@ export function useSpaceProjection(enabled = true): {
     await runMutation(`unlink-reference:${itemId}`, () => postJson(`/api/spaces/references/${encodeURIComponent(itemId)}/unlink`, {}));
   }, [runMutation]);
 
+  const reconnectWorkspace = useCallback(async (workspaceId: string): Promise<void> => {
+    const directory = await selectTaskWorkspaceDirectory();
+    if (directory === undefined) return;
+    await runMutation(`reconnect-workspace:${workspaceId}`, () => postJson(`/api/workspaces/${encodeURIComponent(workspaceId)}/reconnect`, { rootPath: directory }));
+  }, [runMutation]);
+
   const openReference = useCallback(async (_spaceId: string, itemId: string): Promise<void> => {
     await postJson(`/api/spaces/references/${encodeURIComponent(itemId)}/open`, {});
   }, []);
@@ -261,6 +273,7 @@ export function useSpaceProjection(enabled = true): {
     addWebReference,
     rename,
     unlinkReference,
+    reconnectWorkspace,
     removeReference,
     openReference,
     refresh,
@@ -279,13 +292,9 @@ function isAbortError(reason: unknown): boolean {
 
 function localReferenceFromAttachment(attachment: { readonly kind: string; readonly ref: string }):
   | { readonly kind: "local_file"; readonly path: string }
-  | { readonly kind: "workspace_folder"; readonly path: string }
   | undefined {
   if (attachment.ref.startsWith("local-file:")) {
     return { kind: "local_file", path: attachment.ref.slice("local-file:".length) };
-  }
-  if (attachment.ref.startsWith("local-project:")) {
-    return { kind: "workspace_folder", path: attachment.ref.slice("local-project:".length) };
   }
   return undefined;
 }
@@ -332,8 +341,8 @@ function projectEntries(entries: readonly SpaceTreeEntry[]): PersonalSpaceItemPr
 
 function projectEntry(entry: SpaceTreeEntry): PersonalSpaceItemProjection {
   const { item } = entry;
-  const openable = item.reference.kind !== "generated_artifact" && item.reference.kind !== "asset_folder";
-  const isFileSystemFolder = item.reference.kind === "workspace_folder" || item.reference.kind === "managed_folder";
+  const openable = item.reference.kind !== "generated_artifact" && item.reference.kind !== "asset_folder" && item.workspace?.status !== "disconnected";
+  const isFileSystemFolder = item.reference.kind === "workspace" || item.reference.kind === "managed_folder";
   return {
     itemId: item.id,
     title: item.title,
@@ -341,6 +350,10 @@ function projectEntry(entry: SpaceTreeEntry): PersonalSpaceItemProjection {
     openable,
     ...(isFileSystemFolder ? { referenceId: item.id } : {}),
     ...(item.reference.kind === "managed_asset" ? { referenceId: item.id, assetId: item.reference.assetId } : {}),
+    ...(item.reference.kind === "workspace" ? {
+      workspaceId: item.reference.workspaceId,
+      workspaceStatus: item.workspace?.status ?? "disconnected",
+    } : {}),
     ...(item.reference.kind === "web_page" ? { openUrl: item.reference.url } : {}),
     detail: itemDetail(item.reference),
     updatedAtLabel: relativeTimeLabel(item.updatedAt),
@@ -350,7 +363,7 @@ function projectEntry(entry: SpaceTreeEntry): PersonalSpaceItemProjection {
 function itemKind(kind: SpaceReferenceKind): PersonalSpaceItemProjection["kind"] {
   switch (kind) {
     case "local_file": return "local_file";
-    case "workspace_folder": return "workspace_folder";
+    case "workspace": return "workspace";
     case "managed_folder": return "managed_folder";
     case "asset_folder": return "folder";
     case "managed_asset": return "managed_asset";
@@ -363,8 +376,8 @@ function itemKind(kind: SpaceReferenceKind): PersonalSpaceItemProjection["kind"]
 function itemDetail(reference: SpaceReference): string | undefined {
   switch (reference.kind) {
     case "local_file":
-    case "workspace_folder":
     case "managed_folder": return reference.path;
+    case "workspace": return undefined;
     case "asset_folder": return undefined;
     case "managed_asset": return undefined;
     case "web_page": return reference.url;
