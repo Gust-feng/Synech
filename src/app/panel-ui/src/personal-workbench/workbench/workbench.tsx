@@ -18,7 +18,7 @@ import { Sidebar } from "./app/components/Sidebar";
 import { TopBar } from "./app/components/TopBar";
 import type { ConversationSurfaceProjection } from "./app/components/conversation-surface-state";
 import { WorkbenchViewRenderer } from "./app/components/WorkbenchViewRenderer";
-import { WorkbenchStatusNotice } from "./app/components/WorkbenchStatusNotice";
+import { WorkbenchStatusCenter, type WorkbenchStatusNotice } from "./app/components/WorkbenchStatusCenter";
 import { projectLiveConversationState } from "./app/components/conversation-surface-state";
 import { resolveById } from "./app/components/brainStore";
 import {
@@ -244,6 +244,47 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
     autoFocus: true,
     placeholder: activeConversation === undefined ? "从一个想法开始" : "继续对话...",
   }), [activeConversation, props.inputProps]);
+  const statusNotices = useMemo<readonly WorkbenchStatusNotice[]>(() => {
+    const notices: WorkbenchStatusNotice[] = [];
+    if (props.bootstrapState.status === "error") {
+      notices.push({
+        id: "bootstrap-error",
+        message: props.bootstrapState.error ?? "工作台启动数据加载失败。",
+        onRetry: props.bootstrapState.onRetry,
+      });
+    }
+    if (props.bootstrapState.status === "retrying") {
+      notices.push({ id: "bootstrap-retrying", message: "正在重新连接工作台...", retrying: true });
+    }
+    if (props.bootstrapState.status === "ready" && knowledgeLoadState.status === "error") {
+      notices.push({
+        id: "knowledge-load-error",
+        message: knowledgeLoadState.message,
+        onRetry: () => void retryKnowledge().catch(() => undefined),
+      });
+    }
+    if (props.bootstrapState.status === "ready" && knowledgeLoadState.status === "ready" && knowledgeError !== undefined) {
+      notices.push({
+        id: "knowledge-refresh-error",
+        message: knowledgeError,
+        onRetry: () => void refreshKnowledge().catch(() => undefined),
+        onDismiss: dismissKnowledgeError,
+      });
+    }
+    if (props.error !== undefined && props.bootstrapState.status === "ready" && knowledgeError === undefined) {
+      notices.push({ id: "conversation-error", message: props.error, onDismiss: props.onDismissError });
+    }
+    return notices;
+  }, [
+    dismissKnowledgeError,
+    knowledgeError,
+    knowledgeLoadState,
+    props.bootstrapState,
+    props.error,
+    props.onDismissError,
+    refreshKnowledge,
+    retryKnowledge,
+  ]);
   const showLoadingFallback = (
     props.bootstrapState.status === "loading" && view !== "home"
   ) || (
@@ -376,36 +417,7 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
         </main>
       </div>
 
-      {props.bootstrapState.status === "error" && (
-        <WorkbenchStatusNotice
-          message={props.bootstrapState.error ?? "工作台启动数据加载失败。"}
-          onRetry={props.bootstrapState.onRetry}
-          retrying={false}
-        />
-      )}
-
-      {props.bootstrapState.status === "retrying" && (
-        <WorkbenchStatusNotice message="正在重新连接工作台..." retrying />
-      )}
-
-      {props.bootstrapState.status === "ready" && knowledgeLoadState.status === "error" && (
-        <WorkbenchStatusNotice
-          message={knowledgeLoadState.message}
-          onRetry={() => void retryKnowledge().catch(() => undefined)}
-        />
-      )}
-
-      {props.bootstrapState.status === "ready" && knowledgeLoadState.status === "ready" && knowledgeError !== undefined && (
-        <WorkbenchStatusNotice
-          message={knowledgeError}
-          onRetry={() => void refreshKnowledge().catch(() => undefined)}
-          onDismiss={dismissKnowledgeError}
-        />
-      )}
-
-      {props.error !== undefined && props.bootstrapState.status === "ready" && knowledgeError === undefined && (
-        <WorkbenchStatusNotice message={props.error} onDismiss={props.onDismissError} />
-      )}
+      <WorkbenchStatusCenter notices={statusNotices} />
 
       {props.settingsDialogProps?.open === true && <WorkbenchSettingsDialog {...props.settingsDialogProps} />}
     </div>
