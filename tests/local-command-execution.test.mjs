@@ -54,6 +54,51 @@ test("foreground execution preserves stdout, stderr, progress, and registry exit
   assert.equal(progress.at(-1).stderrTail, "err");
 });
 
+test("foreground execution preserves UTF-8 characters split across process chunks", async () => {
+  const childScript = [
+    "const bytes = Buffer.from('中文');",
+    "process.stdout.write(bytes.subarray(0, 1));",
+    "setTimeout(() => process.stdout.write(bytes.subarray(1)), 25);",
+  ].join("");
+  const outcome = await runForegroundProgramCommand({
+    command: process.execPath,
+    args: ["-e", childScript],
+    commandLine: "node split-utf8-output",
+    workingDirectory: process.cwd(),
+    relativeCwd: ".",
+    timeoutMs: 5_000,
+    context: {},
+  });
+
+  assert.equal(outcome.result.exitCode, 0);
+  assert.equal(outcome.result.stdout, "中文");
+});
+
+test("retained foreground logs preserve UTF-8 characters split across chunks", async () => {
+  const childScript = [
+    "const bytes = Buffer.from('中文');",
+    "process.stdout.write(bytes.subarray(0, 1));",
+    "setTimeout(() => { process.stdout.write(bytes.subarray(1)); process.stdout.write('x'.repeat(13000)); }, 25);",
+  ].join("");
+  const outcome = await runForegroundProgramCommand({
+    command: process.execPath,
+    args: ["-e", childScript],
+    commandLine: "node retained-split-utf8-output",
+    workingDirectory: process.cwd(),
+    relativeCwd: ".",
+    timeoutMs: 5_000,
+    context: {},
+  });
+  try {
+    assert.equal(outcome.result.truncated, true);
+    const log = await readLocalCommandLogRef(outcome.result.logRef, { maxLength: 30_000 });
+    assert.match(log.content, /中文/u);
+    assert.doesNotMatch(log.content, /�/u);
+  } finally {
+    if (outcome.result.logPath !== undefined) await fs.rm(outcome.result.logPath, { force: true });
+  }
+});
+
 test("foreground cancellation reports the canonical cancellation fact", async () => {
   const controller = new AbortController();
   controller.abort("cancel test");

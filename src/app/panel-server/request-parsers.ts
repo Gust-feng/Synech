@@ -29,8 +29,6 @@ import type { CreateContextAttachmentPreviewInput } from "./workbench/context-at
 import type { ModelRuntimeMode } from "../model-runtime/index.js";
 import type { OrdinaryRunContextInput } from "../../domain/ordinary/index.js";
 import { ORDINARY_AGENT_SYSTEM_PROMPT_MAX_CHARS, isKnownOrdinaryAgentPromptVariant } from "../config-center/ordinary-agent-prompt-settings.js";
-import { sanitizeAssistantVisibleText } from "../text-projection/visible-text-safety.js";
-import { preserveVisibleText } from "../../kernel/visible-text-policy.js";
 import { z } from "zod";
 import { PanelHttpError } from "./http-utils.js";
 
@@ -512,9 +510,12 @@ export function parseConfirmationDecision(raw: unknown): Pick<ConfirmationDecisi
   if (decision.data === "guidance" && guidance === undefined) {
     throw new PanelHttpError(400, "missing_confirmation_guidance", "补充要求不能为空。");
   }
+  if (guidance !== undefined && guidance.length > 4_000) {
+    throw new PanelHttpError(400, "confirmation_guidance_too_large", "补充要求不能超过 4000 个字符。");
+  }
   return {
     decision: decision.data,
-    guidance: guidance === undefined ? undefined : compactDecisionGuidance(guidance),
+    guidance,
   };
 }
 
@@ -800,15 +801,4 @@ function parseOptionalOpenAITruncation(value: unknown): OpenAIModelRequestSettin
   if (value === undefined || value === null || value === "") return undefined;
   if (value === "auto" || value === "disabled") return value;
   throw new PanelHttpError(400, "invalid_openai_parameter", "truncation 无效。");
-}
-
-function compactDecisionGuidance(value: string): string {
-  const maxLength = 800;
-  const normalized = preserveVisibleText(sanitizeAssistantVisibleText(value))
-    .replace(/\s+/g, " ")
-    .trim();
-  if (normalized.length <= maxLength) {
-    return normalized;
-  }
-  return `${normalized.slice(0, Math.max(0, maxLength - 1))}…`;
 }

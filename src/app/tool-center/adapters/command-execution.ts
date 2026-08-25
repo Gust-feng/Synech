@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { closeSync, openSync, promises as fs } from "node:fs";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 
 import type { SanitizedCommandShellConfig } from "../../../domain/config/index.js";
 import type { ToolExecutionContext, ToolExecutionProgress } from "../../../domain/tools/index.js";
@@ -20,7 +21,6 @@ import {
   createCommandLogTarget,
   releaseCommandLogPath,
   removeCommandLog,
-  writeCommandLogChunk,
   writeCommandLogHeader,
   writeCommandLogText,
 } from "./command-log.js";
@@ -313,21 +313,38 @@ async function runSpawnedCommand(input: {
     let logFd: number | undefined = openSync(logTarget.path, "a");
     const stdout = createBoundedOutputCollector(MAX_COMMAND_STDOUT_CHARS);
     const stderr = createBoundedOutputCollector(MAX_COMMAND_STDERR_CHARS);
+    const stdoutDecoder = new StringDecoder("utf8");
+    const stderrDecoder = new StringDecoder("utf8");
+    let outputDecodersFlushed = false;
     writeCommandLogHeader(logFd, input.commandLine, input.relativeCwd);
     const appendStdout = (chunk: Buffer) => {
-      stdout.append(chunk);
-      writeCommandLogChunk(logFd, "stdout", chunk);
-      input.progress.append("stdout", chunk);
+      const text = stdoutDecoder.write(chunk);
+      stdout.appendText(text);
+      writeCommandLogText(logFd, "stdout", text);
+      input.progress.append("stdout", text);
     };
     const appendStderr = (chunk: Buffer) => {
-      stderr.append(chunk);
-      writeCommandLogChunk(logFd, "stderr", chunk);
-      input.progress.append("stderr", chunk);
+      const text = stderrDecoder.write(chunk);
+      stderr.appendText(text);
+      writeCommandLogText(logFd, "stderr", text);
+      input.progress.append("stderr", text);
     };
     const appendStderrText = (text: string) => {
       stderr.appendText(text);
       writeCommandLogText(logFd, "stderr", text);
       input.progress.append("stderr", text);
+    };
+    const flushOutputDecoders = () => {
+      if (outputDecodersFlushed) return;
+      outputDecodersFlushed = true;
+      const stdoutTail = stdoutDecoder.end();
+      const stderrTail = stderrDecoder.end();
+      stdout.appendText(stdoutTail);
+      stderr.appendText(stderrTail);
+      writeCommandLogText(logFd, "stdout", stdoutTail);
+      writeCommandLogText(logFd, "stderr", stderrTail);
+      input.progress.append("stdout", stdoutTail);
+      input.progress.append("stderr", stderrTail);
     };
     const closeLog = () => {
       if (logFd === undefined) return;
@@ -384,12 +401,13 @@ async function runSpawnedCommand(input: {
       terminateProcessTree(child);
       if (terminationTimer !== undefined) return;
       terminationTimer = setTimeout(() => {
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+        flushOutputDecoders();
         appendTerminationDiagnostic();
         appendStderrText(
           `Command process did not close within ${COMMAND_TERMINATION_GRACE_MS}ms after termination was requested.`,
         );
-        child.stdout?.destroy();
-        child.stderr?.destroy();
         finish(resultFromClose(null, undefined));
       }, COMMAND_TERMINATION_GRACE_MS);
       terminationTimer.unref?.();
@@ -440,6 +458,9 @@ async function runSpawnedCommand(input: {
       settled = true;
       if (timer !== undefined) clearTimeout(timer);
       if (abortHandler !== undefined) input.abortSignal?.removeEventListener("abort", abortHandler);
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      flushOutputDecoders();
       markCommandProcessExited(input.processFacts, processId, {});
       closeLog();
       input.progress.flush();
@@ -448,6 +469,7 @@ async function runSpawnedCommand(input: {
     });
     child.once("close", (code, signal) => {
       if (settled) return;
+      flushOutputDecoders();
       appendTerminationDiagnostic();
       finish(resultFromClose(code, signal));
     });
@@ -583,7 +605,6 @@ function createBoundedOutputCollector(maxChars: number) {
     value += text;
   };
   return {
-    append: (chunk: Buffer) => appendText(chunk.toString("utf8")),
     appendText,
     text: () => value,
     truncated: () => isTruncated,
