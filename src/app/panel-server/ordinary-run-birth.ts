@@ -186,7 +186,7 @@ async function resolveConversationExecutionScope(
       }
       throw new PanelHttpError(409, "workspace_not_available", `工作区 ${owner.id} 当前不可用。`);
     }
-    const mount = workspace.mounts.find((entry) => entry.status === "active");
+    const mount = workspace.currentMount;
     if (mount === undefined) throw new Error(`Workspace ${owner.id} has no active mount and cannot host a run.`);
     return { owner, cwd: mount.rootPath };
   }

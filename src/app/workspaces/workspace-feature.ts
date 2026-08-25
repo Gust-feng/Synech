@@ -309,6 +309,7 @@ export function createWorkspaceFeature(input: CreateWorkspaceFeatureInput): Work
         return {
           ...workspace,
           mounts: snapshot.mounts.filter((mount) => mount.workspaceId === workspaceId),
+          currentMount: currentMountOf(snapshot, workspaceId),
         } satisfies WorkspaceDetail;
       },
       async findByRootPath(rootPath: string) {
@@ -335,10 +336,7 @@ export function createWorkspaceFeature(input: CreateWorkspaceFeatureInput): Work
 }
 
 function currentMountOf(snapshot: WorkspaceSnapshot, workspaceId: string): WorkspaceMount | undefined {
-  const mounts = snapshot.mounts.filter((mount) => mount.workspaceId === workspaceId);
-  const active = mounts.filter((mount) => mount.status === "active");
-  const newest = active.length > 0 ? active : mounts;
-  return newest.length === 0 ? undefined : newest[newest.length - 1];
+  return snapshot.mounts.find((mount) => mount.workspaceId === workspaceId && mount.status === "active");
 }
 
 function assertWorkspaceRootAvailable(

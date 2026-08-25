@@ -553,7 +553,7 @@ function assemblePanelHost(input: {
     resolveWorkspaceDirectory: async (workspaceId) => {
       const workspace = await workspaceFeature.queries.get(workspaceId);
       const mount = workspace?.status === "available"
-        ? [...workspace.mounts].reverse().find((entry) => entry.status === "active")
+        ? workspace.currentMount
         : undefined;
       if (mount === undefined) return undefined;
       const source = await inspectSpaceExternalSource(mount.rootPath);
@@ -641,7 +641,7 @@ function assemblePanelHost(input: {
           if (item.reference.kind !== "workspace") return undefined;
           const workspace = await workspaceFeature.queries.get(item.reference.workspaceId);
           const mount = workspace?.status === "available"
-            ? [...workspace.mounts].reverse().find((entry) => entry.status === "active")
+            ? workspace.currentMount
             : undefined;
           return mount === undefined ? undefined : {
             path: mount.rootPath,
@@ -737,7 +737,7 @@ function assemblePanelHost(input: {
       const workspace = await workspaceFeature.queries.get(workspaceId);
       const rootPath = workspace === undefined
         ? undefined
-        : [...workspace.mounts].reverse().find((mount) => mount.status === "active")?.rootPath;
+        : workspace.currentMount?.rootPath;
       return rootPath === undefined ? await operation() : await fileMutationCoordinator.runExclusive(rootPath, operation);
     },
   });
@@ -781,7 +781,7 @@ function assemblePanelHost(input: {
       const workspace = await workspaceFeature.queries.get(workspaceId);
       const rootPath = workspace === undefined
         ? undefined
-        : [...workspace.mounts].reverse().find((mount) => mount.status === "active")?.rootPath;
+        : workspace.currentMount?.rootPath;
       return rootPath === undefined
         ? await operation()
         : await fileMutationCoordinator.runExclusive(rootPath, operation);
@@ -790,7 +790,7 @@ function assemblePanelHost(input: {
       const workspace = await workspaceFeature.queries.get(workspaceId);
       const currentRoot = workspace === undefined
         ? undefined
-        : [...workspace.mounts].reverse().find((mount) => mount.status === "active")?.rootPath;
+        : workspace.currentMount?.rootPath;
       return await runWithPathLeases(
         fileMutationCoordinator,
         currentRoot === undefined ? [candidateRootPath] : [currentRoot, candidateRootPath],

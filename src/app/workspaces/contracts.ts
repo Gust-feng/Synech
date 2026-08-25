@@ -54,6 +54,8 @@ export type WorkspaceSummary = Pick<Workspace, "id" | "title" | "status" | "visi
 
 export type WorkspaceDetail = Workspace & {
   readonly mounts: readonly WorkspaceMount[];
+  /** 当前有效 mount；断连或没有有效目录时为 undefined。 */
+  readonly currentMount?: WorkspaceMount;
 };
 
 export type EnsureWorkspaceInput = {

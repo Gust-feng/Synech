@@ -53,7 +53,7 @@ export async function handlePanelSpaceMetadataRoute(
     const entries = await Promise.all(tree.entries.map(async (entry) => {
       if (entry.item.reference.kind !== "workspace") return entry;
       const workspace = await dependencies.workspaceFeature.queries.get(entry.item.reference.workspaceId);
-      const mount = workspace === undefined ? undefined : [...workspace.mounts].reverse().find((candidate) => candidate.status === "active");
+      const mount = workspace?.currentMount;
       return {
         ...entry,
         item: {

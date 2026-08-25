@@ -49,7 +49,7 @@ export async function resolveSpaceFilesystemReference(
   }
   const workspace = await dependencies.workspaceFeature.queries.get(item.reference.workspaceId);
   if (workspace === undefined) throw new PanelHttpError(409, "workspace_not_available", "引用的工作区已经不存在。");
-  const mount = [...workspace.mounts].reverse().find((entry) => entry.status === "active");
+  const mount = workspace.currentMount;
   if (workspace.status !== "available" || mount === undefined) {
     throw new PanelHttpError(409, "workspace_not_available", "工作区已断开，请重新连接后再访问。");
   }
