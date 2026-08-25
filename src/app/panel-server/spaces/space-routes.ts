@@ -49,6 +49,7 @@ const createReferenceEntrySchema = z.object({
   name: z.string().trim().min(1).max(255),
   kind: z.enum(["file", "directory"]),
 }).strict();
+const DOCUMENT_TEXT_REQUEST_MAX_CHARS = (512 * 1024 + 4_096 + 512) * 6 + 4_096;
 
 export type SpaceReferenceRouteDependencies = {
   readonly spaceFeature: {
@@ -245,7 +246,11 @@ export async function handlePanelSpaceRoute(
     const item = await feature.queries.getReference(decode(referenceContent[1]));
     if (item === undefined) throw new PanelHttpError(404, "space_reference_not_found", "未找到空间引用。");
     runtime.spaceConversationDeletion.assertAvailable(item.spaceId);
-    const input = parse(updateTextSchema, await readJsonBody(request), "引用文件内容无效。");
+    const input = parse(
+      updateTextSchema,
+      await readJsonBody(request, { maxChars: DOCUMENT_TEXT_REQUEST_MAX_CHARS }),
+      "引用文件内容无效。",
+    );
     if (item.reference.kind === "managed_asset") {
       writeJson(response, 200, { ok: true, preview: await updateManagedAssetTextPreview(
         runtime.managedAssets.commands,

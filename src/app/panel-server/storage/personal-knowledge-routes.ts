@@ -46,6 +46,8 @@ const updateAssetTextSchema: z.ZodType<DocumentTextUpdateInput> = z.object({
   expectedFingerprint: z.string().min(1).max(512),
   text: z.string().max(512 * 1024),
 }).strict();
+const DOCUMENT_TEXT_REQUEST_MAX_CHARS = (512 * 1024 + 4_096 + 512) * 6 + 4_096;
+const NOTE_REQUEST_MAX_CHARS = (10_000_000 + 1_000 + 512 + 512) * 6 + 4_096;
 
 const commandSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("knowledge.collect"), page: z.object({ refId: id, kind: pageKind, collectedAt: timestamp }).strict() }).strict(),
@@ -136,7 +138,7 @@ export async function handlePanelPersonalKnowledgeRoute(
   if (assetContent !== null && request.method === "PUT") {
     await dependencies.knowledgeAssetsReady;
     const refId = decode(assetContent[1]);
-    const input = parse(updateAssetTextSchema, await readJsonBody(request));
+    const input = parse(updateAssetTextSchema, await readJsonBody(request, { maxChars: DOCUMENT_TEXT_REQUEST_MAX_CHARS }));
     const relativePath = input.relativePath ?? "";
     const updated = await feature.commands.updateManagedAssetText({
       refId,
@@ -152,7 +154,7 @@ export async function handlePanelPersonalKnowledgeRoute(
     return true;
   }
   if (url.pathname === "/api/personal-knowledge/notes" && request.method === "POST") {
-    const input = parse(createNoteSchema, await readJsonBody(request));
+    const input = parse(createNoteSchema, await readJsonBody(request, { maxChars: NOTE_REQUEST_MAX_CHARS }));
     writeJson(response, 201, { ok: true, note: await feature.commands.createNote({ ...input, actor: USER_ACTOR }) });
     return true;
   }
@@ -178,7 +180,7 @@ export async function handlePanelPersonalKnowledgeRoute(
     return true;
   }
   if (noteMatch !== null && request.method === "PATCH") {
-    const input = parse(updateNoteSchema, await readJsonBody(request));
+    const input = parse(updateNoteSchema, await readJsonBody(request, { maxChars: NOTE_REQUEST_MAX_CHARS }));
     await feature.commands.updateNote({ id: decode(noteMatch[1]), ...input, actor: USER_ACTOR });
     writeJson(response, 200, { ok: true });
     return true;
