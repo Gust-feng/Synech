@@ -8,6 +8,7 @@
  * 全量可见性不变：工具活动、确认流、失败归因、Sub-Agent 嵌套全部保留。
  */
 import React, { useEffect, useState } from "react";
+import { AnimatePresence, motion } from "motion/react";
 import {
   Brain,
   Check,
@@ -34,6 +35,7 @@ import { useStreamingText } from "@ui/features/conversations/transcript/use-stre
 import { CopyActionButton } from "@ui/components/copy-action-button";
 import { ActivityEvidencePanel } from "./ActivityEvidence";
 import { toolResultForActivity } from "@ui/features/conversations/transcript/tool-result-association";
+import { MOTION_EASING, MOTION_TIMING, useMotionEnabled } from "@ui/shell/motion-system";
 import { ConfirmationCard, type ConfirmationProjection } from "./ConfirmationCard";
 import type { ConversationDisplayItem } from "@panel-api/ui-read-model";
 import type { AssistantWorkflowDisplay } from "@panel-api/ui-read-model";
@@ -443,6 +445,7 @@ function ConversationActivityTimeline(props: {
   // 会从 0 变 1，触发 React "rendered more hooks" 崩溃。
   const autoOpen = props.lifecycle === "open" || props.lifecycle === "attention" || confirmation.current !== undefined;
   const [open, setOpen] = useState(autoOpen || props.collapsed !== true);
+  const motionEnabled = useMotionEnabled();
 
   if (!hasContent) return null;
   const visibleItems = items.filter(isVisibleOrdinaryActivityItem);
@@ -504,15 +507,28 @@ function ConversationActivityTimeline(props: {
       {open && visibleItems.length > 0 && (
         <div className="ui-activity-details space-y-1">
           <div className="space-y-2">
-            {visibleItems.map((item) => (
-              <ConversationActivityItem
-                key={item.key}
-                item={item}
-                toolResult={toolResultForActivity(item, props.timeline.nodes, props.toolResultsByRunId)}
-                resolveChildResult={(child) => toolResultForActivity(child, props.timeline.nodes, props.toolResultsByRunId)}
-                showCanonicalToolResult={props.developerModeEnabled}
-              />
-            ))}
+            <AnimatePresence initial={false}>
+              {visibleItems.map((item, index) => (
+                <motion.div
+                  key={item.key}
+                  initial={motionEnabled ? { opacity: 0, y: 5 } : false}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={motionEnabled ? { opacity: 0, y: -3 } : undefined}
+                  transition={{
+                    duration: MOTION_TIMING.interaction,
+                    delay: motionEnabled ? Math.min(index * 0.025, 0.12) : 0,
+                    ease: MOTION_EASING.premium,
+                  }}
+                >
+                  <ConversationActivityItem
+                    item={item}
+                    toolResult={toolResultForActivity(item, props.timeline.nodes, props.toolResultsByRunId)}
+                    resolveChildResult={(child) => toolResultForActivity(child, props.timeline.nodes, props.toolResultsByRunId)}
+                    showCanonicalToolResult={props.developerModeEnabled}
+                  />
+                </motion.div>
+              ))}
+            </AnimatePresence>
           </div>
         </div>
       )}
