@@ -9,15 +9,16 @@ import type { Conversation, ConversationSummary } from "../../contracts/conversa
 import type { PendingConfirmation } from "../../contracts/run";
 import type { PersonalSpaceActions, PersonalSpaceProjection } from "../space";
 import { useWorkspaceProjection } from "../../features/spaces/workspace-state";
-import { BrainPage } from "./app/components/BrainPage";
+
 import { SurfaceErrorBoundary } from "./app/components/SurfaceErrorBoundary";
-import { HomePage } from "./app/components/HomePage";
-import { MemoryPage } from "./app/components/MemoryPage";
-import { SearchPage } from "./app/components/SearchPage";
+
+
+
 import { Sidebar } from "./app/components/Sidebar";
-import { SpacePage } from "./app/components/SpacePage";
+
 import { TopBar } from "./app/components/TopBar";
-import { ConversationSurface, type ConversationSurfaceProjection } from "./app/components/ConversationSurface";
+import type { ConversationSurfaceProjection } from "./app/components/ConversationSurface";
+import { WorkbenchViewRenderer } from "./app/components/WorkbenchViewRenderer";
 import { WorkbenchStatusNotice } from "./app/components/WorkbenchStatusNotice";
 import type { LiveConversationState } from "./app/components/conversation-surface-state";
 import { runFocusModeTransition, type FocusModeTransitionHandle } from "./app/components/focus-mode-transition";
@@ -402,38 +403,50 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
           >
             {showLoadingFallback ? <WorkbenchBootstrapLoading /> : (
               <SurfaceErrorBoundary resetKey={view} label="这个视图暂时无法打开">
-                  {renderView({
-                    view,
-                    props,
-                    activeConversation,
-                    conversationProjection,
-                    conversationState,
-                    homeInput,
-                    homeFocusRequest,
-                    workspaceProjection,
-                    homeOwnerSelection,
-                    onHomeOwnerChange: (owner) => setHomeOwner(owner),
-                    conversationInput,
-                    brainSelectedId,
-                    spaceTargetId,
-                    activeSpaceId,
-                    onActiveSpaceChange: (id) => setActiveSpace(id),
-                    conversationMode,
-                    conversationSurfaceRequest,
-                    onBrainSelect: (id) => setBrainSelection(id),
-                    navigate,
-                    onEnterFocus: () => setConversationMode("focus"),
-                    onExitFocus: () => setConversationMode("normal"),
-                    onOpenConversationInSurface: openConversationInSurface,
-                    onOpenInSpace: (spaceId, id) => {
+                  <WorkbenchViewRenderer
+                    view={view}
+                    spaces={props.spaces ?? []}
+                    conversations={props.conversations}
+                    spaceActions={props.spaceActions}
+                    onOpenSpaceItem={props.onOpenSpaceItem}
+                    onOpenConversation={props.onOpenConversation}
+                    onRenameConversation={props.onRenameConversation}
+                    onToggleConversationPinned={props.onToggleConversationPinned}
+                    onDeleteConversation={props.onDeleteConversation}
+                    activeConversation={activeConversation}
+                    conversationProjection={conversationProjection}
+                    conversationState={conversationState}
+                    currentRun={props.currentRun}
+                    showModelUsage={props.showModelUsage}
+                    developerModeEnabled={props.developerModeEnabled}
+                    confirmationBusy={props.confirmationBusy}
+                    onDecision={props.onDecision}
+                    homeInput={homeInput}
+                    homeFocusRequest={homeFocusRequest}
+                    workspaceProjection={workspaceProjection}
+                    homeOwnerSelection={homeOwnerSelection}
+                    onHomeOwnerChange={setHomeOwner}
+                    conversationInput={conversationInput}
+                    brainSelectedId={brainSelectedId}
+                    spaceTargetId={spaceTargetId}
+                    activeSpaceId={activeSpaceId}
+                    onActiveSpaceChange={setActiveSpace}
+                    conversationMode={conversationMode}
+                    conversationSurfaceRequest={conversationSurfaceRequest}
+                    onBrainSelect={setBrainSelection}
+                    navigate={navigate}
+                    onEnterFocus={() => setConversationMode("focus")}
+                    onExitFocus={() => setConversationMode("normal")}
+                    onOpenConversationInSurface={openConversationInSurface}
+                    onOpenInSpace={(spaceId, id) => {
                       // Navigation clears stale targets; apply the explicit
                       // search target after entering the Space surface so it
                       // remains available to SpacePage for this transition.
                       navigate("space");
                       setActiveSpace(spaceId);
                       setSpaceTarget(id);
-                    },
-                  })}
+                    }}
+                  />
               </SurfaceErrorBoundary>
             )}
           </div>
@@ -484,101 +497,6 @@ function viewLabel(view: WorkbenchView): string {
     case "memory": return "记忆";
     case "search": return "搜索";
   }
-}
-
-function renderView(input: {
-  readonly view: WorkbenchView;
-  readonly props: PersonalWorkbenchProps;
-  readonly activeConversation?: Conversation;
-  readonly conversationProjection: ConversationSurfaceProjection;
-  readonly conversationState: LiveConversationState;
-  readonly homeInput: ChatInputProps;
-  readonly homeFocusRequest: number;
-  readonly workspaceProjection: ReturnType<typeof useWorkspaceProjection>;
-  readonly homeOwnerSelection: ConversationOwnerSelection | null;
-  readonly onHomeOwnerChange: (owner: ConversationOwnerSelection | null) => void;
-  readonly conversationInput: ChatInputProps;
-  readonly brainSelectedId: string | null;
-  readonly spaceTargetId: string | null;
-  readonly activeSpaceId: string | null;
-  readonly onActiveSpaceChange: (spaceId: string | null) => void;
-  readonly conversationMode: ConversationMode;
-  readonly conversationSurfaceRequest: ConversationSurfaceRequest | null;
-  readonly onBrainSelect: (id: string | null) => void;
-  readonly navigate: (view: WorkbenchView) => void;
-  readonly onEnterFocus: () => void;
-  readonly onExitFocus: () => void;
-  readonly onOpenConversationInSurface: (conversationId: string) => boolean | Promise<boolean>;
-  readonly onOpenInSpace: (spaceId: string, id: string) => void;
-}) {
-  if (input.view === "home") {
-    return <HomePage
-      spaces={input.props.spaces ?? []}
-      workspaces={input.workspaceProjection.workspaces}
-      ownerSelection={input.homeOwnerSelection}
-      onOwnerChange={input.onHomeOwnerChange}
-      input={input.homeInput}
-      focusRequest={input.homeFocusRequest}
-    />;
-  }
-  if (input.view === "space") {
-    const activeSpace = input.props.spaces?.find((space) => space.spaceId === input.activeSpaceId);
-    return <SpacePage
-      onNavigate={input.navigate}
-      targetId={input.spaceTargetId}
-      space={activeSpace}
-      actions={input.props.spaceActions}
-      onOpenItem={input.props.onOpenSpaceItem}
-      onOpenConversation={input.props.onOpenConversation}
-      activeConversationId={input.activeConversation?.conversationId}
-      activeConversationOwner={input.activeConversation?.owner}
-      activeConversationTitle={input.activeConversation?.title}
-      conversationSurfaceRequest={input.conversationSurfaceRequest}
-      conversationContent={
-        <ConversationSurface
-          conversation={input.activeConversation}
-          projection={input.conversationProjection}
-          state={input.conversationState}
-          input={input.conversationInput}
-          currentRun={input.props.currentRun}
-          showModelUsage={input.props.showModelUsage}
-          developerModeEnabled={input.props.developerModeEnabled}
-          confirmationBusy={input.props.confirmationBusy}
-          onDecision={input.props.onDecision}
-          focus={input.conversationMode === "focus"}
-          onExitFocus={input.onExitFocus}
-        />
-      }
-      onEnterFocus={input.conversationMode === "normal" ? input.onEnterFocus : undefined}
-      onRenameConversation={input.props.onRenameConversation}
-      onToggleConversationPinned={input.props.onToggleConversationPinned}
-      onDeleteConversation={input.props.onDeleteConversation}
-    />;
-  }
-  if (input.view === "brain") {
-    return <BrainPage
-      selectedId={input.brainSelectedId}
-      onSelect={input.onBrainSelect}
-    />;
-  }
-  if (input.view === "memory") {
-    return <MemoryPage />;
-  }
-  if (input.view === "search") {
-    return <SearchPage
-      onNavigate={input.navigate}
-      onOpenInSpace={input.onOpenInSpace}
-      onOpenInKnowledge={(id) => {
-        input.onBrainSelect(id);
-        input.navigate("brain");
-      }}
-      // Search opens the same Conversation projection used by the Synech host.
-      onOpenConversation={input.onOpenConversationInSurface}
-      spaces={input.props.spaces ?? []}
-      conversations={input.props.conversations}
-    />;
-  }
-  return null;
 }
 
 const EMPTY_ID_SET: ReadonlySet<string> = new Set();
