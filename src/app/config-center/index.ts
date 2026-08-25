@@ -35,6 +35,7 @@ import type {
 } from "../../domain/config/index.js";
 import type { InformationAccessSettings } from "../../domain/config/index.js";
 import {
+  ConfigSchemaValidationError,
   createDefaultLocalSettings,
   normalizeInformationAccessSettings,
   normalizeLocalSettings,
@@ -485,7 +486,17 @@ export class ConfigCenter {
   private async readOrCreateSettingsOnce(): Promise<LocalSettings> {
     const existing = await this.options.settingsStore.readSettings();
     if (existing !== undefined) {
-      const parsed = parseLocalSettingsFile(existing);
+      let parsed: LocalSettings;
+      try {
+        parsed = parseLocalSettingsFile(existing);
+      } catch (error) {
+        if (!(error instanceof ConfigSchemaValidationError)) throw error;
+        if (this.options.settingsStore.quarantineInvalidSettings === undefined) throw error;
+        await this.options.settingsStore.quarantineInvalidSettings();
+        const created = createDefaultLocalSettings();
+        await this.options.settingsStore.writeSettings(created);
+        return created;
+      }
       const normalized = normalizeLocalSettings(parsed);
       if (shouldRewriteLocalSettingsFile(existing, normalized)) {
         await this.options.settingsStore.writeSettings(normalized);

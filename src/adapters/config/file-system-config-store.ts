@@ -8,7 +8,7 @@ import type {
   SecretMetadata,
 } from "../../domain/config/index.js";
 import { renameWithRetry } from "../../kernel/fs/atomic-write.js";
-import { asRecord, isFileNotFound, stringOrUndefined } from "../../kernel/values/index.js";
+import { isFileNotFound, stringOrUndefined } from "../../kernel/values/index.js";
 
 type LocalDevSecretsFile = {
   readonly version: 1;
@@ -23,12 +23,31 @@ export class FileSystemSettingsStore implements SettingsStore {
     this.settingsPath = path.join(configDirectory, "settings.json");
   }
 
-  readSettings(): Promise<unknown | undefined> {
-    return readJsonFile(this.settingsPath);
+  async readSettings(): Promise<unknown | undefined> {
+    try {
+      return await readJsonFile(this.settingsPath);
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+      await this.quarantineInvalidSettings();
+      return undefined;
+    }
   }
 
   async writeSettings(settings: LocalSettings): Promise<void> {
     await writeJsonFileAtomically(this.settingsPath, settings);
+  }
+
+  async quarantineInvalidSettings(): Promise<string | undefined> {
+    return await quarantineFile(this.settingsPath);
+  }
+}
+
+export class FileSystemLocalDevSecretStoreError extends Error {
+  readonly code = "local_dev_secrets_invalid" as const;
+
+  constructor(readonly filePath: string, cause?: unknown) {
+    super(`Local development secrets file ${filePath} is invalid and was left unchanged.`, { cause });
+    this.name = "FileSystemLocalDevSecretStoreError";
   }
 }
 
@@ -84,11 +103,17 @@ export class FileSystemLocalDevSecretStore implements LocalDevSecretStore {
   }
 
   private async readSecretsFile(): Promise<LocalDevSecretsFile> {
-    const raw = await readJsonFile(this.secretsPath);
+    let raw: unknown | undefined;
+    try {
+      raw = await readJsonFile(this.secretsPath);
+    } catch (error) {
+      if (error instanceof SyntaxError) throw new FileSystemLocalDevSecretStoreError(this.secretsPath, error);
+      throw error;
+    }
     if (raw === undefined) {
       return { version: 1, secrets: {}, updatedAt: new Date(0).toISOString() };
     }
-    return parseSecretsFile(raw);
+    return parseSecretsFile(raw, this.secretsPath);
   }
 }
 
@@ -128,21 +153,50 @@ function renameBackoffMs(attempt: number): number {
   return Math.min(10 * 2 ** attempt, 200);
 }
 
-function parseSecretsFile(raw: unknown): LocalDevSecretsFile {
-  const record = asRecord(raw);
-  const rawSecrets = asRecord(record.secrets);
+async function quarantineFile(filePath: string): Promise<string | undefined> {
+  const suffix = new Date().toISOString().replaceAll(":", "-");
+  const target = `${filePath}.corrupt-${suffix}-${randomUUID().slice(0, 8)}`;
+  try {
+    await renameWithRetry(filePath, target, { backoffMs: renameBackoffMs });
+    return target;
+  } catch (error) {
+    if (isFileNotFound(error)) return undefined;
+    throw error;
+  }
+}
+
+function parseSecretsFile(raw: unknown, filePath: string): LocalDevSecretsFile {
+  const record = strictRecord(raw, ["version", "secrets", "updatedAt"], filePath);
+  if (record.version !== 1 || typeof record.updatedAt !== "string") {
+    throw new FileSystemLocalDevSecretStoreError(filePath);
+  }
+  const rawSecrets = strictRecord(record.secrets, undefined, filePath);
   const secrets: Record<string, { value: string; updatedAt: string }> = {};
   for (const [secretRef, secret] of Object.entries(rawSecrets)) {
-    const secretRecord = asRecord(secret);
+    const secretRecord = strictRecord(secret, ["value", "updatedAt"], filePath);
     const value = stringOrUndefined(secretRecord.value);
     const updatedAt = stringOrUndefined(secretRecord.updatedAt);
-    if (value !== undefined && updatedAt !== undefined) {
-      secrets[secretRef] = { value, updatedAt };
-    }
+    if (value === undefined || updatedAt === undefined) throw new FileSystemLocalDevSecretStoreError(filePath);
+    secrets[secretRef] = { value, updatedAt };
   }
   return {
     version: 1,
     secrets,
-    updatedAt: stringOrUndefined(record.updatedAt) ?? new Date(0).toISOString(),
+    updatedAt: record.updatedAt,
   };
+}
+
+function strictRecord(
+  value: unknown,
+  allowedKeys: readonly string[] | undefined,
+  filePath: string,
+): Readonly<Record<string, unknown>> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new FileSystemLocalDevSecretStoreError(filePath);
+  }
+  const record = value as Readonly<Record<string, unknown>>;
+  if (allowedKeys !== undefined && Object.keys(record).some((key) => !allowedKeys.includes(key))) {
+    throw new FileSystemLocalDevSecretStoreError(filePath);
+  }
+  return record;
 }

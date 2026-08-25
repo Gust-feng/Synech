@@ -46,6 +46,8 @@ export type LocalSettings = {
 export type SettingsStore = {
   readSettings(): Promise<unknown | undefined>;
   writeSettings(settings: LocalSettings): Promise<void>;
+  /** Moves an incompatible settings document aside before the owner recreates defaults. */
+  quarantineInvalidSettings?(): Promise<string | undefined>;
 };
 
 export type SecretMetadata = {
