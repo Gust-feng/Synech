@@ -17,7 +17,7 @@ export function createSpaceReferenceUnlinkService(input: {
   };
   readonly coordination: Pick<WorkbenchCoordination, "commands">;
   readonly mutations: Pick<LocalWorkspaceMutationCoordinator, "runExclusive">;
-  readonly assertSpaceAvailable: (spaceId: string) => void;
+  readonly withSpaceAdmission: <T>(spaceId: string, operation: () => Promise<T>) => Promise<T>;
 }): SpaceReferenceUnlinkService {
   return {
     async unlink(referenceId) {
@@ -32,7 +32,12 @@ export function createSpaceReferenceUnlinkService(input: {
         const current = await input.spaces.queries.getReference(referenceId);
         if (current === undefined) return;
         assertExternal(current);
-        input.assertSpaceAvailable(current.spaceId);
+        if (current.spaceId !== initial.spaceId) {
+          throw new WorkbenchCoordinationError(
+            "coordination_reference_kind_invalid",
+            `Space reference ${referenceId} changed Space membership while waiting for its admission.`,
+          );
+        }
         if (initial.reference.kind === "local_file" && !sameLocalFileSource(initial, current)) {
           throw new WorkbenchCoordinationError(
             "coordination_reference_kind_invalid",
@@ -41,11 +46,13 @@ export function createSpaceReferenceUnlinkService(input: {
         }
         await input.spaces.commands.unlinkReference(referenceId);
       };
-      if (initial.reference.kind !== "local_file") {
-        await unlinkCurrent();
-        return;
-      }
-      await input.mutations.runExclusive(initial.reference.path, unlinkCurrent);
+      await input.withSpaceAdmission(initial.spaceId, async () => {
+        if (initial.reference.kind !== "local_file") {
+          await unlinkCurrent();
+          return;
+        }
+        await input.mutations.runExclusive(initial.reference.path, unlinkCurrent);
+      });
     },
   };
 }

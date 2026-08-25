@@ -13,9 +13,10 @@ import type { PanelExternalResourceTarget } from "../types.js";
 import type { SpaceConversationDeletionCoordinator } from "./space-conversation-coordinator.js";
 import { attachSpaceReferenceMetadata, createPanelDocumentPreview, writePanelSpaceReferenceContent } from "./space-reference-preview.js";
 import { getManagedAssetPreview, updateManagedAssetCaptionPreview, updateManagedAssetTextPreview } from "../storage/managed-asset-routes.js";
-import { createPanelSpaceReferenceEntry, deletePanelSpaceReferenceEntry, renamePanelSpaceReferenceEntry, updatePanelSpaceReferenceText } from "./space-reference-mutations.js";
 import { resolveSpaceFilesystemReference, type ResolvedSpaceFilesystemReference } from "./space-workspace-reference.js";
 import type { ManagedSpaceFolderApplication } from "../../../domain/managed-space-folder.js";
+import type { SpaceReferenceContentApplication } from "../../application/space-reference-content-application.js";
+import type { SpaceReferenceLifecycleApplication } from "../../application/space-reference-lifecycle-application.js";
 
 const titleSchema = z.string().trim().min(1).max(160);
 const referenceSchema = z.discriminatedUnion("kind", [
@@ -65,7 +66,9 @@ export type SpaceReferenceRouteDependencies = {
   };
   readonly managedSpaceFolderApplication: ManagedSpaceFolderApplication<SpaceReferenceItem>;
   readonly unlinkExternalReference: (referenceId: string) => Promise<void>;
-  readonly spaceConversationDeletion: Pick<SpaceConversationDeletionCoordinator, "assertAvailable">;
+  readonly spaceReferenceContentApplication: SpaceReferenceContentApplication;
+  readonly spaceReferenceLifecycleApplication: SpaceReferenceLifecycleApplication;
+  readonly spaceConversationDeletion: Pick<SpaceConversationDeletionCoordinator, "assertAvailable" | "admit">;
   readonly fileMutationCoordinator: Pick<LocalWorkspaceMutationCoordinator, "run" | "runExclusive">;
   readonly flushSpaceKnowledgeSync: () => Promise<void>;
   readonly externalResourceOpener?: (target: PanelExternalResourceTarget) => Promise<void>;
@@ -100,12 +103,12 @@ export async function handlePanelSpaceRoute(
   const referenceMatch = /^\/api\/spaces\/([^/]+)\/references$/u.exec(url.pathname);
   if (referenceMatch !== null && request.method === "POST") {
     const spaceId = decode(referenceMatch[1]);
-    runtime.spaceConversationDeletion.assertAvailable(spaceId);
     const input = parse(addReferenceSchema, await readJsonBody(request), "空间引用信息无效。");
     const reference = absoluteLocalReference(input.reference);
+    const item = await runtime.spaceReferenceLifecycleApplication.addReference({ spaceId, title: input.title, reference, actor: { kind: "user" } });
     writeJson(response, 201, {
       ok: true,
-      item: await feature.commands.addReference({ ...input, spaceId, reference, actor: { kind: "user" } }),
+      item,
     });
     return true;
   }
@@ -129,28 +132,26 @@ export async function handlePanelSpaceRoute(
   if (moveMatch !== null && request.method === "POST") {
     const sourceSpaceId = decode(moveMatch[1]);
     const input = parse(moveSchema, await readJsonBody(request), "空间移动信息无效。");
-    runtime.spaceConversationDeletion.assertAvailable(sourceSpaceId);
-    runtime.spaceConversationDeletion.assertAvailable(input.destinationSpaceId);
     const tree = await feature.queries.getTree(sourceSpaceId);
-    if (tree === undefined) throw new PanelHttpError(404, "space_not_found", "未找到空间。");
-    if (!tree.entries.some((entry) => entry.item.id === input.target.id)) {
+    if (tree === undefined || !tree.entries.some((entry) => entry.item.id === input.target.id)) {
       throw new PanelHttpError(409, "space_invalid_move", "移动目标不属于源空间。");
     }
-    const item = await feature.queries.getReference(input.target.id);
-    if (item === undefined || !isMovableSpaceMaterial(item)) {
+    const movable = await feature.queries.getReference(input.target.id);
+    if (movable === undefined || !isMovableSpaceMaterial(movable)) {
       throw new PanelHttpError(409, "space_invalid_move", "外部文件夹和外部文件不能移动；请在目标空间重新添加外部引用。");
     }
-    await feature.commands.move(input);
+    await runtime.spaceReferenceLifecycleApplication.move({ sourceSpaceId, target: { kind: "reference", id: input.target.id }, destinationSpaceId: input.destinationSpaceId });
     writeJson(response, 200, { ok: true });
     return true;
   }
 
   const spaceRename = /^\/api\/spaces\/([^/]+)\/rename$/u.exec(url.pathname);
   if (spaceRename !== null && request.method === "POST") {
-    runtime.spaceConversationDeletion.assertAvailable(decode(spaceRename[1]));
     const input = parse(renameSchema, await readJsonBody(request), "空间名称无效。");
-    const target: SpaceTarget = { kind: "space", id: decode(spaceRename[1]) };
-    writeJson(response, 200, { ok: true, target: await feature.commands.rename({ target, ...input }) });
+    const spaceId = decode(spaceRename[1]);
+    const target: SpaceTarget = { kind: "space", id: spaceId };
+    const renamed = await runtime.spaceReferenceLifecycleApplication.rename({ target, title: input.title });
+    writeJson(response, 200, { ok: true, target: renamed });
     return true;
   }
 
@@ -158,10 +159,10 @@ export async function handlePanelSpaceRoute(
   if (entryRename !== null && request.method === "POST") {
     const item = await feature.queries.getReference(decode(entryRename[1]));
     if (item === undefined) throw new PanelHttpError(404, "space_reference_not_found", "未找到空间引用。");
-    runtime.spaceConversationDeletion.assertAvailable(item.spaceId);
     const input = parse(renameSchema, await readJsonBody(request), "空间名称无效。");
     const target: SpaceTarget = { kind: "reference", id: decode(entryRename[1]) };
-    writeJson(response, 200, { ok: true, target: await feature.commands.rename({ target, ...input }) });
+    const renamed = await runtime.spaceReferenceLifecycleApplication.rename({ target, title: input.title });
+    writeJson(response, 200, { ok: true, target: renamed });
     return true;
   }
 
@@ -170,11 +171,10 @@ export async function handlePanelSpaceRoute(
     const itemId = decode(removeReference[1]);
     const item = await feature.queries.getReference(itemId);
     if (item === undefined) throw new PanelHttpError(404, "space_reference_not_found", "未找到空间引用。");
-    runtime.spaceConversationDeletion.assertAvailable(item.spaceId);
     if (!isSpaceOwnedMaterial(item)) {
       throw new PanelHttpError(409, "space_reference_delete_unavailable", "外部文件夹和外部文件只能取消引用，不能由空间资产删除操作处理。");
     }
-    await feature.commands.removeReference(itemId);
+    await runtime.spaceReferenceLifecycleApplication.remove({ itemId });
     await runtime.flushSpaceKnowledgeSync();
     writeJson(response, 200, { ok: true });
     return true;
@@ -185,11 +185,10 @@ export async function handlePanelSpaceRoute(
     const itemId = decode(unlinkReference[1]);
     const item = await feature.queries.getReference(itemId);
     if (item === undefined) throw new PanelHttpError(404, "space_reference_not_found", "未找到空间引用。");
-    runtime.spaceConversationDeletion.assertAvailable(item.spaceId);
     if (!isExternalReference(item)) {
       throw new PanelHttpError(409, "space_reference_unlink_unavailable", "软件维护的空间材料不能通过外部引用操作取消。");
     }
-    await runtime.unlinkExternalReference(item.id);
+    await runtime.spaceReferenceLifecycleApplication.unlink({ itemId: item.id });
     await runtime.flushSpaceKnowledgeSync();
     writeJson(response, 200, { ok: true });
     return true;
@@ -240,27 +239,23 @@ export async function handlePanelSpaceRoute(
   if (referenceContent !== null && request.method === "PUT") {
     const item = await feature.queries.getReference(decode(referenceContent[1]));
     if (item === undefined) throw new PanelHttpError(404, "space_reference_not_found", "未找到空间引用。");
-    runtime.spaceConversationDeletion.assertAvailable(item.spaceId);
     const input = parse(
       updateTextSchema,
       await readJsonBody(request, { maxChars: DOCUMENT_TEXT_REQUEST_MAX_CHARS }),
       "引用文件内容无效。",
     );
     if (item.reference.kind === "managed_asset") {
-      writeJson(response, 200, { ok: true, preview: await updateManagedAssetTextPreview(
-        runtime.managedAssets.commands,
-        { assetId: item.reference.assetId, expectedFingerprint: input.expectedFingerprint, text: input.text },
-        item.id,
-      ) });
+      const assetId = item.reference.assetId;
+      const preview = await runtime.spaceConversationDeletion.admit(item.spaceId, async () =>
+        await updateManagedAssetTextPreview(
+          runtime.managedAssets.commands,
+          { assetId, expectedFingerprint: input.expectedFingerprint, text: input.text },
+          item.id,
+        ));
+      writeJson(response, 200, { ok: true, preview });
       return true;
     }
-    const preview = await runReferenceMutation(runtime, item, async (current, resolved) => {
-      const updated = await updatePanelSpaceReferenceText(current, input, undefined, resolved);
-      if (current.reference.kind === "local_file") {
-        await feature.commands.refreshReferenceSourceIdentity(current.id);
-      }
-      return updated;
-    });
+    const preview = await runtime.spaceReferenceContentApplication.updateText({ itemId: item.id, update: input });
     writeJson(response, 200, { ok: true, preview });
     return true;
   }
@@ -269,34 +264,23 @@ export async function handlePanelSpaceRoute(
   if (referenceCaption !== null && request.method === "PUT") {
     const item = await feature.queries.getReference(decode(referenceCaption[1]));
     if (item === undefined) throw new PanelHttpError(404, "space_reference_not_found", "未找到空间引用。");
-    runtime.spaceConversationDeletion.assertAvailable(item.spaceId);
     const input = parse(updateCaptionSchema, await readJsonBody(request), "图片说明编辑请求无效。");
     if (item.reference.kind === "managed_asset") {
       if ((input.relativePath ?? "").length > 0) {
         throw new PanelHttpError(400, "invalid_managed_asset_input", "托管资产图片说明不接受子路径。");
       }
-      writeJson(response, 200, { ok: true, preview: await updateManagedAssetCaptionPreview(
-        runtime.managedAssets.commands,
-        { assetId: item.reference.assetId, expectedFingerprint: input.expectedFingerprint, caption: input.caption },
-        item.id,
-      ) });
+      const assetId = item.reference.assetId;
+      const preview = await runtime.spaceConversationDeletion.admit(item.spaceId, async () =>
+        await updateManagedAssetCaptionPreview(
+          runtime.managedAssets.commands,
+          { assetId, expectedFingerprint: input.expectedFingerprint, caption: input.caption },
+          item.id,
+        ));
+      writeJson(response, 200, { ok: true, preview });
       return true;
     }
-    const resolved = await resolveFilesystemReferenceIfNeeded(runtime, item);
-    const relativePath = captionRelativePath(input.relativePath ?? "");
-    const currentPreview = await createPanelDocumentPreview(item, relativePath, undefined, undefined, resolved);
-    if (currentPreview.content.kind !== "media" || currentPreview.content.mediaKind !== "image" || currentPreview.content.captionEditable !== true) {
-      throw new PanelHttpError(409, "space_reference_caption_unavailable", "只有图片引用可以编辑说明。");
-    }
-    const expectedRevision = captionRevision(input.expectedFingerprint);
-    const updated = await feature.commands.updateReferenceImageCaption({
-      itemId: item.id,
-      relativePath,
-      expectedRevision,
-      text: input.caption,
-      actor: { kind: "user" },
-    });
-    writeJson(response, 200, { ok: true, preview: await createPanelDocumentPreview(updated, relativePath, undefined, undefined, resolved) });
+    const preview = await runtime.spaceReferenceContentApplication.updateCaption({ itemId: item.id, update: input });
+    writeJson(response, 200, { ok: true, preview });
     return true;
   }
 
@@ -304,31 +288,28 @@ export async function handlePanelSpaceRoute(
   if (referenceEntry !== null && request.method === "POST") {
     const item = await feature.queries.getReference(decode(referenceEntry[1]));
     if (item === undefined) throw new PanelHttpError(404, "space_reference_not_found", "未找到空间引用。");
-    runtime.spaceConversationDeletion.assertAvailable(item.spaceId);
     const input = parse(createReferenceEntrySchema, await readJsonBody(request), "新建文件信息无效。");
     writeJson(response, 201, {
       ok: true,
-      entry: await runReferenceMutation(runtime, item, (current, resolved) => createPanelSpaceReferenceEntry(current, input, resolved)),
+      entry: await runtime.spaceReferenceContentApplication.createEntry({ itemId: item.id, ...input }),
     });
     return true;
   }
   if (referenceEntry !== null && request.method === "PATCH") {
     const item = await feature.queries.getReference(decode(referenceEntry[1]));
     if (item === undefined) throw new PanelHttpError(404, "space_reference_not_found", "未找到空间引用。");
-    runtime.spaceConversationDeletion.assertAvailable(item.spaceId);
     const input = parse(renameReferenceEntrySchema, await readJsonBody(request), "文件重命名信息无效。");
     writeJson(response, 200, {
       ok: true,
-      entry: await runReferenceMutation(runtime, item, (current, resolved) => renamePanelSpaceReferenceEntry(current, input, resolved)),
+      entry: await runtime.spaceReferenceContentApplication.renameEntry({ itemId: item.id, ...input }),
     });
     return true;
   }
   if (referenceEntry !== null && request.method === "DELETE") {
     const item = await feature.queries.getReference(decode(referenceEntry[1]));
     if (item === undefined) throw new PanelHttpError(404, "space_reference_not_found", "未找到空间引用。");
-    runtime.spaceConversationDeletion.assertAvailable(item.spaceId);
     const input = parse(referenceEntrySchema, await readJsonBody(request), "文件删除信息无效。");
-    await runReferenceMutation(runtime, item, (current, resolved) => deletePanelSpaceReferenceEntry(current, input.relativePath, resolved));
+    await runtime.spaceReferenceContentApplication.deleteEntry({ itemId: item.id, relativePath: input.relativePath });
     writeJson(response, 200, { ok: true });
     return true;
   }
@@ -336,49 +317,6 @@ export async function handlePanelSpaceRoute(
   return false;
 }
 
-function captionRelativePath(value: string): string {
-  try {
-    return normalizeRelativePath(value);
-  } catch {
-    throw new PanelHttpError(400, "invalid_space_reference_path", "图片说明路径无效。");
-  }
-}
-
-function captionRevision(fingerprint: string): number {
-  const match = /^space-image-caption:(\d+)$/u.exec(fingerprint);
-  if (match === null) throw new PanelHttpError(409, "space_reference_image_caption_revision_conflict", "图片说明版本已变化，请重新加载。");
-  return Number(match[1]);
-}
-
-export async function runReferenceMutation<T>(
-  runtime: SpaceReferenceRouteDependencies,
-  item: SpaceReferenceItem,
-  operation: (current: SpaceReferenceItem, resolved: ResolvedSpaceFilesystemReference) => Promise<T>,
-): Promise<T> {
-  const initial = await resolveSpaceFilesystemReference(runtime, item);
-  return await runtime.fileMutationCoordinator.run(initial.path, async () => {
-    const current = await runtime.spaceFeature.queries.getReference(item.id);
-    if (current === undefined) throw new PanelHttpError(409, "space_reference_revoked", "空间引用已被移除，操作未执行。");
-    runtime.spaceConversationDeletion.assertAvailable(current.spaceId);
-    const resolved = await resolveSpaceFilesystemReference(runtime, current);
-    if (!sameResolvedSource(initial, resolved)) {
-      throw new PanelHttpError(409, "space_reference_source_changed", "引用来源在操作等待期间发生变化，请重新加载后重试。");
-    }
-    return await operation(current, resolved);
-  });
-}
-
-function sameResolvedSource(
-  left: ResolvedSpaceFilesystemReference,
-  right: ResolvedSpaceFilesystemReference,
-): boolean {
-  const leftPath = path.resolve(left.path);
-  const rightPath = path.resolve(right.path);
-  const samePath = process.platform === "win32"
-    ? leftPath.toLocaleLowerCase("en-US") === rightPath.toLocaleLowerCase("en-US")
-    : leftPath === rightPath;
-  return samePath && left.sourceIdentity === right.sourceIdentity && left.mountVersion === right.mountVersion;
-}
 function isExternalReference(item: SpaceReferenceItem): boolean {
   return item.reference.kind === "local_file" ||
     item.reference.kind === "workspace" ||

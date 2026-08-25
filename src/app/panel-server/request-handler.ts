@@ -377,6 +377,8 @@ async function handlePanelRequest(
     workbenchCoordination: runtime.workbenchCoordination,
     managedSpaceFolderApplication,
     unlinkExternalReference: (referenceId) => runtime.spaceReferenceUnlink.unlink(referenceId),
+    spaceReferenceContentApplication: runtime.spaceReferenceContentApplication,
+    spaceReferenceLifecycleApplication: runtime.spaceReferenceLifecycleApplication,
     fileMutationCoordinator: runtime.fileMutationCoordinator,
     flushSpaceKnowledgeSync: runtime.flushSpaceKnowledgeSync,
     externalResourceOpener: runtime.externalResourceOpener,

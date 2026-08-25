@@ -9,7 +9,6 @@ import { createWorkspaceFeature, WORKSPACE_SCHEMA_VERSION } from "../dist/app/wo
 import { createWorkbenchCoordination } from "../dist/app/workbench-coordination/index.js";
 import { resolveConversationSpaceAccess } from "../dist/app/panel-server/spaces/space-agent-access.js";
 import { resolveSpaceFilesystemReference } from "../dist/app/panel-server/spaces/space-workspace-reference.js";
-import { runReferenceMutation } from "../dist/app/panel-server/spaces/space-routes.js";
 
 test("an implicit Workspace is reused and promoted without changing its identity", async (t) => {
   const feature = createWorkspaceFeature({
@@ -116,7 +115,7 @@ test("failed Workspace attachment compensates a newly-created implicit registrat
     },
     workspaces: { commands: workspaces.commands },
     async inspectDirectory() { return { kind: "folder", identity: "folder-id" }; },
-    assertSpaceAvailable() {},
+    async withSpaceAdmission(_spaceId, operation) { return await operation(); },
     async listWorkspaceConversationIds() { return []; },
     async withWorkspaceAdmission(_workspaceId, operation) {
       admissionHeld = true;
@@ -152,7 +151,7 @@ test("Workspace attachment and detachment are idempotent application commands", 
     spaces,
     workspaces: { commands: workspaces.commands },
     async inspectDirectory() { return { kind: "folder", identity: "folder-id" }; },
-    assertSpaceAvailable() {},
+    async withSpaceAdmission(_spaceId, operation) { return await operation(); },
     async listWorkspaceConversationIds() { return []; },
     async withWorkspaceAdmission(_workspaceId, operation) { return await operation(); },
     async withWorkspacePathLease(_workspaceId, operation) {
@@ -200,34 +199,6 @@ test("local-file resolution rejects a different filesystem object at the same pa
       () => resolveSpaceFilesystemReference({ workspaceFeature: unavailableWorkspaceFeature() }, item),
       (error) => error?.code === "space_reference_source_replaced",
     );
-  });
-});
-
-test("a queued reference mutation rechecks membership after acquiring the path lease", async () => {
-  await withTemporaryDirectory(async (directory) => {
-    const file = path.join(directory, "reference.txt");
-    await fs.writeFile(file, "original", "utf8");
-    const stat = await fs.stat(file, { bigint: true });
-    const item = {
-      id: "reference-1",
-      spaceId: "space-1",
-      title: "reference.txt",
-      reference: { kind: "local_file", path: file },
-      sourceIdentity: `${stat.dev}:${stat.ino}`,
-      createdAt: "2026-01-01T00:00:00.000Z",
-      updatedAt: "2026-01-01T00:00:00.000Z",
-    };
-    let executed = false;
-    await assert.rejects(
-      () => runReferenceMutation({
-        spaceFeature: { queries: { async getReference() { return undefined; } } },
-        workspaceFeature: unavailableWorkspaceFeature(),
-        fileMutationCoordinator: { async run(_key, operation) { return await operation(); } },
-      }, item, async () => { executed = true; }),
-      (error) => error?.code === "space_reference_revoked",
-    );
-    assert.equal(executed, false);
-    assert.equal(await fs.readFile(file, "utf8"), "original");
   });
 });
 

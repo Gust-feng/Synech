@@ -3,7 +3,7 @@ import {
   type AgentNotesFeature,
   type AgentNoteVersions,
 } from "../../agent-notes/index.js";
-import { createSpaceRevocationOverlay, createSpaceToolRegistryContribution, type SpaceFeature, type SpaceRevocationOverlay } from "../../spaces/index.js";
+import { createSpaceRevocationOverlay, createSpaceToolRegistryContribution, type SpaceFeature, type SpaceToolOptions, type SpaceRevocationOverlay } from "../../spaces/index.js";
 import {
   createPersonalKnowledgeToolRegistryContribution,
   type PersonalKnowledgeFeature,
@@ -45,7 +45,9 @@ export function createHostFeatureAgentToolContributionResolver(input: {
   readonly spaces?: Pick<SpaceFeature, "commands" | "queries" | "events">;
   readonly personalKnowledge?: Pick<PersonalKnowledgeFeature, "commands" | "queries">;
   readonly revocationOverlay?: SpaceRevocationOverlay;
-  readonly assertSpaceAvailable?: (spaceId: string) => void;
+  readonly withSpaceAdmission?: <T>(spaceId: string, operation: () => Promise<T>) => Promise<T>;
+  readonly spaceReferenceContentApplication?: SpaceToolOptions["spaceReferenceContentApplication"];
+  readonly spaceReferenceLifecycleApplication?: SpaceToolOptions["spaceReferenceLifecycleApplication"];
   readonly deleteSpace?: (spaceId: string) => Promise<void>;
   readonly deleteConversation?: (conversationId: string) => Promise<void>;
   /** Shared application command for software-managed Space folders. */
@@ -102,7 +104,9 @@ export function createHostFeatureAgentToolContributionResolver(input: {
           workspaceRoot,
           runContext,
           revocationOverlay,
-          assertSpaceAvailable: input.assertSpaceAvailable,
+           withSpaceAdmission: input.withSpaceAdmission,
+           spaceReferenceContentApplication: input.spaceReferenceContentApplication,
+           spaceReferenceLifecycleApplication: input.spaceReferenceLifecycleApplication,
           deleteSpace: input.deleteSpace,
           deleteConversation: input.deleteConversation,
           ...(managedSpaceFolderApplication === undefined ? {} : { managedSpaceFolderApplication }),

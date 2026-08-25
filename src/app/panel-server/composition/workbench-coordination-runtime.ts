@@ -165,7 +165,7 @@ export function createApplicationRuntime(input: {
       },
     },
     inspectDirectory: input.inspectDirectory,
-    assertSpaceAvailable: (spaceId) => spaceConversationDeletion.assertAvailable(spaceId),
+    withSpaceAdmission: (spaceId, operation) => spaceConversationDeletion.admit(spaceId, operation),
     listWorkspaceConversationIds: async (workspaceId) =>
       (await input.ordinaryAgentFeature.queries.listConversationsByOwner({ kind: "workspace", id: workspaceId }))
         .map((conversation) => conversation.conversationId),

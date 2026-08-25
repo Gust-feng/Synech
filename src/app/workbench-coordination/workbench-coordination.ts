@@ -16,7 +16,7 @@ export function createWorkbenchCoordination(input: {
       "ensureWorkspace" | "reconnectWorkspace" | "setVisibility" | "discardImplicitWorkspace">;
   };
   readonly inspectDirectory: (rootPath: string) => Promise<SpaceExternalSourceSnapshot | undefined>;
-  readonly assertSpaceAvailable: (spaceId: string) => void;
+  readonly withSpaceAdmission: <T>(spaceId: string, operation: () => Promise<T>) => Promise<T>;
   readonly listWorkspaceConversationIds: (workspaceId: string) => Promise<readonly string[]>;
   readonly withWorkspaceAdmission: <T>(workspaceId: string, operation: () => Promise<T>) => Promise<T>;
   readonly withWorkspacePathLease: <T>(workspaceId: string, operation: () => Promise<T>) => Promise<T>;
@@ -62,8 +62,7 @@ export function createWorkbenchCoordination(input: {
   return {
     commands: {
       attachWorkspaceToSpace(attachInput) {
-        return serialize(async () => {
-          input.assertSpaceAvailable(attachInput.spaceId);
+        return serialize(async () => await input.withSpaceAdmission(attachInput.spaceId, async () => {
           if (await input.spaces.queries.getTree(attachInput.spaceId) === undefined) {
             throw new WorkbenchCoordinationError("coordination_space_not_found", `Space not found: ${attachInput.spaceId}`);
           }
@@ -115,57 +114,67 @@ export function createWorkbenchCoordination(input: {
             }
             throw attachError;
           }
-        });
+        }));
       },
       detachWorkspaceFromSpace(referenceId) {
         return serialize(async () => {
           const initial = await findWorkspaceReference(input.spaces.queries, referenceId);
           if (initial === undefined) return;
-          await input.withWorkspacePathLease(initial.reference.workspaceId, async () => {
-            const current = await findWorkspaceReference(input.spaces.queries, referenceId);
-            if (current === undefined) return;
-            if (current.reference.workspaceId !== initial.reference.workspaceId) {
-              throw new WorkbenchCoordinationError(
-                "coordination_reference_kind_invalid",
-                `Space reference ${referenceId} changed Workspace identity while waiting for its path lease.`,
-              );
-            }
-            input.assertSpaceAvailable(current.spaceId);
-            await input.spaces.commands.unlinkReference(referenceId);
+          await input.withSpaceAdmission(initial.spaceId, async () => {
+            await input.withWorkspacePathLease(initial.reference.workspaceId, async () => {
+              const current = await findWorkspaceReference(input.spaces.queries, referenceId);
+              if (current === undefined) return;
+              if (current.reference.workspaceId !== initial.reference.workspaceId) {
+                throw new WorkbenchCoordinationError(
+                  "coordination_reference_kind_invalid",
+                  `Space reference ${referenceId} changed Workspace identity while waiting for its path lease.`,
+                );
+              }
+              if (current.spaceId !== initial.spaceId) {
+                throw new WorkbenchCoordinationError(
+                  "coordination_reference_kind_invalid",
+                  `Space reference ${referenceId} changed Space membership while waiting for its admission.`,
+                );
+              }
+              await input.spaces.commands.unlinkReference(referenceId);
+            });
           });
         });
       },
       reconnectWorkspace(reconnectInput) {
-        return serialize(async () => {
-          const source = await input.inspectDirectory(reconnectInput.rootPath);
-          if (source?.kind !== "folder") {
-            throw new WorkbenchCoordinationError(
-              "coordination_workspace_directory_required",
-              "The selected Workspace path must be an existing directory.",
+        return serialize(async () => await input.withWorkspaceAdmission(reconnectInput.workspaceId, async () => {
+            const source = await input.inspectDirectory(reconnectInput.rootPath);
+            if (source?.kind !== "folder") {
+              throw new WorkbenchCoordinationError(
+                "coordination_workspace_directory_required",
+                "The selected Workspace path must be an existing directory.",
+              );
+            }
+            return await input.withWorkspaceMountTransitionLease(
+              reconnectInput.workspaceId,
+              reconnectInput.rootPath,
+              async () => {
+                const currentSource = await input.inspectDirectory(reconnectInput.rootPath);
+                if (currentSource?.kind !== "folder" || currentSource.identity !== source.identity) {
+                  throw new WorkbenchCoordinationError(
+                    "coordination_workspace_directory_required",
+                    "The selected Workspace source changed while waiting for its path lease.",
+                  );
+                }
+                return await input.workspaces.commands.reconnectWorkspace({
+                  workspaceId: reconnectInput.workspaceId,
+                  rootPath: reconnectInput.rootPath,
+                  sourceIdentity: currentSource.identity,
+                });
+              },
             );
-          }
-          return await input.withWorkspaceMountTransitionLease(
-            reconnectInput.workspaceId,
-            reconnectInput.rootPath,
-            async () => {
-              const currentSource = await input.inspectDirectory(reconnectInput.rootPath);
-              if (currentSource?.kind !== "folder" || currentSource.identity !== source.identity) {
-                throw new WorkbenchCoordinationError(
-                  "coordination_workspace_directory_required",
-                  "The selected Workspace source changed while waiting for its path lease.",
-                );
-              }
-              return await input.workspaces.commands.reconnectWorkspace({
-                workspaceId: reconnectInput.workspaceId,
-                rootPath: reconnectInput.rootPath,
-                sourceIdentity: currentSource.identity,
-              });
-            },
-          );
-        });
+          }));
       },
       hideWorkspace(workspaceId) {
-        return serialize(async () => await input.workspaces.commands.setVisibility(workspaceId, "implicit"));
+        return serialize(async () => await input.withWorkspaceAdmission(
+          workspaceId,
+          async () => await input.workspaces.commands.setVisibility(workspaceId, "implicit"),
+        ));
       },
       deleteWorkspace(workspaceId) {
         return serialize(async () => await input.deleteWorkspace(workspaceId));

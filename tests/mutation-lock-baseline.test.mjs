@@ -153,7 +153,7 @@ test("local-file unlink waits for the same lease as an active write", async () =
       },
       coordination: { commands: { async detachWorkspaceFromSpace() {} } },
       mutations: coordinator,
-      assertSpaceAvailable() {},
+      async withSpaceAdmission(_spaceId, operation) { return await operation(); },
     });
 
     const pendingUnlink = service.unlink(item.id);
@@ -199,7 +199,7 @@ test("Workspace reconnect waits for writes under the previous mount", async () =
         },
       },
       async inspectDirectory() { return { kind: "folder", identity: "source-1" }; },
-      assertSpaceAvailable() {},
+      async withSpaceAdmission(_spaceId, operation) { return await operation(); },
       async listWorkspaceConversationIds() { return []; },
       async withWorkspaceAdmission(_workspaceId, operation) { return await operation(); },
       async withWorkspacePathLease(_workspaceId, operation) { return await operation(); },

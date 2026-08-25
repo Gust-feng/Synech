@@ -84,6 +84,8 @@ import {
 } from "./storage/data-maintenance.js";
 import { createSpaceReferenceDeletionFilePort } from "./spaces/space-reference-deletion.js";
 import { resolveSpaceFilesystemReference } from "./spaces/space-workspace-reference.js";
+import { createPanelDocumentPreview } from "./spaces/space-reference-preview.js";
+import { updatePanelSpaceReferenceText, createPanelSpaceReferenceEntry, renamePanelSpaceReferenceEntry, deletePanelSpaceReferenceEntry } from "./spaces/space-reference-mutations.js";
 import { resolveConversationSpaceAccess } from "./spaces/space-agent-access.js";
 import {
   createOrdinaryConversationTitleGenerator,
@@ -146,6 +148,8 @@ import {
   resolveSubAgentRoots,
 } from "./storage/runtime-asset-roots.js";
 import { createApplicationRuntime } from "./composition/workbench-coordination-runtime.js";
+import { createSpaceReferenceContentApplication, type SpaceReferenceContentApplication } from "../application/space-reference-content-application.js";
+import { createSpaceReferenceLifecycleApplication, type SpaceReferenceLifecycleApplication } from "../application/space-reference-lifecycle-application.js";
 import type { ManagedSpaceFolderApplication } from "../../domain/managed-space-folder.js";
 import {
   createContextAttachmentUploadApplication,
@@ -193,6 +197,8 @@ export type PanelHost = {
   readonly ordinaryTurnApplication: import("../application/ordinary-turn-application.js").OrdinaryTurnApplication;
   readonly managedSpaceFolderApplication: ManagedSpaceFolderApplication<import("../spaces/index.js").SpaceReferenceItem>;
   readonly spaceReferenceUnlink: SpaceReferenceUnlinkService;
+  readonly spaceReferenceContentApplication: SpaceReferenceContentApplication;
+  readonly spaceReferenceLifecycleApplication: SpaceReferenceLifecycleApplication;
   readonly personalKnowledgeFeature: PersonalKnowledgeFeature<import("../panel-api/workbench.js").DocumentPreview>;
   readonly dataMaintenance: DataMaintenance;
   readonly toolOutputStore: ToolOutputStore;
@@ -531,6 +537,8 @@ function assemblePanelHost(input: {
   });
   let workbenchCoordination!: WorkbenchCoordination;
   let spaceReferenceUnlink!: SpaceReferenceUnlinkService;
+  let spaceReferenceContentApplication!: SpaceReferenceContentApplication;
+  let spaceReferenceLifecycleApplication!: SpaceReferenceLifecycleApplication;
   let managedSpaceFolderApplication!: ManagedSpaceFolderApplication<import("../spaces/index.js").SpaceReferenceItem>;
   const resolveFeatureToolContributions = createHostFeatureAgentToolContributionResolver({
     agentNotes: agentNotesFeature,
@@ -538,7 +546,7 @@ function assemblePanelHost(input: {
     spaces: spaceFeature,
     personalKnowledge: personalKnowledgeFeature,
     revocationOverlay: spaceRevocationOverlay,
-    assertSpaceAvailable: (spaceId) => spaceConversationDeletion.assertAvailable(spaceId),
+    withSpaceAdmission: (spaceId, operation) => spaceConversationDeletion.admit(spaceId, operation),
     deleteSpace: (spaceId) => workbenchCoordination.commands.deleteSpace(spaceId),
     deleteConversation: (conversationId) => conversationLifecycle.deleteConversation(conversationId),
     fileMutationCoordinator,
@@ -745,8 +753,43 @@ function assemblePanelHost(input: {
     },
     coordination: workbenchCoordination,
     mutations: fileMutationCoordinator,
-    assertSpaceAvailable: (spaceId) => spaceConversationDeletion.assertAvailable(spaceId),
+    withSpaceAdmission: (spaceId, operation) => spaceConversationDeletion.admit(spaceId, operation),
   });
+  spaceReferenceContentApplication = createSpaceReferenceContentApplication({
+    spaceFeature: {
+      commands: { refreshReferenceSourceIdentity: spaceFeature.commands.refreshReferenceSourceIdentity },
+      queries: { getReference: spaceFeature.queries.getReference },
+    },
+    spaceAdmission: {
+      assertAvailable: (spaceId) => spaceConversationDeletion.assertAvailable(spaceId),
+      admit: (spaceId, operation) => spaceConversationDeletion.admit(spaceId, operation),
+    },
+    fileMutationCoordinator: { run: (key, operation) => fileMutationCoordinator.run(key, operation) },
+    resolveFilesystemReference: (item) => resolveSpaceFilesystemReference({ workspaceFeature }, item),
+    operations: {
+      updateText: (item, input, resolved) => updatePanelSpaceReferenceText(item, input, undefined, resolved),
+      updateCaption: async (item, input, resolved) => {
+        const relativePath = input.relativePath ?? "";
+        const current = await createPanelDocumentPreview(item, relativePath, undefined, undefined, resolved);
+        if (current.content.kind !== "media" || current.content.mediaKind !== "image" || current.content.captionEditable !== true) {
+          throw new Error("space_reference_caption_unavailable");
+        }
+        const match = /^space-image-caption:(\d+)$/u.exec(input.expectedFingerprint);
+        if (match === null) throw new Error("space_reference_image_caption_revision_conflict");
+        const updated = await spaceFeature.commands.updateReferenceImageCaption({ itemId: item.id, relativePath, expectedRevision: Number(match[1]), text: input.caption, actor: { kind: "user" } });
+        return await createPanelDocumentPreview(updated, relativePath, undefined, undefined, resolved);
+      },
+      createEntry: (item, input, resolved) => createPanelSpaceReferenceEntry(item, input, resolved),
+      renameEntry: (item, input, resolved) => renamePanelSpaceReferenceEntry(item, input, resolved),
+      deleteEntry: (item, relativePath, resolved) => deletePanelSpaceReferenceEntry(item, relativePath, resolved),
+    },
+  });
+  spaceReferenceLifecycleApplication = createSpaceReferenceLifecycleApplication({
+    spaceFeature,
+    spaceAdmission: { admit: (spaceId, operation) => spaceConversationDeletion.admit(spaceId, operation) },
+    unlinkExternalReference: (itemId) => spaceReferenceUnlink.unlink(itemId),
+  });
+
   const projectionChangeUnsubscribers = [
     spaceFeature.events.subscribe((event) => {
       projectionChanges.publish(projectionChangeFromSpace(event));
@@ -790,6 +833,13 @@ function assemblePanelHost(input: {
     }),
   ];
 
+  const releaseProjectionChanges = (): void => {
+    for (const unsubscribe of projectionChangeUnsubscribers.splice(0)) unsubscribe();
+    spaceProcessLifecycleUnsubscribe();
+    spaceRevocationOverlay.dispose();
+    projectionChanges.release();
+  };
+
   host = {
     isQuiescing: false,
     configCenter: input.configCenter,
@@ -826,6 +876,8 @@ function assemblePanelHost(input: {
     ordinaryTurnApplication: applicationRuntime.ordinaryTurnApplication,
     managedSpaceFolderApplication,
     spaceReferenceUnlink,
+    spaceReferenceContentApplication,
+    spaceReferenceLifecycleApplication,
     personalKnowledgeFeature,
     dataMaintenance,
     toolOutputStore,
@@ -834,12 +886,7 @@ function assemblePanelHost(input: {
     managedAssetFeature,
     fileMutationCoordinator,
     projectionChanges,
-    releaseProjectionChanges: () => {
-      for (const unsubscribe of projectionChangeUnsubscribers.splice(0)) unsubscribe();
-      spaceProcessLifecycleUnsubscribe();
-      spaceRevocationOverlay.dispose();
-      projectionChanges.release();
-    },
+    releaseProjectionChanges,
     knowledgeAssetRoot,
     managedSpaceFolderRoot,
     knowledgeAssetsReady,
