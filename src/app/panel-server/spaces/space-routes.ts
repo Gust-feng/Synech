@@ -61,6 +61,7 @@ export type SpaceReferenceRouteDependencies = {
     readonly queries: Pick<WorkspaceFeature["queries"], "get">;
   };
   readonly workbenchCoordination: Pick<WorkbenchCoordination, "commands">;
+  readonly unlinkExternalReference: (referenceId: string) => Promise<void>;
   readonly spaceConversationDeletion: Pick<SpaceConversationDeletionCoordinator, "assertAvailable">;
   readonly fileMutationCoordinator: Pick<LocalWorkspaceMutationCoordinator, "run" | "runExclusive">;
   readonly managedSpaceFolderRoot: string;
@@ -196,7 +197,7 @@ export async function handlePanelSpaceRoute(
     if (!isExternalReference(item)) {
       throw new PanelHttpError(409, "space_reference_unlink_unavailable", "软件维护的空间材料不能通过外部引用操作取消。");
     }
-    await unlinkExternalReference(runtime, item);
+    await runtime.unlinkExternalReference(item.id);
     await runtime.flushSpaceKnowledgeSync();
     writeJson(response, 200, { ok: true });
     return true;
@@ -373,41 +374,6 @@ export async function runReferenceMutation<T>(
     }
     return await operation(current, resolved);
   });
-}
-
-async function unlinkExternalReference(
-  runtime: SpaceReferenceRouteDependencies,
-  item: SpaceReferenceItem,
-): Promise<void> {
-  const lockPath = await externalReferenceLockPath(runtime, item);
-  const unlink = async () => {
-    const current = await runtime.spaceFeature.queries.getReference(item.id);
-    if (current === undefined) throw new PanelHttpError(404, "space_reference_not_found", "未找到空间引用。");
-    runtime.spaceConversationDeletion.assertAvailable(current.spaceId);
-    if (!isExternalReference(current)) {
-      throw new PanelHttpError(409, "space_reference_unlink_unavailable", "软件维护的空间材料不能通过外部引用操作取消。");
-    }
-    if (current.reference.kind === "workspace") {
-      await runtime.workbenchCoordination.commands.detachWorkspaceFromSpace(current.id);
-    } else {
-      await runtime.spaceFeature.commands.unlinkReference(current.id);
-    }
-  };
-  if (item.reference.kind === "workspace") return await unlink();
-  if (lockPath === undefined) return await unlink();
-  await runtime.fileMutationCoordinator.runExclusive(lockPath, unlink);
-}
-
-async function externalReferenceLockPath(
-  runtime: SpaceReferenceRouteDependencies,
-  item: SpaceReferenceItem,
-): Promise<string | undefined> {
-  if (item.reference.kind === "local_file") return item.reference.path;
-  if (item.reference.kind !== "workspace") return undefined;
-  const workspace = await runtime.workspaceFeature.queries.get(item.reference.workspaceId);
-  return workspace === undefined
-    ? undefined
-    : [...workspace.mounts].reverse().find((mount) => mount.status === "active")?.rootPath;
 }
 
 function sameResolvedSource(

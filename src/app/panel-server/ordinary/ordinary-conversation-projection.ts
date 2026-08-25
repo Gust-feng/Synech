@@ -46,10 +46,7 @@ export function projectOrdinaryConversation(input: {
     status,
     activeRunId: input.conversation.activeRunId,
     latestRunId: input.conversation.latestRunId,
-    workspaceFolder: workspaceFolderSummaryFromPath(
-      input.workspaceRun?.birth.capabilitySnapshot.executionRoot,
-      input.workspaceRun?.birth.workspaceSelection ?? "default",
-    ),
+    workspaceFolder: workspaceFolderSummaryFromPath(input.workspaceRun?.birth.capabilitySnapshot.executionRoot),
     requiresUserAction: pendingAction !== undefined,
     pendingAction,
     queuedRunIds: input.conversation.queuedRunIds,

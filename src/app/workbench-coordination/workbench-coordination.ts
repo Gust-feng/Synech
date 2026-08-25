@@ -17,7 +17,13 @@ export function createWorkbenchCoordination(input: {
   readonly inspectDirectory: (rootPath: string) => Promise<SpaceExternalSourceSnapshot | undefined>;
   readonly assertSpaceAvailable: (spaceId: string) => void;
   readonly listWorkspaceConversationIds: (workspaceId: string) => Promise<readonly string[]>;
+  readonly withWorkspaceAdmission: <T>(workspaceId: string, operation: () => Promise<T>) => Promise<T>;
   readonly withWorkspacePathLease: <T>(workspaceId: string, operation: () => Promise<T>) => Promise<T>;
+  readonly withWorkspaceMountTransitionLease: <T>(
+    workspaceId: string,
+    candidateRootPath: string,
+    operation: () => Promise<T>,
+  ) => Promise<T>;
   readonly deleteWorkspace: (workspaceId: string) => Promise<void>;
   readonly deleteSpace: (spaceId: string) => Promise<void>;
   readonly detachKnowledgeFromSpace: (input: {
@@ -70,13 +76,15 @@ export function createWorkbenchCoordination(input: {
           } catch (attachError) {
             if (!ensured.created) throw attachError;
             try {
-              const [references, conversations] = await Promise.all([
-                input.spaces.queries.listReferencesByWorkspace(ensured.workspace.id),
-                input.listWorkspaceConversationIds(ensured.workspace.id),
-              ]);
-              if (references.length === 0 && conversations.length === 0) {
-                await input.workspaces.commands.discardImplicitWorkspace(ensured.workspace.id);
-              }
+              await input.withWorkspaceAdmission(ensured.workspace.id, async () => {
+                const [references, conversations] = await Promise.all([
+                  input.spaces.queries.listReferencesByWorkspace(ensured.workspace.id),
+                  input.listWorkspaceConversationIds(ensured.workspace.id),
+                ]);
+                if (references.length === 0 && conversations.length === 0) {
+                  await input.workspaces.commands.discardImplicitWorkspace(ensured.workspace.id);
+                }
+              });
             } catch (compensationError) {
               throw new WorkbenchCoordinationError(
                 "coordination_attach_compensation_failed",
@@ -115,11 +123,24 @@ export function createWorkbenchCoordination(input: {
               "The selected Workspace path must be an existing directory.",
             );
           }
-          return await input.workspaces.commands.reconnectWorkspace({
-            workspaceId: reconnectInput.workspaceId,
-            rootPath: reconnectInput.rootPath,
-            sourceIdentity: source.identity,
-          });
+          return await input.withWorkspaceMountTransitionLease(
+            reconnectInput.workspaceId,
+            reconnectInput.rootPath,
+            async () => {
+              const currentSource = await input.inspectDirectory(reconnectInput.rootPath);
+              if (currentSource?.kind !== "folder" || currentSource.identity !== source.identity) {
+                throw new WorkbenchCoordinationError(
+                  "coordination_workspace_directory_required",
+                  "The selected Workspace source changed while waiting for its path lease.",
+                );
+              }
+              return await input.workspaces.commands.reconnectWorkspace({
+                workspaceId: reconnectInput.workspaceId,
+                rootPath: reconnectInput.rootPath,
+                sourceIdentity: currentSource.identity,
+              });
+            },
+          );
         });
       },
       hideWorkspace(workspaceId) {

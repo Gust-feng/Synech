@@ -266,7 +266,7 @@ function birth() {
       skillCatalog: [], subAgentCatalog: [], skillTrigger: { mode: "keyword" }, mcpCatalog: [],
       executionRoot: ".", toolConfirmation: { policy: "never" }, warnings: [],
     },
-    agentNoteVersions: [], memoryOwner: { kind: "global" }, workspaceSelection: "explicit",
+    agentNoteVersions: [], memoryOwner: { kind: "global" },
     ownerContext: "test", informationAccess: { web: { enabled: false } }, toolConfirmationPolicy: "never",
   };
 }

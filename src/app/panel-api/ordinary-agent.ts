@@ -294,7 +294,6 @@ export type OrdinaryPanelConversationPendingAction = {
 export type PanelWorkspaceFolderSummary = {
   readonly label: string;
   readonly path?: string;
-  readonly selection: "default" | "explicit";
 };
 
 export type OrdinaryPanelConversation = {

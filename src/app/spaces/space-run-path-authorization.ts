@@ -30,6 +30,12 @@ export type CreateSpaceRunPathAuthorizationInput = {
   readonly revocationOverlay?: SpaceRevocationOverlay;
   readonly pathIdentity?: SpacePathIdentity;
   readonly externalSourceInspector?: SpaceExternalSourceInspector;
+  /** Reads the current owner facts; used again after the mutation lease is acquired. */
+  readonly resolveCurrentSource?: (referenceId: string) => Promise<{
+    readonly path: string;
+    readonly sourceIdentity?: string;
+    readonly mountVersion?: string;
+  } | undefined>;
   /** Called lazily when actual access proves that the frozen external source is gone or replaced. */
   readonly onInvalidReference?: (referenceId: string) => Promise<void>;
 };
@@ -68,6 +74,15 @@ export function createSpaceRunPathAuthorization(
       }
       if (resolution.outcome === "resolved") {
         const grant = grants.find((candidate) => candidate.referenceId === resolution.referenceId);
+        if (grant !== undefined && input.resolveCurrentSource !== undefined) {
+          const current = await input.resolveCurrentSource(resolution.referenceId);
+          if (current === undefined ||
+              await identity(current.path) !== await identity(grant.path) ||
+              current.sourceIdentity !== grant.sourceIdentity ||
+              current.mountVersion !== grant.mountVersion) {
+            throw new Error(`Space reference ${resolution.referenceId} changed source identity while the request was waiting.`);
+          }
+        }
         // External references always carry a captured source identity. Managed
         // folders are software assets and must never enter the unlink workflow.
         if (grant?.sourceIdentity !== undefined &&
@@ -122,7 +137,13 @@ export function frozenSpacePathGrants(runContext: Pick<OrdinaryRunContext, "cont
     const readable = runContext.permissionBoundaryRefs.includes(readPermission);
     const writable = runContext.permissionBoundaryRefs.includes(spaceReferenceWritePermission(referenceId));
     if (!readable && !writable) continue;
-    grants.push({ referenceId, kind: grant.kind, path: grant.path, sourceIdentity: contextRef.sourceIdentity });
+    grants.push({
+      referenceId,
+      kind: grant.kind,
+      path: grant.path,
+      sourceIdentity: contextRef.sourceIdentity,
+      mountVersion: contextRef.mountVersion,
+    });
   }
   return grants;
 }

@@ -14,6 +14,21 @@ import {
   type KnowledgePage,
   type KnowledgePageSummary,
 } from "./contracts.js";
+import {
+  parseKnowledgeAsset,
+  parseKnowledgeAssignmentIdentity,
+  parseKnowledgeLink,
+  parseKnowledgeNoteListRow,
+  parseKnowledgePage,
+  parseKnowledgeTheme,
+  parseKnowledgeThemeAssignment,
+  parsePersonalKnowledgeActor,
+  parsePersonalKnowledgeChangeRecord,
+  parsePersonalKnowledgeSearchResult,
+  parsePersonalKnowledgeSnapshot,
+  parsePersonalNote,
+  parsePersonalNoteRevision,
+} from "./persistence-schema.js";
 
 const MIGRATIONS = [{
   version: 1,
@@ -119,46 +134,30 @@ export function createSqlitePersonalKnowledgeRepository(database: SqliteRuntimeD
           SELECT id, space_id AS spaceId, title, body_markdown AS bodyMarkdown, revision,
                  created_at AS createdAt, updated_at AS updatedAt
           FROM personal_notes ORDER BY position, id
-        `).all().map((row) => {
-          const value = row as Record<string, SQLInputValue>;
-          return {
-            id: String(value.id),
-            ...(value.spaceId === null ? {} : { spaceId: String(value.spaceId) }),
-            title: String(value.title),
-            bodyMarkdown: String(value.bodyMarkdown),
-            revision: Number(value.revision),
-            createdAt: Number(value.createdAt),
-            updatedAt: Number(value.updatedAt),
-          };
-        });
+        `).all().map((row) => personalNoteFromRow(row as Record<string, SQLInputValue>));
         const pages = database.connection.prepare(
           "SELECT ref_id AS refId, kind, collected_at AS collectedAt, asset_json AS assetJson FROM knowledge_pages ORDER BY collected_at DESC, ref_id",
-        ).all().map((row) => {
-          const value = row as Record<string, SQLInputValue>;
-          return {
-            refId: String(value.refId),
-            kind: String(value.kind) as PersonalKnowledgeSnapshot["pages"][number]["kind"],
-            collectedAt: Number(value.collectedAt),
-            ...(value.assetJson === null ? {} : { asset: JSON.parse(String(value.assetJson)) }),
-          };
-        });
+        ).all().map((row) => knowledgePageFromRow(row as Record<string, SQLInputValue>));
         const links = database.connection.prepare(
           "SELECT from_ref_id AS 'from', to_ref_id AS 'to' FROM knowledge_links ORDER BY from_ref_id, to_ref_id",
-        ).all() as unknown as PersonalKnowledgeSnapshot["links"];
+        ).all().map((row) => parseKnowledgeLink(row));
         const themes = database.connection.prepare(
           "SELECT id, name, color, origin FROM knowledge_themes ORDER BY id",
-        ).all() as unknown as PersonalKnowledgeSnapshot["themes"];
+        ).all().map((row) => parseKnowledgeTheme(row));
         const assignments = database.connection.prepare(`
           SELECT ref_id AS refId, theme_id AS themeId, assigned_by AS 'by', locked
           FROM knowledge_theme_assignments ORDER BY theme_id, ref_id
-        `).all().map((row) => ({ ...row, locked: Boolean((row as Record<string, SQLInputValue>).locked) })) as unknown as PersonalKnowledgeSnapshot["assignments"];
+        `).all().map((row) => {
+          const value = row as Record<string, SQLInputValue>;
+          return parseKnowledgeThemeAssignment({ ...value, locked: value.locked === 1 });
+        });
         const recentlyOpened = Object.fromEntries(database.connection.prepare(
           "SELECT ref_id AS refId, opened_at AS openedAt FROM knowledge_recently_opened",
         ).all().map((row) => {
           const value = row as Record<string, SQLInputValue>;
           return [String(value.refId), Number(value.openedAt)];
         }));
-        return { notes, pages, links, themes, assignments, recentlyOpened };
+        return parsePersonalKnowledgeSnapshot({ notes, pages, links, themes, assignments, recentlyOpened });
       } catch (error) {
         throw repositoryError("Could not read personal knowledge from SQLite.", error);
       }
@@ -249,42 +248,42 @@ export function createSqlitePersonalKnowledgeRepository(database: SqliteRuntimeD
         const cursor = input.cursor === undefined ? undefined : parsePageCursor(input.cursor);
         const pages = database.connection.prepare(
           "SELECT ref_id AS refId, kind, collected_at AS collectedAt, asset_json AS assetJson FROM knowledge_pages",
-        ).all().map((row) => {
-          const value = row as Record<string, SQLInputValue>;
-          return {
-            refId: String(value.refId),
-            kind: String(value.kind) as PersonalKnowledgeSnapshot["pages"][number]["kind"],
-            collectedAt: Number(value.collectedAt),
-            ...(value.assetJson === null ? {} : { asset: JSON.parse(String(value.assetJson)) as Record<string, unknown> }),
-          };
-        });
+        ).all().map((row) => knowledgePageFromRow(row as Record<string, SQLInputValue>));
         const noteRows = database.connection.prepare(
           "SELECT id, title, space_id AS spaceId, created_at AS createdAt FROM personal_notes",
-        ).all() as Record<string, SQLInputValue>[];
-        const noteTitles = new Map(noteRows.map((row) => [String(row.id), String(row.title)]));
-        const pageSpaceIds = new Map(noteRows.flatMap((row) => row.spaceId === null
+        ).all().map((row) => {
+          const value = row as Record<string, SQLInputValue>;
+          return parseKnowledgeNoteListRow({
+            id: value.id,
+            title: value.title,
+            ...(value.spaceId === null ? {} : { spaceId: value.spaceId }),
+            createdAt: value.createdAt,
+          });
+        });
+        const noteTitles = new Map(noteRows.map((row) => [row.id, row.title]));
+        const pageSpaceIds = new Map(noteRows.flatMap((row) => row.spaceId === undefined
           ? []
-          : [[String(row.id), String(row.spaceId)] as const]));
+          : [[row.id, row.spaceId] as const]));
         // 未收藏的 UI 笔记也属于 Agent 可枚举的个人笔记；已收藏的以知识页为准，避免重复。
         const collectedNoteRefIds = new Set(pages.filter((page) => page.kind === "note").map((page) => page.refId));
         const noteCandidates = noteRows
-          .filter((row) => !collectedNoteRefIds.has(String(row.id)))
+          .filter((row) => !collectedNoteRefIds.has(row.id))
           .map((row) => ({
-            refId: String(row.id),
+            refId: row.id,
             kind: "note" as const,
-            collectedAt: Number(row.createdAt),
+            collectedAt: row.createdAt,
           }));
         const themeAssignments = new Map<string, Set<string>>();
         for (const row of database.connection.prepare(
           "SELECT ref_id AS refId, theme_id AS themeId FROM knowledge_theme_assignments",
         ).all()) {
-          const value = row as Record<string, SQLInputValue>;
-          const refId = String(value.refId);
-          const set = themeAssignments.get(String(value.themeId)) ?? new Set<string>();
+          const value = parseKnowledgeAssignmentIdentity(row);
+          const refId = value.refId;
+          const set = themeAssignments.get(value.themeId) ?? new Set<string>();
           set.add(refId);
-          themeAssignments.set(String(value.themeId), set);
+          themeAssignments.set(value.themeId, set);
         }
-        const titleOf = (page: { readonly kind: string; readonly refId: string; readonly asset?: Record<string, unknown> }): string | undefined =>
+        const titleOf = (page: { readonly kind: string; readonly refId: string; readonly asset?: KnowledgePage["asset"] }): string | undefined =>
           page.kind === "note" ? noteTitles.get(page.refId)
             : page.kind === "space_reference" && typeof page.asset?.title === "string" ? page.asset.title
               : undefined;
@@ -607,9 +606,11 @@ function cleanupSpace(database: SqliteRuntimeDatabase, spaceId: string, referenc
     const update = database.connection.prepare("UPDATE knowledge_pages SET asset_json = ? WHERE ref_id = ?");
     for (const row of pages) {
       const value = row as Record<string, SQLInputValue>;
-      const rawAsset = value.assetJson === null ? undefined : JSON.parse(String(value.assetJson)) as unknown;
-      if (!isRecord(rawAsset)) continue;
-      const sourceReferenceId = typeof rawAsset.sourceReferenceId === "string" ? rawAsset.sourceReferenceId : undefined;
+      const rawAsset = value.assetJson === null
+        ? undefined
+        : parseKnowledgeAsset(JSON.parse(String(value.assetJson)));
+      if (rawAsset === undefined) continue;
+      const sourceReferenceId = rawAsset.sourceReferenceId;
       if (sourceReferenceId === undefined || !sourceReferenceIds.has(sourceReferenceId)) continue;
       const { sourceReferenceId: _sourceReferenceId, sourceRelativePath: _sourceRelativePath, ...detachedAsset } = rawAsset;
       update.run(JSON.stringify(detachedAsset), String(value.refId));
@@ -617,9 +618,6 @@ function cleanupSpace(database: SqliteRuntimeDatabase, spaceId: string, referenc
   });
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 function removeKnowledgeReference(database: SqliteRuntimeDatabase, refId: string): void {
   database.connection.prepare("DELETE FROM knowledge_pages WHERE ref_id = ?").run(refId);
   database.connection.prepare("DELETE FROM knowledge_links WHERE from_ref_id = ? OR to_ref_id = ?").run(refId, refId);
@@ -662,15 +660,6 @@ function parseChangeCursor(value: string): { readonly occurredAt: number; readon
   throw new PersonalKnowledgeError("personal_knowledge_invalid_input", "cursor is invalid.");
 }
 
-type ChangeRecordRow = {
-  readonly type: PersonalKnowledgeChangeRecord["type"];
-  readonly refId?: string;
-  readonly themeId?: string;
-  readonly payload: Record<string, unknown>;
-  readonly actor: PersonalKnowledgeChangeRecord["actor"];
-  readonly occurredAt: number;
-};
-
 function changeRecordPayload(record: PersonalKnowledgeChangeRecord): { readonly refId?: string; readonly themeId?: string; readonly rest: Record<string, unknown> } {
   switch (record.type) {
     case "knowledge.asset_updated":
@@ -686,33 +675,34 @@ function changeRecordPayload(record: PersonalKnowledgeChangeRecord): { readonly 
 }
 
 function changeRecordFromRow(value: Record<string, SQLInputValue>): PersonalKnowledgeChangeRecord {
-  const row: ChangeRecordRow = {
-    type: String(value.type) as PersonalKnowledgeChangeRecord["type"],
-    ...(value.refId === null ? {} : { refId: String(value.refId) }),
-    ...(value.themeId === null ? {} : { themeId: String(value.themeId) }),
-    payload: JSON.parse(String(value.payloadJson)) as Record<string, unknown>,
-    actor: {
-      kind: String(value.actorKind) as PersonalKnowledgeChangeRecord["actor"]["kind"],
-      ...(value.actorId === null ? {} : { actorId: String(value.actorId) }),
-      ...(value.traceId === null ? {} : { traceId: String(value.traceId) }),
-      ...(value.goalId === null ? {} : { goalId: String(value.goalId) }),
-      ...(value.toolCallId === null ? {} : { toolCallId: String(value.toolCallId) }),
-    },
-    occurredAt: Number(value.occurredAt),
-  };
-  const id = String(value.id);
-  const actor = row.actor;
-  const occurredAt = row.occurredAt;
-  switch (row.type) {
+  const type = value.type;
+  const refId = value.refId === null ? undefined : value.refId;
+  const themeId = value.themeId === null ? undefined : value.themeId;
+  const payload: unknown = JSON.parse(String(value.payloadJson));
+  const actor = parsePersonalKnowledgeActor({
+    kind: value.actorKind,
+    ...(value.actorId === null ? {} : { actorId: value.actorId }),
+    ...(value.traceId === null ? {} : { traceId: value.traceId }),
+    ...(value.goalId === null ? {} : { goalId: value.goalId }),
+    ...(value.toolCallId === null ? {} : { toolCallId: value.toolCallId }),
+  });
+  const id = value.id;
+  const occurredAt = value.occurredAt;
+  if (typeof type !== "string" || typeof occurredAt !== "number" || typeof payload !== "object" || payload === null) {
+    return parsePersonalKnowledgeChangeRecord({ id, type, actor, occurredAt, payload });
+  }
+  switch (type) {
     case "knowledge.asset_updated":
-      return { id, type: row.type, refId: requiredValue(row.refId), relativePath: String(row.payload.relativePath), beforeFingerprint: String(row.payload.beforeFingerprint), afterFingerprint: String(row.payload.afterFingerprint), actor, occurredAt };
+      return parsePersonalKnowledgeChangeRecord({ id, type, refId, ...payload, actor, occurredAt });
     case "knowledge.uncollected":
-      return { id, type: row.type, refId: requiredValue(row.refId), kind: row.payload.kind as KnowledgePage["kind"], actor, occurredAt };
+      return parsePersonalKnowledgeChangeRecord({ id, type, refId, ...payload, actor, occurredAt });
     case "knowledge.theme_created":
-      return { id, type: row.type, themeId: requiredValue(row.themeId), name: String(row.payload.name), actor, occurredAt };
+      return parsePersonalKnowledgeChangeRecord({ id, type, themeId, ...payload, actor, occurredAt });
     case "knowledge.theme_assigned":
     case "knowledge.theme_unassigned":
-      return { id, type: row.type, themeId: requiredValue(row.themeId), refIds: row.payload.refIds as readonly string[], actor, occurredAt };
+      return parsePersonalKnowledgeChangeRecord({ id, type, themeId, ...payload, actor, occurredAt });
+    default:
+      return parsePersonalKnowledgeChangeRecord({ id, type, actor, occurredAt });
   }
 }
 
@@ -736,36 +726,47 @@ function noteWriteError(database: SqliteRuntimeDatabase, id: string): PersonalKn
     : new PersonalKnowledgeError("personal_note_not_found", `Note ${id} was not found.`);
 }
 
+function knowledgePageFromRow(value: Record<string, SQLInputValue>): KnowledgePage {
+  return parseKnowledgePage({
+    refId: value.refId,
+    kind: value.kind,
+    collectedAt: value.collectedAt,
+    ...(value.assetJson === null
+      ? {}
+      : { asset: parseKnowledgeAsset(JSON.parse(String(value.assetJson))) }),
+  });
+}
+
 function personalNoteFromRow(value: Record<string, SQLInputValue>): PersonalNote {
-  return {
-    id: String(value.id),
-    ...(value.spaceId === null ? {} : { spaceId: String(value.spaceId) }),
-    title: String(value.title),
-    bodyMarkdown: String(value.bodyMarkdown),
-    revision: Number(value.revision),
-    createdAt: Number(value.createdAt),
-    updatedAt: Number(value.updatedAt),
-  };
+  return parsePersonalNote({
+    id: value.id,
+    ...(value.spaceId === null ? {} : { spaceId: value.spaceId }),
+    title: value.title,
+    bodyMarkdown: value.bodyMarkdown,
+    revision: value.revision,
+    createdAt: value.createdAt,
+    updatedAt: value.updatedAt,
+  });
 }
 
 function personalNoteRevisionFromRow(value: Record<string, SQLInputValue>): PersonalNoteRevision {
-  return {
-    noteId: String(value.noteId),
-    revision: Number(value.revision),
-    ...(value.baseRevision === null ? {} : { baseRevision: Number(value.baseRevision) }),
-    operation: String(value.operation) as PersonalNoteRevision["operation"],
-    title: String(value.title),
-    bodyMarkdown: String(value.bodyMarkdown),
+  return parsePersonalNoteRevision({
+    noteId: value.noteId,
+    revision: value.revision,
+    ...(value.baseRevision === null ? {} : { baseRevision: value.baseRevision }),
+    operation: value.operation,
+    title: value.title,
+    bodyMarkdown: value.bodyMarkdown,
     actor: {
-      kind: String(value.actorKind) as PersonalNoteRevision["actor"]["kind"],
-      ...(value.actorId === null ? {} : { actorId: String(value.actorId) }),
-      ...(value.traceId === null ? {} : { traceId: String(value.traceId) }),
-      ...(value.goalId === null ? {} : { goalId: String(value.goalId) }),
-      ...(value.toolCallId === null ? {} : { toolCallId: String(value.toolCallId) }),
+      kind: value.actorKind,
+      ...(value.actorId === null ? {} : { actorId: value.actorId }),
+      ...(value.traceId === null ? {} : { traceId: value.traceId }),
+      ...(value.goalId === null ? {} : { goalId: value.goalId }),
+      ...(value.toolCallId === null ? {} : { toolCallId: value.toolCallId }),
     },
-    ...(value.changeSummary === null ? {} : { changeSummary: String(value.changeSummary) }),
-    createdAt: Number(value.createdAt),
-  };
+    ...(value.changeSummary === null ? {} : { changeSummary: value.changeSummary }),
+    createdAt: value.createdAt,
+  });
 }
 
 function insertNoteRevision(database: SqliteRuntimeDatabase, revision: PersonalNoteRevision): void {
@@ -783,17 +784,17 @@ function insertNoteRevision(database: SqliteRuntimeDatabase, revision: PersonalN
 }
 
 function searchResultFromRow(value: Record<string, SQLInputValue>): PersonalKnowledgeSearchResult {
-  return {
+  return parsePersonalKnowledgeSearchResult({
     note: {
-      id: String(value.id),
-      ...(value.spaceId === null ? {} : { spaceId: String(value.spaceId) }),
-      title: String(value.title),
-      revision: Number(value.revision),
-      createdAt: Number(value.createdAt),
-      updatedAt: Number(value.updatedAt),
+      id: value.id,
+      ...(value.spaceId === null ? {} : { spaceId: value.spaceId }),
+      title: value.title,
+      revision: value.revision,
+      createdAt: value.createdAt,
+      updatedAt: value.updatedAt,
     },
-    snippet: String(value.snippet),
-  };
+    snippet: value.snippet,
+  });
 }
 
 function ftsQuery(query: string): string {

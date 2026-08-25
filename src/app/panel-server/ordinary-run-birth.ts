@@ -104,7 +104,6 @@ export async function prepareOrdinaryRunBirth(
     capabilitySnapshot,
     agentNoteVersions: noteSnapshot.versions,
     memoryOwner: scope.owner,
-    workspaceSelection: "explicit",
     ownerContext: [ownerBlock, formatEnvironmentContext(capabilitySnapshot.commandShell)].join("\n\n"),
     informationAccess,
     accessPolicy: toolRunAccessPolicyFromPreset(input.toolConfirmationPolicy ?? toolConfirmation.policy),

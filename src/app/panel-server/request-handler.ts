@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
+import { isIP, type AddressInfo } from "node:net";
 import {
   PANEL_BRAND_LOGO_PATHNAME,
   createPanelHtml,
@@ -44,6 +44,10 @@ import { DataMaintenanceError } from "./storage/data-maintenance.js";
 import { handlePanelManagedAssetRoute } from "./storage/managed-asset-routes.js";
 import { handleWorkbenchProjectionRoute } from "./workbench/workbench-projection-routes.js";
 import { initializeProductStorage, resolveProductPaths } from "../../platform/storage/index.js";
+import {
+  acquireProductHomeRuntimeLease,
+  type ProductHomeRuntimeLease,
+} from "./product-home-runtime-lease.js";
 export type { PanelModelCatalogFetch, PanelProviderFetch, PanelServerOptions, StartedPanelServer } from "./types.js";
 
 const PANEL_REQUEST_DRAIN_TIMEOUT_MS = 1_000;
@@ -63,10 +67,22 @@ export class PanelShutdownTimeoutError extends Error {
   }
 }
 
+export class PanelNonLoopbackHostError extends Error {
+  readonly code = "panel_non_loopback_host" as const;
+
+  constructor(readonly host: string) {
+    super(`Synech v1 only accepts loopback Panel hosts; received: ${host}`);
+    this.name = "PanelNonLoopbackHostError";
+  }
+}
+
 export async function startLocalPanelServer(options: PanelServerOptions = {}): Promise<StartedPanelServer> {
+  const host = normalizeLoopbackHost(options.host ?? "127.0.0.1");
   const productPaths = resolveProductPaths({ productHome: options.productHome });
   let runtime: PanelHost | undefined;
+  let runtimeLease: ProductHomeRuntimeLease | undefined;
   try {
+    runtimeLease = await acquireProductHomeRuntimeLease(productPaths.productHome);
     await initializeProductStorage(productPaths);
     await preparePanelStorageForStartup(productPaths);
     const createdRuntime = createPanelHost({
@@ -92,23 +108,32 @@ export async function startLocalPanelServer(options: PanelServerOptions = {}): P
     await createdRuntime.spaceConversationDeletion.ready();
     await createdRuntime.workspaceDeletion.ready();
     const server = createServer(createPanelRequestHandler(createdRuntime));
-    const host = options.host ?? "127.0.0.1";
     const port = options.port ?? 9090;
 
     await listen(server, port, host);
     const address = server.address() as AddressInfo;
     let closing: Promise<void> | undefined;
     return {
-      url: `http://${host}:${address.port}/`,
+      url: `http://${panelUrlHost(host)}:${address.port}/`,
       productHome: createdRuntime.productPaths.productHome,
       configDirectory: createdRuntime.configDirectory,
-      close: () => closing ??= closePanelServer(server, createdRuntime),
+      close: () => closing ??= (async () => {
+        await closePanelServer(server, createdRuntime);
+        await runtimeLease!.release();
+      })(),
     };
   } catch (startError) {
     const cleanupErrors: unknown[] = [];
     if (runtime !== undefined) {
       try {
         await disposePanelHostAfterFailedStart(runtime);
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+    }
+    if (runtimeLease !== undefined) {
+      try {
+        await runtimeLease.release();
       } catch (error) {
         cleanupErrors.push(error);
       }
@@ -121,6 +146,20 @@ export async function startLocalPanelServer(options: PanelServerOptions = {}): P
     }
     throw startError;
   }
+}
+
+export function normalizeLoopbackHost(value: string): string {
+  const host = value.trim().toLowerCase();
+  const ipv4Loopback = isIP(host) === 4 && host.split(".")[0] === "127";
+  const ipv6Loopback = host === "::1" || host === "0:0:0:0:0:0:0:1";
+  if (host !== "localhost" && !ipv4Loopback && !ipv6Loopback) {
+    throw new PanelNonLoopbackHostError(value);
+  }
+  return host;
+}
+
+function panelUrlHost(host: string): string {
+  return isIP(host) === 6 ? `[${host}]` : host;
 }
 
 function createPanelRequestHandler(runtime: PanelHost): (request: IncomingMessage, response: ServerResponse) => void {
@@ -301,6 +340,7 @@ async function handlePanelRequest(
     workspaceFeature: runtime.workspaceFeature,
     spaceConversationDeletion: runtime.spaceConversationDeletion,
     workbenchCoordination: runtime.workbenchCoordination,
+    unlinkExternalReference: (referenceId) => runtime.spaceReferenceUnlink.unlink(referenceId),
     fileMutationCoordinator: runtime.fileMutationCoordinator,
     managedSpaceFolderRoot: runtime.managedSpaceFolderRoot,
     flushSpaceKnowledgeSync: runtime.flushSpaceKnowledgeSync,
@@ -375,10 +415,18 @@ function workbenchCoordinationHttpError(error: WorkbenchCoordinationError): Pane
   switch (error.code) {
     case "coordination_space_not_found":
     case "coordination_reference_not_found":
+    case "workspace_not_found":
+    case "space_not_found":
       return new PanelHttpError(404, error.code, error.message);
     case "coordination_workspace_directory_required":
       return new PanelHttpError(400, error.code, error.message);
     case "coordination_reference_kind_invalid":
+    case "conversation_deletion_in_progress":
+    case "conversation_owner_conflict":
+    case "workspace_deletion_in_progress":
+    case "workspace_not_available":
+    case "space_deletion_in_progress":
+    case "background_process_stop_pending":
       return new PanelHttpError(409, error.code, error.message);
     case "coordination_attach_compensation_failed":
       return new PanelHttpError(500, error.code, error.message);

@@ -294,7 +294,6 @@ function runState(overrides = {}) {
     birth: {
       agentDefinitionRef: { agentId: "ordinary", revision: "1" },
       capabilitySnapshot: { executionRoot: "Z:/Workspace" },
-      workspaceSelection: "default",
     },
     status: { kind: "running" },
     session: { phase: "not_started" },

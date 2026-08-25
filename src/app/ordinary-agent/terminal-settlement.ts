@@ -285,7 +285,6 @@ export function projectStableTerminalRunFacts(
     userMessage: state.input.userMessage,
     taskContextRefs: (state.input.context?.contextRefs ?? []).map((contextRef) => contextRef.ref),
     workspaceRoot: state.birth.capabilitySnapshot.executionRoot,
-    workspaceSelection: state.birth.workspaceSelection ?? "default",
     executionStarted: state.timeline.some((event) => event.type === "run.started"),
     toolFacts: state.toolCalls
       .filter((result): result is ToolCallResult & { readonly status: "completed" | "failed" | "cancelled" } =>

@@ -225,7 +225,6 @@ const birthSchema = z.object({
   capabilitySnapshot: capabilitySnapshotSchema,
   agentNoteVersions: agentNoteVersionsSchema.optional(),
   memoryOwner: memoryOwnerSchema,
-  workspaceSelection: z.enum(["default", "explicit"]).optional(),
   ownerContext: z.string().max(16_000).optional(),
   informationAccess: z.object({
     web: z.object({

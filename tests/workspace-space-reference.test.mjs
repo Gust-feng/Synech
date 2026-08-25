@@ -96,6 +96,12 @@ test("failed Workspace attachment compensates a newly-created implicit registrat
   });
   t.after(async () => await workspaces.release());
   await workspaces.ready();
+  let admissionHeld = false;
+  const originalDiscard = workspaces.commands.discardImplicitWorkspace;
+  workspaces.commands.discardImplicitWorkspace = async (workspaceId) => {
+    assert.equal(admissionHeld, true);
+    await originalDiscard(workspaceId);
+  };
   const coordination = createWorkbenchCoordination({
     spaces: {
       commands: {
@@ -112,7 +118,12 @@ test("failed Workspace attachment compensates a newly-created implicit registrat
     async inspectDirectory() { return { kind: "folder", identity: "folder-id" }; },
     assertSpaceAvailable() {},
     async listWorkspaceConversationIds() { return []; },
+    async withWorkspaceAdmission(_workspaceId, operation) {
+      admissionHeld = true;
+      try { return await operation(); } finally { admissionHeld = false; }
+    },
     async withWorkspacePathLease(_workspaceId, operation) { return await operation(); },
+    async withWorkspaceMountTransitionLease(_workspaceId, _rootPath, operation) { return await operation(); },
     async deleteWorkspace() {},
     async deleteSpace() {},
     async detachKnowledgeFromSpace() {},
@@ -143,10 +154,12 @@ test("Workspace attachment and detachment are idempotent application commands", 
     async inspectDirectory() { return { kind: "folder", identity: "folder-id" }; },
     assertSpaceAvailable() {},
     async listWorkspaceConversationIds() { return []; },
+    async withWorkspaceAdmission(_workspaceId, operation) { return await operation(); },
     async withWorkspacePathLease(_workspaceId, operation) {
       leaseHeld = true;
       try { return await operation(); } finally { leaseHeld = false; }
     },
+    async withWorkspaceMountTransitionLease(_workspaceId, _rootPath, operation) { return await operation(); },
     async deleteWorkspace() {},
     async deleteSpace() {},
     async detachKnowledgeFromSpace() {},
@@ -242,7 +255,7 @@ test("Workspace repository failures are not silently projected as missing Space 
   );
 });
 
-test("moving a Workspace replaces the active mount and releases the historical path", async (t) => {
+test("moving a Workspace requires the explicit reconnect command and releases the historical path", async (t) => {
   const feature = createWorkspaceFeature({
     repository: memoryWorkspaceRepository(),
     idFactory: increasingId("workspace"),
@@ -257,10 +270,18 @@ test("moving a Workspace replaces the active mount and releases the historical p
     sourceIdentity: "identity-1",
     visibility: "listed",
   });
-  const moved = await feature.commands.ensureWorkspace({
+  await assert.rejects(
+    () => feature.commands.ensureWorkspace({
+      rootPath: "D:/projects/moved",
+      sourceIdentity: "identity-1",
+      visibility: "listed",
+    }),
+    (error) => error?.code === "workspace_mount_invalid",
+  );
+  const moved = await feature.commands.reconnectWorkspace({
+    workspaceId: original.workspace.id,
     rootPath: "D:/projects/moved",
     sourceIdentity: "identity-1",
-    visibility: "listed",
   });
   assert.equal(moved.workspace.id, original.workspace.id);
   const detail = await feature.queries.get(original.workspace.id);

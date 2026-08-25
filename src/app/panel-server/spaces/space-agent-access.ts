@@ -27,6 +27,7 @@ type AgentAccessibleSpaceReference = {
   readonly path: string;
   readonly kind: "file" | "project";
   readonly sourceIdentity?: string;
+  readonly mountVersion?: string;
 };
 
 /**
@@ -69,6 +70,7 @@ export async function resolveConversationSpaceAccess(
         path: resolved.path,
         kind: resolved.sourceKind === "local_file" ? "file" as const : "project" as const,
         sourceIdentity: resolved.sourceIdentity,
+        mountVersion: resolved.mountVersion,
       };
     } catch (error) {
       if (error instanceof PanelHttpError && (
@@ -115,6 +117,7 @@ function contextRefFor(
     // model-input-files 消费）。
     automaticSpaceReference: true,
     ...(resolved.sourceIdentity === undefined ? {} : { sourceIdentity: resolved.sourceIdentity }),
+    ...(resolved.mountVersion === undefined ? {} : { mountVersion: resolved.mountVersion }),
     kind: file ? "file" : "project",
     title: item.title,
     summary: "当前对话所属空间授权的本地资源。",

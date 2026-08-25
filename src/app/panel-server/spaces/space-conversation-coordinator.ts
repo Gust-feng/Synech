@@ -15,7 +15,7 @@ import {
   type InMemoryProcessRegistry,
   type ProcessTerminator,
 } from "../../runtime-guard/process-registry.js";
-import { PanelHttpError } from "../http-utils.js";
+import { WorkbenchCoordinationError } from "../../workbench-coordination/index.js";
 import {
   newSpaceConversationDeletionRecord,
   type SpaceConversationDeletionCheckpoint,
@@ -141,14 +141,14 @@ export function createConversationLifecycleCoordinator(input: {
     },
     assertConversationAvailable(conversationId) {
       if (deletingConversationIds.has(conversationId)) {
-        throw new PanelHttpError(409, "conversation_deletion_in_progress", `Conversation ${conversationId} is being deleted.`);
+        throw new WorkbenchCoordinationError("conversation_deletion_in_progress", `Conversation ${conversationId} is being deleted.`);
       }
     },
     submit(submission) {
       const operation = () => serialize(async () => await runExclusive(async () => {
         const conversationId = `conversation:${submission.submissionId}`;
         if (deletingConversationIds.has(conversationId)) {
-          throw new PanelHttpError(409, "conversation_deletion_in_progress", `Conversation ${conversationId} is being deleted.`);
+          throw new WorkbenchCoordinationError("conversation_deletion_in_progress", `Conversation ${conversationId} is being deleted.`);
         }
         const pending = await input.journal.getByConversation(conversationId);
         if (pending !== undefined) await resume(pending);
@@ -158,8 +158,7 @@ export function createConversationLifecycleCoordinator(input: {
           input.ordinary.queries.getConversationOwner(conversationId),
         ]);
         if (canonicalOwner !== undefined && (canonicalOwner.kind !== submission.owner.kind || canonicalOwner.id !== submission.owner.id)) {
-          throw new PanelHttpError(
-            409,
+          throw new WorkbenchCoordinationError(
             "conversation_owner_conflict",
             `Conversation ${conversationId} already belongs to ${canonicalOwner.kind} ${canonicalOwner.id}.`,
           );
@@ -176,7 +175,7 @@ export function createConversationLifecycleCoordinator(input: {
         if (submission.owner.kind === "workspace") {
           const workspace = await input.workspaces?.queries.get(submission.owner.id);
           if (workspace === undefined || workspace.status !== "available") {
-            throw new PanelHttpError(404, "workspace_not_found", "所选工作区不存在或不可用。");
+            throw new WorkbenchCoordinationError("workspace_not_found", "所选工作区不存在或不可用。");
           }
         }
 
@@ -402,7 +401,7 @@ export function createSpaceConversationDeletionCoordinator(input: {
     isDeleting: (spaceId) => deletingSpaceIds.has(spaceId),
     assertAvailable(spaceId) {
       if (deletingSpaceIds.has(spaceId)) {
-        throw new PanelHttpError(409, "space_deletion_in_progress", `Space ${spaceId} is being deleted.`);
+        throw new WorkbenchCoordinationError("space_deletion_in_progress", `Space ${spaceId} is being deleted.`);
       }
     },
     admit(spaceId, operation) {
@@ -413,21 +412,21 @@ export function createSpaceConversationDeletionCoordinator(input: {
       // rejected after deletion begins. Only the callback already in progress
       // is allowed to drain before the deletion snapshot.
       if (deletingSpaceIds.has(spaceId)) {
-        return Promise.reject(new PanelHttpError(409, "space_deletion_in_progress", `Space ${spaceId} is being deleted.`));
+        return Promise.reject(new WorkbenchCoordinationError("space_deletion_in_progress", `Space ${spaceId} is being deleted.`));
       }
       return serializeAdmission(spaceId, async () => {
         if (deletingSpaceIds.has(spaceId)) {
-          throw new PanelHttpError(409, "space_deletion_in_progress", `Space ${spaceId} is being deleted.`);
+          throw new WorkbenchCoordinationError("space_deletion_in_progress", `Space ${spaceId} is being deleted.`);
         }
         // A journal row is the durable deletion marker. This check also
         // protects a request arriving after restart but before `ready()` has
         // replayed the row into the in-memory set.
         if (await input.journal.getBySpace(spaceId) !== undefined) {
           deletingSpaceIds.add(spaceId);
-          throw new PanelHttpError(409, "space_deletion_in_progress", `Space ${spaceId} is being deleted.`);
+          throw new WorkbenchCoordinationError("space_deletion_in_progress", `Space ${spaceId} is being deleted.`);
         }
         if (await input.spaces.queries.getTree(spaceId) === undefined) {
-          throw new PanelHttpError(404, "space_not_found", `Space ${spaceId} was not found.`);
+          throw new WorkbenchCoordinationError("space_not_found", `Space ${spaceId} was not found.`);
         }
         return operation();
       });
@@ -440,7 +439,7 @@ export function createSpaceConversationDeletionCoordinator(input: {
             const tree = await input.spaces.queries.getTree(spaceId);
             if (tree === undefined) {
               deletingSpaceIds.delete(spaceId);
-              throw new PanelHttpError(404, "space_not_found", `Space ${spaceId} was not found.`);
+              return;
             }
             // Capture owner conversations only after all admissions that
             // passed before the deletion marker have completed.
@@ -516,8 +515,7 @@ function assertProcessCleanupComplete(
       .filter((skip) => skip.reason !== "inactive_status")
       .map((skip) => skip.processId),
   ];
-  throw new PanelHttpError(
-    409,
+  throw new WorkbenchCoordinationError(
     "background_process_stop_pending",
     `${owner} still has managed processes that could not be confirmed stopped: ${processIds.join(", ")}.`,
   );

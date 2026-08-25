@@ -8,6 +8,8 @@ export type OrdinaryRunContextReference = {
   readonly pathGranted?: boolean;
   readonly automaticSpaceReference?: boolean;
   readonly sourceIdentity?: string;
+  /** Frozen Workspace mount identity used to reject writes after reconnect. */
+  readonly mountVersion?: string;
   readonly kind: "user_goal" | "workspace" | "file" | "project" | "web" | "runtime";
   readonly title?: string;
   readonly summary?: string;

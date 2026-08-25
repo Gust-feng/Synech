@@ -156,8 +156,6 @@ export type OrdinaryRunBirth = {
   readonly agentNoteVersions?: AgentNoteVersions;
   /** Stable non-global memory owner frozen with this run; never derived from cwd. */
   readonly memoryOwner: ConversationOwner;
-  /** Frozen provenance prevents the configured fallback becoming a user selection after restore. */
-  readonly workspaceSelection?: "default" | "explicit";
   /** 模型可见的 Owner 与环境上下文，随 Run 出生事实冻结。 */
   readonly ownerContext?: string;
   readonly informationAccess: SanitizedInformationAccessConfig;
@@ -644,7 +642,6 @@ export type OrdinaryStableTerminalRunFacts = {
   readonly userMessage: string;
   readonly taskContextRefs: readonly string[];
   readonly workspaceRoot: string;
-  readonly workspaceSelection: "default" | "explicit";
   readonly executionStarted: boolean;
   readonly toolFacts: readonly {
     readonly toolFactId: string;

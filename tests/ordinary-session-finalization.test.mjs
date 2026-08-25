@@ -148,7 +148,7 @@ function terminalDocument(runId, endEntryId) {
       },
       turn: { conversationId: "conversation-1", ordinal: 1 },
       input: { userMessage: "test" },
-      birth: { capabilitySnapshot: { executionRoot: "." }, workspaceSelection: "default" },
+      birth: { capabilitySnapshot: { executionRoot: "." } },
       timeline: [],
       toolCalls: [],
       timestamps: { createdAt: "2026-08-26T00:00:00.000Z", terminalAt: "2026-08-26T00:00:01.000Z" },

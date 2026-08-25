@@ -109,7 +109,6 @@ function initialRun(runId) {
       },
       agentNoteVersions: [],
       memoryOwner: { kind: "global" },
-      workspaceSelection: "explicit",
       ownerContext: "test",
       informationAccess: { web: { enabled: false } },
       toolConfirmationPolicy: "never",

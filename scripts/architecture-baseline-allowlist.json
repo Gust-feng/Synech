@@ -1,1 +1,14 @@
-[]
+[
+  {
+    "rule": "presentation-string-control",
+    "file": "src/app/panel-ui/src/personal-workbench/workbench/app/components/ActivityEvidence.tsx",
+    "contains": "subject === source",
+    "reason": "Presentation-only source de-duplication; it does not derive lifecycle, error, confirmation or activity identity."
+  },
+  {
+    "rule": "presentation-string-control",
+    "file": "src/app/panel-ui/src/personal-workbench/workbench/app/components/ActivityEvidence.tsx",
+    "contains": "subject.startsWith",
+    "reason": "Presentation-only source de-duplication; it does not derive lifecycle, error, confirmation or activity identity."
+  }
+]

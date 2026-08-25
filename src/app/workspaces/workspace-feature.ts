@@ -88,26 +88,29 @@ export function createWorkspaceFeature(input: CreateWorkspaceFeatureInput): Work
             if (pathMount !== undefined && pathMount.sourceIdentity !== registerInput.sourceIdentity) {
               throw new WorkspaceFeatureError("workspace_mount_conflict", "The selected path is bound to a different Workspace object.");
             }
-            const at = now();
             const visibility = current.visibility === "listed" || registerInput.visibility === "listed" ? "listed" : "implicit";
-            let workspace: Workspace = visibility === current.visibility ? current : { ...current, visibility, updatedAt: at };
-            let mount = latestMountOf(snapshot, current.id);
-            let mounts = snapshot.mounts;
-            if (mount?.status !== "active" || canonicalWorkspacePathIdentity(mount.rootPath) !== candidateRoot) {
-              if (mount === undefined || mount.sourceIdentity !== registerInput.sourceIdentity) {
-                throw new WorkspaceFeatureError("workspace_mount_conflict", "The selected directory is not the same filesystem object as the existing Workspace.");
-              }
-              assertWorkspaceRootAvailable(snapshot, registerInput.rootPath, current.id);
-              mount = { workspaceId: current.id, mountVersion: nextMountVersion(), rootPath: candidateRoot, sourceIdentity: registerInput.sourceIdentity, status: "active", connectedAt: at };
-              mounts = [...invalidateActiveMounts(snapshot.mounts, current.id, at), mount];
-              workspace = { ...workspace, status: "available", updatedAt: at };
+            const mount = latestMountOf(snapshot, current.id);
+            if (mount === undefined || mount.sourceIdentity !== registerInput.sourceIdentity) {
+              throw new WorkspaceFeatureError("workspace_mount_conflict", "The selected directory is not the same filesystem object as the existing Workspace.");
             }
-            if (workspace !== current || mounts !== snapshot.mounts) {
-              await input.repository.write({ schemaVersion: WORKSPACE_SCHEMA_VERSION, workspaces: snapshot.workspaces.map((entry) => entry.id === current.id ? workspace : entry), mounts });
+            if (mount.status !== "active" || canonicalWorkspacePathIdentity(mount.rootPath) !== candidateRoot) {
+              throw new WorkspaceFeatureError(
+                "workspace_mount_invalid",
+                "The Workspace mount changed or is disconnected; reconnect it through the explicit reconnect command.",
+              );
+            }
+            const workspace: Workspace = visibility === current.visibility
+              ? current
+              : { ...current, visibility, updatedAt: now() };
+            if (workspace !== current) {
+              await input.repository.write({
+                schemaVersion: WORKSPACE_SCHEMA_VERSION,
+                workspaces: snapshot.workspaces.map((entry) => entry.id === current.id ? workspace : entry),
+                mounts: snapshot.mounts,
+              });
               if (workspace.visibility !== current.visibility) publish({ type: "workspace.visibility_changed", workspace });
-              if (mounts !== snapshot.mounts) publish({ type: "workspace.reconnected", workspaceId: workspace.id, mount: mount! });
             }
-            return { workspace, mount: mount!, created: false };
+            return { workspace, mount, created: false };
           }
           assertWorkspaceRootAvailable(snapshot, registerInput.rootPath);
           const at = now();

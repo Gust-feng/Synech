@@ -8,7 +8,7 @@ import {
   type InMemoryProcessRegistry,
   type ProcessTerminator,
 } from "../../runtime-guard/process-registry.js";
-import { PanelHttpError } from "../http-utils.js";
+import { WorkbenchCoordinationError } from "../../workbench-coordination/index.js";
 
 export type WorkspaceDeletionCoordinator = {
   ready(): Promise<void>;
@@ -104,10 +104,10 @@ export function createWorkspaceDeletionCoordinator(input: {
     isDeleting: (workspaceId) => deletingWorkspaceIds.has(workspaceId),
     assertAvailable(workspaceId) {
       if (deletingWorkspaceIds.has(workspaceId)) {
-        throw new PanelHttpError(409, "workspace_deletion_in_progress", `工作区 ${workspaceId} 正在删除。`);
+        throw new WorkbenchCoordinationError("workspace_deletion_in_progress", `工作区 ${workspaceId} 正在删除。`);
       }
       if (deletedWorkspaceIds.has(workspaceId)) {
-        throw new PanelHttpError(409, "workspace_not_available", `工作区 ${workspaceId} 当前不可用。`);
+        throw new WorkbenchCoordinationError("workspace_not_available", `工作区 ${workspaceId} 当前不可用。`);
       }
     },
     admit(workspaceId, operation) {
@@ -116,24 +116,24 @@ export function createWorkspaceDeletionCoordinator(input: {
       // its FIFO callback starts; callbacks queued before the marker are
       // rechecked below and may be rejected instead of being drained.
       if (deletingWorkspaceIds.has(workspaceId)) {
-        return Promise.reject(new PanelHttpError(409, "workspace_deletion_in_progress", `工作区 ${workspaceId} 正在删除。`));
+        return Promise.reject(new WorkbenchCoordinationError("workspace_deletion_in_progress", `工作区 ${workspaceId} 正在删除。`));
       }
       if (deletedWorkspaceIds.has(workspaceId)) {
-        return Promise.reject(new PanelHttpError(409, "workspace_not_available", `工作区 ${workspaceId} 当前不可用。`));
+        return Promise.reject(new WorkbenchCoordinationError("workspace_not_available", `工作区 ${workspaceId} 当前不可用。`));
       }
       return serializeAdmission(workspaceId, async () => {
         if (deletingWorkspaceIds.has(workspaceId)) {
-          throw new PanelHttpError(409, "workspace_deletion_in_progress", `工作区 ${workspaceId} 正在删除。`);
+          throw new WorkbenchCoordinationError("workspace_deletion_in_progress", `工作区 ${workspaceId} 正在删除。`);
         }
         if (deletedWorkspaceIds.has(workspaceId)) {
-          throw new PanelHttpError(409, "workspace_not_available", `工作区 ${workspaceId} 当前不可用。`);
+          throw new WorkbenchCoordinationError("workspace_not_available", `工作区 ${workspaceId} 当前不可用。`);
         }
         const workspace = await input.workspaces.queries.get(workspaceId);
         if (workspace === undefined) {
-          throw new PanelHttpError(404, "workspace_not_found", "工作区不存在。");
+          throw new WorkbenchCoordinationError("workspace_not_found", "工作区不存在。");
         }
         if (workspace.status !== "available") {
-          throw new PanelHttpError(409, "workspace_not_available", `工作区 ${workspaceId} 当前不可用。`);
+          throw new WorkbenchCoordinationError("workspace_not_available", `工作区 ${workspaceId} 当前不可用。`);
         }
         return operation();
       });
@@ -145,13 +145,12 @@ export function createWorkspaceDeletionCoordinator(input: {
       deletingWorkspaceIds.add(workspaceId);
       return serialize(async () => await serializeAdmission(workspaceId, async () => await runExclusive(async () =>
         await runWorkspaceExclusive(workspaceId, async () => {
-        let workspaceMissing = false;
         let completed = false;
         try {
           const workspace = await input.workspaces.queries.get(workspaceId);
           if (workspace === undefined) {
-            workspaceMissing = true;
-            throw new PanelHttpError(404, "workspace_not_found", "工作区不存在。");
+            completed = true;
+            return;
           }
           // Persist the deny marker before capturing owner resources. The
           // command is idempotent, so retries can resume a partial cascade.
@@ -175,9 +174,8 @@ export function createWorkspaceDeletionCoordinator(input: {
         } finally {
           // A failed cascade remains denied in this process so a retry can
           // finish the partial cleanup without admitting new owner data.
-          if (completed || workspaceMissing) deletingWorkspaceIds.delete(workspaceId);
+          if (completed) deletingWorkspaceIds.delete(workspaceId);
           if (completed) deletedWorkspaceIds.add(workspaceId);
-          if (workspaceMissing) deletedWorkspaceIds.delete(workspaceId);
         }
         }))));
     },
@@ -197,8 +195,7 @@ function assertProcessCleanupComplete(
       .filter((skip) => skip.reason !== "inactive_status")
       .map((skip) => skip.processId),
   ];
-  throw new PanelHttpError(
-    409,
+  throw new WorkbenchCoordinationError(
     "background_process_stop_pending",
     `${owner} still has managed processes that could not be confirmed stopped: ${processIds.join(", ")}.`,
   );

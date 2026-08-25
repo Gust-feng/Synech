@@ -62,6 +62,56 @@ export async function resolveAuthorizedWorkspacePath(
   };
 }
 
+/**
+ * Resolves the mutation key first, then repeats authorization after the shared
+ * path lease is acquired. A frozen run grant is context, not a lock-time
+ * authorization: unlink/reconnect may invalidate it while the request waits.
+ */
+export async function runAuthorizedWorkspaceMutation<T>(input: {
+  readonly rootDirectory: string;
+  readonly requestedPath: string;
+  readonly operation: Extract<LocalWorkspacePathOperation, "write" | "edit">;
+  readonly context: ToolExecutionContext;
+  readonly authorization?: LocalWorkspacePathAuthorization;
+  readonly coordinator: import("./local-workspace-mutation-coordinator.js").LocalWorkspaceMutationCoordinator;
+  readonly mutate: (target: AuthorizedLocalWorkspacePath) => Promise<T>;
+}): Promise<T> {
+  const resolve = async () => await resolveAuthorizedWorkspacePath(
+    input.rootDirectory,
+    input.requestedPath,
+    input.operation,
+    input.context,
+    input.authorization,
+  );
+  const initial = await resolve();
+  return await input.coordinator.run(initial.absolutePath, async () => {
+    const current = await resolve();
+    if (!sameAuthorizedMutationTarget(initial, current)) {
+      throw new Error("The authorized filesystem source changed while the mutation was waiting for its path lease.");
+    }
+    return await input.mutate(current);
+  });
+}
+
+function sameAuthorizedMutationTarget(
+  left: AuthorizedLocalWorkspacePath,
+  right: AuthorizedLocalWorkspacePath,
+): boolean {
+  return samePlatformPath(left.absolutePath, right.absolutePath)
+    && samePlatformPath(left.rootDirectory, right.rootDirectory)
+    && left.resourceId === right.resourceId
+    && left.resourceScope?.ownerKind === right.resourceScope?.ownerKind
+    && left.resourceScope?.ownerId === right.resourceScope?.ownerId;
+}
+
+function samePlatformPath(left: string, right: string): boolean {
+  const normalizedLeft = path.normalize(path.resolve(left));
+  const normalizedRight = path.normalize(path.resolve(right));
+  return process.platform === "win32"
+    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+    : normalizedLeft === normalizedRight;
+}
+
 /** Adds identities only for an explicitly authorized multi-root path. */
 export function authorizedPathFacts(target: AuthorizedLocalWorkspacePath): Readonly<Record<string, string>> {
   return target.resourceScope === undefined && target.resourceId === undefined

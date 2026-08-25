@@ -30,6 +30,7 @@ import {
 } from "./panel-desktop-window-controls.js";
 import { startLocalPanelServer } from "../panel-server/index.js";
 import { resolveProductPaths, type ProductPaths } from "../../platform/storage/index.js";
+import { acquireDesktopSingleInstance } from "./panel-desktop-single-instance.js";
 import {
   DESKTOP_APP_NAME,
   desktopAppUserModelId,
@@ -50,6 +51,7 @@ process.on("warning", (warning) => {
 const desktopWindowStates = new WeakMap<BrowserWindow, DesktopWindowState>();
 let desktopLocalPreferenceStore: DesktopLocalPreferenceStore | undefined;
 let desktopExitCleanup: Promise<void> | undefined;
+let secondInstanceFocusRequested = false;
 const WINDOW_MINIMIZE_CHANNEL = "desktop:window-minimize";
 const WINDOW_TOGGLE_MAXIMIZE_CHANNEL = "desktop:window-toggle-maximize";
 const WINDOW_GET_STATE_CHANNEL = "desktop:window-get-state";
@@ -71,6 +73,12 @@ main().catch((error: unknown) => {
 
 async function main(): Promise<void> {
   const args = parsePanelDesktopArgs(process.argv.slice(2));
+  if (!acquireDesktopSingleInstance({
+    requestLock: () => app.requestSingleInstanceLock(),
+    onSecondInstance: (listener) => app.on("second-instance", listener),
+    focusCurrentWindow: focusCurrentDesktopWindow,
+    quit: () => app.quit(),
+  })) return;
   configureDesktopAppIdentity();
   installDesktopLocalPreferenceBridge();
   installDesktopWindowControlBridge();
@@ -154,6 +162,19 @@ function exitDesktopAfterCleanup(exitCode: number): void {
     }
     app.exit(exitCode);
   })();
+}
+
+function focusCurrentDesktopWindow(): void {
+  const window = BrowserWindow.getFocusedWindow() ??
+    [...activeWindows].find((candidate) => !candidate.isDestroyed());
+  if (window === undefined) {
+    secondInstanceFocusRequested = true;
+    return;
+  }
+  secondInstanceFocusRequested = false;
+  if (window.isMinimized()) window.restore();
+  if (!window.isVisible()) window.show();
+  window.focus();
 }
 
 function configureDesktopAppIdentity(): void {
@@ -254,6 +275,9 @@ function createElectronPanelWindow(
     },
   });
   activeWindows.add(mainWindow);
+  if (secondInstanceFocusRequested) {
+    mainWindow.once("ready-to-show", focusCurrentDesktopWindow);
+  }
   desktopWindowStates.set(mainWindow, {
     nativeWindowEvents: createDesktopWindowNativeEventState(),
   });

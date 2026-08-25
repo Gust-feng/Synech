@@ -5,6 +5,7 @@ export type OrdinaryRunContextReferenceInput = {
   readonly pathGranted?: boolean;
   readonly automaticSpaceReference?: boolean;
   readonly sourceIdentity?: string;
+  readonly mountVersion?: string;
   readonly kind: "workspace" | "file" | "project" | "web";
   readonly title?: string;
   readonly summary?: string;

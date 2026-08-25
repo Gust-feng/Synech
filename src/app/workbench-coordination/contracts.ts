@@ -6,7 +6,15 @@ export type WorkbenchCoordinationErrorCode =
   | "coordination_reference_not_found"
   | "coordination_workspace_directory_required"
   | "coordination_reference_kind_invalid"
-  | "coordination_attach_compensation_failed";
+  | "coordination_attach_compensation_failed"
+  | "conversation_deletion_in_progress"
+  | "conversation_owner_conflict"
+  | "workspace_deletion_in_progress"
+  | "workspace_not_available"
+  | "workspace_not_found"
+  | "space_deletion_in_progress"
+  | "space_not_found"
+  | "background_process_stop_pending";
 
 export class WorkbenchCoordinationError extends Error {
   readonly name = "WorkbenchCoordinationError";

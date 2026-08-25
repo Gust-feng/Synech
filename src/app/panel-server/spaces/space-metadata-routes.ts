@@ -81,9 +81,6 @@ export async function handlePanelSpaceMetadataRoute(
   }
   if (treeMatch !== null && request.method === "DELETE") {
     const spaceId = decode(treeMatch[1]);
-    if (await dependencies.spaceFeature.queries.getTree(spaceId) === undefined) {
-      throw new PanelHttpError(404, "space_not_found", "未找到空间。");
-    }
     await dependencies.workbenchCoordination.commands.deleteSpace(spaceId);
     await dependencies.flushSpaceKnowledgeSync();
     writeJson(response, 200, { ok: true });

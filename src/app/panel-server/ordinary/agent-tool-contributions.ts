@@ -59,7 +59,12 @@ export function createHostFeatureAgentToolContributionResolver(input: {
     readonly annotation?: import("../../spaces/index.js").SpaceReferenceAnnotationInput;
   }) => Promise<import("../../spaces/index.js").SpaceReferenceItem>;
   readonly detachWorkspaceFromSpace?: (referenceId: string) => Promise<void>;
-  readonly resolveWorkspaceDirectory?: (workspaceId: string) => Promise<{ readonly path: string; readonly sourceIdentity: string } | undefined>;
+  readonly unlinkExternalReference?: (referenceId: string) => Promise<void>;
+  readonly resolveWorkspaceDirectory?: (workspaceId: string) => Promise<{
+    readonly path: string;
+    readonly sourceIdentity: string;
+    readonly mountVersion: string;
+  } | undefined>;
 }): HostFeatureAgentToolContributionResolver {
   // Shared across runs on purpose: a revocation is permanent, since re-adding a
   // reference mints a new id rather than reviving the revoked one.
@@ -101,6 +106,7 @@ export function createHostFeatureAgentToolContributionResolver(input: {
           ...(input.fileMutationCoordinator === undefined ? {} : { fileMutationCoordinator: input.fileMutationCoordinator }),
           ...(input.attachWorkspaceDirectory === undefined ? {} : { attachWorkspaceDirectory: input.attachWorkspaceDirectory }),
           ...(input.detachWorkspaceFromSpace === undefined ? {} : { detachWorkspaceFromSpace: input.detachWorkspaceFromSpace }),
+          ...(input.unlinkExternalReference === undefined ? {} : { unlinkExternalReference: input.unlinkExternalReference }),
           ...(input.resolveWorkspaceDirectory === undefined ? {} : { resolveWorkspaceDirectory: input.resolveWorkspaceDirectory }),
         })]),
     ...(input.personalKnowledge === undefined

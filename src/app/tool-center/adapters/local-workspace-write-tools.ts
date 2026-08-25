@@ -9,7 +9,7 @@ import {
   DEFAULT_LOCAL_WORKSPACE_ROOT,
   MAX_LOCAL_WORKSPACE_FILE_BYTES,
   requireText,
-  resolveAuthorizedWorkspacePath,
+  runAuthorizedWorkspaceMutation,
   sha256Hex,
   stringOrFallback,
   throwIfAborted,
@@ -70,51 +70,53 @@ export function createLocalWriteFileTool(
       throwIfAborted(context.abortSignal);
       const record = asRecord(input);
       const content = requireText(record.content, "content", { allowEmpty: true });
-      const target = await resolveAuthorizedWorkspacePath(
+      const requestedPath = stringOrFallback(record.path, "");
+      return runAuthorizedWorkspaceMutation({
         rootDirectory,
-        stringOrFallback(record.path, ""),
-        "write",
+        requestedPath,
+        operation: "write",
         context,
-        options.pathAuthorization,
-      );
-      const pathFacts = authorizedPathFacts(target);
-      return mutationCoordinator.run(target.absolutePath, async () => {
-        let original: string | undefined;
-        try {
-          const existing = await fs.stat(target.absolutePath);
-          if (!existing.isFile()) throw new Error(`Write expects a file path: ${target.relativePath}`);
-          if (existing.size > MAX_LOCAL_WORKSPACE_FILE_BYTES) {
-            throw new Error(`File is too large to rewrite safely: ${target.relativePath}`);
+        authorization: options.pathAuthorization,
+        coordinator: mutationCoordinator,
+        mutate: async (target) => {
+          const pathFacts = authorizedPathFacts(target);
+          let original: string | undefined;
+          try {
+            const existing = await fs.stat(target.absolutePath);
+            if (!existing.isFile()) throw new Error(`Write expects a file path: ${target.relativePath}`);
+            if (existing.size > MAX_LOCAL_WORKSPACE_FILE_BYTES) {
+              throw new Error(`File is too large to rewrite safely: ${target.relativePath}`);
+            }
+            const current = await readEditableUtf8TextFile(target.absolutePath, target.relativePath);
+            if (current.bytes.length > MAX_LOCAL_WORKSPACE_FILE_BYTES) {
+              throw new Error(`File is too large to rewrite safely: ${target.relativePath}`);
+            }
+            original = current.text;
+          } catch (error) {
+            if (!isNodeError(error) || error.code !== "ENOENT") throw error;
           }
-          const current = await readEditableUtf8TextFile(target.absolutePath, target.relativePath);
-          if (current.bytes.length > MAX_LOCAL_WORKSPACE_FILE_BYTES) {
-            throw new Error(`File is too large to rewrite safely: ${target.relativePath}`);
-          }
-          original = current.text;
-        } catch (error) {
-          if (!isNodeError(error) || error.code !== "ENOENT") throw error;
-        }
 
-        const changed = original === undefined || original !== content;
-        assertSandboxAllowed(sandboxPolicy, sandboxRequest("write", target.rootDirectory, target.relativePath, {
-          bytes: Buffer.byteLength(content, "utf8"),
-        }));
-        if (changed) {
-          await fs.mkdir(path.dirname(target.absolutePath), { recursive: true });
-          await fs.writeFile(target.absolutePath, content, "utf8");
-        }
-        const written = Buffer.from(content, "utf8");
-        return {
-          refId: `workspace:file:${target.relativePath}`,
-          path: target.relativePath,
-          ...pathFacts,
-          operation: original === undefined ? "create" : "write",
-          changed,
-          beforeHash: original === undefined ? undefined : sha256Hex(original),
-          afterHash: sha256Hex(content),
-          bytes: written.length,
-          diff: editFileDiffFact(target.relativePath, original ?? "", content),
-        };
+          const changed = original === undefined || original !== content;
+          assertSandboxAllowed(sandboxPolicy, sandboxRequest("write", target.rootDirectory, target.relativePath, {
+            bytes: Buffer.byteLength(content, "utf8"),
+          }));
+          if (changed) {
+            await fs.mkdir(path.dirname(target.absolutePath), { recursive: true });
+            await fs.writeFile(target.absolutePath, content, "utf8");
+          }
+          const written = Buffer.from(content, "utf8");
+          return {
+            refId: `workspace:file:${target.relativePath}`,
+            path: target.relativePath,
+            ...pathFacts,
+            operation: original === undefined ? "create" : "write",
+            changed,
+            beforeHash: original === undefined ? undefined : sha256Hex(original),
+            afterHash: sha256Hex(content),
+            bytes: written.length,
+            diff: editFileDiffFact(target.relativePath, original ?? "", content),
+          };
+        },
       });
     },
   };
@@ -163,54 +165,56 @@ export function createLocalEditFileTool(
       throwIfAborted(context.abortSignal);
       const record = asRecord(input);
       const edits = parseExactEdits(record.edits);
-      const target = await resolveAuthorizedWorkspacePath(
+      const requestedPath = stringOrFallback(record.path, "");
+      return runAuthorizedWorkspaceMutation({
         rootDirectory,
-        stringOrFallback(record.path, ""),
-        "edit",
+        requestedPath,
+        operation: "edit",
         context,
-        options.pathAuthorization,
-      );
-      const pathFacts = authorizedPathFacts(target);
-      return mutationCoordinator.run(target.absolutePath, async () => {
-        assertSandboxAllowed(sandboxPolicy, sandboxRequest("edit", target.rootDirectory, target.relativePath));
-        const stat = await fs.stat(target.absolutePath);
-        if (!stat.isFile()) throw new Error(`Edit expects a file path: ${target.relativePath}`);
-        if (stat.size > MAX_LOCAL_WORKSPACE_FILE_BYTES) {
-          throw new Error(`File is too large to edit safely: ${target.relativePath}`);
-        }
+        authorization: options.pathAuthorization,
+        coordinator: mutationCoordinator,
+        mutate: async (target) => {
+          const pathFacts = authorizedPathFacts(target);
+          assertSandboxAllowed(sandboxPolicy, sandboxRequest("edit", target.rootDirectory, target.relativePath));
+          const stat = await fs.stat(target.absolutePath);
+          if (!stat.isFile()) throw new Error(`Edit expects a file path: ${target.relativePath}`);
+          if (stat.size > MAX_LOCAL_WORKSPACE_FILE_BYTES) {
+            throw new Error(`File is too large to edit safely: ${target.relativePath}`);
+          }
 
-        const current = await readEditableUtf8TextFile(target.absolutePath, target.relativePath);
-        if (current.bytes.length > MAX_LOCAL_WORKSPACE_FILE_BYTES) {
-          throw new Error(`File is too large to edit safely: ${target.relativePath}`);
-        }
-        const original = current.text;
-        const located = locateExactEdits(original, edits, target.relativePath);
-        assertNoOverlappingEdits(located, target.relativePath);
-        let updated = original;
-        for (const edit of [...located].sort((left, right) => right.start - left.start)) {
-          updated = `${updated.slice(0, edit.start)}${edit.newText}${updated.slice(edit.end)}`;
-        }
-        const changed = updated !== original;
-        throwIfAborted(context.abortSignal);
-        if (changed) {
-          assertSandboxAllowed(sandboxPolicy, sandboxRequest("edit", target.rootDirectory, target.relativePath, {
-            bytes: Buffer.byteLength(updated, "utf8"),
-          }));
-          await fs.writeFile(target.absolutePath, updated, "utf8");
-        }
-        const written = Buffer.from(updated, "utf8");
-        return {
-          refId: `workspace:file:${target.relativePath}`,
-          path: target.relativePath,
-          ...pathFacts,
-          operation: "edit",
-          changed,
-          replacements: changed ? located.length : 0,
-          beforeHash: sha256Hex(original),
-          afterHash: sha256Hex(updated),
-          bytes: written.length,
-          diff: editFileDiffFact(target.relativePath, original, updated),
-        };
+          const current = await readEditableUtf8TextFile(target.absolutePath, target.relativePath);
+          if (current.bytes.length > MAX_LOCAL_WORKSPACE_FILE_BYTES) {
+            throw new Error(`File is too large to edit safely: ${target.relativePath}`);
+          }
+          const original = current.text;
+          const located = locateExactEdits(original, edits, target.relativePath);
+          assertNoOverlappingEdits(located, target.relativePath);
+          let updated = original;
+          for (const edit of [...located].sort((left, right) => right.start - left.start)) {
+            updated = `${updated.slice(0, edit.start)}${edit.newText}${updated.slice(edit.end)}`;
+          }
+          const changed = updated !== original;
+          throwIfAborted(context.abortSignal);
+          if (changed) {
+            assertSandboxAllowed(sandboxPolicy, sandboxRequest("edit", target.rootDirectory, target.relativePath, {
+              bytes: Buffer.byteLength(updated, "utf8"),
+            }));
+            await fs.writeFile(target.absolutePath, updated, "utf8");
+          }
+          const written = Buffer.from(updated, "utf8");
+          return {
+            refId: `workspace:file:${target.relativePath}`,
+            path: target.relativePath,
+            ...pathFacts,
+            operation: "edit",
+            changed,
+            replacements: changed ? located.length : 0,
+            beforeHash: sha256Hex(original),
+            afterHash: sha256Hex(updated),
+            bytes: written.length,
+            diff: editFileDiffFact(target.relativePath, original, updated),
+          };
+        },
       });
     },
   };

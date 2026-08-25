@@ -9,15 +9,18 @@ import {
 import { copyFile, cp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { z } from "zod";
 
 import {
   checkSqliteDatabaseFile,
+  type SqliteAppliedMigration,
+  type SqliteDatabaseBaseline,
   type SqliteRuntimeDatabase,
 } from "../../../adapters/runtime-storage/index.js";
 import type { ProductPaths } from "../../../platform/storage/index.js";
 import { PRODUCT_DATA_FORMAT_ID, PRODUCT_NAMESPACE } from "../../../platform/product-identity.js";
 
-const BACKUP_MANIFEST_VERSION = 1;
+const BACKUP_MANIFEST_VERSION = 2;
 const DATABASE_FILE_SUFFIXES = ["", "-wal", "-shm"] as const;
 const OWNED_STORAGE_NAMES = ["knowledge-assets", "space-files"] as const;
 const PENDING_RESTORE_BUNDLE_NAME = "pending-restore";
@@ -36,13 +39,15 @@ type BackupManifest = {
   readonly assets: string;
   readonly roots: readonly OwnedStorageName[];
   readonly createdAt: string;
+  readonly schemaFingerprint: string;
+  readonly migrations: readonly SqliteAppliedMigration[];
 };
 
 export type DataMaintenance = {
   health(): {
     readonly ok: boolean;
     readonly checks: readonly string[];
-    readonly migrations: readonly { readonly owner: string; readonly version: number; readonly appliedAt: string }[];
+    readonly migrations: readonly { readonly owner: string; readonly version: number; readonly checksum: string; readonly appliedAt: string }[];
     readonly pendingRestore: boolean;
   };
   createBackup(): Promise<{ readonly filePath: string; readonly byteLength: number; readonly createdAt: string }>;
@@ -105,7 +110,7 @@ export function createDataMaintenance(input: {
       if (path.resolve(selectedPath) === path.resolve(input.database.filePath)) {
         throw new DataMaintenanceError("restore_source_invalid", "不能把当前正在使用的数据库作为恢复来源。");
       }
-      await validateSelectedBackup(selectedPath);
+      await validateSelectedBackup(selectedPath, databaseBaseline(input.database.filePath));
       try {
         await input.beforeRestoreStage?.();
       } catch (error) {
@@ -169,10 +174,12 @@ async function writeBackup(
       if (existsSync(source)) await cp(source, destination, { recursive: true });
       else await mkdir(destination, { recursive: true });
     }
+    const baseline = databaseBaseline(temporaryFilePath);
     await writeFile(temporaryManifestPath, JSON.stringify(backupManifest({
       database: path.basename(filePath),
       assets: path.basename(assetsPath),
       createdAt,
+      baseline,
     })), "utf8");
     await rename(temporaryFilePath, filePath);
     await rename(temporaryAssetsPath, assetsPath);
@@ -211,6 +218,7 @@ async function stageRestoreBundle(runtimePaths: ProductPaths, selectedPath: stri
       database: BUNDLE_DATABASE_FILE_NAME,
       assets: ".",
       createdAt: new Date().toISOString(),
+      baseline: databaseBaseline(selectedPath),
     })), "utf8");
     await rm(pendingPath, { recursive: true, force: true });
     await rename(temporaryPath, pendingPath);
@@ -236,7 +244,11 @@ export function applyPendingRestore(
   if (!existsSync(pendingPath)) return;
   try {
     input.assertSpaceDeletionIdle();
-    validateRestoreBundle(pendingPath);
+    const currentDatabasePath = databaseFilePath(runtimePaths, "");
+    if (!existsSync(currentDatabasePath)) {
+      throw new DataMaintenanceError("data_maintenance_failed", "当前应用数据库不存在，恢复未执行。");
+    }
+    validateRestoreBundle(pendingPath, databaseBaseline(currentDatabasePath));
   } catch (error) {
     if (error instanceof DataMaintenanceError) throw error;
     throw new DataMaintenanceError("data_maintenance_failed", "待恢复数据无法应用，当前数据未修改。", { cause: error });
@@ -245,9 +257,7 @@ export function applyPendingRestore(
   const originalDatabaseSuffixes = DATABASE_FILE_SUFFIXES.filter((suffix) =>
     existsSync(databaseFilePath(runtimePaths, suffix))
   );
-  if (!originalDatabaseSuffixes.includes("")) {
-    throw new DataMaintenanceError("data_maintenance_failed", "当前应用数据库不存在，恢复未执行。");
-  }
+  if (!originalDatabaseSuffixes.includes("")) throw new Error("Current database disappeared after restore validation.");
   const originalStorageNames = OWNED_STORAGE_NAMES.filter((storageName) =>
     existsSync(storagePath(runtimePaths, storageName))
   );
@@ -322,7 +332,7 @@ function rollbackRestore(input: {
   rmSync(input.rollbackPath, { recursive: true, force: true });
 }
 
-async function validateSelectedBackup(databasePath: string): Promise<void> {
+async function validateSelectedBackup(databasePath: string, expected: SqliteDatabaseBaseline): Promise<void> {
   try {
     const manifest = parseManifest(await readFile(backupManifestPath(databasePath), "utf8"));
     assertManifest(manifest, {
@@ -333,14 +343,14 @@ async function validateSelectedBackup(databasePath: string): Promise<void> {
       const directoryPath = path.join(backupAssetsPath(databasePath), storageName);
       if (!existsSync(directoryPath) || !statSync(directoryPath).isDirectory()) throw new Error(`${storageName} missing`);
     }
-    assertWorkbenchDatabase(databasePath);
+    assertWorkbenchDatabase(databasePath, manifest, expected);
   } catch (error) {
     if (error instanceof DataMaintenanceError) throw error;
     throw new DataMaintenanceError("restore_source_invalid", "所选备份不完整或不是有效的应用数据备份。", { cause: error });
   }
 }
 
-function validateRestoreBundle(bundlePath: string): void {
+function validateRestoreBundle(bundlePath: string, expected: SqliteDatabaseBaseline): void {
   try {
     const manifest = parseManifest(readFileSync(path.join(bundlePath, BUNDLE_MANIFEST_FILE_NAME), "utf8"));
     assertManifest(manifest, { database: BUNDLE_DATABASE_FILE_NAME, assets: "." });
@@ -348,16 +358,23 @@ function validateRestoreBundle(bundlePath: string): void {
       const directoryPath = path.join(bundlePath, storageName);
       if (!existsSync(directoryPath) || !statSync(directoryPath).isDirectory()) throw new Error(`${storageName} missing`);
     }
-    assertWorkbenchDatabase(path.join(bundlePath, BUNDLE_DATABASE_FILE_NAME));
+    assertWorkbenchDatabase(path.join(bundlePath, BUNDLE_DATABASE_FILE_NAME), manifest, expected);
   } catch (error) {
     if (error instanceof DataMaintenanceError) throw error;
     throw new DataMaintenanceError("restore_source_invalid", "待恢复数据不完整或已损坏。", { cause: error });
   }
 }
 
-function assertWorkbenchDatabase(databasePath: string): void {
+function assertWorkbenchDatabase(
+  databasePath: string,
+  manifest: BackupManifest,
+  expected: SqliteDatabaseBaseline,
+): void {
   const health = checkSqliteDatabaseFile(databasePath);
-  if (!health.ok || !isWorkbenchDatabase(health)) {
+  const actual = { schemaFingerprint: health.schemaFingerprint, migrations: health.migrations };
+  if (!health.ok || !isWorkbenchDatabase(health) ||
+      !sameDatabaseBaseline(actual, manifest) ||
+      !sameDatabaseBaseline(actual, expected)) {
     throw new Error(health.checks.join("; ") || "database identity mismatch");
   }
 }
@@ -366,6 +383,7 @@ function backupManifest(input: {
   readonly database: string;
   readonly assets: string;
   readonly createdAt: string;
+  readonly baseline: SqliteDatabaseBaseline;
 }): BackupManifest {
   return {
     version: BACKUP_MANIFEST_VERSION,
@@ -375,15 +393,33 @@ function backupManifest(input: {
     assets: input.assets,
     roots: OWNED_STORAGE_NAMES,
     createdAt: input.createdAt,
+    schemaFingerprint: input.baseline.schemaFingerprint,
+    migrations: input.baseline.migrations,
   };
 }
 
-function parseManifest(value: string): Partial<BackupManifest> {
-  return JSON.parse(value) as Partial<BackupManifest>;
+const backupManifestSchema = z.object({
+  version: z.literal(BACKUP_MANIFEST_VERSION),
+  namespace: z.literal(PRODUCT_NAMESPACE),
+  dataFormatId: z.literal(PRODUCT_DATA_FORMAT_ID),
+  database: z.string().min(1),
+  assets: z.string().min(1),
+  roots: z.tuple([z.literal("knowledge-assets"), z.literal("space-files")]),
+  createdAt: z.string().min(1),
+  schemaFingerprint: z.string().regex(/^[a-f0-9]{64}$/u),
+  migrations: z.array(z.object({
+    owner: z.string().min(1),
+    version: z.number().int().positive(),
+    checksum: z.string().regex(/^[a-f0-9]{64}$/u),
+  }).strict()),
+}).strict();
+
+function parseManifest(value: string): BackupManifest {
+  return backupManifestSchema.parse(JSON.parse(value));
 }
 
 function assertManifest(
-  manifest: Partial<BackupManifest>,
+  manifest: BackupManifest,
   expected: { readonly database: string; readonly assets: string },
 ): void {
   if (manifest.version !== BACKUP_MANIFEST_VERSION ||
@@ -396,6 +432,22 @@ function assertManifest(
     manifest.roots.some((value, index) => value !== OWNED_STORAGE_NAMES[index])) {
     throw new Error("backup manifest mismatch");
   }
+}
+
+function databaseBaseline(databasePath: string): SqliteDatabaseBaseline {
+  const health = checkSqliteDatabaseFile(databasePath);
+  if (!health.ok || !isWorkbenchDatabase(health)) {
+    throw new Error(health.checks.join("; ") || "database identity mismatch");
+  }
+  return { schemaFingerprint: health.schemaFingerprint, migrations: health.migrations };
+}
+
+function sameDatabaseBaseline(
+  left: SqliteDatabaseBaseline,
+  right: SqliteDatabaseBaseline,
+): boolean {
+  return left.schemaFingerprint === right.schemaFingerprint &&
+    JSON.stringify(left.migrations) === JSON.stringify(right.migrations);
 }
 
 function databaseFilePath(runtimePaths: ProductPaths, suffix: DatabaseFileSuffix): string {

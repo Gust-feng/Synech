@@ -12,6 +12,7 @@ export type SpacePathGrant = {
   readonly kind: "file" | "folder";
   readonly path: string;
   readonly sourceIdentity?: string;
+  readonly mountVersion?: string;
 };
 
 export type SpacePathResolution =

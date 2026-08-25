@@ -73,7 +73,9 @@ import {
   type WorkspaceFeature,
 } from "../workspaces/index.js";
 import {
+  createSpaceReferenceUnlinkService,
   createWorkbenchCoordination,
+  type SpaceReferenceUnlinkService,
   type WorkbenchCoordination,
 } from "../workbench-coordination/index.js";
 import { createWorkspaceDeletionCoordinator, type WorkspaceDeletionCoordinator } from "./spaces/workspace-deletion-coordinator.js";
@@ -186,6 +188,7 @@ export type PanelHost = {
   readonly spaceConversationDeletion: SpaceConversationDeletionCoordinator;
   readonly workspaceDeletion: WorkspaceDeletionCoordinator;
   readonly workbenchCoordination: WorkbenchCoordination;
+  readonly spaceReferenceUnlink: SpaceReferenceUnlinkService;
   readonly personalKnowledgeFeature: PersonalKnowledgeFeature<import("../panel-api/workbench.js").DocumentPreview>;
   readonly dataMaintenance: DataMaintenance;
   readonly prepareOrdinaryRunBirth: (input: PanelRunInput, conversationId?: string) => Promise<OrdinaryRunBirth>;
@@ -524,6 +527,7 @@ function assemblePanelHost(input: {
     }
   });
   let workbenchCoordination!: WorkbenchCoordination;
+  let spaceReferenceUnlink!: SpaceReferenceUnlinkService;
   const resolveFeatureToolContributions = createHostFeatureAgentToolContributionResolver({
     agentNotes: agentNotesFeature,
     pathDependencies: pathDependencyFeature,
@@ -545,6 +549,7 @@ function assemblePanelHost(input: {
       })).item,
     detachWorkspaceFromSpace: (referenceId) =>
       workbenchCoordination.commands.detachWorkspaceFromSpace(referenceId),
+    unlinkExternalReference: (referenceId) => spaceReferenceUnlink.unlink(referenceId),
     resolveWorkspaceDirectory: async (workspaceId) => {
       const workspace = await workspaceFeature.queries.get(workspaceId);
       const mount = workspace?.status === "available"
@@ -556,7 +561,11 @@ function assemblePanelHost(input: {
         await workspaceFeature.commands.invalidateMount(workspaceId);
         return undefined;
       }
-      return { path: mount.rootPath, sourceIdentity: mount.sourceIdentity };
+      return {
+        path: mount.rootPath,
+        sourceIdentity: mount.sourceIdentity,
+        mountVersion: mount.mountVersion,
+      };
     },
   });
   const capabilityCenter = new CapabilityCenter({
@@ -620,6 +629,26 @@ function assemblePanelHost(input: {
         runContext,
         workspaceRoot,
         revocationOverlay: spaceRevocationOverlay,
+        resolveCurrentSource: async (referenceId) => {
+          const item = await spaceFeature.queries.getReference(referenceId);
+          if (item === undefined) return undefined;
+          if (item.reference.kind === "local_file") {
+            return { path: item.reference.path, sourceIdentity: item.sourceIdentity };
+          }
+          if (item.reference.kind === "managed_folder") {
+            return { path: item.reference.path };
+          }
+          if (item.reference.kind !== "workspace") return undefined;
+          const workspace = await workspaceFeature.queries.get(item.reference.workspaceId);
+          const mount = workspace?.status === "available"
+            ? [...workspace.mounts].reverse().find((entry) => entry.status === "active")
+            : undefined;
+          return mount === undefined ? undefined : {
+            path: mount.rootPath,
+            sourceIdentity: mount.sourceIdentity,
+            mountVersion: mount.mountVersion,
+          };
+        },
         onInvalidReference: invalidateSpaceReferenceAccess,
       }),
     resolveSubAgentRoots: (workspaceRoot) =>
@@ -747,6 +776,7 @@ function assemblePanelHost(input: {
     listWorkspaceConversationIds: async (workspaceId) =>
       (await ordinaryAgentFeature.queries.listConversationsByOwner({ kind: "workspace", id: workspaceId }))
         .map((conversation) => conversation.conversationId),
+    withWorkspaceAdmission: (workspaceId, operation) => workspaceDeletion.admit(workspaceId, operation),
     withWorkspacePathLease: async (workspaceId, operation) => {
       const workspace = await workspaceFeature.queries.get(workspaceId);
       const rootPath = workspace === undefined
@@ -756,9 +786,29 @@ function assemblePanelHost(input: {
         ? await operation()
         : await fileMutationCoordinator.runExclusive(rootPath, operation);
     },
+    withWorkspaceMountTransitionLease: async (workspaceId, candidateRootPath, operation) => {
+      const workspace = await workspaceFeature.queries.get(workspaceId);
+      const currentRoot = workspace === undefined
+        ? undefined
+        : [...workspace.mounts].reverse().find((mount) => mount.status === "active")?.rootPath;
+      return await runWithPathLeases(
+        fileMutationCoordinator,
+        currentRoot === undefined ? [candidateRootPath] : [currentRoot, candidateRootPath],
+        operation,
+      );
+    },
     deleteWorkspace: (workspaceId) => workspaceDeletion.deleteWorkspace(workspaceId),
     deleteSpace: (spaceId) => spaceConversationDeletion.deleteSpace(spaceId),
     detachKnowledgeFromSpace: (detachInput) => personalKnowledgeFeature.commands.cleanupSpace(detachInput),
+  });
+  spaceReferenceUnlink = createSpaceReferenceUnlinkService({
+    spaces: {
+      commands: { unlinkReference: spaceFeature.commands.unlinkReference },
+      queries: { getReference: spaceFeature.queries.getReference },
+    },
+    coordination: workbenchCoordination,
+    mutations: fileMutationCoordinator,
+    assertSpaceAvailable: (spaceId) => spaceConversationDeletion.assertAvailable(spaceId),
   });
   const projectionChangeUnsubscribers = [
     spaceFeature.events.subscribe((event) => {
@@ -836,6 +886,7 @@ function assemblePanelHost(input: {
     spaceConversationDeletion,
     workspaceDeletion,
     workbenchCoordination,
+    spaceReferenceUnlink,
     personalKnowledgeFeature,
     dataMaintenance,
     prepareOrdinaryRunBirth: (runInput, conversationId) => prepareOrdinaryRunBirth(host, runInput, conversationId),
@@ -896,6 +947,22 @@ function managedKnowledgeAssetWriteError(error: unknown): unknown {
  */
 async function canonicalWorkspaceMountIdentity(value: string): Promise<string> {
   return await canonicalSpacePathIdentity(value, (target) => fs.realpath(target));
+}
+
+async function runWithPathLeases<T>(
+  coordinator: Pick<LocalWorkspaceMutationCoordinator, "runExclusive">,
+  paths: readonly string[],
+  operation: () => Promise<T>,
+): Promise<T> {
+  const ordered = [...new Map(paths.map((value) => {
+    const resolved = path.normalize(path.resolve(value));
+    const key = process.platform === "win32" ? resolved.toLowerCase() : resolved;
+    return [key, resolved] as const;
+  })).values()].sort((left, right) => left.localeCompare(right));
+  const acquire = async (index: number): Promise<T> => index >= ordered.length
+    ? await operation()
+    : await coordinator.runExclusive(ordered[index]!, async () => await acquire(index + 1));
+  return await acquire(0);
 }
 
 export async function cleanupPanelHostOwnedProcesses(

@@ -29,6 +29,10 @@ test("fresh Product Home matches the frozen v1 data baseline", async () => {
         "SELECT owner, version FROM schema_migrations ORDER BY owner",
       ).all().map((row) => [row.owner, row.version]));
       assert.deepEqual(migrations, baseline.migrationOwners);
+      const migrationChecksums = Object.fromEntries(database.prepare(
+        "SELECT owner, version, checksum FROM schema_migrations ORDER BY owner, version",
+      ).all().map((row) => [`${row.owner}/${row.version}`, row.checksum]));
+      assert.deepEqual(migrationChecksums, baseline.migrationChecksums);
 
       const schema = database.prepare(
         "SELECT type, name, tbl_name AS tblName, sql FROM sqlite_master WHERE name NOT LIKE ? ORDER BY type, name",

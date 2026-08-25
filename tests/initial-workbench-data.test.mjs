@@ -129,6 +129,11 @@ async function withTemporaryDirectory(operation) {
   try {
     await operation(temporaryDirectory);
   } finally {
-    await fs.rm(temporaryDirectory, { recursive: true, force: true });
+    await fs.rm(temporaryDirectory, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 20,
+    });
   }
 }
