@@ -25,6 +25,7 @@ import {
   ToolInvocationBindingTable,
   acceptedToolRequests,
   providerToolCallsForRound,
+  requireAcceptedToolInvocations,
 } from "../dist/adapters/intelligence/agent-session-tool-bindings.js";
 import { withToolModelAttachments } from "../dist/domain/tools/model-attachments.js";
 import { sameResultForIdempotency } from "../dist/domain/tools/contracts.js";
@@ -105,6 +106,18 @@ test("tool binding helpers keep root rounds and nested acceptance scoped", () =>
 
   bindings.replace([]);
   assert.equal(bindings.get("call-1"), undefined);
+});
+
+test("tool binding validation rejects owner responses that drift from the provider batch", () => {
+  const providerCalls = providerToolCallsForRound([
+    { providerCallId: "call-1", toolName: "Read", input: { path: "README.md" } },
+  ], "assistant-entry-1");
+  const reject = (message) => { throw new Error(message); };
+  assert.throws(() => requireAcceptedToolInvocations(providerCalls, [{
+    ...providerCalls[0],
+    invocationId: "invocation-1",
+    input: { path: "OTHER.md" },
+  }], reject), /do not match the provider-issued order and definition/u);
 });
 
 test("Pi transport preserves completed, failed, and cancelled execution facts", () => {

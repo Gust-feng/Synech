@@ -324,9 +324,7 @@ export function sameResultForIdempotency(
   right: ToolCallResult,
 ): boolean {
   if (!sameToolResultIdentity(left, right)) return false;
-  if (left.toolName !== right.toolName) return false;
-  if (left.parentInvocationId !== right.parentInvocationId) return false;
-  if (!sameToolInput(left.input, right.input)) return false;
+  if (!sameInvocationDefinition(left, right)) return false;
   return sameConfirmationRequestShape(left.confirmationRequest, right.confirmationRequest)
     && sameToolResultContent(left, right);
 }
