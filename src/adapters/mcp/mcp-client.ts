@@ -47,6 +47,11 @@ export type McpClientWrapperOptions = {
   readonly transportFactory?: () => Transport | Promise<Transport>;
 };
 
+export type McpClientConnectionState = {
+  readonly connected: boolean;
+  readonly error?: unknown;
+};
+
 export type McpCallOptions = {
   readonly signal?: AbortSignal;
   readonly idleTimeoutMs?: number;
@@ -171,6 +176,7 @@ export class McpClientWrapper {
   private transport: Transport | undefined;
   private transportCloseLease: McpTransportCloseLease | undefined;
   private readonly pendingTransportCloseLeases = new Set<McpTransportCloseLease>();
+  private connecting: Promise<void> | undefined;
   private disconnecting: Promise<void> | undefined;
   private activeToolCalls = 0;
   private readonly pendingToolCalls: Array<PendingToolCallSlot> = [];
@@ -182,6 +188,7 @@ export class McpClientWrapper {
   private health: McpClientHealth = "healthy";
   private lastCallFailure?: McpClientRuntimeSnapshot["lastCallFailure"];
   private lifecycleGeneration = 0;
+  private readonly connectionStateListeners = new Set<(state: McpClientConnectionState) => void>();
 
   constructor(
     private readonly config: McpClientConfig,
@@ -206,7 +213,17 @@ export class McpClientWrapper {
     );
   }
 
-  async connect(options: McpLifecycleRequestOptions = {}): Promise<void> {
+  connect(options: McpLifecycleRequestOptions = {}): Promise<void> {
+    if (this.connecting !== undefined) return this.connecting;
+    let connecting!: Promise<void>;
+    connecting = this.connectOnce(options).finally(() => {
+      if (this.connecting === connecting) this.connecting = undefined;
+    });
+    this.connecting = connecting;
+    return connecting;
+  }
+
+  private async connectOnce(options: McpLifecycleRequestOptions): Promise<void> {
     if (this.disconnecting !== undefined) {
       await this.disconnecting;
     }
@@ -222,6 +239,7 @@ export class McpClientWrapper {
     const generation = ++this.lifecycleGeneration;
     const transportCloseLease = createMcpTransportCloseLease(
       this.options.transport ?? await (this.options.transportFactory?.() ?? buildTransport(this.config)),
+      (error) => this.handleUnexpectedTransportTermination(generation, transportCloseLease, error),
     );
     const transport = transportCloseLease.transport;
     if (generation !== this.lifecycleGeneration) {
@@ -253,13 +271,13 @@ export class McpClientWrapper {
       ) {
         throw staleConnectionAttemptError(this.config.serverId);
       }
-      this.connected = true;
+      this.updateConnectionState(true);
       this.health = "healthy";
       this.lastCallFailure = undefined;
     } catch (error) {
       if (this.client === client && this.transport === transport) {
         this.lifecycleGeneration += 1;
-        this.connected = false;
+        this.updateConnectionState(false, error);
         this.rejectPendingToolCalls(new Error(`MCP client "${this.config.serverId}" disconnected.`));
         try {
           await this.closeOwnedResources(client, transport, transportCloseLease);
@@ -279,7 +297,7 @@ export class McpClientWrapper {
     const client = this.client;
     const transport = this.transport;
     const transportCloseLease = this.transportCloseLease;
-    this.connected = false;
+    this.updateConnectionState(false);
     this.rejectPendingToolCalls(new Error(`MCP client "${this.config.serverId}" disconnected.`));
     await this.closeOwnedResources(client, transport, transportCloseLease);
   }
@@ -434,6 +452,11 @@ export class McpClientWrapper {
     return this.connected;
   }
 
+  subscribeConnectionState(listener: (state: McpClientConnectionState) => void): () => void {
+    this.connectionStateListeners.add(listener);
+    return () => this.connectionStateListeners.delete(listener);
+  }
+
   private assertConnected(): void {
     if (!this.connected || this.client === undefined) {
       throw new Error(`MCP client "${this.config.serverId}" is not connected.`);
@@ -497,6 +520,43 @@ export class McpClientWrapper {
       message: message.length > 500 ? `${message.slice(0, 497)}...` : message,
       recordedAt: new Date().toISOString(),
     };
+  }
+
+  private updateConnectionState(connected: boolean, error?: unknown): void {
+    if (this.connected === connected) return;
+    this.connected = connected;
+    for (const listener of this.connectionStateListeners) {
+      try {
+        listener({ connected, ...(error === undefined ? {} : { error }) });
+      } catch {
+        // Connection observation cannot change lifecycle ownership.
+      }
+    }
+  }
+
+  private handleUnexpectedTransportTermination(
+    generation: number,
+    transportCloseLease: McpTransportCloseLease,
+    error: Error,
+  ): void {
+    const transport = transportCloseLease.transport;
+    if (
+      generation !== this.lifecycleGeneration ||
+      this.transport !== transport ||
+      this.transportCloseLease !== transportCloseLease
+    ) {
+      return;
+    }
+    this.lifecycleGeneration += 1;
+    this.updateConnectionState(false, error);
+    this.recordCallFailure(error);
+    this.rejectPendingToolCalls(new Error(`MCP client "${this.config.serverId}" disconnected.`));
+    void this.closeOwnedResources(this.client, transport, transportCloseLease).catch((cleanupError) => {
+      this.recordCallFailure(new AggregateError(
+        [error, cleanupError],
+        `MCP client "${this.config.serverId}" disconnected and could not release its transport.`,
+      ));
+    });
   }
 
   private async closeOwnedResources(
@@ -579,16 +639,38 @@ type McpTransportCloseLease = {
   release(): Promise<void>;
 };
 
-function createMcpTransportCloseLease(ownedTransport: Transport): McpTransportCloseLease {
+function createMcpTransportCloseLease(
+  ownedTransport: Transport,
+  onUnexpectedTermination: (error: Error) => void,
+): McpTransportCloseLease {
   let releasePromise: Promise<void> | undefined;
   let released = false;
+  let releasing = false;
+  let protocolCloseListener: Transport["onclose"];
+  let protocolErrorListener: Transport["onerror"];
+  ownedTransport.onclose = () => {
+    if (!releasing && !released) {
+      onUnexpectedTermination(new Error("MCP transport closed unexpectedly."));
+    }
+    protocolCloseListener?.();
+  };
+  ownedTransport.onerror = (error) => {
+    if (!releasing && !released) {
+      onUnexpectedTermination(error);
+    }
+    protocolErrorListener?.(error);
+  };
   const release = (): Promise<void> => {
     if (released) return Promise.resolve();
     releasePromise ??= Promise.resolve()
-      .then(() => ownedTransport.close())
+      .then(() => {
+        releasing = true;
+        return ownedTransport.close();
+      })
       .then(
         () => { released = true; },
         (error: unknown) => {
+          releasing = false;
           releasePromise = undefined;
           throw error;
         },
@@ -603,10 +685,10 @@ function createMcpTransportCloseLease(ownedTransport: Transport): McpTransportCl
       // The wrapper-owned lease remains the awaited, retryable error boundary.
       await release().catch(() => undefined);
     },
-    get onclose() { return ownedTransport.onclose; },
-    set onclose(listener) { ownedTransport.onclose = listener; },
-    get onerror() { return ownedTransport.onerror; },
-    set onerror(listener) { ownedTransport.onerror = listener; },
+    get onclose() { return protocolCloseListener; },
+    set onclose(listener) { protocolCloseListener = listener; },
+    get onerror() { return protocolErrorListener; },
+    set onerror(listener) { protocolErrorListener = listener; },
     get onmessage() { return ownedTransport.onmessage; },
     set onmessage(listener) { ownedTransport.onmessage = listener; },
     get sessionId() { return ownedTransport.sessionId; },

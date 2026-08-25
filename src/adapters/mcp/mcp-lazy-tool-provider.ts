@@ -161,11 +161,13 @@ export class LazyMcpToolExecutorProvider {
     if (session.connecting !== undefined) {
       return session.connecting;
     }
-    const clientConfig = mcpClientConfigFromServer(session.server, this.config.env, {
-      maxConcurrentCallsPerServer: this.config.maxConcurrentCallsPerServer,
-      managedBinDirectory: this.config.managedBinDirectory,
-    });
-    const client = this.options.createClient?.(clientConfig) ?? new McpClientWrapper(clientConfig);
+    const client = session.client ?? (() => {
+      const clientConfig = mcpClientConfigFromServer(session.server, this.config.env, {
+        maxConcurrentCallsPerServer: this.config.maxConcurrentCallsPerServer,
+        managedBinDirectory: this.config.managedBinDirectory,
+      });
+      return this.options.createClient?.(clientConfig) ?? new McpClientWrapper(clientConfig);
+    })();
     const generation = this.lifecycleGeneration;
     const abortController = new AbortController();
     session.connectAbortController = abortController;
@@ -186,6 +188,7 @@ export class LazyMcpToolExecutorProvider {
           `Lazy MCP client ${session.server.serverId} failed while closing an incomplete connection.`,
         );
       }
+      if (session.client === client) session.client = undefined;
       if (this.closed || generation !== this.lifecycleGeneration) {
         throw lazyProviderClosedError();
       }

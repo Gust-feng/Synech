@@ -1,8 +1,9 @@
 import type { McpServerSettings } from "../../domain/config/index.js";
+import { createMcpToolDefinition } from "../../domain/mcp/index.js";
 import type { ToolExecutor } from "../../domain/tools/index.js";
 import type { McpClientConfig, McpClientHealth, McpReferenceInfo, McpToolInfo } from "./mcp-client.js";
 import { DEFAULT_MCP_MAX_CONCURRENT_CALLS_PER_SERVER, McpClientWrapper } from "./mcp-client.js";
-import { createMcpToolExecutor } from "./mcp-tool-adapter.js";
+import { createLazyMcpToolExecutor } from "./mcp-tool-adapter.js";
 
 export type McpManagerConfig = {
   readonly servers: readonly McpServerSettings[];
@@ -10,6 +11,10 @@ export type McpManagerConfig = {
   readonly connectTimeoutMs?: number;
   readonly maxConcurrentCallsPerServer?: number;
   readonly managedBinDirectory?: string;
+};
+
+export type McpManagerOptions = {
+  readonly createClient?: (config: McpClientConfig) => McpClientWrapper;
 };
 
 export type McpServerStatus = "disconnected" | "connecting" | "connected" | "error";
@@ -35,6 +40,7 @@ type ServerEntry = {
   readonly config: McpServerSettings;
   status: McpServerStatus;
   tools: readonly McpToolInfo[];
+  connecting?: Promise<McpClientWrapper>;
   errorMessage?: string;
   lastConnectedAt?: string;
 };
@@ -43,7 +49,7 @@ export class McpManager {
   private readonly entries = new Map<string, ServerEntry>();
   private readonly connectTimeoutMs: number;
 
-  constructor(config: McpManagerConfig) {
+  constructor(config: McpManagerConfig, options: McpManagerOptions = {}) {
     this.connectTimeoutMs = Math.max(10, Math.floor(config.connectTimeoutMs ?? 3_000));
     const maxConcurrentCalls = config.maxConcurrentCallsPerServer ?? DEFAULT_MCP_MAX_CONCURRENT_CALLS_PER_SERVER;
     for (const server of config.servers) {
@@ -66,12 +72,21 @@ export class McpManager {
         managedBinDirectory: config.managedBinDirectory,
         maxConcurrentCalls,
       };
-      this.entries.set(server.serverId, {
-        client: new McpClientWrapper(clientConfig),
+      const client = options.createClient?.(clientConfig) ?? new McpClientWrapper(clientConfig);
+      const entry: ServerEntry = {
+        client,
         config: server,
         status: "disconnected",
         tools: [],
+      };
+      client.subscribeConnectionState((state) => {
+        if (state.connected || entry.status !== "connected") return;
+        entry.status = "disconnected";
+        entry.errorMessage = state.error === undefined
+          ? undefined
+          : mcpErrorMessage(state.error instanceof Error ? state.error.message : String(state.error));
       });
+      this.entries.set(server.serverId, entry);
     }
   }
 
@@ -107,21 +122,19 @@ export class McpManager {
   private getRegistryTools(options: { readonly exposedOnly: boolean }): readonly ToolExecutor[] {
     const executors: ToolExecutor[] = [];
     for (const entry of this.entries.values()) {
-      if (entry.status !== "connected") {
-        continue;
-      }
+      this.syncConnectionStatus(entry);
       for (const tool of entry.tools) {
         if (options.exposedOnly && !isToolEnabled(entry.config, tool.name)) {
           continue;
         }
-        executors.push(createMcpToolExecutor(
-          entry.client,
+        executors.push(createLazyMcpToolExecutor(
+          () => this.connectEntry(entry),
           tool,
           entry.config.serverId,
-          {
+          createMcpToolDefinition(tool, entry.config.serverId, {
             confirmationMode: entry.config.confirmationMode,
             autoApprovedTools: entry.config.autoApprovedTools,
-          }
+          }),
         ));
       }
     }
@@ -131,20 +144,24 @@ export class McpManager {
   getServerStatuses(): Readonly<Record<string, McpServerStatus>> {
     const statuses: Record<string, McpServerStatus> = {};
     for (const [serverId, entry] of this.entries) {
+      this.syncConnectionStatus(entry);
       statuses[serverId] = entry.status;
     }
     return statuses;
   }
 
   getServerRuntimeSnapshots(): readonly McpServerRuntimeSnapshot[] {
-    return [...this.entries.values()].map((entry) => ({
-      serverId: entry.config.serverId,
-      status: entry.status,
-      errorSummary: entry.errorMessage,
-      lastConnectedAt: entry.lastConnectedAt,
-      toolNames: entry.tools.map((tool) => tool.name),
-      ...entry.client.getRuntimeSnapshot(),
-    }));
+    return [...this.entries.values()].map((entry) => {
+      this.syncConnectionStatus(entry);
+      return {
+        serverId: entry.config.serverId,
+        status: entry.status,
+        errorSummary: entry.errorMessage,
+        lastConnectedAt: entry.lastConnectedAt,
+        toolNames: entry.tools.map((tool) => tool.name),
+        ...entry.client.getRuntimeSnapshot(),
+      };
+    });
   }
 
   getServerTools(serverId: string): readonly McpToolInfo[] {
@@ -153,17 +170,30 @@ export class McpManager {
 
   async getServerReferences(serverId: string): Promise<McpReferenceInfo | undefined> {
     const entry = this.entries.get(serverId);
-    if (entry === undefined || entry.status !== "connected") {
+    if (entry === undefined) {
       return undefined;
     }
+    const client = await this.connectEntry(entry);
     return withAbortTimeout(
-      (signal) => entry.client.listReferences({ signal, timeoutMs: this.connectTimeoutMs }),
+      (signal) => client.listReferences({ signal, timeoutMs: this.connectTimeoutMs }),
       this.connectTimeoutMs,
       `MCP server "${entry.config.serverId}" did not list prompts/resources before timeout.`
     );
   }
 
-  private async connectEntry(entry: ServerEntry): Promise<void> {
+  private async connectEntry(entry: ServerEntry): Promise<McpClientWrapper> {
+    this.syncConnectionStatus(entry);
+    if (entry.client.isConnected()) return entry.client;
+    if (entry.connecting !== undefined) return entry.connecting;
+    let connecting!: Promise<McpClientWrapper>;
+    connecting = this.performConnection(entry).finally(() => {
+      if (entry.connecting === connecting) entry.connecting = undefined;
+    });
+    entry.connecting = connecting;
+    return connecting;
+  }
+
+  private async performConnection(entry: ServerEntry): Promise<McpClientWrapper> {
     entry.status = "connecting";
     try {
       await withAbortTimeout(
@@ -179,11 +209,18 @@ export class McpManager {
       entry.status = "connected";
       entry.errorMessage = undefined;
       entry.lastConnectedAt = new Date().toISOString();
+      return entry.client;
     } catch (error) {
       await entry.client.disconnect().catch(() => undefined);
       entry.status = "error";
       entry.errorMessage = mcpErrorMessage(error instanceof Error ? error.message : "Unknown connection error.");
-      entry.tools = [];
+      throw error;
+    }
+  }
+
+  private syncConnectionStatus(entry: ServerEntry): void {
+    if (entry.status === "connected" && !entry.client.isConnected()) {
+      entry.status = "disconnected";
     }
   }
 }
