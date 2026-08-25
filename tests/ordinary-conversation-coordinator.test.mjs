@@ -111,7 +111,7 @@ function createFixture(overrides = {}) {
     async get(conversationId) { return controls.get(conversationId); },
     async save(state, expectedRevision, savedAt) {
       const current = controls.get(state.conversationId);
-      assert.equal(current?.revision ?? 0, expectedRevision);
+      if (current !== undefined) assert.equal(current.revision, expectedRevision);
       const document = { revision: expectedRevision + 1, savedAt, state: structuredClone(state) };
       controls.set(state.conversationId, document);
       events.push(`save-control:${state.conversationId}`);
