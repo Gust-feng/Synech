@@ -26,7 +26,7 @@ import type { SkillDefinition } from "../../../contracts/skills";
 import type { SubAgentDefinition } from "../../../contracts/sub-agents";
 import type { McpEnvironmentCheckResponse, McpReferenceResponse, ToolsResponse } from "@panel-api/tools";
 import { AppearanceSettings } from "./appearance";
-import { ModelSettings } from "../model/settings";
+import { ModelProviderManager } from "../model/provider-manager";
 import type { McpServerForm, ModelForm, SettingsGroup, ToolForm } from "./types";
 import { BasicCapabilitiesSettings, OrdinaryAgentPromptSettings } from "./basic-capabilities";
 import { McpServiceSettings } from "./mcp-service";
@@ -179,7 +179,7 @@ export function SettingsDialog(props: {
               hidden={visibleActiveGroup !== "models"}
               aria-hidden={visibleActiveGroup !== "models"}
             >
-              <ModelSettings
+              <ModelProviderManager
                 active={visibleActiveGroup === "models"}
                 config={props.config}
                 modelForm={props.modelForm}

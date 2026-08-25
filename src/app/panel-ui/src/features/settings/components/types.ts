@@ -1,4 +1,4 @@
-export type { ModelForm } from "../model/settings";
+export type { ModelForm } from "../model/settings-projection";
 
 export type ToolForm = {
   readonly provider: string;
