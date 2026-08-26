@@ -44,6 +44,36 @@ test("RunStore publishes a birth only after the claim barrier and then owns CAS 
   assert.deepEqual(transitions, ["run.started"]);
 });
 
+test("RunStore delete waits behind queued mutations and leaves no persisted or cached run", async () => {
+  const fixture = createBlockingRepository();
+  const store = createStore(fixture.repository);
+  const initial = initialRun("run-delete-race");
+  store.publishBirth(await store.persistUnpublished(initial, 0));
+
+  const releaseSave = fixture.blockNextSave();
+  const starting = store.mutate(initial.runId, { type: "start" });
+  const cancelling = store.mutate(initial.runId, { type: "cancel", reason: "conversation_deleted" });
+  const deleting = store.delete(initial.runId);
+
+  assert.equal(fixture.events.includes("delete"), false);
+  releaseSave();
+  await Promise.all([starting, cancelling, deleting]);
+
+  assert.deepEqual(fixture.events.slice(-5), [
+    "save:start:running",
+    "save:end:running",
+    "save:start:cancelled",
+    "save:end:cancelled",
+    "delete",
+  ]);
+  assert.equal(store.cached(initial.runId), undefined);
+  assert.equal(await store.inspectPersisted(initial.runId), undefined);
+  await assert.rejects(
+    store.mutate(initial.runId, { type: "start" }),
+    (error) => error?.code === "ordinary_run_not_found",
+  );
+});
+
 function createStore(repository, overrides = {}) {
   let nextId = 0;
   return createOrdinaryRunStore({
@@ -74,6 +104,49 @@ function createRepository() {
     async list() { return []; },
     async inspectRecoveryInventory() { return { summaries: [], issues: [] }; },
     async delete(runId) { documents.delete(runId); },
+  };
+}
+
+function createBlockingRepository() {
+  const documents = new Map();
+  const events = [];
+  let blockedSave;
+  return {
+    events,
+    blockNextSave() {
+      let release;
+      const pending = new Promise((resolve) => { release = resolve; });
+      blockedSave = pending;
+      return release;
+    },
+    repository: {
+      async save(state, expectedRevision) {
+        events.push(`save:start:${state.status.kind}`);
+        const pending = blockedSave;
+        blockedSave = undefined;
+        if (pending !== undefined) await pending;
+        const current = documents.get(state.runId);
+        assert.equal(current?.revision ?? 0, expectedRevision);
+        const document = {
+          schemaVersion: "ordinary-run/v1",
+          revision: expectedRevision + 1,
+          state: structuredClone(state),
+        };
+        documents.set(state.runId, document);
+        events.push(`save:end:${state.status.kind}`);
+        return structuredClone(document);
+      },
+      async get(runId) {
+        const document = documents.get(runId);
+        return document === undefined ? undefined : structuredClone(document);
+      },
+      async list() { return []; },
+      async inspectRecoveryInventory() { return { summaries: [], issues: [] }; },
+      async delete(runId) {
+        events.push("delete");
+        documents.delete(runId);
+      },
+    },
   };
 }
 

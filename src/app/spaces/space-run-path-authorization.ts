@@ -37,7 +37,7 @@ export type CreateSpaceRunPathAuthorizationInput = {
     readonly mountVersion?: string;
   } | undefined>;
   /** Called lazily when actual access proves that the frozen external source is gone or replaced. */
-  readonly onInvalidReference?: (referenceId: string) => Promise<void>;
+  readonly onInvalidReference?: (referenceId: string, expectedMountVersion?: string) => Promise<void>;
 };
 
 /**
@@ -88,7 +88,7 @@ export function createSpaceRunPathAuthorization(
         if (grant?.sourceIdentity !== undefined &&
             await spaceExternalSourceStatus(grant, input.externalSourceInspector) !== "current") {
           if (input.onInvalidReference !== undefined) {
-            await input.onInvalidReference(resolution.referenceId);
+            await input.onInvalidReference(resolution.referenceId, grant.mountVersion);
             throw new Error(`Space reference ${resolution.referenceId} no longer has an active Workspace mount.`);
           }
           throw new Error(`Space reference ${resolution.referenceId} no longer points to its original source.`);

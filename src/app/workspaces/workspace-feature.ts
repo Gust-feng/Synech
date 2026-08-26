@@ -2,6 +2,7 @@ import {
   WORKSPACE_SCHEMA_VERSION,
   WorkspaceFeatureError,
   type EnsureWorkspaceInput,
+  type InvalidateWorkspaceMountInput,
   type ReconnectWorkspaceInput,
   type Workspace,
   type WorkspaceDetail,
@@ -20,14 +21,14 @@ export type CreateWorkspaceFeatureInput = {
   readonly repository: WorkspaceRepository;
   readonly now?: () => string;
   readonly idFactory?: () => string;
-  /** 生成 mountVersion（默认按时间戳）。 */
+  /** 生成一次连接的唯一 mountVersion。 */
   readonly mountVersionFactory?: () => string;
 };
 
 export function createWorkspaceFeature(input: CreateWorkspaceFeatureInput): WorkspaceFeature {
   const now = input.now ?? (() => new Date().toISOString());
   const createId = input.idFactory ?? (() => crypto.randomUUID());
-  const nextMountVersion = input.mountVersionFactory ?? (() => `m-${now()}`);
+  const nextMountVersion = input.mountVersionFactory ?? (() => `m-${crypto.randomUUID()}`);
   const listeners = new Set<(event: WorkspaceEvent) => void>();
   let released = false;
   let tail = Promise.resolve();
@@ -199,13 +200,13 @@ export function createWorkspaceFeature(input: CreateWorkspaceFeatureInput): Work
           return { workspace: nextWorkspace, mount: nextMount };
         });
       },
-      async invalidateMount(workspaceId: string) {
+      async invalidateMount(invalidateInput: InvalidateWorkspaceMountInput) {
         assertUsable("invalidate a mount");
         return serialize(async () => {
           const snapshot = await input.repository.read();
-          const workspace = requireWorkspace(snapshot, workspaceId);
-          const activeMounts = snapshot.mounts.filter((mount) => mount.workspaceId === workspaceId && mount.status === "active");
-          if (activeMounts.length === 0) return;
+          const workspace = requireWorkspace(snapshot, invalidateInput.workspaceId);
+          const activeMount = currentMountOf(snapshot, invalidateInput.workspaceId);
+          if (activeMount?.mountVersion !== invalidateInput.expectedMountVersion) return;
           const at = now();
           const nextWorkspace: Workspace = {
             ...workspace,
@@ -214,12 +215,14 @@ export function createWorkspaceFeature(input: CreateWorkspaceFeatureInput): Work
           };
           await input.repository.write({
             schemaVersion: WORKSPACE_SCHEMA_VERSION,
-            workspaces: snapshot.workspaces.map((entry) => entry.id === workspaceId ? nextWorkspace : entry),
-            mounts: invalidateActiveMounts(snapshot.mounts, workspaceId, at),
+            workspaces: snapshot.workspaces.map((entry) => entry.id === invalidateInput.workspaceId ? nextWorkspace : entry),
+            mounts: invalidateActiveMounts(snapshot.mounts, invalidateInput.workspaceId, at),
           });
-          for (const mount of activeMounts) {
-            publish({ type: "workspace.mount_invalidated", workspaceId, mountVersion: mount.mountVersion });
-          }
+          publish({
+            type: "workspace.mount_invalidated",
+            workspaceId: invalidateInput.workspaceId,
+            mountVersion: activeMount.mountVersion,
+          });
         });
       },
       async deleteWorkspace(workspaceId: string) {

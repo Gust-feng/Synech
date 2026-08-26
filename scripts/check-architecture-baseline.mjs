@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { builtinModules } from "node:module";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import ts from "typescript";
@@ -15,8 +16,18 @@ const parsedSources = new Map(files.map((file) => {
   }];
 }));
 const moduleGraph = new Map(files.map((file) => [file, moduleReferences(file, parsedSources.get(file).source)]));
+const runtimeModuleGraph = new Map(files.map((file) => [
+  file,
+  moduleReferences(file, parsedSources.get(file).source).filter(({ node }) => isRuntimeModuleReference(node)),
+]));
 const allowlist = JSON.parse(fs.readFileSync(path.join(root, "scripts", "architecture-baseline-allowlist.json"), "utf8"));
+const matchedAllowlistEntries = new Set();
 const violations = [];
+const nodeBuiltinModules = new Set(builtinModules.map((name) => name.replace(/^node:/u, "")));
+const uiReadModelFacade = path.resolve(sourceRoot, "app", "panel-api", "ui-read-model.ts");
+const uiReadModelRuntimeFiles = sourceSet.has(uiReadModelFacade)
+  ? reachableSourceFiles(uiReadModelFacade, runtimeModuleGraph)
+  : new Set();
 const ownedFeatures = new Set(["spaces", "workspaces", "personal-knowledge"]);
 const presentationFields = new Set(["title", "label", "message", "detail", "summary"]);
 const canonicalSpaceReferenceCommands = new Set([
@@ -79,6 +90,16 @@ for (const file of files) {
         source,
       );
     }
+    if (uiReadModelRuntimeFiles.has(file) && isNodeBuiltinSpecifier(specifier)) {
+      report(
+        "ui-read-model-node-dependency",
+        file,
+        node,
+        "The client-safe ui-read-model facade must not have runtime dependencies on Node built-ins",
+        sourceText,
+        source,
+      );
+    }
   }
   if (isCanonicalSpaceReferenceAdapter(file)) {
     // This exact-file guard is intentional. Content/Lifecycle Applications own
@@ -128,9 +149,9 @@ for (const file of files) {
     }
     });
   }
-  if (normalized(file).endsWith("/src/app/personal-knowledge/sqlite-repository.ts")) {
+  if (isRepositoryFile(file)) {
     visit(source, (node) => {
-      if (ts.isAsExpression(node) && containsJsonParse(node.expression) &&
+      if (ts.isAsExpression(node) && isJsonParseExpression(node.expression) &&
         node.type.kind !== ts.SyntaxKind.UnknownKeyword) {
         report(
           "persistence-runtime-schema",
@@ -146,6 +167,7 @@ for (const file of files) {
 }
 
 checkMigrationChecksumHistory();
+checkStaleAllowlistEntries();
 
 if (violations.length > 0) {
   console.error("Architecture baseline violations detected:");
@@ -157,9 +179,15 @@ function report(rule, file, node, message, sourceText, sourceFile) {
   const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
   const text = sourceText.slice(node.getStart(sourceFile), node.getEnd()).split(/\r?\n/u, 1)[0].trim();
   const relativeFile = relative(file);
-  const allowed = allowlist.some((entry) => entry.rule === rule && entry.file === relativeFile &&
-    typeof entry.contains === "string" && text.includes(entry.contains) &&
-    typeof entry.reason === "string" && entry.reason.trim().length > 0);
+  let allowed = false;
+  allowlist.forEach((entry, index) => {
+    if (entry.rule === rule && entry.file === relativeFile &&
+      typeof entry.contains === "string" && text.includes(entry.contains) &&
+      typeof entry.reason === "string" && entry.reason.trim().length > 0) {
+      allowed = true;
+      matchedAllowlistEntries.add(index);
+    }
+  });
   if (!allowed) violations.push({ rule, file: relativeFile, line, message });
 }
 
@@ -225,6 +253,21 @@ function reachableOwnedFeatures(start) {
   return found;
 }
 
+function reachableSourceFiles(start, graph) {
+  const reachable = new Set();
+  const queue = [start];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (reachable.has(current)) continue;
+    reachable.add(current);
+    for (const reference of graph.get(current) ?? []) {
+      const target = resolveSourceImport(current, reference.specifier);
+      if (target !== undefined) queue.push(target);
+    }
+  }
+  return reachable;
+}
+
 function appFeature(file) {
   const parts = path.relative(path.join(sourceRoot, "app"), file).replaceAll("\\", "/").split("/");
   return parts[0] === ".." || parts.length < 2 ? undefined : parts[0];
@@ -240,6 +283,33 @@ function isCanonicalSpaceReferenceAdapter(file) {
   const value = normalized(file);
   return value.endsWith("/src/app/spaces/space-tools.ts") ||
     value.endsWith("/src/app/panel-server/spaces/space-routes.ts");
+}
+
+function isRepositoryFile(file) {
+  return /(?:^|\/)[^/]*repository\.ts$/u.test(normalized(file));
+}
+
+function isNodeBuiltinSpecifier(specifier) {
+  const candidate = specifier.replace(/^node:/u, "");
+  return specifier.startsWith("node:") || nodeBuiltinModules.has(candidate) ||
+    nodeBuiltinModules.has(candidate.split("/", 1)[0]);
+}
+
+function isRuntimeModuleReference(node) {
+  if (ts.isImportTypeNode(node)) return false;
+  if (ts.isImportDeclaration(node)) {
+    const clause = node.importClause;
+    if (clause === undefined) return true;
+    if (clause.isTypeOnly || clause.name !== undefined) return !clause.isTypeOnly;
+    if (clause.namedBindings === undefined || ts.isNamespaceImport(clause.namedBindings)) return true;
+    return clause.namedBindings.elements.some((element) => !element.isTypeOnly);
+  }
+  if (ts.isExportDeclaration(node)) {
+    if (node.isTypeOnly) return false;
+    return node.exportClause === undefined || !ts.isNamedExports(node.exportClause) ||
+      node.exportClause.elements.some((element) => !element.isTypeOnly);
+  }
+  return true;
 }
 
 function referencedCommandName(node) {
@@ -448,20 +518,29 @@ function checkMigrationChecksumHistory() {
   }
 }
 
+function checkStaleAllowlistEntries() {
+  allowlist.forEach((entry, index) => {
+    if (matchedAllowlistEntries.has(index)) return;
+    violations.push({
+      rule: "stale-allowlist-entry",
+      file: "scripts/architecture-baseline-allowlist.json",
+      line: 1,
+      message: `Allowlist entry ${index + 1} (${String(entry?.rule ?? "unknown")}) no longer matches a violation`,
+    });
+  });
+}
+
 function containsStringLiteral(node) {
   let found = false;
   visit(node, (candidate) => { if (ts.isStringLiteralLike(candidate) || ts.isNoSubstitutionTemplateLiteral(candidate)) found = true; });
   return found;
 }
 
-function containsJsonParse(node) {
-  let found = false;
-  visit(node, (candidate) => {
-    if (ts.isCallExpression(candidate) && ts.isPropertyAccessExpression(candidate.expression) &&
-      ts.isIdentifier(candidate.expression.expression) && candidate.expression.expression.text === "JSON" &&
-      candidate.expression.name.text === "parse") found = true;
-  });
-  return found;
+function isJsonParseExpression(node) {
+  if (ts.isParenthesizedExpression(node)) return isJsonParseExpression(node.expression);
+  return ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) &&
+    ts.isIdentifier(node.expression.expression) && node.expression.expression.text === "JSON" &&
+    node.expression.name.text === "parse";
 }
 
 function isEqualityOperator(kind) {

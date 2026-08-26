@@ -53,7 +53,6 @@ import {
 import {
   canonicalSpacePathIdentity,
   createSpaceRunPathAuthorization,
-  createSpaceRevocationOverlay,
   createFileSystemSpaceReferenceDeletionJournal,
   createSpaceFeature,
   hasSpaceOwnerScope,
@@ -87,7 +86,6 @@ import {
 import {
   createPlatformProcessTerminator,
   InMemoryProcessRegistry,
-  processCleanupHasUnresolvedStops,
   type ProcessCleanupResult,
   type ProcessTerminator,
 } from "../runtime-guard/index.js";
@@ -119,19 +117,12 @@ import {
   type ManagedAssetsFeature,
 } from "../managed-assets/index.js";
 import {
-  createWorkbenchProjectionChangeFeed,
-  projectionChangeFromPersonalKnowledge,
-  projectionChangeFromSpace,
-  type WorkbenchProjectionChangeFeed,
-} from "./workbench/workbench-projection-change-feed.js";
-import {
   type SpaceConversationDeletionCoordinator,
   type ConversationLifecycleCoordinator,
-} from "./spaces/space-conversation-coordinator.js";
+} from "../workbench-coordination/index.js";
 import { createSqliteSpaceConversationDeletionJournal } from "./spaces/space-conversation-deletion-journal.js";
-import { createSqliteConversationLifecycleJournal } from "./spaces/conversation-lifecycle-journal.js";
+import { createSqliteConversationLifecycleJournal } from "./storage/conversation-lifecycle-journal.js";
 import {
-  ensureSpaceManagedRoot,
   prepareOrdinaryRunBirth,
   reconstructFrozenOrdinaryDefinition,
 } from "./ordinary-run-birth.js";
@@ -146,6 +137,14 @@ import {
   createSpaceReferenceApplicationRuntime,
   type SpaceReferenceApplicationRuntime,
 } from "./composition/space-reference-application-runtime.js";
+import {
+  createPanelProjectionRuntime,
+  type PanelProjectionRuntime,
+} from "./composition/panel-projection-runtime.js";
+import {
+  createSpaceReferenceRuntimeGuard,
+  type SpaceReferenceRuntimeGuard,
+} from "./composition/space-reference-runtime-guard.js";
 import type { ManagedSpaceFolderApplication } from "../../domain/managed-space-folder.js";
 import {
   createContextAttachmentUploadApplication,
@@ -200,15 +199,14 @@ export type PanelHost = {
   readonly managedAssets: ManagedAssetRepository;
   readonly managedAssetFeature: ManagedAssetsFeature;
   readonly fileMutationCoordinator: LocalWorkspaceMutationCoordinator;
-  readonly projectionChanges: WorkbenchProjectionChangeFeed;
-  readonly releaseProjectionChanges: () => void;
+  readonly projectionRuntime: PanelProjectionRuntime;
+  readonly spaceReferenceRuntimeGuard: SpaceReferenceRuntimeGuard;
   readonly knowledgeAssetRoot?: string;
   /** Host-owned root for physical directories created from Space. */
   readonly managedSpaceFolderRoot: string;
   readonly knowledgeAssetsReady: Promise<void>;
   readonly ensureDefaultSpace: () => Promise<void>;
   readonly flushSpaceKnowledgeSync: () => Promise<void>;
-  readonly flushSpaceProcessCleanup: () => Promise<void>;
   readonly releaseAgentSessionStorage: () => Promise<void>;
   readonly resolveSubAgentRoots?: (input: PanelSubAgentRootsInput) => readonly SubAgentRootInput[];
 };
@@ -297,7 +295,6 @@ function assemblePanelHost(input: {
   const agentDefinitionOverrides = new Map<string, AgentDefinition>();
   const processRegistry = new InMemoryProcessRegistry();
   const fileMutationCoordinator = new InMemoryLocalWorkspaceMutationCoordinator();
-  const projectionChanges = createWorkbenchProjectionChangeFeed();
   const productPaths = input.productPaths;
   const toolOutputStore = new FileSystemToolOutputStore(productPaths.data.agent.evidence);
   const processTerminator = input.processTerminator ?? createPlatformProcessTerminator();
@@ -395,10 +392,16 @@ function assemblePanelHost(input: {
       deleteOwnedAssets: async (assetIds) => await managedAssets.removeMany(assetIds),
     },
   });
-  const invalidateSpaceReferenceAccess = async (referenceId: string): Promise<void> => {
+  const invalidateSpaceReferenceAccess = async (
+    referenceId: string,
+    expectedMountVersion?: string,
+  ): Promise<void> => {
     const item = await spaceFeature.queries.getReference(referenceId);
-    if (item?.reference.kind === "workspace") {
-      await workspaceFeature.commands.invalidateMount(item.reference.workspaceId);
+    if (item?.reference.kind === "workspace" && expectedMountVersion !== undefined) {
+      await workspaceFeature.commands.invalidateMount({
+        workspaceId: item.reference.workspaceId,
+        expectedMountVersion,
+      });
     }
   };
   const workspaceFeature: WorkspaceFeature = createWorkspaceFeature({
@@ -485,7 +488,12 @@ function assemblePanelHost(input: {
     await initialWorkbenchData.ensure();
   };
   const spaceKnowledgeSync = Promise.resolve();
-  const spaceRevocationOverlay = createSpaceRevocationOverlay(spaceFeature.events);
+  const spaceReferenceRuntimeGuard = createSpaceReferenceRuntimeGuard({
+    spaces: spaceFeature,
+    processes: processRegistry,
+    processTerminator,
+  });
+  const spaceRevocationOverlay = spaceReferenceRuntimeGuard.revocationOverlay;
   const contextAttachmentReadAuthorization = {
     async assertReadAllowed(attachmentId: string): Promise<void> {
       spaceRevocationOverlay.assertReadAllowed(attachmentId);
@@ -499,36 +507,6 @@ function assemblePanelHost(input: {
       await resolveSpaceFilesystemReference({ workspaceFeature }, item);
     },
   };
-  const activeSpaceProcessCleanups = new Set<Promise<void>>();
-  const trackSpaceProcessCleanup = (
-    cleanup: Promise<ProcessCleanupResult>,
-    referenceId: string,
-  ): void => {
-    let tracked: Promise<void>;
-    tracked = cleanup.then((result) => {
-      if (processCleanupHasUnresolvedStops(result)) {
-        console.error(
-          `[panel-server] Space reference ${referenceId} was revoked but one or more managed processes remain stop_pending`,
-          result,
-        );
-      }
-    }, (error: unknown) => {
-      console.error(`[panel-server] Space reference ${referenceId} process cleanup failed`, error);
-    }).finally(() => {
-      activeSpaceProcessCleanups.delete(tracked);
-    });
-    activeSpaceProcessCleanups.add(tracked);
-  };
-  const spaceProcessLifecycleUnsubscribe = spaceFeature.events.subscribe((event) => {
-    if (event.type !== "space.reference_removed") return;
-    for (const referenceId of event.removedItemIds) {
-      // revokeByReference marks matching records before its first await.
-      trackSpaceProcessCleanup(
-        processRegistry.revokeByReference(referenceId, processTerminator),
-        referenceId,
-      );
-    }
-  });
   let workbenchCoordination!: WorkbenchCoordination;
   let spaceReferenceApplications!: SpaceReferenceApplicationRuntime;
   let managedSpaceFolderApplication!: ManagedSpaceFolderApplication<import("../spaces/index.js").SpaceReferenceItem>;
@@ -559,7 +537,10 @@ function assemblePanelHost(input: {
       if (mount === undefined) return undefined;
       const source = await inspectSpaceExternalSource(mount.rootPath);
       if (source?.kind !== "folder" || source.identity !== mount.sourceIdentity) {
-        await workspaceFeature.commands.invalidateMount(workspaceId);
+        await workspaceFeature.commands.invalidateMount({
+          workspaceId,
+          expectedMountVersion: mount.mountVersion,
+        });
         return undefined;
       }
       return {
@@ -747,55 +728,15 @@ function assemblePanelHost(input: {
     mutations: fileMutationCoordinator,
   });
 
-  const projectionChangeUnsubscribers = [
-    spaceFeature.events.subscribe((event) => {
-      projectionChanges.publish(projectionChangeFromSpace(event));
-      if (event.type === "space.created") {
-        // Directory creation is a Host mechanical step. Missing roots are
-        // recreated lazily, and failures never roll back the Space command.
-        void ensureSpaceManagedRoot(path.join(managedSpaceRoot, event.space.id, "files"))
-          .catch((error) => console.error(`[panel-server] Could not create managedRoot for Space ${event.space.id}`, error));
-      }
-    }),
-    personalKnowledgeFeature.events.subscribe((event) => {
-      projectionChanges.publish(projectionChangeFromPersonalKnowledge(event));
-    }),
-    managedAssetFeature.events.subscribe((event) => {
-      projectionChanges.publish({
-        owners: ["managed_assets"],
-        managedAssetIds: [event.assetId],
-      });
-    }),
-    workspaceFeature.events.subscribe((event) => {
-      const workspaceId = event.type === "workspace.registered" || event.type === "workspace.visibility_changed"
-        ? event.workspace.id
-        : event.workspaceId;
-      projectionChanges.publish({ owners: ["workspaces"] });
-      void spaceFeature.queries.listReferencesByWorkspace(workspaceId).then((references) => {
-        if (references.length === 0) return;
-        projectionChanges.publish({
-          owners: ["spaces"],
-          spaceIds: [...new Set(references.map((reference) => reference.spaceId))],
-          referenceIds: references.map((reference) => reference.id),
-        });
-      }).catch(() => undefined);
-    }),
-    fileMutationCoordinator.events.subscribe(() => {
-      projectionChanges.publish({ owners: ["mounted_files"] });
-    }),
-    ordinaryAgentFeature.events.subscribeStableTerminalRuns(() => {
-      // A terminal run invalidates only the mounted-file projection. Missing Space sources are
-      // reported by the actual preview/tool access and are never discovered by a background scan.
-      projectionChanges.publish({ owners: ["mounted_files"] });
-    }),
-  ];
-
-  const releaseProjectionChanges = (): void => {
-    for (const unsubscribe of projectionChangeUnsubscribers.splice(0)) unsubscribe();
-    spaceProcessLifecycleUnsubscribe();
-    spaceRevocationOverlay.dispose();
-    projectionChanges.release();
-  };
+  const projectionRuntime = createPanelProjectionRuntime({
+    spaces: spaceFeature,
+    personalKnowledge: personalKnowledgeFeature,
+    managedAssets: managedAssetFeature,
+    workspaces: workspaceFeature,
+    fileMutations: fileMutationCoordinator,
+    ordinary: ordinaryAgentFeature,
+    managedSpaceRoot,
+  });
 
   host = {
     isQuiescing: false,
@@ -840,18 +781,13 @@ function assemblePanelHost(input: {
     managedAssets,
     managedAssetFeature,
     fileMutationCoordinator,
-    projectionChanges,
-    releaseProjectionChanges,
+    projectionRuntime,
+    spaceReferenceRuntimeGuard,
     knowledgeAssetRoot,
     managedSpaceFolderRoot,
     knowledgeAssetsReady,
     ensureDefaultSpace: ensurePanelDefaultData,
     flushSpaceKnowledgeSync: () => spaceKnowledgeSync,
-    flushSpaceProcessCleanup: async () => {
-      while (activeSpaceProcessCleanups.size > 0) {
-        await Promise.all([...activeSpaceProcessCleanups]);
-      }
-    },
     releaseAgentSessionStorage: () => agentSessionEnvironment.cleanup(),
   };
 
@@ -892,6 +828,6 @@ async function canonicalWorkspaceMountIdentity(value: string): Promise<string> {
 export async function cleanupPanelHostOwnedProcesses(
   runtime: PanelHost
 ): Promise<ProcessCleanupResult> {
-  await runtime.flushSpaceProcessCleanup();
+  await runtime.spaceReferenceRuntimeGuard.flush();
   return runtime.processRegistry.cleanupOwnedProcesses(runtime.processTerminator);
 }

@@ -2,6 +2,7 @@ export {
   WORKSPACE_SCHEMA_VERSION,
   WorkspaceFeatureError,
   type EnsureWorkspaceInput,
+  type InvalidateWorkspaceMountInput,
   type ReconnectWorkspaceInput,
   type Workspace,
   type WorkspaceDetail,

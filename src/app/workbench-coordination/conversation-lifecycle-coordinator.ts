@@ -1,17 +1,17 @@
-import type { ConversationOwner } from "../../../domain/execution-scope/index.js";
+import type { ConversationOwner } from "../../domain/execution-scope/index.js";
 import type {
   OrdinaryAgentFeature,
   OrdinaryRunBirth,
   OrdinaryRunInput,
   SubmitOrdinaryTurnResult,
-} from "../../ordinary-agent/index.js";
-import type { WorkspaceFeature } from "../../workspaces/index.js";
+} from "../ordinary-agent/index.js";
 import {
   processCleanupHasUnresolvedStops,
   type InMemoryProcessRegistry,
   type ProcessTerminator,
-} from "../../runtime-guard/process-registry.js";
-import { WorkbenchCoordinationError } from "../../workbench-coordination/index.js";
+} from "../runtime-guard/process-registry.js";
+import type { WorkspaceFeature } from "../workspaces/index.js";
+import { WorkbenchCoordinationError } from "./contracts.js";
 import {
   newConversationBirthRecord,
   newConversationDeleteRecord,
@@ -21,7 +21,7 @@ import {
   type ConversationDeleteRecord,
   type ConversationLifecycleJournal,
   type ConversationLifecycleRecord,
-} from "./conversation-lifecycle-journal.js";
+} from "./conversation-lifecycle-journal-contract.js";
 
 export type ConversationLifecycleCoordinator = {
   /** Settles incomplete Conversation birth and delete records before request admission. */
@@ -38,9 +38,8 @@ export type ConversationLifecycleCoordinator = {
 };
 
 /**
- * Host-owned coordination for Conversation birth and deletion. The journal lets
- * recovery finish lifecycle cleanup without ever
- * replaying a model turn or a Shell command.
+ * Cross-feature Conversation birth and deletion workflow. The journal and
+ * process registry are ports; Ordinary remains the Conversation owner.
  */
 export function createConversationLifecycleCoordinator(input: {
   readonly ordinary: {
@@ -53,9 +52,7 @@ export function createConversationLifecycleCoordinator(input: {
   readonly processes: Pick<InMemoryProcessRegistry, "cleanupByConversation">;
   readonly processTerminator: ProcessTerminator;
   readonly journal: ConversationLifecycleJournal;
-  /** Host Workspace deletion admission gate for both new and existing-owner submits. */
   readonly workspaceAdmission?: <T>(workspaceId: string, operation: () => Promise<T>) => Promise<T>;
-  /** Host Space deletion admission gate for both new and existing-owner submits. */
   readonly spaceAdmission?: <T>(spaceId: string, operation: () => Promise<T>) => Promise<T>;
   readonly runExclusive?: <T>(operation: () => Promise<T>) => Promise<T>;
   readonly now?: () => string;
@@ -240,11 +237,6 @@ export function createConversationLifecycleCoordinator(input: {
   };
 }
 
-export {
-  createSpaceConversationDeletionCoordinator,
-  type SpaceConversationDeletionCoordinator,
-} from "../../workbench-coordination/space-deletion-coordinator.js";
-
 async function saveBirthCheckpoint(
   journal: ConversationLifecycleJournal,
   record: ConversationBirthRecord,
@@ -277,14 +269,8 @@ async function saveOperationFailure(
   error: unknown,
   updatedAt: string,
 ): Promise<void> {
-  // A checkpoint may have committed immediately before the following action
-  // failed. Reload before recording the error so recovery never regresses it.
   const current = await journal.getByConversation(record.conversationId) ?? record;
-  await journal.save({
-    ...current,
-    lastErrorMessage: errorMessage(error),
-    updatedAt,
-  });
+  await journal.save({ ...current, lastErrorMessage: errorMessage(error), updatedAt });
 }
 
 function assertProcessCleanupComplete(

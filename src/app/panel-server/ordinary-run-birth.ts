@@ -28,8 +28,10 @@ import {
 import type { SpaceFeature } from "../spaces/index.js";
 import type { WorkspaceFeature } from "../workspaces/index.js";
 import type { ProductPaths } from "../../platform/storage/index.js";
-import type { SpaceConversationDeletionCoordinator } from "./spaces/space-conversation-coordinator.js";
-import type { WorkspaceDeletionCoordinator } from "./spaces/workspace-deletion-coordinator.js";
+import type {
+  SpaceConversationDeletionCoordinator,
+  WorkspaceDeletionCoordinator,
+} from "../workbench-coordination/index.js";
 import { ordinaryCapabilitySnapshotForRunStart } from "./ordinary/ordinary-run-model-settings.js";
 import { PanelHttpError } from "./http-utils.js";
 import type { PanelRunInput } from "./request-parsers.js";

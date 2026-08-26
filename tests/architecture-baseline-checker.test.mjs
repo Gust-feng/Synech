@@ -46,10 +46,17 @@ test("architecture checker rejects dependency, presentation, persistence, and ca
         return copy === "思考中" ? "running" : "idle";
       }
     `);
-    await write(directory, "src/app/personal-knowledge/sqlite-repository.ts", `
+    await write(directory, "src/app/ordinary-agent/file-system-repository.ts", `
       export function read(value: string) {
         return JSON.parse(value) as { refId: string };
       }
+    `);
+    await write(directory, "src/app/panel-api/ui-read-model.ts", `
+      export { readUnsafe } from "./read-model/browser-unsafe.js";
+    `);
+    await write(directory, "src/app/panel-api/read-model/browser-unsafe.ts", `
+      import { readFileSync } from "node:fs";
+      export function readUnsafe(path: string) { return readFileSync(path, "utf8"); }
     `);
     await write(directory, "src/app/spaces/space-tools.ts", `
       import { createFile } from "../local-filesystem/index.js";
@@ -75,6 +82,53 @@ test("architecture checker rejects dependency, presentation, persistence, and ca
     assert.match(result.stderr, /presentation-string-control/u);
     assert.match(result.stderr, /persistence-runtime-schema/u);
     assert.match(result.stderr, /canonical-application-bypass/u);
+    assert.match(result.stderr, /ui-read-model-node-dependency/u);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("architecture checker rejects stale allowlist entries", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "synech-baseline-checker-"));
+  try {
+    await write(directory, "scripts/architecture-baseline-allowlist.json", JSON.stringify([{
+      rule: "presentation-string-control",
+      file: "src/app/panel-ui/src/features/conversations/example.ts",
+      contains: "item.message ===",
+      reason: "Temporary exception that no longer exists.",
+    }]));
+    await write(directory, "docs/architecture/data-baseline.json", JSON.stringify({ migrationChecksums: {} }));
+    await write(directory, "src/app/example.ts", "export const value = 1;");
+
+    const result = await runChecker(directory);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /stale-allowlist-entry/u);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("architecture checker allows validated repository JSON and type-only facade dependencies", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "synech-baseline-checker-"));
+  try {
+    await write(directory, "scripts/architecture-baseline-allowlist.json", "[]");
+    await write(directory, "docs/architecture/data-baseline.json", JSON.stringify({ migrationChecksums: {} }));
+    await write(directory, "src/app/example/file-system-repository.ts", `
+      function validate(value: unknown) { return value; }
+      export function read(value: string) {
+        return validate(JSON.parse(value) as unknown);
+      }
+    `);
+    await write(directory, "src/app/panel-api/ui-read-model.ts", `
+      export type { ServerOnlyType } from "./read-model/server-type.js";
+    `);
+    await write(directory, "src/app/panel-api/read-model/server-type.ts", `
+      import type { Stats } from "node:fs";
+      export type ServerOnlyType = Stats;
+    `);
+
+    const result = await runChecker(directory);
+    assert.equal(result.code, 0, result.stderr);
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }

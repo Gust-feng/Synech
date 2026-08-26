@@ -61,10 +61,85 @@ test("Workspace disconnection preserves every Space-owned relationship", async (
     actor: { kind: "user" },
   });
 
-  await workspaces.commands.invalidateMount(workspace.workspace.id);
+  await workspaces.commands.invalidateMount({
+    workspaceId: workspace.workspace.id,
+    expectedMountVersion: workspace.mount.mountVersion,
+  });
   assert.equal((await workspaces.queries.get(workspace.workspace.id))?.status, "disconnected");
   assert.equal((await spaces.queries.getReference(reference.id))?.reference.kind, "workspace");
   assert.deepEqual((await spaces.queries.listReferencesByWorkspace(workspace.workspace.id)).map((item) => item.id), [reference.id]);
+});
+
+test("a stale mount invalidation cannot disconnect a reconnected Workspace", async (t) => {
+  const feature = createWorkspaceFeature({
+    repository: memoryWorkspaceRepository(),
+    idFactory: () => "workspace-1",
+    mountVersionFactory: increasingId("mount"),
+    now: increasingClock(),
+  });
+  t.after(async () => await feature.release());
+  await feature.ready();
+
+  const registered = await feature.commands.ensureWorkspace({
+    rootPath: "C:/projects/synech",
+    sourceIdentity: "identity-1",
+    visibility: "listed",
+  });
+  await feature.commands.invalidateMount({
+    workspaceId: registered.workspace.id,
+    expectedMountVersion: registered.mount.mountVersion,
+  });
+  const reconnected = await feature.commands.reconnectWorkspace({
+    workspaceId: registered.workspace.id,
+    rootPath: registered.mount.rootPath,
+    sourceIdentity: registered.mount.sourceIdentity,
+  });
+
+  await feature.commands.invalidateMount({
+    workspaceId: registered.workspace.id,
+    expectedMountVersion: registered.mount.mountVersion,
+  });
+  const afterStaleInvalidation = await feature.queries.get(registered.workspace.id);
+  assert.equal(afterStaleInvalidation?.status, "available");
+  assert.equal(afterStaleInvalidation?.currentMount?.mountVersion, reconnected.mount.mountVersion);
+
+  await feature.commands.invalidateMount({
+    workspaceId: registered.workspace.id,
+    expectedMountVersion: reconnected.mount.mountVersion,
+  });
+  assert.equal((await feature.queries.get(registered.workspace.id))?.status, "disconnected");
+});
+
+test("default mount versions remain unique when reconnect happens in the same clock tick", async (t) => {
+  const feature = createWorkspaceFeature({
+    repository: memoryWorkspaceRepository(),
+    idFactory: () => "workspace-1",
+    now: () => "2026-08-26T00:00:00.000Z",
+  });
+  t.after(async () => await feature.release());
+  await feature.ready();
+
+  const registered = await feature.commands.ensureWorkspace({
+    rootPath: "C:/projects/synech",
+    sourceIdentity: "identity-1",
+    visibility: "listed",
+  });
+  await feature.commands.invalidateMount({
+    workspaceId: registered.workspace.id,
+    expectedMountVersion: registered.mount.mountVersion,
+  });
+  const reconnected = await feature.commands.reconnectWorkspace({
+    workspaceId: registered.workspace.id,
+    rootPath: registered.mount.rootPath,
+    sourceIdentity: registered.mount.sourceIdentity,
+  });
+
+  assert.notEqual(reconnected.mount.mountVersion, registered.mount.mountVersion);
+  await feature.commands.invalidateMount({
+    workspaceId: registered.workspace.id,
+    expectedMountVersion: registered.mount.mountVersion,
+  });
+  assert.equal((await feature.queries.get(registered.workspace.id))?.status, "available");
 });
 
 test("Workspace reconnect reuses the same nesting policy as first registration", async (t) => {
@@ -77,7 +152,10 @@ test("Workspace reconnect reuses the same nesting policy as first registration",
   t.after(async () => await feature.release());
   await feature.ready();
   const parent = await feature.commands.ensureWorkspace({ rootPath: "C:/projects/root", sourceIdentity: "root-id", visibility: "listed" });
-  await feature.commands.invalidateMount(parent.workspace.id);
+  await feature.commands.invalidateMount({
+    workspaceId: parent.workspace.id,
+    expectedMountVersion: parent.mount.mountVersion,
+  });
   await feature.commands.ensureWorkspace({ rootPath: "C:/projects/root/sub", sourceIdentity: "child-id", visibility: "listed" });
 
   await assert.rejects(

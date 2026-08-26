@@ -373,7 +373,7 @@ async function handlePanelRequest(
   }
 
   if (await handleWorkbenchProjectionRoute({
-    projectionChanges: runtime.projectionChanges,
+    projectionChanges: runtime.projectionRuntime.changes,
   }, request, response, url)) {
     return;
   }
@@ -618,7 +618,8 @@ export async function releasePanelHostResources(
   const errors: unknown[] = [];
   await captureCleanupError(errors, () => ordinaryDisposal);
   await captureCleanupError(errors, () => runtime.pathDependencyFeature.release());
-  await captureCleanupError(errors, async () => runtime.releaseProjectionChanges());
+  await captureCleanupError(errors, async () => runtime.spaceReferenceRuntimeGuard.release());
+  await captureCleanupError(errors, async () => runtime.projectionRuntime.release());
   await captureCleanupError(errors, () => releaseWorkbenchStorage(runtime));
   await captureCleanupError(errors, () => runtime.releaseAgentSessionStorage());
   await captureCleanupError(errors, () => runtime.toolOutputStore.close?.() ?? runtime.toolOutputStore.clear());

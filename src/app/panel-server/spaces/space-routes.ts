@@ -5,11 +5,13 @@ import type { DocumentCaptionUpdateInput, DocumentTextUpdateInput } from "../../
 import { normalizeRelativePath } from "../../local-filesystem/index.js";
 import type { SpaceDirectReference, SpaceFeature, SpaceFeatureError, SpaceReferenceItem, SpaceTarget } from "../../spaces/index.js";
 import type { WorkspaceFeature } from "../../workspaces/index.js";
-import type { WorkbenchCoordination } from "../../workbench-coordination/index.js";
+import type {
+  SpaceConversationDeletionCoordinator,
+  WorkbenchCoordination,
+} from "../../workbench-coordination/index.js";
 import type { ManagedAssetsFeature } from "../../managed-assets/index.js";
 import { PanelHttpError, readJsonBody, writeJson } from "../http-utils.js";
 import type { PanelExternalResourceTarget } from "../types.js";
-import type { SpaceConversationDeletionCoordinator } from "./space-conversation-coordinator.js";
 import { attachSpaceReferenceMetadata, createPanelDocumentPreview, writePanelSpaceReferenceContent } from "./space-reference-preview.js";
 import { getManagedAssetPreview } from "../storage/managed-asset-routes.js";
 import { resolveSpaceFilesystemReference, type ResolvedSpaceFilesystemReference } from "./space-workspace-reference.js";

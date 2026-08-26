@@ -52,7 +52,10 @@ export async function resolveSpaceFilesystemReference(
   }
   const current = await inspectSpaceExternalSource(mount.rootPath);
   if (current?.kind !== "folder" || current.identity !== mount.sourceIdentity) {
-    await dependencies.workspaceFeature.commands.invalidateMount(workspace.id);
+    await dependencies.workspaceFeature.commands.invalidateMount({
+      workspaceId: workspace.id,
+      expectedMountVersion: mount.mountVersion,
+    });
     throw new PanelHttpError(409, "workspace_not_available", "工作区目录已断开，请重新连接后再访问。");
   }
   return { item, path: mount.rootPath, sourceKind: "workspace", sourceIdentity: mount.sourceIdentity, mountVersion: mount.mountVersion };

@@ -153,11 +153,11 @@ export function createOrdinaryRunStore(options: {
     persistUnpublished,
     publishBirth,
     savePublished,
-    async delete(runId) {
+    delete: (runId) => withExclusiveRun(runId, async () => {
       await options.repository.delete(runId);
       documents.delete(runId);
       unpublishedRunIds.delete(runId);
-    },
+    }),
     withExclusiveRun,
     mutate,
     mutateLocked,

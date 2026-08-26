@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createSpaceConversationDeletionCoordinator } from "../dist/app/panel-server/spaces/space-conversation-coordinator.js";
-import { createWorkspaceDeletionCoordinator } from "../dist/app/panel-server/spaces/workspace-deletion-coordinator.js";
+import {
+  createSpaceConversationDeletionCoordinator,
+  createWorkspaceDeletionCoordinator,
+} from "../dist/app/workbench-coordination/index.js";
 
 test("Workspace deletion is successful when retried after purge", async () => {
   let workspace = { id: "workspace-1", status: "available" };

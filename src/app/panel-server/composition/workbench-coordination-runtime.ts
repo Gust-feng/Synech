@@ -10,23 +10,19 @@ import type { AgentNotesFeature } from "../../agent-notes/index.js";
 import type { OrdinaryAgentFeature } from "../../ordinary-agent/index.js";
 import {
   createSpaceConversationDeletionCoordinator,
+  createConversationLifecycleCoordinator,
   createWorkspaceDeletionCoordinator,
   createWorkbenchCoordination,
+  type ConversationLifecycleCoordinator,
+  type ConversationLifecycleJournal,
   type SpaceConversationDeletionCoordinator,
   type WorkbenchCoordination,
   type WorkspaceDeletionCoordinator,
 } from "../../workbench-coordination/index.js";
-import {
-  createConversationLifecycleCoordinator,
-  type ConversationLifecycleCoordinator,
-} from "../spaces/space-conversation-coordinator.js";
-import type {
-  ConversationLifecycleJournal,
-} from "../spaces/conversation-lifecycle-journal.js";
 import type {
   SpaceConversationDeletionJournal,
 } from "../spaces/space-conversation-deletion-journal.js";
-import { deletionLifecycleLockKey } from "../spaces/deletion-lifecycle-lock.js";
+import { deletionLifecycleLockKey } from "./deletion-lifecycle-lock.js";
 import type { PersonalKnowledgeFeature } from "../../personal-knowledge/index.js";
 import type { PathDependencyFeature } from "../../path-dependencies/index.js";
 import type { SpaceFeature } from "../../spaces/index.js";

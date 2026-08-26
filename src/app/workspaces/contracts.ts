@@ -74,6 +74,12 @@ export type ReconnectWorkspaceInput = {
   readonly sourceIdentity: string;
 };
 
+export type InvalidateWorkspaceMountInput = {
+  readonly workspaceId: string;
+  /** Only invalidate the mount version observed by the caller; stale observations are ignored. */
+  readonly expectedMountVersion: string;
+};
+
 export type WorkspaceFeatureErrorCode =
   | "workspace_feature_released"
   | "workspace_not_found"
@@ -111,8 +117,8 @@ export type WorkspaceFeature = {
     setVisibility(workspaceId: string, visibility: WorkspaceVisibility): Promise<Workspace>;
     /** 同一文件系统对象的重新连接；不同对象必须注册新 Workspace，不替换旧 mount。 */
     reconnectWorkspace(input: ReconnectWorkspaceInput): Promise<{ readonly workspace: Workspace; readonly mount: WorkspaceMount }>;
-    /** 使当前 mount 失效；Space membership 保留并投影为 disconnected。 */
-    invalidateMount(workspaceId: string, reason?: string): Promise<void>;
+    /** 条件失效调用方观察到的 mount；版本已变化时忽略，Space membership 始终保留。 */
+    invalidateMount(input: InvalidateWorkspaceMountInput): Promise<void>;
     /** 进入 deleting 并发布事件；跨 feature 级联由 Host coordinator 协调。 */
     deleteWorkspace(workspaceId: string): Promise<void>;
     /**

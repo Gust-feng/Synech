@@ -27,8 +27,11 @@ import {
   parseRunInput,
 } from "../request-parsers.js";
 import type { PanelRunInput } from "../request-parsers.js";
-import type { ConversationLifecycleCoordinator, SpaceConversationDeletionCoordinator } from "../spaces/space-conversation-coordinator.js";
-import type { WorkspaceDeletionCoordinator } from "../spaces/workspace-deletion-coordinator.js";
+import type {
+  ConversationLifecycleCoordinator,
+  SpaceConversationDeletionCoordinator,
+  WorkspaceDeletionCoordinator,
+} from "../../workbench-coordination/index.js";
 import { SseResponseWriter } from "../sse-response-writer.js";
 import type { OrdinaryTurnApplication, OrdinaryTurnInput } from "../../application/ordinary-turn-application.js";
 

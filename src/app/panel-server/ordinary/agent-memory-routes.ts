@@ -16,8 +16,10 @@ import {
 import type { OrdinaryAgentFeature, OrdinaryMemoryFact } from "../../ordinary-agent/index.js";
 import type { SpaceFeature } from "../../spaces/index.js";
 import type { WorkspaceFeature } from "../../workspaces/index.js";
-import type { SpaceConversationDeletionCoordinator } from "../spaces/space-conversation-coordinator.js";
-import type { WorkspaceDeletionCoordinator } from "../spaces/workspace-deletion-coordinator.js";
+import type {
+  SpaceConversationDeletionCoordinator,
+  WorkspaceDeletionCoordinator,
+} from "../../workbench-coordination/index.js";
 import { PanelHttpError, readJsonBody, writeJson } from "../http-utils.js";
 import type {
   DeletedMemoryHistory,
