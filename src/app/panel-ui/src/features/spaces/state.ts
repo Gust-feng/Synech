@@ -6,6 +6,14 @@ import type { ContextAttachment } from "../../contracts/context";
 import type { SpaceSummary, SpaceTree } from "@panel-api/spaces";
 import type { PersonalSpaceProjection } from "../../personal-workbench/space";
 import { subscribeWorkbenchProjectionChanges } from "../../workbench/projection-changes";
+import {
+  createIdleAsyncRequestState,
+  failAsyncRequest,
+  resolveAsyncRequest,
+  settleAsyncRequest,
+  startAsyncRequest,
+  type AsyncRequestState,
+} from "../../workbench/async-request-state";
 import { invalidateDocumentPreviews } from "../../personal-workbench/workbench/app/components/referencePreviewClient";
 import { projectSpaceTree, type SpaceConversationSummary } from "./projection";
 
@@ -39,9 +47,9 @@ export function useSpaceProjection(enabled = true): {
   readonly mutationPending: boolean;
   readonly error?: string;
 } {
-  const [spaces, setSpaces] = useState<readonly PersonalSpaceProjection[]>([]);
-  const [loading, setLoading] = useState(enabled);
-  const [error, setError] = useState<string | undefined>();
+  const [requestState, setRequestState] = useState<AsyncRequestState<readonly PersonalSpaceProjection[], string>>(
+    () => enabled ? { status: "loading" } : createIdleAsyncRequestState(),
+  );
   const refreshAbortRef = useRef<AbortController | undefined>(undefined);
   const refreshEpochRef = useRef(0);
   const spaceRefreshRevisionRef = useRef(new Map<string, number>());
@@ -61,7 +69,10 @@ export function useSpaceProjection(enabled = true): {
         { signal: abortController.signal },
       );
       if (spaceRefreshRevisionRef.current.get(spaceId) !== revision) return;
-      setSpaces((current) => current.map((space) => space.spaceId === spaceId ? projectSpaceTree(tree, conversations) : space));
+      const nextSpace = projectSpaceTree(tree, conversations);
+      setRequestState((current) => resolveAsyncRequest(
+        (current.data ?? []).map((space) => space.spaceId === spaceId ? nextSpace : space),
+      ));
     } catch (reason: unknown) {
       // A newer refresh for the same Space owns the result. Superseded reads
       // are normal during quick successive mutations and must not surface as
@@ -85,8 +96,7 @@ export function useSpaceProjection(enabled = true): {
     refreshAbortRef.current?.abort();
     const abortController = new AbortController();
     refreshAbortRef.current = abortController;
-    setLoading(true);
-    setError(undefined);
+    setRequestState(startAsyncRequest);
     try {
       const listed = await getJson<SpaceSummaryResponse>("/api/spaces", { signal: abortController.signal });
       if (epoch !== refreshEpochRef.current) return;
@@ -101,21 +111,24 @@ export function useSpaceProjection(enabled = true): {
         return projectSpaceTree(tree, conversations);
       }));
       if (epoch !== refreshEpochRef.current) return;
-      setSpaces((current) => {
-        const currentById = new Map(current.map((space) => [space.spaceId, space]));
-        return trees.map((tree) => {
+      setRequestState((current) => {
+        const currentById = new Map((current.data ?? []).map((space) => [space.spaceId, space]));
+        const merged = trees.map((tree) => {
           const revisionAtStart = revisionsAtStart.get(tree.spaceId) ?? 0;
           const currentRevision = spaceRefreshRevisionRef.current.get(tree.spaceId) ?? 0;
           return currentRevision === revisionAtStart ? tree : currentById.get(tree.spaceId) ?? tree;
         });
+        return resolveAsyncRequest(merged);
       });
     } catch (reason: unknown) {
       if (epoch !== refreshEpochRef.current || isAbortError(reason)) return;
-      setError(reason instanceof Error ? reason.message : "空间数据加载失败。");
+      setRequestState((current) => failAsyncRequest(
+        current,
+        reason instanceof Error ? reason.message : "空间数据加载失败。",
+      ));
       throw reason;
     } finally {
       if (epoch === refreshEpochRef.current) {
-        setLoading(false);
         if (refreshAbortRef.current === abortController) refreshAbortRef.current = undefined;
       }
     }
@@ -125,20 +138,25 @@ export function useSpaceProjection(enabled = true): {
     const existing = mutationPromisesRef.current.get(key);
     if (existing !== undefined) return existing;
     setMutationPendingCount((count) => count + 1);
-    setError(undefined);
     const pending = (async () => {
       try {
         try {
           await request();
         } catch (reason: unknown) {
-          setError(reason instanceof Error ? reason.message : "空间数据保存失败。");
+          setRequestState((current) => failAsyncRequest(
+            current,
+            reason instanceof Error ? reason.message : "空间数据保存失败。",
+          ));
           throw reason;
         }
         try {
           if (affectedSpaceIds === undefined) await refresh();
           else await refreshAffectedSpaces(affectedSpaceIds);
         } catch {
-          setError("操作已完成，但空间数据刷新失败。请手动刷新。");
+          setRequestState((current) => failAsyncRequest(
+            current,
+            "操作已完成，但空间数据刷新失败。请手动刷新。",
+          ));
         }
       } finally {
         mutationPromisesRef.current.delete(key);
@@ -154,7 +172,7 @@ export function useSpaceProjection(enabled = true): {
       refreshAbortRef.current?.abort();
       for (const controller of spaceRefreshControllersRef.current.values()) controller.abort();
       spaceRefreshControllersRef.current.clear();
-      setLoading(false);
+      setRequestState((current) => settleAsyncRequest(current));
       return undefined;
     }
     void refresh().catch(() => undefined);
@@ -259,7 +277,7 @@ export function useSpaceProjection(enabled = true): {
   }, [refreshAffectedSpaces]);
 
   return {
-    spaces,
+    spaces: requestState.data ?? [],
     createSpace,
     deleteSpace,
     createManagedFolder,
@@ -273,9 +291,9 @@ export function useSpaceProjection(enabled = true): {
     openReference,
     refresh,
     refreshSpace,
-    loading,
+    loading: requestState.status === "loading" || requestState.status === "refreshing",
     mutationPending: mutationPendingCount > 0,
-    error,
+    error: requestState.status === "error" ? requestState.error : undefined,
   };
 }
 

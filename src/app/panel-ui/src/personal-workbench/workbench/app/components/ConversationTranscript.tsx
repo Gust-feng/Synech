@@ -7,7 +7,8 @@
  * 数据权威不变：projectConversationDisplayList 产出什么，这里就渲染什么。
  * 全量可见性不变：工具活动、确认流、失败归因、Sub-Agent 嵌套全部保留。
  */
-import React, { useCallback, useEffect, useMemo, useSyncExternalStore, useState } from "react";
+import React, { useEffect, useState } from "react";
+import { AnimatePresence, motion } from "motion/react";
 import {
   Brain,
   Check,
@@ -24,28 +25,21 @@ import {
   Wrench,
 } from "lucide-react";
 import type { ConversationTurn, ConversationTurnAttachment } from "@ui/contracts/conversation";
-import type { AgentDeliverable, OrdinaryRun, OrdinaryWorkView, TranscriptNode } from "@ui/contracts/run";
+import type { OrdinaryRun, OrdinaryWorkView, TranscriptNode } from "@ui/contracts/run";
 import type { PanelToolCallResult as ToolCallResult } from "@panel-api/ordinary-agent";
 import type { LiveRunBuffer } from "@panel-api/ui-read-model";
 import type { WorklineProjectedTurn } from "@panel-api/ui-read-model";
-import type { LiveRunTranscriptProjection } from "@panel-api/ui-read-model";
-import { projectConversationDisplayList } from "@panel-api/ui-read-model";
-import { shouldCollapseStandaloneTimeline } from "@panel-api/ui-read-model";
-import {
-  getTranscriptCache,
-  subscribeTranscriptCache,
-  transcriptNodesCacheForConversation,
-  transcriptToolResultsCacheForConversation,
-} from "@ui/features/conversations/transcript/store";
 import type { ChatModelOption } from "@ui/contracts/composer";
 import { RichText, StreamingRichText } from "@ui/components/rich-text";
 import { useStreamingText } from "@ui/features/conversations/transcript/use-streaming-text";
 import { CopyActionButton } from "@ui/components/copy-action-button";
 import { ActivityEvidencePanel } from "./ActivityEvidence";
 import { toolResultForActivity } from "@ui/features/conversations/transcript/tool-result-association";
+import { MOTION_EASING, MOTION_TIMING, useMotionEnabled } from "@ui/shell/motion-system";
 import { ConfirmationCard, type ConfirmationProjection } from "./ConfirmationCard";
 import type { ConversationDisplayItem } from "@panel-api/ui-read-model";
 import type { AssistantWorkflowDisplay } from "@panel-api/ui-read-model";
+import { useConversationTranscriptProjection, type ConversationStandaloneRun } from "./use-conversation-transcript-projection";
 import {
   isVisibleOrdinaryActivityItem,
   resolveActivityToolKind,
@@ -78,15 +72,7 @@ export type ConversationTranscriptProps = {
   readonly pending?: ConfirmationProjection;
   readonly showModelUsage: boolean;
   readonly developerModeEnabled: boolean;
-  readonly standaloneRun?: {
-    readonly currentRunId?: string;
-    readonly runStatus?: string;
-    readonly answer?: string;
-    readonly failure?: { readonly code: string; readonly message: string };
-    readonly deliverable?: AgentDeliverable;
-    readonly runProjection: LiveRunTranscriptProjection & { readonly nodes: readonly TranscriptNode[] };
-    readonly pending?: ConfirmationProjection;
-  };
+  readonly standaloneRun?: ConversationStandaloneRun;
   readonly models: readonly ChatModelOption[];
   readonly selectedModelId: string;
   readonly onDecision: (decision: "approve_once" | "deny" | "guidance", guidance?: string) => void;
@@ -94,49 +80,7 @@ export type ConversationTranscriptProps = {
 };
 
 export function ConversationTranscript(props: ConversationTranscriptProps): React.ReactElement | null {
-  const cachedHistoricalSnapshot = useSyncExternalStore(
-    useCallback(
-      (listener: () => void) => subscribeTranscriptCache(props.conversationId, listener),
-      [props.conversationId],
-    ),
-    getTranscriptCache,
-    getTranscriptCache,
-  );
-  const cachedHistoricalNodes = transcriptNodesCacheForConversation(cachedHistoricalSnapshot, props.conversationId);
-  const cachedHistoricalToolResults = transcriptToolResultsCacheForConversation(
-    cachedHistoricalSnapshot,
-    props.conversationId,
-  );
-  const toolResultsByRunId = useMemo(() => props.currentRunId === undefined
-    ? cachedHistoricalToolResults
-    : {
-        ...cachedHistoricalToolResults,
-        [props.currentRunId]: props.currentRunToolResults,
-      }, [cachedHistoricalToolResults, props.currentRunId, props.currentRunToolResults]);
-  const conversationDisplay = useMemo(() => {
-    const collapseTimeline = shouldCollapseStandaloneTimeline({
-      runStatus: props.standaloneRun?.runStatus,
-      hasPendingConfirmation: props.standaloneRun?.pending !== undefined,
-    });
-    return projectConversationDisplayList({
-      conversationId: props.conversationId,
-      projectedTurns: props.projectedTurns,
-      turns: props.turns,
-      cachedNodesByRunId: cachedHistoricalNodes,
-      currentRunId: props.currentRunId,
-      currentRunNodes: props.currentRunNodes,
-      run: props.run,
-      live: props.live,
-      workView: props.workView,
-      pending: props.pending,
-      standaloneRun: props.standaloneRun === undefined ? undefined : { ...props.standaloneRun, collapseTimeline },
-    });
-  }, [
-    cachedHistoricalNodes, props.conversationId, props.projectedTurns, props.turns,
-    props.currentRunId, props.currentRunNodes, props.run, props.live, props.workView,
-    props.pending, props.standaloneRun,
-  ]);
-
+  const { conversationDisplay, toolResultsByRunId } = useConversationTranscriptProjection(props);
   const items = conversationDisplay.items;
   if (items.length === 0) return null;
 
@@ -401,13 +345,13 @@ function ConversationActivitySegment(props: {
   >;
   readonly onDecision?: (decision: "approve_once" | "deny" | "guidance", guidance?: string) => void;
   readonly confirmationBusy: boolean;
-  readonly toolResultsByRunId: Readonly<Record<string, readonly ToolCallResult[]>>;
   readonly developerModeEnabled: boolean;
+  readonly toolResultsByRunId: Readonly<Record<string, readonly ToolCallResult[]>>;
 }) {
   const { thinkingItems, processTimeline } = splitThinkingTimeline(props.segment.timeline);
   return (
     <>
-      {thinkingItems.length > 0 && <ConversationThinkingBlock items={thinkingItems} />}
+      {props.developerModeEnabled && thinkingItems.length > 0 && <ConversationThinkingBlock items={thinkingItems} />}
       <ConversationActivityTimeline
         timeline={processTimeline}
         collapsed={props.segment.collapsed}
@@ -469,7 +413,7 @@ function ConversationThinkingBlock(props: { readonly items: readonly ActivityIte
         style={{ color: "var(--ui-text-2)" }}
       >
         <Brain size={12} className="shrink-0" style={{ color: "var(--ui-text-3)" }} />
-        <span className="text-[12px] font-medium tracking-wide">思考</span>
+        <span className="text-[12px] font-medium tracking-wide">过程</span>
         <span className="ml-auto" style={{ color: "var(--ui-text-3)" }}>
           {open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
         </span>
@@ -501,6 +445,7 @@ function ConversationActivityTimeline(props: {
   // 会从 0 变 1，触发 React "rendered more hooks" 崩溃。
   const autoOpen = props.lifecycle === "open" || props.lifecycle === "attention" || confirmation.current !== undefined;
   const [open, setOpen] = useState(autoOpen || props.collapsed !== true);
+  const motionEnabled = useMotionEnabled();
 
   if (!hasContent) return null;
   const visibleItems = items.filter(isVisibleOrdinaryActivityItem);
@@ -517,12 +462,12 @@ function ConversationActivityTimeline(props: {
         ? "failed"
         : "settled";
   const summaryLabel = summaryState === "attention"
-    ? "等待你的确认"
+    ? "需要确认"
     : summaryState === "running"
-      ? `正在处理 ${doneCount}/${visibleItems.length}`
+      ? "正在处理"
       : summaryState === "failed"
-        ? `${failedCount} 项操作未完成`
-        : `完成 ${visibleItems.length} 项操作`;
+        ? "有操作未完成"
+        : "查看执行过程";
   const summaryColor = summaryState === "running"
     ? "var(--ui-accent)"
     : summaryState === "attention"
@@ -562,28 +507,46 @@ function ConversationActivityTimeline(props: {
       {open && visibleItems.length > 0 && (
         <div className="ui-activity-details space-y-1">
           <div className="space-y-2">
-            {visibleItems.map((item) => (
-              <ConversationActivityItem
-                key={item.key}
-                item={item}
-                toolResult={toolResultForActivity(item, props.timeline.nodes, props.toolResultsByRunId)}
-                resolveChildResult={(child) => toolResultForActivity(child, props.timeline.nodes, props.toolResultsByRunId)}
-                showCanonicalToolResult={props.developerModeEnabled}
-              />
-            ))}
+            <AnimatePresence initial={false}>
+              {visibleItems.map((item, index) => (
+                <motion.div
+                  key={item.key}
+                  initial={motionEnabled ? { opacity: 0, y: 5 } : false}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={motionEnabled ? { opacity: 0, y: -3 } : undefined}
+                  transition={{
+                    duration: MOTION_TIMING.interaction,
+                    delay: motionEnabled ? Math.min(index * 0.025, 0.12) : 0,
+                    ease: MOTION_EASING.premium,
+                  }}
+                >
+                  <ConversationActivityItem
+                    item={item}
+                    toolResult={toolResultForActivity(item, props.timeline.nodes, props.toolResultsByRunId)}
+                    resolveChildResult={(child) => toolResultForActivity(child, props.timeline.nodes, props.toolResultsByRunId)}
+                    showCanonicalToolResult={props.developerModeEnabled}
+                  />
+                </motion.div>
+              ))}
+            </AnimatePresence>
           </div>
         </div>
       )}
 
       {/* 确认卡片 */}
       {confirmation.current !== undefined && (
-        <div className="ui-activity-confirmation">
+        <motion.div
+          className="ui-activity-confirmation"
+          initial={motionEnabled ? { opacity: 0, y: 6, scale: 0.99 } : false}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          transition={{ duration: MOTION_TIMING.panel, ease: MOTION_EASING.premium }}
+        >
           <ConfirmationCard
             confirmation={confirmation.current}
             busy={props.confirmationBusy}
             onDecision={props.onDecision}
           />
-        </div>
+        </motion.div>
       )}
     </div>
   );

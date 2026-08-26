@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { AnimatePresence, motion } from 'motion/react'
 import { ArrowUp, Check, ChevronDown, FileText, Plus, ShieldCheck, X } from 'lucide-react'
 import type { ChatInputProps } from '@ui/contracts/composer'
 import type { ComposerToolConfirmationPolicy } from '@ui/features/settings/config-projection'
@@ -7,6 +8,7 @@ import { ModelOptionPicker } from '@ui/features/settings/model/option-picker'
 import { ActionConfirmationDialog } from './ActionConfirmationDialog'
 import { composerSurface } from './tokens'
 import { QueuedMessageList } from './QueuedMessageList'
+import { MOTION_EASING, MOTION_TIMING, useMotionEnabled } from '@ui/shell/motion-system'
 
 interface ConversationComposerProps {
   readonly input: ChatInputProps
@@ -17,6 +19,7 @@ export function ConversationComposer({ input, onCompositionChange }: Conversatio
   const [focused, setFocused] = useState(false)
   const ref = useRef<HTMLTextAreaElement>(null)
   const canEdit = !input.busy || input.allowInputWhileBusy === true
+  const motionEnabled = useMotionEnabled()
   const canSend = input.value.trim().length > 0 && canEdit
 
   useEffect(() => {
@@ -46,24 +49,30 @@ export function ConversationComposer({ input, onCompositionChange }: Conversatio
       )}
       {input.attachments.length > 0 && (
         <div className="flex flex-wrap gap-1.5 px-3 pt-3">
-          {input.attachments.map((attachment) => (
-            <span
-              key={attachment.attachmentId}
-              className="flex max-w-full items-center gap-1.5 rounded-md px-2 py-1 text-[11px]"
-              style={{ background: 'var(--ui-surface-hover)', color: 'var(--ui-text-2)' }}
-            >
-              <FileText size={11} className="shrink-0" />
-              <span className="truncate">{attachment.title}</span>
-              <button
-                type="button"
-                onClick={() => input.onRemoveAttachment(attachment.attachmentId)}
-                className="shrink-0 hover:opacity-70"
-                aria-label={`移除${attachment.title}`}
+          <AnimatePresence initial={false}>
+            {input.attachments.map((attachment) => (
+              <motion.span
+                key={attachment.attachmentId}
+                className="flex max-w-full items-center gap-1.5 rounded-md px-2 py-1 text-[11px]"
+                style={{ background: 'var(--ui-surface-hover)', color: 'var(--ui-text-2)' }}
+                initial={motionEnabled ? { opacity: 0, y: 4, scale: 0.96 } : false}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={motionEnabled ? { opacity: 0, y: -3, scale: 0.96 } : undefined}
+                transition={{ duration: MOTION_TIMING.interaction, ease: MOTION_EASING.premium }}
               >
-                <X size={11} />
-              </button>
-            </span>
-          ))}
+                <FileText size={11} className="shrink-0" />
+                <span className="truncate">{attachment.title}</span>
+                <button
+                  type="button"
+                  onClick={() => input.onRemoveAttachment(attachment.attachmentId)}
+                  className="shrink-0 hover:opacity-70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ui-accent)]"
+                  aria-label={`移除${attachment.title}`}
+                >
+                  <X size={11} />
+                </button>
+              </motion.span>
+            ))}
+          </AnimatePresence>
         </div>
       )}
       <textarea

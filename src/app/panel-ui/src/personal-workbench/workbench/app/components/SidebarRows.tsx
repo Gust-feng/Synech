@@ -121,10 +121,20 @@ export function SidebarListRow({ active, onClick, dot, dotShape = 'circle', labe
   return (
     <div
       role="button"
+      tabIndex={editing || pending ? -1 : 0}
+      aria-current={active ? 'page' : undefined}
+      aria-disabled={pending || undefined}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onClick={() => { if (!editing && !pending) onClick() }}
-      className="group/row relative flex items-center gap-2 rounded-lg cursor-pointer text-sm"
+      onKeyDown={(event) => {
+        if (editing || pending) return
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          onClick()
+        }
+      }}
+      className="group/row relative flex items-center gap-2 rounded-lg cursor-pointer text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ui-accent)] focus-visible:ring-inset"
       style={{
         height: 32,
         paddingLeft: 12,

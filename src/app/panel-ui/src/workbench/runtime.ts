@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useConversationSummaryRefresh } from "../features/conversations/conversation-refresh";
 import { useConversationProjectionChanges } from "../features/conversations/conversation-projection-changes";
 import { createAppRunController } from "../features/conversations/run/controller";
@@ -11,7 +11,6 @@ import {
 import { createAppSidebarConversationController } from "../features/conversations/sidebar-controller";
 import { createAppSettingsController, type AppSettingsController } from "../features/settings/controllers/settings-controller";
 import { createAppComposerController } from "../features/conversations/composer-controller";
-import { applyAppBootstrap, loadAppBootstrap } from "../shell/bootstrap";
 import { shouldKeepRefreshing, stopLiveUpdates } from "../features/conversations/run/runtime-controls";
 import { resetTranscriptCache } from "../features/conversations/transcript/store";
 import {
@@ -23,6 +22,8 @@ import {
 } from "../features/conversations/context-window-usage";
 import { isConversationWaitingForUser } from "../features/conversations/conversation-state";
 import type { AppState } from "./state";
+import { useAppBootstrap, type AppBootstrapLoadState } from "./use-app-bootstrap";
+export type { AppBootstrapLoadState } from "./use-app-bootstrap";
 import type {
   ComposerReasoningEffort,
   ComposerToolConfirmationPolicy,
@@ -93,14 +94,9 @@ export type AppWorkbenchRuntime = {
   >;
 };
 
-export type AppBootstrapLoadState =
-  | { readonly status: "loading" }
-  | { readonly status: "ready" }
-  | { readonly status: "retrying" }
-  | { readonly status: "error"; readonly message: string };
-
 export function useAppWorkbenchRuntime(options: AppWorkbenchRuntimeOptions): AppWorkbenchRuntime {
-  const [bootstrap, setBootstrap] = useState<AppBootstrapLoadState>({ status: "loading" });
+  const mountedRef = useRef(true);
+  const { state: bootstrap, retry: retryBootstrap } = useAppBootstrap({ mountedRef, setApp: options.setApp });
   const [confirmationBusy, setConfirmationBusy] = useState(false);
   const [contextBusy, setContextBusy] = useState(false);
   const [savingModel, setSavingModel] = useState(false);
@@ -110,7 +106,7 @@ export function useAppWorkbenchRuntime(options: AppWorkbenchRuntimeOptions): App
   const [cancellingRunId, setCancellingRunId] = useState<string | undefined>(undefined);
   const [pendingConversationIds, setPendingConversationIds] = useState<ReadonlySet<string>>(() => new Set());
 
-  const mountedRef = useRef(true);
+
   const appRef = useRef(options.app);
   appRef.current = options.app;
   const pollTimer = useRef<number | undefined>(undefined);
@@ -123,8 +119,6 @@ export function useAppWorkbenchRuntime(options: AppWorkbenchRuntimeOptions): App
 
   const conversationLoadAbortRef = useRef<AbortController | undefined>(undefined);
   const conversationLoadTargetRef = useRef<string | undefined>(undefined);
-  const bootstrapAbortRef = useRef<AbortController | undefined>(undefined);
-  const bootstrapEpochRef = useRef(0);
   const mutationConversationIdsRef = useRef<Set<string>>(new Set());
   const modelSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const toolSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -142,36 +136,10 @@ export function useAppWorkbenchRuntime(options: AppWorkbenchRuntimeOptions): App
     mcpToolCatalogDraftRef.current = options.app.tools?.mcpCatalog;
   }, [options.app.tools?.mcpCatalog]);
 
-  const loadBootstrap = useCallback((retry: boolean): void => {
-    const epoch = ++bootstrapEpochRef.current;
-    bootstrapAbortRef.current?.abort();
-    const abortController = new AbortController();
-    bootstrapAbortRef.current = abortController;
-    setBootstrap({ status: retry ? "retrying" : "loading" });
-    void loadAppBootstrap(abortController.signal).then((loaded) => {
-      if (!mountedRef.current || bootstrapEpochRef.current !== epoch) return;
-      options.setApp((previous) => applyAppBootstrap(previous, loaded));
-      setBootstrap({ status: "ready" });
-    }).catch((error: unknown) => {
-      if (!mountedRef.current || bootstrapEpochRef.current !== epoch || abortController.signal.aborted) return;
-      setBootstrap({
-        status: "error",
-        message: error instanceof Error ? error.message : "工作台启动数据加载失败。",
-      });
-    }).finally(() => {
-      if (bootstrapAbortRef.current === abortController) bootstrapAbortRef.current = undefined;
-    });
-  }, [options.setApp]);
-
-  const retryBootstrap = useCallback((): void => loadBootstrap(true), [loadBootstrap]);
-
   useEffect(() => {
     mountedRef.current = true;
-    loadBootstrap(false);
     return () => {
       mountedRef.current = false;
-      bootstrapAbortRef.current?.abort();
-      bootstrapAbortRef.current = undefined;
       conversationLoadAbortRef.current?.abort();
       conversationLoadAbortRef.current = undefined;
       conversationLoadTargetRef.current = undefined;
@@ -179,7 +147,7 @@ export function useAppWorkbenchRuntime(options: AppWorkbenchRuntimeOptions): App
       resetTranscriptCache();
 
     };
-  }, [loadBootstrap]);
+  }, []);
 
   const currentRun = useMemo(() => projectCurrentRun(options.app), currentRunProjectionDeps(options.app));
   const hasNormalConversationContext = options.app.conversation !== undefined || currentRun.run !== undefined;

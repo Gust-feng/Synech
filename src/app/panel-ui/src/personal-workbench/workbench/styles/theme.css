@@ -59,6 +59,19 @@
   --ui-font-ui: 14px;
   --ui-font-meta: 12px;
   --ui-font-caption: 11px;
+  --ui-surface-raised: #ffffff;
+  --ui-surface-overlay: #faf9f7;
+  --ui-border-strong: rgba(45, 40, 34, 0.16);
+  --ui-shadow-soft: 0 8px 24px -16px rgba(45, 40, 34, 0.22);
+  --ui-shadow-float: 0 18px 48px -20px rgba(45, 40, 34, 0.24), 0 2px 10px rgba(45, 40, 34, 0.05);
+  --ui-focus-ring: 0 0 0 3px rgba(104, 101, 167, 0.18);
+  --motion-duration-quick: 120ms;
+  --motion-duration-interaction: 180ms;
+  --motion-duration-panel: 280ms;
+  --motion-duration-spatial: 420ms;
+  --motion-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --motion-ease-premium: cubic-bezier(0.22, 1, 0.36, 1);
+  --motion-ease-exit: cubic-bezier(0.4, 0, 1, 1);
 
   --background: #f4f2ef;
   --foreground: #292722;
@@ -116,6 +129,12 @@ html[data-style="default"][data-color="dark"] {
   --ui-panel: #232227;
   --ui-composer: #29282e;
   --ui-composer-shadow: 0 12px 32px rgba(5, 5, 7, 0.2);
+  --ui-surface-raised: #2b2a31;
+  --ui-surface-overlay: #29282e;
+  --ui-border-strong: rgba(232, 229, 226, 0.18);
+  --ui-shadow-soft: 0 12px 32px rgba(5, 5, 7, 0.2);
+  --ui-shadow-float: 0 18px 48px -20px rgba(5, 5, 7, 0.34), 0 2px 10px rgba(5, 5, 7, 0.18);
+  --ui-focus-ring: 0 0 0 3px rgba(152, 146, 176, 0.16);
   --ui-composer-shadow-focus:
     0 0 0 3px rgba(152, 146, 176, 0.11),
     0 16px 38px rgba(5, 5, 7, 0.26);
@@ -391,4 +410,19 @@ html[data-style="default"][data-color="dark"] *::-webkit-scrollbar-thumb {
 
 html[data-style="default"][data-color="dark"] *::-webkit-scrollbar-thumb:hover {
   background-color: rgba(232, 229, 226, 0.28);
+}
+html[data-motion-effective="reduced"] {
+  --motion-duration-quick: 0ms;
+  --motion-duration-interaction: 0ms;
+  --motion-duration-panel: 0ms;
+  --motion-duration-spatial: 0ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html:not([data-motion-effective="standard"]) {
+    --motion-duration-quick: 0ms;
+    --motion-duration-interaction: 0ms;
+    --motion-duration-panel: 0ms;
+    --motion-duration-spatial: 0ms;
+  }
 }
