@@ -96,8 +96,12 @@ export function createApplicationRuntime(input: {
     },
     spaces: {
       commands: { unlinkReference: input.spaceFeature.commands.unlinkReference },
-      queries: { listReferencesByWorkspace: input.spaceFeature.queries.listReferencesByWorkspace },
+      queries: {
+        listReferencesByWorkspace: input.spaceFeature.queries.listReferencesByWorkspace,
+        getReference: input.spaceFeature.queries.getReference,
+      },
     },
+    spaceAdmission: { admit: (spaceId, operation) => spaceConversationDeletion.admit(spaceId, operation) },
     ordinary: {
       commands: { deleteConversation: input.ordinaryAgentFeature.commands.deleteConversation },
       queries: { listConversationsByOwner: input.ordinaryAgentFeature.queries.listConversationsByOwner },

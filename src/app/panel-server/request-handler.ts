@@ -33,6 +33,7 @@ import {
 import {
   ContextAttachmentUploadApplicationError,
 } from "../application/context-attachment-application.js";
+import { SpaceReferenceContentApplicationError } from "../application/space-reference-content-application.js";
 import { agentMemoryHttpError, handlePanelAgentMemoryRoute } from "./ordinary/agent-memory-routes.js";
 import { AgentNotesError } from "../agent-notes/index.js";
 import { PathDependencyFeatureError } from "../path-dependencies/index.js";
@@ -194,6 +195,10 @@ function createPanelRequestHandler(runtime: PanelHost): (request: IncomingMessag
         writePanelError(response, contextAttachmentUploadApplicationHttpError(error));
         return;
       }
+      if (error instanceof SpaceReferenceContentApplicationError) {
+        writePanelError(response, spaceReferenceContentApplicationHttpError(error));
+        return;
+      }
       if (error instanceof OrdinaryFeatureError) {
         writePanelError(response, ordinaryFeatureHttpError(error));
         return;
@@ -229,6 +234,30 @@ function createPanelRequestHandler(runtime: PanelHost): (request: IncomingMessag
     });
     runtime.activeRequestJobs.add(requestJob);
   };
+}
+
+export function spaceReferenceContentApplicationHttpError(error: SpaceReferenceContentApplicationError): PanelHttpError {
+  switch (error.code) {
+    case "space_reference_not_found":
+    case "space_reference_revoked":
+      return new PanelHttpError(404, error.code, error.message);
+    case "space_reference_membership_changed":
+    case "space_reference_source_changed":
+    case "space_reference_caption_unavailable":
+    case "space_reference_image_caption_revision_conflict":
+    case "space_reference_content_unavailable":
+    case "space_reference_source_missing":
+    case "space_reference_source_replaced":
+    case "space_reference_entry_exists":
+    case "space_reference_entry_mutation_unavailable":
+    case "workspace_not_available":
+      return new PanelHttpError(409, error.code, error.message);
+    case "invalid_space_reference_path":
+    case "invalid_space_reference_name":
+      return new PanelHttpError(400, error.code, error.message);
+    case "space_reference_mutation_failed":
+      return new PanelHttpError(500, error.code, error.message);
+  }
 }
 
 export function ordinaryTurnApplicationHttpError(error: OrdinaryTurnApplicationError): PanelHttpError {
@@ -461,6 +490,7 @@ function workbenchCoordinationHttpError(error: WorkbenchCoordinationError): Pane
     case "conversation_deletion_in_progress":
     case "conversation_owner_conflict":
     case "workspace_deletion_in_progress":
+    case "workspace_reference_membership_changed":
     case "workspace_not_available":
     case "space_deletion_in_progress":
     case "background_process_stop_pending":

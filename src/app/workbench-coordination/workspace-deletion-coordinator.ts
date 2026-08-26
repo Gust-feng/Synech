@@ -8,6 +8,7 @@ import {
   type InMemoryProcessRegistry,
   type ProcessTerminator,
 } from "../runtime-guard/process-registry.js";
+import { withOrderedSpaceAdmissions } from "../ownership/admission.js";
 import { WorkbenchCoordinationError } from "./contracts.js";
 
 /**
@@ -33,8 +34,9 @@ export function createWorkspaceDeletionCoordinator(input: {
   };
   readonly spaces: {
     readonly commands: Pick<SpaceFeature["commands"], "unlinkReference">;
-    readonly queries: Pick<SpaceFeature["queries"], "listReferencesByWorkspace">;
+    readonly queries: Pick<SpaceFeature["queries"], "listReferencesByWorkspace" | "getReference">;
   };
+  readonly spaceAdmission: { admit<T>(spaceId: string, operation: () => Promise<T>): Promise<T> };
   readonly ordinary: {
     readonly commands: Pick<OrdinaryAgentFeature["commands"], "deleteConversation">;
     readonly queries: Pick<OrdinaryAgentFeature["queries"], "listConversationsByOwner">;
@@ -51,6 +53,7 @@ export function createWorkspaceDeletionCoordinator(input: {
   const admissionTails = new Map<string, Promise<void>>();
   const runExclusive = input.runExclusive ?? (async <T>(operation: () => Promise<T>) => await operation());
   const runWorkspaceExclusive = input.runWorkspaceExclusive ?? (async <T>(_id: string, operation: () => Promise<T>) => await operation());
+  const spaceAdmission = input.spaceAdmission;
   let tail = Promise.resolve();
 
   const serialize = <T>(operation: () => Promise<T>): Promise<T> => {
@@ -104,8 +107,11 @@ export function createWorkspaceDeletionCoordinator(input: {
       // cascade. Keep the owner denied until every phase has succeeded.
       deleted.delete(workspaceId);
       deleting.add(workspaceId);
-      return serialize(() => admitInOrder(workspaceId, () => runExclusive(() =>
-        runWorkspaceExclusive(workspaceId, async () => {
+      return serialize(() => admitInOrder(workspaceId, async () => {
+        const referencesBeforeLease = await input.spaces.queries.listReferencesByWorkspace(workspaceId);
+        const spaceIds = [...new Set(referencesBeforeLease.map((reference) => reference.spaceId))];
+        return await withOrderedSpaceAdmissions(spaceAdmission, spaceIds, async () => await runExclusive(() =>
+          runWorkspaceExclusive(workspaceId, async () => {
           let completed = false;
           try {
             const workspace = await input.workspaces.queries.get(workspaceId);
@@ -125,7 +131,23 @@ export function createWorkspaceDeletionCoordinator(input: {
             await input.memory?.deleteByOwner({ kind: "workspace", id: workspaceId });
             await input.agentNotes.deleteByOwner({ kind: "workspace", id: workspaceId });
             const references = await input.spaces.queries.listReferencesByWorkspace(workspaceId);
-            for (const reference of references) await input.spaces.commands.unlinkReference(reference.id);
+            for (const reference of references) {
+              if (!spaceIds.includes(reference.spaceId)) {
+                throw new WorkbenchCoordinationError(
+                  "workspace_reference_membership_changed",
+                  `Workspace ${workspaceId} reference ${reference.id} changed Space membership while deletion was waiting.`,
+                );
+              }
+              const current = await input.spaces.queries.getReference(reference.id);
+              if (current === undefined) continue;
+              if (current.spaceId !== reference.spaceId || current.reference.kind !== "workspace" || current.reference.workspaceId !== workspaceId) {
+                throw new WorkbenchCoordinationError(
+                  "workspace_reference_membership_changed",
+                  `Workspace ${workspaceId} reference ${reference.id} changed while deletion was waiting.`,
+                );
+              }
+              await input.spaces.commands.unlinkReference(current.id);
+            }
             await input.workspaces.commands.purgeWorkspace(workspaceId);
             completed = true;
           } finally {
@@ -134,8 +156,9 @@ export function createWorkspaceDeletionCoordinator(input: {
               deleted.add(workspaceId);
             }
           }
-        }),
-      )));
+          }),
+        ));
+      }));
     },
   };
 }

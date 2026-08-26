@@ -10,6 +10,7 @@ export type WorkbenchCoordinationErrorCode =
   | "conversation_deletion_in_progress"
   | "conversation_owner_conflict"
   | "workspace_deletion_in_progress"
+  | "workspace_reference_membership_changed"
   | "workspace_not_available"
   | "workspace_not_found"
   | "space_deletion_in_progress"

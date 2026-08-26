@@ -82,6 +82,10 @@ function createFixture({ item = localItem(), resolutionPath = "C:/notes.md" } = 
       async deleteEntry(value, relativePath) {
         calls.push(["deleteEntry", value.id, relativePath]);
       },
+      async updateAnnotation(value, expectedRevision, patch, actor) {
+        calls.push(["updateAnnotation", value.id, expectedRevision, patch.markdown, actor.kind]);
+        return { ...value, annotation: { revision: expectedRevision + 1, markdown: patch.markdown } };
+      },
     },
   };
   return { runtime, calls, setCurrent(value) { current = value; } };
@@ -143,7 +147,7 @@ test("content application delegates caption and entry commands through the same 
   const fixture = createFixture({ item: { ...localItem(), reference: { kind: "managed_folder", path: "C:/managed" } } });
   const application = createSpaceReferenceContentApplication(fixture.runtime);
 
-  await application.updateCaption({ itemId: "reference-1", update: { expectedFingerprint: "space-image-caption:0", caption: "Caption" } });
+  await application.updateCaption({ itemId: "reference-1", update: { expectedFingerprint: "space-image-caption:0", caption: "Caption" }, actor: { kind: "agent", runId: "run-1" } });
   await application.createEntry({ itemId: "reference-1", parentRelativePath: "docs", name: "new.md", kind: "file" });
   await application.renameEntry({ itemId: "reference-1", relativePath: "docs/old.md", name: "new.md" });
   await application.deleteEntry({ itemId: "reference-1", relativePath: "docs/new.md" });
@@ -161,8 +165,26 @@ test("non-filesystem references use the owner admission without a filesystem lea
   const fixture = createFixture({ item: { ...localItem(), reference: { kind: "managed_asset", assetId: "asset-1" } } });
   const application = createSpaceReferenceContentApplication(fixture.runtime);
 
-  await application.updateCaption({ itemId: "reference-1", update: { expectedFingerprint: "caption-0", caption: "Caption" } });
+  await application.updateCaption({ itemId: "reference-1", update: { expectedFingerprint: "caption-0", caption: "Caption" }, actor: { kind: "agent", runId: "run-1" } });
 
   assert.equal(fixture.calls.some(([kind]) => kind === "resolve"), false);
   assert.equal(fixture.calls.some(([kind]) => kind === "run"), false);
+});
+
+test("annotation updates share owner admission without a filesystem lease", async () => {
+  const fixture = createFixture();
+  const application = createSpaceReferenceContentApplication(fixture.runtime);
+
+  const updated = await application.updateAnnotation({
+    itemId: "reference-1",
+    expectedRevision: 2,
+    patch: { markdown: "Summary" },
+    actor: { kind: "agent", runId: "run-1" },
+  });
+
+  assert.equal(updated.annotation.markdown, "Summary");
+  assert.deepEqual(fixture.calls.filter(([kind]) => ["admit", "updateAnnotation", "run"].includes(kind)), [
+    ["admit", "space-1"],
+    ["updateAnnotation", "reference-1", 2, "Summary", "agent"],
+  ]);
 });

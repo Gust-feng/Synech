@@ -18,8 +18,10 @@ test("Space Reference lifecycle application owns canonical relationship mutation
         async getTree() { return { entries: [{ item }] }; },
       },
     },
-    spaceAdmission: { async admit(id, operation) { events.push(["admit", id]); return await operation(); } },
-    workbenchCoordination: { commands: {} },
+    spaceAdmission: {
+      assertAvailable() {},
+      async admit(id, operation) { events.push(["admit", id]); return await operation(); },
+    },
     async unlinkExternalReference(id) { events.push(["unlink", id]); },
   });
   await app.addReference({ spaceId: "space-1", title: "new", reference: item.reference, actor: { kind: "user" } });

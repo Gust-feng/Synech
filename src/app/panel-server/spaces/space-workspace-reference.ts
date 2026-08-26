@@ -1,14 +1,11 @@
 import type { SpaceReferenceItem } from "../../spaces/index.js";
+import type { ResolvedSource } from "../../local-filesystem/resolved-source.js";
 import { inspectSpaceExternalSource } from "../../spaces/index.js";
 import type { WorkspaceFeature } from "../../workspaces/index.js";
 import { PanelHttpError } from "../http-utils.js";
 
-export type ResolvedSpaceFilesystemReference = {
+export type ResolvedSpaceFilesystemReference = ResolvedSource<"local_file" | "workspace" | "managed_folder"> & {
   readonly item: SpaceReferenceItem;
-  readonly path: string;
-  readonly sourceKind: "local_file" | "workspace" | "managed_folder";
-  readonly sourceIdentity?: string;
-  readonly mountVersion?: string;
 };
 
 export type SpaceWorkspaceReferenceDependencies = {

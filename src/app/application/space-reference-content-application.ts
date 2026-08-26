@@ -1,22 +1,34 @@
-import path from "node:path";
-
 import type { DocumentCaptionUpdateInput, DocumentPreview, DocumentTextUpdateInput } from "../panel-api/workbench.js";
-import type { SpaceFeature, SpaceReferenceItem } from "../spaces/index.js";
+import type {
+  SpaceFeature,
+  SpaceReferenceActorRecord,
+  SpaceReferenceAnnotationPatch,
+  SpaceReferenceItem,
+} from "../spaces/index.js";
+import type { SpaceAdmission } from "../ownership/admission.js";
+import { sameResolvedSource, type ResolvedSource } from "../local-filesystem/resolved-source.js";
 
 /** The resolved source facts that are valid for one filesystem mutation. */
-export type SpaceReferenceContentResolution = {
+export type SpaceReferenceContentResolution = ResolvedSource<"local_file" | "workspace" | "managed_folder"> & {
   readonly item: SpaceReferenceItem;
-  readonly path: string;
-  readonly sourceKind: "local_file" | "workspace" | "managed_folder";
-  readonly sourceIdentity?: string;
-  readonly mountVersion?: string;
 };
 
 export type SpaceReferenceContentApplicationErrorCode =
   | "space_reference_not_found"
   | "space_reference_revoked"
   | "space_reference_membership_changed"
-  | "space_reference_source_changed";
+  | "space_reference_source_changed"
+  | "space_reference_caption_unavailable"
+  | "space_reference_image_caption_revision_conflict"
+  | "space_reference_content_unavailable"
+  | "space_reference_source_missing"
+  | "space_reference_source_replaced"
+  | "space_reference_entry_exists"
+  | "space_reference_entry_mutation_unavailable"
+  | "space_reference_mutation_failed"
+  | "invalid_space_reference_path"
+  | "invalid_space_reference_name"
+  | "workspace_not_available";
 
 /**
  * Structured failures owned by the application boundary.
@@ -43,6 +55,7 @@ export type SpaceReferenceContentApplicationOperations = {
   readonly updateCaption: (
     item: SpaceReferenceItem,
     input: DocumentCaptionUpdateInput,
+    actor: SpaceReferenceActorRecord,
     resolved?: SpaceReferenceContentResolution,
   ) => Promise<DocumentPreview>;
   readonly createEntry: (
@@ -64,6 +77,12 @@ export type SpaceReferenceContentApplicationOperations = {
     relativePath: string,
     resolved?: SpaceReferenceContentResolution,
   ) => Promise<void>;
+  readonly updateAnnotation: (
+    item: SpaceReferenceItem,
+    expectedRevision: number,
+    patch: SpaceReferenceAnnotationPatch,
+    actor: SpaceReferenceActorRecord,
+  ) => Promise<SpaceReferenceItem>;
 };
 
 export type SpaceReferenceContentApplication = {
@@ -74,6 +93,7 @@ export type SpaceReferenceContentApplication = {
   updateCaption(input: {
     readonly itemId: string;
     readonly update: DocumentCaptionUpdateInput;
+    readonly actor: SpaceReferenceActorRecord;
   }): Promise<DocumentPreview>;
   createEntry(input: {
     readonly itemId: string;
@@ -90,6 +110,12 @@ export type SpaceReferenceContentApplication = {
     readonly itemId: string;
     readonly relativePath: string;
   }): Promise<void>;
+  updateAnnotation(input: {
+    readonly itemId: string;
+    readonly expectedRevision: number;
+    readonly patch: SpaceReferenceAnnotationPatch;
+    readonly actor: SpaceReferenceActorRecord;
+  }): Promise<SpaceReferenceItem>;
 };
 
 export type SpaceReferenceContentApplicationDependencies = {
@@ -97,10 +123,7 @@ export type SpaceReferenceContentApplicationDependencies = {
     readonly commands: Pick<SpaceFeature["commands"], "refreshReferenceSourceIdentity">;
     readonly queries: Pick<SpaceFeature["queries"], "getReference">;
   };
-  readonly spaceAdmission: {
-    assertAvailable(spaceId: string): void;
-    admit<T>(spaceId: string, operation: () => Promise<T>): Promise<T>;
-  };
+  readonly spaceAdmission: SpaceAdmission;
   readonly fileMutationCoordinator: {
     run<T>(key: string, operation: () => Promise<T>): Promise<T>;
   };
@@ -130,9 +153,9 @@ export function createSpaceReferenceContentApplication(
         }
         return result;
       }),
-    updateCaption: async ({ itemId, update }) =>
+    updateCaption: async ({ itemId, update, actor }) =>
       await runReferenceMutation(runtime, itemId, (item, resolved) =>
-        runtime.operations.updateCaption(item, update, resolved)),
+        runtime.operations.updateCaption(item, update, actor, resolved)),
     createEntry: async ({ itemId, parentRelativePath, name, kind }) =>
       await runReferenceMutation(runtime, itemId, (item, resolved) =>
         runtime.operations.createEntry(item, { parentRelativePath, name, kind }, resolved)),
@@ -142,6 +165,9 @@ export function createSpaceReferenceContentApplication(
     deleteEntry: async ({ itemId, relativePath }) =>
       await runReferenceMutation(runtime, itemId, (item, resolved) =>
         runtime.operations.deleteEntry(item, relativePath, resolved)),
+    updateAnnotation: async ({ itemId, expectedRevision, patch, actor }) =>
+      await runReferenceMetadataMutation(runtime, itemId, (item) =>
+        runtime.operations.updateAnnotation(item, expectedRevision, patch, actor)),
   };
 }
 
@@ -172,6 +198,17 @@ async function runReferenceMutation<T>(
       return await operation(current, currentResolution);
     });
   });
+}
+
+async function runReferenceMetadataMutation<T>(
+  runtime: SpaceReferenceContentApplicationDependencies,
+  itemId: string,
+  operation: (item: SpaceReferenceItem) => Promise<T>,
+): Promise<T> {
+  const initial = await getReference(runtime, itemId);
+  runtime.spaceAdmission.assertAvailable(initial.spaceId);
+  return await runtime.spaceAdmission.admit(initial.spaceId, async () =>
+    await operation(await getCurrentReference(runtime, initial)));
 }
 
 async function getReference(
@@ -217,19 +254,4 @@ async function resolveIfFilesystem(
     || item.reference.kind === "managed_folder"
     ? await runtime.resolveFilesystemReference(item)
     : undefined;
-}
-
-function sameResolvedSource(
-  left: SpaceReferenceContentResolution,
-  right: SpaceReferenceContentResolution,
-): boolean {
-  const leftPath = path.resolve(left.path);
-  const rightPath = path.resolve(right.path);
-  const samePath = process.platform === "win32"
-    ? leftPath.toLocaleLowerCase("en-US") === rightPath.toLocaleLowerCase("en-US")
-    : leftPath === rightPath;
-  return samePath
-    && left.sourceKind === right.sourceKind
-    && left.sourceIdentity === right.sourceIdentity
-    && left.mountVersion === right.mountVersion;
 }

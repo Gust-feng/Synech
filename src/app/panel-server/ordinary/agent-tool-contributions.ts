@@ -3,7 +3,7 @@ import {
   type AgentNotesFeature,
   type AgentNoteVersions,
 } from "../../agent-notes/index.js";
-import { createSpaceRevocationOverlay, createSpaceToolRegistryContribution, type SpaceFeature, type SpaceToolOptions, type SpaceRevocationOverlay } from "../../spaces/index.js";
+import { createSpaceRevocationOverlay, createSpaceToolRegistryContribution, type SpaceFeature, type SpaceRevocationOverlay } from "../../spaces/index.js";
 import {
   createPersonalKnowledgeToolRegistryContribution,
   type PersonalKnowledgeFeature,
@@ -18,11 +18,12 @@ import type {
   AgentToolProviderFetch,
   AgentToolRegistryContribution,
 } from "../../tool-center/factory.js";
-import type { LocalWorkspaceMutationCoordinator } from "../../tool-center/adapters/local-workspace-mutation-coordinator.js";
 import type { ContextAttachmentRunContext } from "../../tool-center/adapters/context-attachment-access.js";
 import type { ConversationOwner } from "../../../domain/execution-scope/index.js";
 import type { AgentHostRunResources } from "./agent-run-resources.js";
 import type { ManagedSpaceFolderApplication } from "../../../domain/managed-space-folder.js";
+import type { SpaceReferenceContentApplication } from "../../application/space-reference-content-application.js";
+import type { SpaceReferenceLifecycleApplication } from "../../application/space-reference-lifecycle-application.js";
 
 export type HostFeatureAgentToolContributionResolver = (input: {
   readonly workspaceRoot: string;
@@ -45,15 +46,12 @@ export function createHostFeatureAgentToolContributionResolver(input: {
   readonly spaces?: Pick<SpaceFeature, "commands" | "queries" | "events">;
   readonly personalKnowledge?: Pick<PersonalKnowledgeFeature, "commands" | "queries">;
   readonly revocationOverlay?: SpaceRevocationOverlay;
-  readonly withSpaceAdmission?: <T>(spaceId: string, operation: () => Promise<T>) => Promise<T>;
-  readonly spaceReferenceContentApplication?: SpaceToolOptions["spaceReferenceContentApplication"];
-  readonly spaceReferenceLifecycleApplication?: SpaceToolOptions["spaceReferenceLifecycleApplication"];
+  readonly spaceReferenceContentApplication: () => SpaceReferenceContentApplication;
+  readonly spaceReferenceLifecycleApplication: () => SpaceReferenceLifecycleApplication;
   readonly deleteSpace?: (spaceId: string) => Promise<void>;
   readonly deleteConversation?: (conversationId: string) => Promise<void>;
   /** Shared application command for software-managed Space folders. */
   readonly managedSpaceFolderApplication?: () => ManagedSpaceFolderApplication<import("../../spaces/index.js").SpaceReferenceItem> | undefined;
-  /** Host-owned file mutation coordinator shared with the file tools. */
-  readonly fileMutationCoordinator?: LocalWorkspaceMutationCoordinator;
   readonly attachWorkspaceDirectory?: (input: {
     readonly spaceId: string;
     readonly path: string;
@@ -61,8 +59,6 @@ export function createHostFeatureAgentToolContributionResolver(input: {
     readonly actor: import("../../spaces/index.js").SpaceReferenceActorRecord;
     readonly annotation?: import("../../spaces/index.js").SpaceReferenceAnnotationInput;
   }) => Promise<import("../../spaces/index.js").SpaceReferenceItem>;
-  readonly detachWorkspaceFromSpace?: (referenceId: string) => Promise<void>;
-  readonly unlinkExternalReference?: (referenceId: string) => Promise<void>;
   readonly resolveWorkspaceDirectory?: (workspaceId: string) => Promise<{
     readonly path: string;
     readonly sourceIdentity: string;
@@ -104,16 +100,12 @@ export function createHostFeatureAgentToolContributionResolver(input: {
           workspaceRoot,
           runContext,
           revocationOverlay,
-           withSpaceAdmission: input.withSpaceAdmission,
-           spaceReferenceContentApplication: input.spaceReferenceContentApplication,
-           spaceReferenceLifecycleApplication: input.spaceReferenceLifecycleApplication,
+           spaceReferenceContentApplication: input.spaceReferenceContentApplication(),
+           spaceReferenceLifecycleApplication: input.spaceReferenceLifecycleApplication(),
           deleteSpace: input.deleteSpace,
           deleteConversation: input.deleteConversation,
           ...(managedSpaceFolderApplication === undefined ? {} : { managedSpaceFolderApplication }),
-          ...(input.fileMutationCoordinator === undefined ? {} : { fileMutationCoordinator: input.fileMutationCoordinator }),
           ...(input.attachWorkspaceDirectory === undefined ? {} : { attachWorkspaceDirectory: input.attachWorkspaceDirectory }),
-          ...(input.detachWorkspaceFromSpace === undefined ? {} : { detachWorkspaceFromSpace: input.detachWorkspaceFromSpace }),
-          ...(input.unlinkExternalReference === undefined ? {} : { unlinkExternalReference: input.unlinkExternalReference }),
           ...(input.resolveWorkspaceDirectory === undefined ? {} : { resolveWorkspaceDirectory: input.resolveWorkspaceDirectory }),
         })]),
     ...(input.personalKnowledge === undefined

@@ -13,7 +13,6 @@ import {
   spaceReferenceWritePermission,
   spaceScopePermission,
 } from "../dist/app/spaces/index.js";
-import { createSpaceCreateEntryTool } from "../dist/app/spaces/space-tools.js";
 import {
   createSpaceReferenceUnlinkService,
   createWorkbenchCoordination,
@@ -52,41 +51,6 @@ test("Write repeats authorization after acquiring the shared path lease", async 
       /reference revoked/u,
     );
     assert.equal(await fs.readFile(filePath, "utf8"), "original");
-  });
-});
-
-test("queued Agent entry mutation re-reads membership inside the lease", async () => {
-  await withTemporaryDirectory(async (directory) => {
-    let linked = true;
-    const item = workspaceReference("reference-1", "workspace-1");
-    const tool = createSpaceCreateEntryTool({
-      spaces: {
-        queries: {
-          async getReference() { return linked ? item : undefined; },
-        },
-        commands: {},
-      },
-      workspaceRoot: directory,
-      assertSpaceAvailable() {},
-      async resolveWorkspaceDirectory() {
-        return { path: directory, sourceIdentity: "source-1", mountVersion: "mount-1" };
-      },
-      fileMutationCoordinator: {
-        async run(_key, operation) {
-          linked = false;
-          return await operation();
-        },
-      },
-    });
-
-    const result = await tool.execute({
-      itemId: item.id,
-      parentRelativePath: "",
-      name: "queued.txt",
-      kind: "file",
-    }, {});
-    assert.equal(result.status, "space_reference_not_found");
-    await assert.rejects(fs.stat(path.join(directory, "queued.txt")), (error) => error?.code === "ENOENT");
   });
 });
 
@@ -223,17 +187,6 @@ test("Workspace reconnect waits for writes under the previous mount", async () =
     assert.equal(reconnects, 1);
   });
 });
-
-function workspaceReference(id, workspaceId) {
-  return {
-    id,
-    spaceId: "space-1",
-    title: "Workspace",
-    reference: { kind: "workspace", workspaceId },
-    createdAt: "2026-01-01T00:00:00.000Z",
-    updatedAt: "2026-01-01T00:00:00.000Z",
-  };
-}
 
 function localFileReference(id, filePath) {
   return {

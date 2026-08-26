@@ -20,8 +20,9 @@ test("Workspace deletion is successful when retried after purge", async () => {
     },
     spaces: {
       commands: { async unlinkReference() {} },
-      queries: { async listReferencesByWorkspace() { return []; } },
+      queries: { async listReferencesByWorkspace() { return []; }, async getReference() { return undefined; } },
     },
+    spaceAdmission: { async admit(_spaceId, operation) { return await operation(); } },
     ordinary: {
       commands: { async deleteConversation() {} },
       queries: { async listConversationsByOwner() { return []; } },
@@ -42,7 +43,7 @@ test("Workspace deletion is successful when retried after purge", async () => {
 
 test("Workspace deletion retries a failed cascade without admitting a new owner", async () => {
   let workspace = { id: "workspace-1", status: "available" };
-  let reference = { id: "reference-1" };
+  let reference = { id: "reference-1", spaceId: "space-1", reference: { kind: "workspace", workspaceId: "workspace-1" } };
   let failUnlink = true;
   const coordinator = createWorkspaceDeletionCoordinator({
     workspaces: {
@@ -62,8 +63,12 @@ test("Workspace deletion retries a failed cascade without admitting a new owner"
           reference = undefined;
         },
       },
-      queries: { async listReferencesByWorkspace() { return reference === undefined ? [] : [reference]; } },
+      queries: {
+        async listReferencesByWorkspace() { return reference === undefined ? [] : [reference]; },
+        async getReference() { return reference; },
+      },
     },
+    spaceAdmission: { async admit(_spaceId, operation) { return await operation(); } },
     ordinary: {
       commands: { async deleteConversation() {} },
       queries: { async listConversationsByOwner() { return []; } },
@@ -82,6 +87,56 @@ test("Workspace deletion retries a failed cascade without admitting a new owner"
   await coordinator.deleteWorkspace("workspace-1");
   assert.equal(workspace, undefined);
   assert.equal(reference, undefined);
+});
+
+test("Workspace deletion rejects a reference that changes Space membership while admission waits", async () => {
+  let workspace = { id: "workspace-1", status: "available" };
+  let reference = { id: "reference-1", spaceId: "space-1", reference: { kind: "workspace", workspaceId: "workspace-1" } };
+  let purged = false;
+  let unlinked = false;
+  const coordinator = createWorkspaceDeletionCoordinator({
+    workspaces: {
+      commands: {
+        async deleteWorkspace() { workspace = { ...workspace, status: "deleting" }; },
+        async purgeWorkspace() { purged = true; workspace = undefined; },
+      },
+      queries: {
+        async get() { return workspace; },
+        async listAll() { return workspace === undefined ? [] : [workspace]; },
+      },
+    },
+    spaces: {
+      commands: { async unlinkReference() { unlinked = true; } },
+      queries: {
+        async listReferencesByWorkspace() { return [reference]; },
+        async getReference() { return reference; },
+      },
+    },
+    spaceAdmission: {
+      async admit(_spaceId, operation) {
+        reference = { ...reference, spaceId: "space-2" };
+        return await operation();
+      },
+    },
+    ordinary: {
+      commands: { async deleteConversation() {} },
+      queries: { async listConversationsByOwner() { return []; } },
+    },
+    agentNotes: { async deleteByOwner() {} },
+    memory: { async deleteByOwner() {} },
+    processes: { async cleanupByConversation() { return emptyCleanup(); } },
+    processTerminator: { async killTree() { return { status: "exited" }; } },
+    async runExclusive(operation) { return await operation(); },
+    async runWorkspaceExclusive(_workspaceId, operation) { return await operation(); },
+  });
+
+  await assert.rejects(
+    coordinator.deleteWorkspace("workspace-1"),
+    (error) => error?.code === "workspace_reference_membership_changed",
+  );
+  assert.equal(coordinator.isDeleting("workspace-1"), true);
+  assert.equal(unlinked, false);
+  assert.equal(purged, false);
 });
 
 test("Space deletion is successful when retried after journal cleanup", async () => {

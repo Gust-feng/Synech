@@ -1,4 +1,3 @@
-import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { ToolDefinition, ToolExecutionContext, ToolExecutor, ToolJsonSchema, ToolJsonSchemaValue } from "../../domain/tools/index.js";
 import { asOptionalRecord, asRecord, stringOrUndefined } from "../../kernel/values/index.js";
@@ -9,15 +8,6 @@ import {
   attachmentEntries,
   resolveAttachmentTarget,
 } from "../tool-center/adapters/context-attachment-access.js";
-import type { LocalWorkspaceMutationCoordinator } from "../tool-center/adapters/local-workspace-mutation-coordinator.js";
-import {
-  createDirectory,
-  createFile,
-  deleteEntry,
-  renameEntry,
-  resolveDestinationWithinRoot,
-  resolveWithinRoot,
-} from "../local-filesystem/index.js";
 import {
   spaceReferenceIdFromAttachmentId,
 } from "./space-file-access.js";
@@ -27,25 +17,28 @@ import {
 } from "./space-external-source.js";
 import { SpaceFeatureError, type SpaceAddableReference, type SpaceFeature, type SpaceReference, type SpaceReferenceActorRecord, type SpaceReferenceAnnotation, type SpaceReferenceAnnotationInput, type SpaceReferenceAnnotationPatch, type SpaceReferenceItem, type SpaceTarget } from "./contracts.js";
 
+type SpaceReferenceContentApplication = {
+  readonly updateCaption: (input: { readonly itemId: string; readonly update: { readonly relativePath: string; readonly expectedFingerprint: string; readonly caption: string }; readonly actor: SpaceReferenceActorRecord }) => Promise<unknown>;
+  readonly createEntry: (input: { readonly itemId: string; readonly parentRelativePath: string; readonly name: string; readonly kind: "file" | "directory" }) => Promise<{ readonly relativePath: string }>;
+  readonly renameEntry: (input: { readonly itemId: string; readonly relativePath: string; readonly name: string }) => Promise<{ readonly relativePath: string }>;
+  readonly deleteEntry: (input: { readonly itemId: string; readonly relativePath: string }) => Promise<void>;
+  readonly updateAnnotation: (input: { readonly itemId: string; readonly expectedRevision: number; readonly patch: SpaceReferenceAnnotationPatch; readonly actor: SpaceReferenceActorRecord }) => Promise<SpaceReferenceItem>;
+};
+
+type SpaceReferenceLifecycleApplication = {
+  readonly addReference: (input: { readonly spaceId: string; readonly title: string; readonly reference: SpaceReference; readonly actor: SpaceReferenceActorRecord; readonly annotation?: SpaceReferenceAnnotationInput }) => Promise<SpaceReferenceItem>;
+  readonly move: (input: { readonly sourceSpaceId: string; readonly target: { readonly kind: "reference"; readonly id: string }; readonly destinationSpaceId: string }) => Promise<void>;
+  readonly rename: (input: { readonly target: SpaceTarget; readonly title: string }) => Promise<unknown>;
+  readonly remove: (input: { readonly itemId: string }) => Promise<void>;
+  readonly unlink: (input: { readonly itemId: string }) => Promise<void>;
+};
+
 export type SpaceToolOptions = {
   readonly spaces: Pick<SpaceFeature, "commands" | "queries">;
   readonly workspaceRoot: string;
   readonly runContext?: ContextAttachmentRunContext;
-  /** Host deletion-coordinator admission for Space-scoped writes. */
-  readonly withSpaceAdmission?: <T>(spaceId: string, operation: () => Promise<T>) => Promise<T>;
-  readonly spaceReferenceContentApplication?: {
-    createEntry(input: { readonly itemId: string; readonly parentRelativePath: string; readonly name: string; readonly kind: "file" | "directory" }): Promise<{ readonly relativePath: string }>;
-    renameEntry(input: { readonly itemId: string; readonly relativePath: string; readonly name: string }): Promise<{ readonly relativePath: string }>;
-    deleteEntry(input: { readonly itemId: string; readonly relativePath: string }): Promise<void>;
-    updateCaption(input: { readonly itemId: string; readonly update: { readonly relativePath?: string; readonly expectedFingerprint: string; readonly caption: string } }): Promise<unknown>;
-  };
-  readonly spaceReferenceLifecycleApplication?: {
-    addReference(input: { readonly spaceId: string; readonly title: string; readonly reference: SpaceReference; readonly actor: SpaceReferenceActorRecord }): Promise<SpaceReferenceItem>;
-    move(input: { readonly sourceSpaceId: string; readonly target: { readonly kind: "reference"; readonly id: string }; readonly destinationSpaceId: string }): Promise<void>;
-    rename(input: { readonly target: SpaceTarget; readonly title: string }): Promise<unknown>;
-    remove(input: { readonly itemId: string }): Promise<void>;
-    unlink(input: { readonly itemId: string }): Promise<void>;
-  };
+  readonly spaceReferenceContentApplication: SpaceReferenceContentApplication;
+  readonly spaceReferenceLifecycleApplication: SpaceReferenceLifecycleApplication;
   /** Host-owned durable Space deletion workflow. */
   readonly deleteSpace?: (spaceId: string) => Promise<void>;
   /** Host-owned durable Conversation deletion workflow. */
@@ -54,8 +47,6 @@ export type SpaceToolOptions = {
   readonly revocationOverlay?: SpaceRevocationOverlay;
   /** Shared application command for software-managed Space folders. */
   readonly managedSpaceFolderApplication?: ManagedSpaceFolderApplication<SpaceReferenceItem>;
-  /** Host-owned file mutation coordinator shared with the file tools. */
-  readonly fileMutationCoordinator?: LocalWorkspaceMutationCoordinator;
   /** Filesystem source inspector; defaults to the real filesystem. */
   readonly externalSourceInspector?: SpaceExternalSourceInspector;
   /** Application command for atomically attaching a complete directory through an implicit Workspace. */
@@ -66,9 +57,6 @@ export type SpaceToolOptions = {
     readonly actor: SpaceReferenceActorRecord;
     readonly annotation?: SpaceReferenceAnnotationInput;
   }) => Promise<SpaceReferenceItem>;
-  readonly detachWorkspaceFromSpace?: (referenceId: string) => Promise<void>;
-  /** Shared application service used by Agent and HTTP unlink adapters. */
-  readonly unlinkExternalReference?: (referenceId: string) => Promise<void>;
   /** Host composition for resolving a Space Workspace relationship to its current active mount. */
   readonly resolveWorkspaceDirectory?: (workspaceId: string) => Promise<{
     readonly path: string;
@@ -202,10 +190,11 @@ export function createSpaceMoveTool(options: SpaceToolOptions): ToolExecutor {
         };
       }
       return resultFor(
-        () => options.spaceReferenceLifecycleApplication !== undefined
-          ? options.spaceReferenceLifecycleApplication.move({ sourceSpaceId: item.spaceId, target: { kind: "reference", id: target.id }, destinationSpaceId }).then(() => undefined)
-          : withSpaceAdmissions(options, [item.spaceId, destinationSpaceId], async () =>
-            await options.spaces.commands.move({ target, destinationSpaceId })),
+        () => options.spaceReferenceLifecycleApplication.move({
+          sourceSpaceId: item.spaceId,
+          target: { kind: "reference", id: target.id },
+          destinationSpaceId,
+        }).then(() => undefined),
         () => ({ status: "moved", target, destinationSpaceId }),
       );
     },
@@ -246,10 +235,13 @@ export function createSpaceAddReferenceTool(options: SpaceToolOptions): ToolExec
         );
       }
       return resultFor(
-        () => options.spaceReferenceLifecycleApplication !== undefined
-          ? options.spaceReferenceLifecycleApplication.addReference({ spaceId, title, reference: resolution.reference, actor })
-          : withSpaceAdmission(options, spaceId, async () =>
-            await options.spaces.commands.addReference({ spaceId, title, reference: resolution.reference, ...(annotation === undefined ? {} : { annotation }), actor })),
+        () => options.spaceReferenceLifecycleApplication.addReference({
+          spaceId,
+          title,
+          reference: resolution.reference,
+          actor,
+          ...(annotation === undefined ? {} : { annotation }),
+        }),
         (item) => ({ status: "added", item: spaceReferenceModelView(item), annotationStatus: item.annotation === undefined ? "missing" : "written" }),
       );
     },
@@ -301,10 +293,7 @@ export function createSpaceMountLocalPathTool(options: SpaceToolOptions): ToolEx
       return resultFor(
         () => targetKind === "folder"
           ? options.attachWorkspaceDirectory!({ spaceId, path: absolutePath, title, actor: agentActor(context) })
-          : options.spaceReferenceLifecycleApplication !== undefined
-            ? options.spaceReferenceLifecycleApplication.addReference({ spaceId, title, reference: { kind: "local_file", path: absolutePath }, actor: agentActor(context) })
-            : withSpaceAdmission(options, spaceId, async () =>
-              await options.spaces.commands.addReference({ spaceId, title, reference: { kind: "local_file", path: absolutePath }, actor: agentActor(context) })),
+          : options.spaceReferenceLifecycleApplication.addReference({ spaceId, title, reference: { kind: "local_file", path: absolutePath }, actor: agentActor(context) }),
         (item) => ({
           status: "added",
           item: spaceReferenceModelView(item),
@@ -369,23 +358,10 @@ export function createSpaceCreateEntryTool(options: SpaceToolOptions): ToolExecu
       if (!validEntryName(name)) return invalid("name is invalid.");
       const relativePath = joinEntryPath(parentRelativePath, name);
       if (relativePath === undefined) return invalid("parentRelativePath is invalid.");
-      if (options.spaceReferenceContentApplication !== undefined) {
-        return resultFor(
-          () => options.spaceReferenceContentApplication!.createEntry({ itemId, parentRelativePath, name, kind }),
-          (result) => ({ status: "created", itemId, relativePath: result.relativePath }),
-        );
-      }
-      return mutateEntry(options, itemId, async (_current, rootPath) => {
-        let target: string;
-        try {
-          target = await resolveDestinationWithinRoot(rootPath, relativePath);
-        } catch {
-          return { status: "space_reference_entry_path_invalid", itemId, message: "The entry path is outside the reference root." };
-        }
-        const result = kind === "directory" ? await createDirectory(target) : await createFile(target);
-        if (!result.ok) return entryResultError(result.error.kind, itemId);
-        return { status: "created", itemId, relativePath };
-      });
+      return resultFor(
+        () => options.spaceReferenceContentApplication.createEntry({ itemId, parentRelativePath, name, kind }),
+        (result) => ({ status: "created", itemId, relativePath: result.relativePath }),
+      );
     },
   });
 }
@@ -411,32 +387,10 @@ export function createSpaceRenameEntryTool(options: SpaceToolOptions): ToolExecu
       }
       if (relativePath.length === 0) return invalid("relativePath cannot be the reference root.");
       if (!validEntryName(name)) return invalid("name is invalid.");
-      if (options.spaceReferenceContentApplication !== undefined) {
-        return resultFor(
-          () => options.spaceReferenceContentApplication!.renameEntry({ itemId, relativePath, name }),
-          (result) => ({ status: "renamed", itemId, relativePath: result.relativePath }),
-        );
-      }
-      return mutateEntry(options, itemId, async (_current, rootPath) => {
-        let source: string;
-        try {
-          source = await resolveWithinRoot(rootPath, relativePath);
-        } catch {
-          return { status: "space_reference_entry_path_invalid", itemId, message: "The entry path is outside the reference root." };
-        }
-        const parentRelativePath = path.posix.dirname(relativePath);
-        const destinationRelativePath = joinEntryPath(parentRelativePath === "." ? "" : parentRelativePath, name);
-        if (destinationRelativePath === undefined) return invalid("name is invalid.");
-        let destination: string;
-        try {
-          destination = await resolveDestinationWithinRoot(rootPath, destinationRelativePath);
-        } catch {
-          return { status: "space_reference_entry_path_invalid", itemId, message: "The destination is outside the reference root." };
-        }
-        const result = await renameEntry(source, destination);
-        if (!result.ok) return entryResultError(result.error.kind, itemId);
-        return { status: "renamed", itemId, relativePath: destinationRelativePath };
-      });
+      return resultFor(
+        () => options.spaceReferenceContentApplication.renameEntry({ itemId, relativePath, name }),
+        (result) => ({ status: "renamed", itemId, relativePath: result.relativePath }),
+      );
     },
   });
 }
@@ -457,23 +411,10 @@ export function createSpaceDeleteEntryTool(options: SpaceToolOptions): ToolExecu
       const relativePath = stringOrUndefined(record.relativePath);
       if (itemId === undefined || relativePath === undefined) return invalid("itemId and relativePath are required.");
       if (relativePath.length === 0) return invalid("relativePath cannot be the reference root.");
-      if (options.spaceReferenceContentApplication !== undefined) {
-        return resultFor(
-          async () => { await options.spaceReferenceContentApplication!.deleteEntry({ itemId, relativePath }); return { status: "deleted", itemId, relativePath }; },
-          (result) => result,
-        );
-      }
-      return mutateEntry(options, itemId, async (_current, rootPath) => {
-        let source: string;
-        try {
-          source = await resolveWithinRoot(rootPath, relativePath);
-        } catch {
-          return { status: "space_reference_entry_path_invalid", itemId, message: "The entry path is outside the reference root." };
-        }
-        const result = await deleteEntry(source);
-        if (!result.ok) return entryResultError(result.error.kind, itemId);
-        return { status: "deleted", itemId, relativePath };
-      });
+      return resultFor(
+        async () => { await options.spaceReferenceContentApplication.deleteEntry({ itemId, relativePath }); return { status: "deleted", itemId, relativePath }; },
+        (result) => result,
+      );
     },
   });
 }
@@ -514,43 +455,16 @@ export function createSpaceUpdateCaptionTool(options: SpaceToolOptions): ToolExe
         return { status: "space_reference_source_missing", itemId, message: "The source path no longer exists or was replaced." };
       }
       const expectedRevision = item.imageCaptions?.[relativePath]?.revision ?? 0;
-      if (options.spaceReferenceContentApplication !== undefined) {
-        return resultFor(
-          () => options.spaceReferenceContentApplication!.updateCaption({ itemId, update: { relativePath, expectedFingerprint: `space-image-caption:${expectedRevision}`, caption } }),
-          () => ({ status: "updated", itemId, revision: expectedRevision + 1 }),
-        );
-      }
       return resultFor(
-        () => withSpaceAdmission(options, item.spaceId, async () =>
-          await options.spaces.commands.updateReferenceImageCaption({
-            itemId,
-            relativePath,
-            expectedRevision,
-            text: caption,
-            actor: agentActor(context),
-          })),
-        (updated) => {
-          const current = updated.imageCaptions?.[relativePath];
-          return {
-            status: "updated",
-            itemId,
-            relativePath,
-            ...(current === undefined ? {} : { caption: spaceImageCaptionModelView(current) }),
-          };
-        },
+        () => options.spaceReferenceContentApplication.updateCaption({
+          itemId,
+          update: { relativePath, expectedFingerprint: `space-image-caption:${expectedRevision}`, caption },
+          actor: agentActor(context),
+        }),
+        () => ({ status: "updated", itemId, revision: expectedRevision + 1 }),
       );
     },
   });
-}
-
-/** 模型可见的 image caption 投影：剥离 actor 审计字段，保留内容与版本事实。 */
-function spaceImageCaptionModelView(caption: NonNullable<SpaceReferenceItem["imageCaptions"]>[string]) {
-  return {
-    revision: caption.revision,
-    text: caption.text,
-    updatedAt: caption.updatedAt,
-    updatedBy: caption.updatedBy,
-  };
 }
 
 const mountMetadata = { category: "workspace", riskLevel: "medium", operationType: "read-write", requiresConfirmation: true } as const;
@@ -592,8 +506,7 @@ export function createSpaceUpdateReferenceAnnotationTool(options: SpaceToolOptio
       const patch = annotationPatchFromRecord(record);
       if (patch === undefined) return invalid("At least one content field (markdown, keyPoints or tags) is required.");
       return resultFor(
-        () => withSpaceAdmission(options, item.spaceId, async () =>
-          await options.spaces.commands.updateReferenceAnnotation({ itemId, expectedRevision, patch, actor: agentActor(context) })),
+        () => options.spaceReferenceContentApplication.updateAnnotation({ itemId, expectedRevision, patch, actor: agentActor(context) }),
         (updated) => ({ status: "updated", item: spaceReferenceModelView(updated) }),
       );
     },
@@ -619,15 +532,8 @@ export function createSpaceUnlinkReferenceTool(options: SpaceToolOptions): ToolE
           message: "Space-owned materials must be deleted through their material workflow.",
         };
       }
-      const unlink = options.spaceReferenceLifecycleApplication !== undefined
-        ? () => options.spaceReferenceLifecycleApplication!.unlink({ itemId })
-        : options.unlinkExternalReference !== undefined
-          ? () => options.unlinkExternalReference!(itemId)
-        : item.reference.kind === "workspace" && options.detachWorkspaceFromSpace !== undefined
-          ? () => options.detachWorkspaceFromSpace!(itemId)
-          : () => withSpaceAdmission(options, item.spaceId, async () => await options.spaces.commands.unlinkReference(itemId));
       return resultFor(
-        unlink,
+        () => options.spaceReferenceLifecycleApplication.unlink({ itemId }),
         () => ({ status: "unlinked", itemId }),
       );
     },
@@ -654,9 +560,7 @@ export function createSpaceRemoveReferenceTool(options: SpaceToolOptions): ToolE
         };
       }
       return resultFor(
-        () => options.spaceReferenceLifecycleApplication !== undefined
-          ? options.spaceReferenceLifecycleApplication.remove({ itemId })
-          : withSpaceAdmission(options, item.spaceId, async () => await options.spaces.commands.removeReference(itemId)),
+        () => options.spaceReferenceLifecycleApplication.remove({ itemId }),
         () => ({ status: "removed", itemId }),
       );
     },
@@ -680,37 +584,11 @@ export function createSpaceRenameTool(options: SpaceToolOptions): ToolExecutor {
       })();
       if (spaceId === undefined) return { status: "space_reference_not_found", itemId: target.id };
       return resultFor(
-        () => options.spaceReferenceLifecycleApplication !== undefined
-          ? options.spaceReferenceLifecycleApplication.rename({ target, title }).then(() => undefined)
-          : withSpaceAdmission(options, spaceId, async () => await options.spaces.commands.rename({ target, title })),
+        () => options.spaceReferenceLifecycleApplication.rename({ target, title }).then(() => undefined),
         () => ({ status: "renamed", target, title }),
       );
     },
   });
-}
-
-async function withSpaceAdmission<T>(
-  options: SpaceToolOptions,
-  spaceId: string,
-  operation: () => Promise<T>,
-): Promise<T> {
-  return options.withSpaceAdmission === undefined
-    ? await operation()
-    : await options.withSpaceAdmission(spaceId, operation);
-}
-
-async function withSpaceAdmissions<T>(
-  options: SpaceToolOptions,
-  spaceIds: readonly string[],
-  operation: () => Promise<T>,
-): Promise<T> {
-  const ordered = [...new Set(spaceIds)].sort();
-  const admit = async (index: number): Promise<T> => {
-    const spaceId = ordered[index];
-    if (spaceId === undefined) return await operation();
-    return await withSpaceAdmission(options, spaceId, async () => await admit(index + 1));
-  };
-  return await admit(0);
 }
 
 type ToolSpec = {
@@ -957,122 +835,6 @@ function isExpectedSpaceOperationError(code: SpaceFeatureError["code"]): boolean
     || code === "space_reference_image_caption_invalid"
     || code === "space_reference_image_caption_revision_conflict"
     || code === "space_reference_image_caption_too_large";
-}
-
-/** 引用内条目操作允许的 folder 引用形态（kind 已收窄为可写文件夹）。 */
-type MutableFolderReferenceItem = SpaceReferenceItem & {
-  readonly reference:
-    | { readonly kind: "workspace"; readonly workspaceId: string }
-    | { readonly kind: "managed_folder"; readonly path: string };
-};
-type MutableFolderResolution = {
-  readonly item: MutableFolderReferenceItem;
-  readonly rootPath: string;
-  readonly sourceIdentity?: string;
-  readonly mountVersion?: string;
-};
-
-/**
- * 解析引用内条目操作的目标引用：必须存在、空间可用、kind 为
- * Workspace / managed_folder、引用根当前有效。失效 Workspace 保留 Space 关系。
- */
-async function requireMutableFolderReference(
-  options: SpaceToolOptions,
-  itemId: string,
-): Promise<MutableFolderResolution | { readonly error: Readonly<Record<string, unknown>> }> {
-  const item = await options.spaces.queries.getReference(itemId);
-  if (item === undefined) return { error: { status: "space_reference_not_found", itemId } };
-  const reference = item.reference;
-  if (reference.kind !== "workspace" && reference.kind !== "managed_folder") {
-    return {
-      error: {
-        status: "space_reference_entry_mutation_unavailable",
-        itemId,
-        message: "Only workspace folder and managed folder references support entries.",
-      },
-    };
-  }
-  const workspace = reference.kind === "workspace"
-    ? await options.resolveWorkspaceDirectory?.(reference.workspaceId)
-    : undefined;
-  const rootPath = reference.kind === "workspace" ? workspace?.path : reference.path;
-  const stat = rootPath === undefined ? undefined : await fs.stat(rootPath).catch(() => undefined);
-  if (rootPath === undefined || stat?.isDirectory() !== true) {
-    return {
-      error: {
-        status: "space_reference_source_missing",
-        itemId,
-        message: "The Workspace is disconnected or the managed folder is missing; the Space reference was preserved.",
-      },
-    };
-  }
-  return {
-    item: { ...item, reference },
-    rootPath,
-    ...(workspace === undefined ? {} : {
-      sourceIdentity: workspace.sourceIdentity,
-      mountVersion: workspace.mountVersion,
-    }),
-  };
-}
-
-/** 条目变更获得共享 lease 后重新读取 membership 与 Workspace mount。 */
-async function mutateEntry(
-  options: SpaceToolOptions,
-  itemId: string,
-  operation: (item: MutableFolderReferenceItem, rootPath: string) => Promise<unknown>,
-): Promise<unknown> {
-  const initial = await requireMutableFolderReference(options, itemId);
-  if ("error" in initial) return initial.error;
-  const run = options.fileMutationCoordinator === undefined
-    ? async (locked: () => Promise<unknown>) => await locked()
-    : async (locked: () => Promise<unknown>) =>
-        await options.fileMutationCoordinator!.run(initial.rootPath, locked);
-  return await withSpaceAdmission(options, initial.item.spaceId, async () =>
-    await run(async () => {
-      const current = await requireMutableFolderReference(options, itemId);
-      if ("error" in current) return current.error;
-      if (!sameMutableFolderSource(initial, current)) {
-        return {
-          status: "space_reference_source_changed",
-          itemId,
-          message: "The reference source changed while the filesystem mutation was waiting.",
-        };
-      }
-      return await operation(current.item, current.rootPath);
-    }));
-}
-
-function sameMutableFolderSource(
-  left: MutableFolderResolution,
-  right: MutableFolderResolution,
-): boolean {
-  const leftPath = path.resolve(left.rootPath);
-  const rightPath = path.resolve(right.rootPath);
-  const samePath = process.platform === "win32"
-    ? leftPath.toLowerCase() === rightPath.toLowerCase()
-    : leftPath === rightPath;
-  return samePath
-    && left.item.reference.kind === right.item.reference.kind
-    && (left.item.reference.kind !== "workspace" || (
-      right.item.reference.kind === "workspace" &&
-      left.item.reference.workspaceId === right.item.reference.workspaceId
-    ))
-    && left.sourceIdentity === right.sourceIdentity
-    && left.mountVersion === right.mountVersion;
-}
-
-function entryResultError(
-  kind: string,
-  itemId: string,
-): Readonly<Record<string, unknown>> {
-  if (kind === "not_found") {
-    return { status: "space_reference_source_missing", itemId, message: "The entry does not exist anymore." };
-  }
-  if (kind === "already_exists") {
-    return { status: "space_reference_entry_exists", itemId, message: "An entry with this name already exists in the same folder." };
-  }
-  return { status: "space_reference_mutation_failed", itemId, message: "The filesystem mutation failed." };
 }
 
 function validEntryName(name: string): boolean {

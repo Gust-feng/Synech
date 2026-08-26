@@ -279,7 +279,7 @@ export async function handlePanelSpaceRoute(
       writeJson(response, 200, { ok: true, preview });
       return true;
     }
-    const preview = await runtime.spaceReferenceContentApplication.updateCaption({ itemId: item.id, update: input });
+    const preview = await runtime.spaceReferenceContentApplication.updateCaption({ itemId: item.id, update: input, actor: { kind: "user" } });
     writeJson(response, 200, { ok: true, preview });
     return true;
   }

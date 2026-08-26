@@ -148,7 +148,11 @@ import {
   resolveSubAgentRoots,
 } from "./storage/runtime-asset-roots.js";
 import { createApplicationRuntime } from "./composition/workbench-coordination-runtime.js";
-import { createSpaceReferenceContentApplication, type SpaceReferenceContentApplication } from "../application/space-reference-content-application.js";
+import {
+  createSpaceReferenceContentApplication,
+  SpaceReferenceContentApplicationError,
+  type SpaceReferenceContentApplication,
+} from "../application/space-reference-content-application.js";
 import { createSpaceReferenceLifecycleApplication, type SpaceReferenceLifecycleApplication } from "../application/space-reference-lifecycle-application.js";
 import type { ManagedSpaceFolderApplication } from "../../domain/managed-space-folder.js";
 import {
@@ -546,10 +550,10 @@ function assemblePanelHost(input: {
     spaces: spaceFeature,
     personalKnowledge: personalKnowledgeFeature,
     revocationOverlay: spaceRevocationOverlay,
-    withSpaceAdmission: (spaceId, operation) => spaceConversationDeletion.admit(spaceId, operation),
+    spaceReferenceContentApplication: () => spaceReferenceContentApplication,
+    spaceReferenceLifecycleApplication: () => spaceReferenceLifecycleApplication,
     deleteSpace: (spaceId) => workbenchCoordination.commands.deleteSpace(spaceId),
     deleteConversation: (conversationId) => conversationLifecycle.deleteConversation(conversationId),
-    fileMutationCoordinator,
     managedSpaceFolderApplication: () => managedSpaceFolderApplication,
     attachWorkspaceDirectory: async ({ spaceId, path: workspacePath, title, actor, annotation }) =>
       (await workbenchCoordination.commands.attachWorkspaceToSpace({
@@ -559,9 +563,6 @@ function assemblePanelHost(input: {
         actor,
         ...(annotation === undefined ? {} : { annotation }),
       })).item,
-    detachWorkspaceFromSpace: (referenceId) =>
-      workbenchCoordination.commands.detachWorkspaceFromSpace(referenceId),
-    unlinkExternalReference: (referenceId) => spaceReferenceUnlink.unlink(referenceId),
     resolveWorkspaceDirectory: async (workspaceId) => {
       const workspace = await workspaceFeature.queries.get(workspaceId);
       const mount = workspace?.status === "available"
@@ -768,25 +769,34 @@ function assemblePanelHost(input: {
     resolveFilesystemReference: (item) => resolveSpaceFilesystemReference({ workspaceFeature }, item),
     operations: {
       updateText: (item, input, resolved) => updatePanelSpaceReferenceText(item, input, undefined, resolved),
-      updateCaption: async (item, input, resolved) => {
+      updateCaption: async (item, input, actor, resolved) => {
         const relativePath = input.relativePath ?? "";
         const current = await createPanelDocumentPreview(item, relativePath, undefined, undefined, resolved);
         if (current.content.kind !== "media" || current.content.mediaKind !== "image" || current.content.captionEditable !== true) {
-          throw new Error("space_reference_caption_unavailable");
+          throw new SpaceReferenceContentApplicationError("space_reference_caption_unavailable", "Only image references support editable captions.");
         }
         const match = /^space-image-caption:(\d+)$/u.exec(input.expectedFingerprint);
-        if (match === null) throw new Error("space_reference_image_caption_revision_conflict");
-        const updated = await spaceFeature.commands.updateReferenceImageCaption({ itemId: item.id, relativePath, expectedRevision: Number(match[1]), text: input.caption, actor: { kind: "user" } });
+        if (match === null) throw new SpaceReferenceContentApplicationError("space_reference_image_caption_revision_conflict", "The image caption revision changed while the mutation was waiting.");
+        const updated = await spaceFeature.commands.updateReferenceImageCaption({ itemId: item.id, relativePath, expectedRevision: Number(match[1]), text: input.caption, actor });
         return await createPanelDocumentPreview(updated, relativePath, undefined, undefined, resolved);
       },
       createEntry: (item, input, resolved) => createPanelSpaceReferenceEntry(item, input, resolved),
       renameEntry: (item, input, resolved) => renamePanelSpaceReferenceEntry(item, input, resolved),
       deleteEntry: (item, relativePath, resolved) => deletePanelSpaceReferenceEntry(item, relativePath, resolved),
+      updateAnnotation: (item, expectedRevision, patch, actor) => spaceFeature.commands.updateReferenceAnnotation({
+        itemId: item.id,
+        expectedRevision,
+        patch,
+        actor,
+      }),
     },
   });
   spaceReferenceLifecycleApplication = createSpaceReferenceLifecycleApplication({
     spaceFeature,
-    spaceAdmission: { admit: (spaceId, operation) => spaceConversationDeletion.admit(spaceId, operation) },
+    spaceAdmission: {
+      assertAvailable: (spaceId) => spaceConversationDeletion.assertAvailable(spaceId),
+      admit: (spaceId, operation) => spaceConversationDeletion.admit(spaceId, operation),
+    },
     unlinkExternalReference: (itemId) => spaceReferenceUnlink.unlink(itemId),
   });
 

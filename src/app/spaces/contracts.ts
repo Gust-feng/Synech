@@ -124,6 +124,7 @@ export type SpaceFeatureErrorCode =
   | "space_feature_released"
   | "space_not_found"
   | "space_reference_not_found"
+  | "space_reference_membership_changed"
   | "space_invalid_move"
   | "space_workspace_mount_conflict"
   | "space_asset_ownership_conflict"
