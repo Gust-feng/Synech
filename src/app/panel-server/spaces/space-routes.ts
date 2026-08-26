@@ -3,11 +3,10 @@ import path from "node:path";
 import { z } from "zod";
 import type { DocumentCaptionUpdateInput, DocumentTextUpdateInput } from "../../panel-api/workbench.js";
 import { normalizeRelativePath } from "../../local-filesystem/index.js";
-import type { SpaceAddableReference, SpaceFeature, SpaceFeatureError, SpaceReferenceItem, SpaceTarget } from "../../spaces/index.js";
+import type { SpaceDirectReference, SpaceFeature, SpaceFeatureError, SpaceReferenceItem, SpaceTarget } from "../../spaces/index.js";
 import type { WorkspaceFeature } from "../../workspaces/index.js";
 import type { WorkbenchCoordination } from "../../workbench-coordination/index.js";
 import type { ManagedAssetsFeature } from "../../managed-assets/index.js";
-import type { LocalWorkspaceMutationCoordinator } from "../../tool-center/adapters/local-workspace-mutation-coordinator.js";
 import { PanelHttpError, readJsonBody, writeJson } from "../http-utils.js";
 import type { PanelExternalResourceTarget } from "../types.js";
 import type { SpaceConversationDeletionCoordinator } from "./space-conversation-coordinator.js";
@@ -54,7 +53,6 @@ const DOCUMENT_TEXT_REQUEST_MAX_CHARS = (512 * 1024 + 4_096 + 512) * 6 + 4_096;
 
 export type SpaceReferenceRouteDependencies = {
   readonly spaceFeature: {
-    readonly commands: Pick<SpaceFeature["commands"], "addReference" | "move" | "rename" | "unlinkReference" | "removeReference" | "refreshReferenceSourceIdentity" | "updateReferenceImageCaption">;
     readonly queries: Pick<SpaceFeature["queries"], "getTree" | "getReference">;
   };
   readonly workspaceFeature: {
@@ -65,11 +63,9 @@ export type SpaceReferenceRouteDependencies = {
     readonly commands: Pick<WorkbenchCoordination["commands"], "attachWorkspaceToSpace">;
   };
   readonly managedSpaceFolderApplication: ManagedSpaceFolderApplication<SpaceReferenceItem>;
-  readonly unlinkExternalReference: (referenceId: string) => Promise<void>;
   readonly spaceReferenceContentApplication: SpaceReferenceContentApplication;
   readonly spaceReferenceLifecycleApplication: SpaceReferenceLifecycleApplication;
-  readonly spaceConversationDeletion: Pick<SpaceConversationDeletionCoordinator, "assertAvailable" | "admit">;
-  readonly fileMutationCoordinator: Pick<LocalWorkspaceMutationCoordinator, "run" | "runExclusive">;
+  readonly spaceConversationDeletion: Pick<SpaceConversationDeletionCoordinator, "assertAvailable">;
   readonly flushSpaceKnowledgeSync: () => Promise<void>;
   readonly externalResourceOpener?: (target: PanelExternalResourceTarget) => Promise<void>;
   readonly managedAssets: {
@@ -310,8 +306,8 @@ function isMovableSpaceMaterial(item: SpaceReferenceItem): boolean {
 }
 
 function absoluteLocalReference(
-  reference: Exclude<SpaceAddableReference, { readonly kind: "workspace" }>,
-): Exclude<SpaceAddableReference, { readonly kind: "workspace" }> {
+  reference: SpaceDirectReference,
+): SpaceDirectReference {
   return reference.kind === "local_file"
     ? { ...reference, path: path.resolve(reference.path) }
     : reference;

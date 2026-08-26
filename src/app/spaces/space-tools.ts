@@ -15,24 +15,27 @@ import {
   inspectSpaceExternalSource,
   type SpaceExternalSourceInspector,
 } from "./space-external-source.js";
-import { SpaceFeatureError, type SpaceAddableReference, type SpaceFeature, type SpaceReference, type SpaceReferenceActorRecord, type SpaceReferenceAnnotation, type SpaceReferenceAnnotationInput, type SpaceReferenceAnnotationPatch, type SpaceReferenceItem, type SpaceTarget } from "./contracts.js";
+import { SpaceFeatureError, type SpaceDirectReference, type SpaceFeature, type SpaceReference, type SpaceReferenceActorRecord, type SpaceReferenceAnnotation, type SpaceReferenceAnnotationInput, type SpaceReferenceAnnotationPatch, type SpaceReferenceItem, type SpaceTarget } from "./contracts.js";
 import { SpaceReferenceContentApplicationError } from "../space-reference-contracts/application-error.js";
+import type {
+  SpaceReferenceContentApplicationPort,
+  SpaceReferenceLifecycleApplicationPort,
+} from "../space-reference-contracts/application-port.js";
 
-type SpaceReferenceContentApplication = {
-  readonly updateCaption: (input: { readonly itemId: string; readonly update: { readonly relativePath: string; readonly expectedFingerprint: string; readonly caption: string }; readonly actor: SpaceReferenceActorRecord }) => Promise<unknown>;
-  readonly createEntry: (input: { readonly itemId: string; readonly parentRelativePath: string; readonly name: string; readonly kind: "file" | "directory" }) => Promise<{ readonly relativePath: string }>;
-  readonly renameEntry: (input: { readonly itemId: string; readonly relativePath: string; readonly name: string }) => Promise<{ readonly relativePath: string }>;
-  readonly deleteEntry: (input: { readonly itemId: string; readonly relativePath: string }) => Promise<void>;
-  readonly updateAnnotation: (input: { readonly itemId: string; readonly expectedRevision: number; readonly patch: SpaceReferenceAnnotationPatch; readonly actor: SpaceReferenceActorRecord }) => Promise<SpaceReferenceItem>;
-};
+type SpaceReferenceContentApplication = SpaceReferenceContentApplicationPort<
+  unknown,
+  SpaceReferenceItem,
+  SpaceReferenceActorRecord,
+  SpaceReferenceAnnotationPatch
+>;
 
-type SpaceReferenceLifecycleApplication = {
-  readonly addReference: (input: { readonly spaceId: string; readonly title: string; readonly reference: Exclude<SpaceReference, { readonly kind: "workspace" }>; readonly actor: SpaceReferenceActorRecord; readonly annotation?: SpaceReferenceAnnotationInput }) => Promise<SpaceReferenceItem>;
-  readonly move: (input: { readonly sourceSpaceId: string; readonly target: { readonly kind: "reference"; readonly id: string }; readonly destinationSpaceId: string }) => Promise<void>;
-  readonly rename: (input: { readonly target: SpaceTarget; readonly title: string }) => Promise<unknown>;
-  readonly remove: (input: { readonly itemId: string }) => Promise<void>;
-  readonly unlink: (input: { readonly itemId: string }) => Promise<void>;
-};
+type SpaceReferenceLifecycleApplication = SpaceReferenceLifecycleApplicationPort<
+  SpaceDirectReference,
+  SpaceReferenceItem,
+  SpaceTarget,
+  SpaceReferenceActorRecord,
+  SpaceReferenceAnnotationInput
+>;
 
 export type SpaceToolOptions = {
   readonly spaces: Pick<SpaceFeature, "commands" | "queries">;
@@ -739,7 +742,7 @@ function movableTarget(kind: unknown, id: unknown): { readonly kind: "reference"
 }
 
 type AgentSpaceReferenceResolution =
-  | { readonly reference: Exclude<SpaceAddableReference, { readonly kind: "workspace" }> }
+  | { readonly reference: SpaceDirectReference }
   | { readonly workspacePath: string }
   | { readonly error: Readonly<Record<string, unknown>> };
 

@@ -15,6 +15,7 @@ export {
   type SpaceFeature,
   type SpaceFeatureErrorCode,
   type SpaceAddableReference,
+  type SpaceDirectReference,
   type SpaceExternalFileReference,
   type SpaceOwnedAssetDeletionPort,
   type SpaceMovableTarget,

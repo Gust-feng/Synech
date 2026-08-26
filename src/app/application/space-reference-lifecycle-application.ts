@@ -4,18 +4,19 @@ import {
   type SpaceReferenceActorRecord,
   type SpaceReferenceAnnotationInput,
   type SpaceReferenceItem,
-  type SpaceAddableReference,
+  type SpaceDirectReference,
   type SpaceTarget,
 } from "../spaces/index.js";
 import { withOrderedSpaceAdmissions, type SpaceAdmission } from "../ownership/admission.js";
+import type { SpaceReferenceLifecycleApplicationPort } from "../space-reference-contracts/application-port.js";
 
-export type SpaceReferenceLifecycleApplication = {
-  addReference(input: { readonly spaceId: string; readonly title: string; readonly reference: Exclude<SpaceAddableReference, { readonly kind: "workspace" }>; readonly actor: SpaceReferenceActorRecord; readonly annotation?: SpaceReferenceAnnotationInput }): Promise<SpaceReferenceItem>;
-  move(input: { readonly sourceSpaceId: string; readonly target: { readonly kind: "reference"; readonly id: string }; readonly destinationSpaceId: string }): Promise<void>;
-  rename(input: { readonly target: SpaceTarget; readonly title: string }): Promise<SpaceTarget | undefined>;
-  remove(input: { readonly itemId: string }): Promise<void>;
-  unlink(input: { readonly itemId: string }): Promise<void>;
-};
+export type SpaceReferenceLifecycleApplication = SpaceReferenceLifecycleApplicationPort<
+  SpaceDirectReference,
+  SpaceReferenceItem,
+  SpaceTarget,
+  SpaceReferenceActorRecord,
+  SpaceReferenceAnnotationInput
+>;
 
 export type SpaceReferenceLifecycleApplicationDependencies = {
   readonly spaceFeature: Pick<SpaceFeature, "commands" | "queries">;

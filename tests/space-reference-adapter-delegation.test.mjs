@@ -7,7 +7,8 @@ import { createSpaceCreateEntryTool, createSpaceMoveTool } from "../dist/app/spa
 import { SpaceFeatureError } from "../dist/app/spaces/index.js";
 import { SpaceReferenceContentApplicationError } from "../dist/app/application/space-reference-content-application.js";
 import { spaceReferenceContentApplicationHttpError } from "../dist/app/panel-server/request-handler.js";
-import { panelSpaceReferenceContentOperationError } from "../dist/app/panel-server/panel-host.js";
+import { createSpaceReferenceApplicationRuntime } from "../dist/app/panel-server/composition/space-reference-application-runtime.js";
+import { panelSpaceReferenceContentOperationError } from "../dist/app/panel-server/spaces/panel-space-reference-content-adapter.js";
 import { PanelHttpError } from "../dist/app/panel-server/http-utils.js";
 
 const reference = {
@@ -131,6 +132,53 @@ test("Panel composition and HTTP preserve declared Space Reference error facts",
     "space_reference_membership_changed",
     "Membership changed.",
   )).statusCode, 409);
+});
+
+test("Space Reference composition wires shared Applications to owner commands", async () => {
+  const calls = [];
+  const item = { ...reference, reference: { kind: "web_page", url: "https://example.test" } };
+  const runtime = createSpaceReferenceApplicationRuntime({
+    spaces: {
+      commands: {
+        async addReference(input) { calls.push({ kind: "add", input }); return item; },
+        async updateReferenceAnnotation(input) { calls.push({ kind: "annotation", input }); return item; },
+        async unlinkReference() {},
+      },
+      queries: {
+        async getReference() { return item; },
+        async getTree() { return { entries: [{ item }] }; },
+      },
+    },
+    workspaces: {},
+    managedAssets: { commands: {} },
+    admission: {
+      assertAvailable() {},
+      async admit(_spaceId, operation) { return await operation(); },
+    },
+    coordination: { commands: {} },
+    mutations: {
+      async run(_key, operation) { return await operation(); },
+      async runExclusive(_key, operation) { return await operation(); },
+    },
+  });
+
+  await runtime.content.updateAnnotation({
+    itemId: item.id,
+    expectedRevision: 1,
+    patch: { summary: "updated" },
+    actor: { kind: "agent", actorId: "agent-1" },
+  });
+  await runtime.lifecycle.addReference({
+    spaceId: item.spaceId,
+    title: "New reference",
+    reference: { kind: "web_page", url: "https://new.example.test" },
+    actor: { kind: "user" },
+  });
+
+  assert.equal(calls[0].kind, "annotation");
+  assert.equal(calls[0].input.expectedRevision, 1);
+  assert.equal(calls[1].kind, "add");
+  assert.equal(calls[1].input.title, "New reference");
 });
 
 function toolOptions({ content = {}, lifecycle = {}, queries = {} }) {

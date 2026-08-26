@@ -13,6 +13,12 @@ export type SpaceReference =
 /** References that may be created through the ordinary Space reference command. */
 export type SpaceAddableReference = SpaceReference;
 
+/** External or metadata-only references that need no owner-specific creation workflow. */
+export type SpaceDirectReference = Extract<
+  SpaceReference,
+  { readonly kind: "local_file" | "web_page" | "generated_artifact" }
+>;
+
 /** User-owned single-file source. Complete external directories are Workspace objects. */
 export type SpaceExternalFileReference = Extract<SpaceReference, { readonly kind: "local_file" }>;
 

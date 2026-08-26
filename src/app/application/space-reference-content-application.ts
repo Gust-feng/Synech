@@ -1,4 +1,3 @@
-import type { DocumentCaptionUpdateInput, DocumentPreview, DocumentTextUpdateInput } from "../panel-api/workbench.js";
 import type {
   SpaceFeature,
   SpaceReferenceActorRecord,
@@ -11,6 +10,11 @@ import {
   SpaceReferenceContentApplicationError,
   type SpaceReferenceContentApplicationErrorCode,
 } from "../space-reference-contracts/application-error.js";
+import type {
+  SpaceReferenceCaptionUpdate,
+  SpaceReferenceContentApplicationPort,
+  SpaceReferenceTextUpdate,
+} from "../space-reference-contracts/application-port.js";
 
 export {
   SpaceReferenceContentApplicationError,
@@ -22,18 +26,18 @@ export type SpaceReferenceContentResolution = ResolvedSource<"local_file" | "wor
   readonly item: SpaceReferenceItem;
 };
 
-export type SpaceReferenceContentApplicationOperations = {
+export type SpaceReferenceContentApplicationOperations<TPreview> = {
   readonly updateText: (
     item: SpaceReferenceItem,
-    input: DocumentTextUpdateInput,
+    input: SpaceReferenceTextUpdate,
     resolved?: SpaceReferenceContentResolution,
-  ) => Promise<DocumentPreview>;
+  ) => Promise<TPreview>;
   readonly updateCaption: (
     item: SpaceReferenceItem,
-    input: DocumentCaptionUpdateInput,
+    input: SpaceReferenceCaptionUpdate,
     actor: SpaceReferenceActorRecord,
     resolved?: SpaceReferenceContentResolution,
-  ) => Promise<DocumentPreview>;
+  ) => Promise<TPreview>;
   readonly createEntry: (
     item: SpaceReferenceItem,
     input: {
@@ -61,40 +65,14 @@ export type SpaceReferenceContentApplicationOperations = {
   ) => Promise<SpaceReferenceItem>;
 };
 
-export type SpaceReferenceContentApplication = {
-  updateText(input: {
-    readonly itemId: string;
-    readonly update: DocumentTextUpdateInput;
-  }): Promise<DocumentPreview>;
-  updateCaption(input: {
-    readonly itemId: string;
-    readonly update: DocumentCaptionUpdateInput;
-    readonly actor: SpaceReferenceActorRecord;
-  }): Promise<DocumentPreview>;
-  createEntry(input: {
-    readonly itemId: string;
-    readonly parentRelativePath: string;
-    readonly name: string;
-    readonly kind: "file" | "directory";
-  }): Promise<{ readonly relativePath: string }>;
-  renameEntry(input: {
-    readonly itemId: string;
-    readonly relativePath: string;
-    readonly name: string;
-  }): Promise<{ readonly relativePath: string }>;
-  deleteEntry(input: {
-    readonly itemId: string;
-    readonly relativePath: string;
-  }): Promise<void>;
-  updateAnnotation(input: {
-    readonly itemId: string;
-    readonly expectedRevision: number;
-    readonly patch: SpaceReferenceAnnotationPatch;
-    readonly actor: SpaceReferenceActorRecord;
-  }): Promise<SpaceReferenceItem>;
-};
+export type SpaceReferenceContentApplication<TPreview = unknown> = SpaceReferenceContentApplicationPort<
+  TPreview,
+  SpaceReferenceItem,
+  SpaceReferenceActorRecord,
+  SpaceReferenceAnnotationPatch
+>;
 
-export type SpaceReferenceContentApplicationDependencies = {
+export type SpaceReferenceContentApplicationDependencies<TPreview> = {
   readonly spaceFeature: {
     readonly commands: Pick<SpaceFeature["commands"], "refreshReferenceSourceIdentity">;
     readonly queries: Pick<SpaceFeature["queries"], "getReference">;
@@ -107,7 +85,7 @@ export type SpaceReferenceContentApplicationDependencies = {
   readonly resolveFilesystemReference: (
     item: SpaceReferenceItem,
   ) => Promise<SpaceReferenceContentResolution>;
-  readonly operations: SpaceReferenceContentApplicationOperations;
+  readonly operations: SpaceReferenceContentApplicationOperations<TPreview>;
 };
 
 /**
@@ -117,9 +95,9 @@ export type SpaceReferenceContentApplicationDependencies = {
  * filesystem and owner-specific operations are injected so this layer does
  * not depend on Panel HTTP adapters or duplicate their path policy.
  */
-export function createSpaceReferenceContentApplication(
-  runtime: SpaceReferenceContentApplicationDependencies,
-): SpaceReferenceContentApplication {
+export function createSpaceReferenceContentApplication<TPreview>(
+  runtime: SpaceReferenceContentApplicationDependencies<TPreview>,
+): SpaceReferenceContentApplication<TPreview> {
   return {
     updateText: async ({ itemId, update }) =>
       await runReferenceMutation(runtime, itemId, async (item, resolved) => {
@@ -147,8 +125,8 @@ export function createSpaceReferenceContentApplication(
   };
 }
 
-async function runReferenceMutation<T>(
-  runtime: SpaceReferenceContentApplicationDependencies,
+async function runReferenceMutation<TPreview, T>(
+  runtime: SpaceReferenceContentApplicationDependencies<TPreview>,
   itemId: string,
   operation: (item: SpaceReferenceItem, resolved?: SpaceReferenceContentResolution) => Promise<T>,
 ): Promise<T> {
@@ -176,8 +154,8 @@ async function runReferenceMutation<T>(
   });
 }
 
-async function runReferenceMetadataMutation<T>(
-  runtime: SpaceReferenceContentApplicationDependencies,
+async function runReferenceMetadataMutation<TPreview, T>(
+  runtime: SpaceReferenceContentApplicationDependencies<TPreview>,
   itemId: string,
   operation: (item: SpaceReferenceItem) => Promise<T>,
 ): Promise<T> {
@@ -188,7 +166,7 @@ async function runReferenceMetadataMutation<T>(
 }
 
 async function getReference(
-  runtime: SpaceReferenceContentApplicationDependencies,
+  runtime: SpaceReferenceContentApplicationDependencies<unknown>,
   itemId: string,
 ): Promise<SpaceReferenceItem> {
   const item = await runtime.spaceFeature.queries.getReference(itemId);
@@ -202,7 +180,7 @@ async function getReference(
 }
 
 async function getCurrentReference(
-  runtime: SpaceReferenceContentApplicationDependencies,
+  runtime: SpaceReferenceContentApplicationDependencies<unknown>,
   initial: SpaceReferenceItem,
 ): Promise<SpaceReferenceItem> {
   const current = await runtime.spaceFeature.queries.getReference(initial.id);
@@ -231,7 +209,7 @@ async function getCurrentReference(
 }
 
 async function resolveIfFilesystem(
-  runtime: SpaceReferenceContentApplicationDependencies,
+  runtime: SpaceReferenceContentApplicationDependencies<unknown>,
   item: SpaceReferenceItem,
 ): Promise<SpaceReferenceContentResolution | undefined> {
   return item.reference.kind === "local_file"
