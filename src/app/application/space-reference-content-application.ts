@@ -7,44 +7,20 @@ import type {
 } from "../spaces/index.js";
 import type { SpaceAdmission } from "../ownership/admission.js";
 import { sameResolvedSource, type ResolvedSource } from "../local-filesystem/resolved-source.js";
+import {
+  SpaceReferenceContentApplicationError,
+  type SpaceReferenceContentApplicationErrorCode,
+} from "../space-reference-contracts/application-error.js";
+
+export {
+  SpaceReferenceContentApplicationError,
+  type SpaceReferenceContentApplicationErrorCode,
+} from "../space-reference-contracts/application-error.js";
 
 /** The resolved source facts that are valid for one filesystem mutation. */
 export type SpaceReferenceContentResolution = ResolvedSource<"local_file" | "workspace" | "managed_folder"> & {
   readonly item: SpaceReferenceItem;
 };
-
-export type SpaceReferenceContentApplicationErrorCode =
-  | "space_reference_not_found"
-  | "space_reference_revoked"
-  | "space_reference_membership_changed"
-  | "space_reference_source_changed"
-  | "space_reference_caption_unavailable"
-  | "space_reference_image_caption_revision_conflict"
-  | "space_reference_content_unavailable"
-  | "space_reference_source_missing"
-  | "space_reference_source_replaced"
-  | "space_reference_entry_exists"
-  | "space_reference_entry_mutation_unavailable"
-  | "space_reference_mutation_failed"
-  | "invalid_space_reference_path"
-  | "invalid_space_reference_name"
-  | "workspace_not_available";
-
-/**
- * Structured failures owned by the application boundary.
- * Adapters map these facts to HTTP, Agent or another transport protocol.
- */
-export class SpaceReferenceContentApplicationError extends Error {
-  readonly name = "SpaceReferenceContentApplicationError";
-
-  constructor(
-    readonly code: SpaceReferenceContentApplicationErrorCode,
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
-  }
-}
 
 export type SpaceReferenceContentApplicationOperations = {
   readonly updateText: (
@@ -240,6 +216,15 @@ async function getCurrentReference(
     throw new SpaceReferenceContentApplicationError(
       "space_reference_membership_changed",
       `Space reference ${initial.id} changed Space membership while waiting for its mutation lease.`,
+    );
+  }
+  if (initial.reference.kind === "managed_asset" && (
+    current.reference.kind !== "managed_asset" ||
+    current.reference.assetId !== initial.reference.assetId
+  )) {
+    throw new SpaceReferenceContentApplicationError(
+      "space_reference_source_changed",
+      `Managed asset reference ${initial.id} changed source while waiting for its owner admission.`,
     );
   }
   return current;

@@ -32,7 +32,7 @@ function createFixture({ item = localItem(), resolutionPath = "C:/notes.md" } = 
       queries: {
         async getReference(itemId) {
           calls.push(["getReference", itemId]);
-          return current.id === itemId ? current : undefined;
+          return current?.id === itemId ? current : undefined;
         },
       },
     },
@@ -120,6 +120,22 @@ test("content application rejects a revoked reference before invoking the operat
   );
 });
 
+test("content application rejects a reference revoked while waiting for its path lease", async () => {
+  const fixture = createFixture();
+  fixture.runtime.fileMutationCoordinator.run = async (key, operation) => {
+    fixture.calls.push(["run", key]);
+    fixture.setCurrent(undefined);
+    return await operation();
+  };
+  const application = createSpaceReferenceContentApplication(fixture.runtime);
+
+  await assert.rejects(
+    () => application.deleteEntry({ itemId: "reference-1", relativePath: "notes.md" }),
+    (error) => error instanceof SpaceReferenceContentApplicationError && error.code === "space_reference_revoked",
+  );
+  assert.equal(fixture.calls.some(([kind]) => kind === "deleteEntry"), false);
+});
+
 test("content application rejects a source change while waiting for the path lease", async () => {
   const fixture = createFixture();
   let changed = false;
@@ -169,6 +185,29 @@ test("non-filesystem references use the owner admission without a filesystem lea
 
   assert.equal(fixture.calls.some(([kind]) => kind === "resolve"), false);
   assert.equal(fixture.calls.some(([kind]) => kind === "run"), false);
+});
+
+test("managed asset mutation rejects membership and asset identity changes inside admission", async () => {
+  const initial = { ...localItem(), reference: { kind: "managed_asset", assetId: "asset-1" } };
+  for (const current of [
+    { ...initial, spaceId: "space-2" },
+    { ...initial, reference: { kind: "managed_asset", assetId: "asset-2" } },
+  ]) {
+    const fixture = createFixture({ item: initial });
+    fixture.runtime.spaceAdmission.admit = async (spaceId, operation) => {
+      fixture.calls.push(["admit", spaceId]);
+      fixture.setCurrent(current);
+      return await operation();
+    };
+    const application = createSpaceReferenceContentApplication(fixture.runtime);
+
+    await assert.rejects(
+      () => application.updateText({ itemId: "reference-1", update: { expectedFingerprint: "old", text: "new" } }),
+      (error) => error instanceof SpaceReferenceContentApplicationError &&
+        (error.code === "space_reference_membership_changed" || error.code === "space_reference_source_changed"),
+    );
+    assert.equal(fixture.calls.some(([kind]) => kind === "updateText"), false);
+  }
 });
 
 test("annotation updates share owner admission without a filesystem lease", async () => {

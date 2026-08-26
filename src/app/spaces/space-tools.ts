@@ -16,6 +16,7 @@ import {
   type SpaceExternalSourceInspector,
 } from "./space-external-source.js";
 import { SpaceFeatureError, type SpaceAddableReference, type SpaceFeature, type SpaceReference, type SpaceReferenceActorRecord, type SpaceReferenceAnnotation, type SpaceReferenceAnnotationInput, type SpaceReferenceAnnotationPatch, type SpaceReferenceItem, type SpaceTarget } from "./contracts.js";
+import { SpaceReferenceContentApplicationError } from "../space-reference-contracts/application-error.js";
 
 type SpaceReferenceContentApplication = {
   readonly updateCaption: (input: { readonly itemId: string; readonly update: { readonly relativePath: string; readonly expectedFingerprint: string; readonly caption: string }; readonly actor: SpaceReferenceActorRecord }) => Promise<unknown>;
@@ -26,7 +27,7 @@ type SpaceReferenceContentApplication = {
 };
 
 type SpaceReferenceLifecycleApplication = {
-  readonly addReference: (input: { readonly spaceId: string; readonly title: string; readonly reference: SpaceReference; readonly actor: SpaceReferenceActorRecord; readonly annotation?: SpaceReferenceAnnotationInput }) => Promise<SpaceReferenceItem>;
+  readonly addReference: (input: { readonly spaceId: string; readonly title: string; readonly reference: Exclude<SpaceReference, { readonly kind: "workspace" }>; readonly actor: SpaceReferenceActorRecord; readonly annotation?: SpaceReferenceAnnotationInput }) => Promise<SpaceReferenceItem>;
   readonly move: (input: { readonly sourceSpaceId: string; readonly target: { readonly kind: "reference"; readonly id: string }; readonly destinationSpaceId: string }) => Promise<void>;
   readonly rename: (input: { readonly target: SpaceTarget; readonly title: string }) => Promise<unknown>;
   readonly remove: (input: { readonly itemId: string }) => Promise<void>;
@@ -738,7 +739,7 @@ function movableTarget(kind: unknown, id: unknown): { readonly kind: "reference"
 }
 
 type AgentSpaceReferenceResolution =
-  | { readonly reference: SpaceAddableReference }
+  | { readonly reference: Exclude<SpaceAddableReference, { readonly kind: "workspace" }> }
   | { readonly workspacePath: string }
   | { readonly error: Readonly<Record<string, unknown>> };
 
@@ -819,6 +820,9 @@ async function resultFor<T>(operation: () => Promise<T>, project: (value: T) => 
   try {
     return project(await operation());
   } catch (error) {
+    if (error instanceof SpaceReferenceContentApplicationError) {
+      return { status: error.code, message: error.message };
+    }
     if (error instanceof SpaceFeatureError && isExpectedSpaceOperationError(error.code)) {
       return { status: error.code, message: error.message };
     }
@@ -829,6 +833,7 @@ async function resultFor<T>(operation: () => Promise<T>, project: (value: T) => 
 function isExpectedSpaceOperationError(code: SpaceFeatureError["code"]): boolean {
   return code === "space_not_found"
     || code === "space_reference_not_found"
+    || code === "space_reference_membership_changed"
     || code === "space_invalid_move"
     || code === "space_invalid_input"
     || code === "space_id_collision"

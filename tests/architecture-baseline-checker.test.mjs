@@ -59,8 +59,11 @@ test("architecture checker rejects dependency, presentation, persistence, and ca
       }
     `);
     await write(directory, "src/app/panel-server/spaces/space-routes.ts", `
+      import { updateManagedAssetTextPreview } from "../storage/managed-asset-routes.js";
       export async function handleSpaceRoute(feature) {
-        return feature.commands.updateReferenceImageCaption({});
+        await feature.commands.updateReferenceImageCaption({});
+        await feature.managedAssets.commands.updateCaption({});
+        return updateManagedAssetTextPreview();
       }
     `);
 

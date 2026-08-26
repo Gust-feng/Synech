@@ -12,7 +12,7 @@ import { PanelHttpError, readJsonBody, writeJson } from "../http-utils.js";
 import type { PanelExternalResourceTarget } from "../types.js";
 import type { SpaceConversationDeletionCoordinator } from "./space-conversation-coordinator.js";
 import { attachSpaceReferenceMetadata, createPanelDocumentPreview, writePanelSpaceReferenceContent } from "./space-reference-preview.js";
-import { getManagedAssetPreview, updateManagedAssetCaptionPreview, updateManagedAssetTextPreview } from "../storage/managed-asset-routes.js";
+import { getManagedAssetPreview } from "../storage/managed-asset-routes.js";
 import { resolveSpaceFilesystemReference, type ResolvedSpaceFilesystemReference } from "./space-workspace-reference.js";
 import type { ManagedSpaceFolderApplication } from "../../../domain/managed-space-folder.js";
 import type { SpaceReferenceContentApplication } from "../../application/space-reference-content-application.js";
@@ -73,7 +73,6 @@ export type SpaceReferenceRouteDependencies = {
   readonly flushSpaceKnowledgeSync: () => Promise<void>;
   readonly externalResourceOpener?: (target: PanelExternalResourceTarget) => Promise<void>;
   readonly managedAssets: {
-    readonly commands: Pick<ManagedAssetsFeature["commands"], "updateText" | "updateCaption">;
     readonly queries: Pick<ManagedAssetsFeature["queries"], "get">;
   };
 };
@@ -237,49 +236,27 @@ export async function handlePanelSpaceRoute(
     return true;
   }
   if (referenceContent !== null && request.method === "PUT") {
-    const item = await feature.queries.getReference(decode(referenceContent[1]));
-    if (item === undefined) throw new PanelHttpError(404, "space_reference_not_found", "未找到空间引用。");
     const input = parse(
       updateTextSchema,
       await readJsonBody(request, { maxChars: DOCUMENT_TEXT_REQUEST_MAX_CHARS }),
       "引用文件内容无效。",
     );
-    if (item.reference.kind === "managed_asset") {
-      const assetId = item.reference.assetId;
-      const preview = await runtime.spaceConversationDeletion.admit(item.spaceId, async () =>
-        await updateManagedAssetTextPreview(
-          runtime.managedAssets.commands,
-          { assetId, expectedFingerprint: input.expectedFingerprint, text: input.text },
-          item.id,
-        ));
-      writeJson(response, 200, { ok: true, preview });
-      return true;
-    }
-    const preview = await runtime.spaceReferenceContentApplication.updateText({ itemId: item.id, update: input });
+    const preview = await runtime.spaceReferenceContentApplication.updateText({
+      itemId: decode(referenceContent[1]),
+      update: input,
+    });
     writeJson(response, 200, { ok: true, preview });
     return true;
   }
 
   const referenceCaption = /^\/api\/spaces\/references\/([^/]+)\/caption$/u.exec(url.pathname);
   if (referenceCaption !== null && request.method === "PUT") {
-    const item = await feature.queries.getReference(decode(referenceCaption[1]));
-    if (item === undefined) throw new PanelHttpError(404, "space_reference_not_found", "未找到空间引用。");
     const input = parse(updateCaptionSchema, await readJsonBody(request), "图片说明编辑请求无效。");
-    if (item.reference.kind === "managed_asset") {
-      if ((input.relativePath ?? "").length > 0) {
-        throw new PanelHttpError(400, "invalid_managed_asset_input", "托管资产图片说明不接受子路径。");
-      }
-      const assetId = item.reference.assetId;
-      const preview = await runtime.spaceConversationDeletion.admit(item.spaceId, async () =>
-        await updateManagedAssetCaptionPreview(
-          runtime.managedAssets.commands,
-          { assetId, expectedFingerprint: input.expectedFingerprint, caption: input.caption },
-          item.id,
-        ));
-      writeJson(response, 200, { ok: true, preview });
-      return true;
-    }
-    const preview = await runtime.spaceReferenceContentApplication.updateCaption({ itemId: item.id, update: input, actor: { kind: "user" } });
+    const preview = await runtime.spaceReferenceContentApplication.updateCaption({
+      itemId: decode(referenceCaption[1]),
+      update: input,
+      actor: { kind: "user" },
+    });
     writeJson(response, 200, { ok: true, preview });
     return true;
   }
@@ -332,7 +309,9 @@ function isMovableSpaceMaterial(item: SpaceReferenceItem): boolean {
   return item.reference.kind !== "local_file" && item.reference.kind !== "workspace";
 }
 
-function absoluteLocalReference(reference: SpaceAddableReference): SpaceAddableReference {
+function absoluteLocalReference(
+  reference: Exclude<SpaceAddableReference, { readonly kind: "workspace" }>,
+): Exclude<SpaceAddableReference, { readonly kind: "workspace" }> {
   return reference.kind === "local_file"
     ? { ...reference, path: path.resolve(reference.path) }
     : reference;
@@ -362,6 +341,7 @@ export function spaceFeatureHttpError(error: SpaceFeatureError): PanelHttpError 
     case "space_reference_not_found":
       return new PanelHttpError(404, error.code, error.message);
     case "space_invalid_move":
+    case "space_reference_membership_changed":
     case "space_id_collision":
     case "space_workspace_mount_conflict":
     case "space_asset_ownership_conflict":

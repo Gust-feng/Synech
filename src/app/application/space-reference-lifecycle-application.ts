@@ -4,12 +4,13 @@ import {
   type SpaceReferenceActorRecord,
   type SpaceReferenceAnnotationInput,
   type SpaceReferenceItem,
+  type SpaceAddableReference,
   type SpaceTarget,
 } from "../spaces/index.js";
 import { withOrderedSpaceAdmissions, type SpaceAdmission } from "../ownership/admission.js";
 
 export type SpaceReferenceLifecycleApplication = {
-  addReference(input: { readonly spaceId: string; readonly title: string; readonly reference: Parameters<SpaceFeature["commands"]["addReference"]>[0]["reference"]; readonly actor: SpaceReferenceActorRecord; readonly annotation?: SpaceReferenceAnnotationInput }): Promise<SpaceReferenceItem>;
+  addReference(input: { readonly spaceId: string; readonly title: string; readonly reference: Exclude<SpaceAddableReference, { readonly kind: "workspace" }>; readonly actor: SpaceReferenceActorRecord; readonly annotation?: SpaceReferenceAnnotationInput }): Promise<SpaceReferenceItem>;
   move(input: { readonly sourceSpaceId: string; readonly target: { readonly kind: "reference"; readonly id: string }; readonly destinationSpaceId: string }): Promise<void>;
   rename(input: { readonly target: SpaceTarget; readonly title: string }): Promise<SpaceTarget | undefined>;
   remove(input: { readonly itemId: string }): Promise<void>;

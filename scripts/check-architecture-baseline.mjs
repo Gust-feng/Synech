@@ -36,6 +36,10 @@ const mechanicalSpaceReferenceMutations = new Set([
   "renameEntry",
   "updateLocalDocumentText",
 ]);
+const managedAssetReferenceMutations = new Set([
+  "updateManagedAssetTextPreview",
+  "updateManagedAssetCaptionPreview",
+]);
 
 for (const file of files) {
   const { sourceText, source } = parsedSources.get(file);
@@ -64,7 +68,8 @@ for (const file of files) {
     }
     if (isCanonicalSpaceReferenceAdapter(file) &&
       ((specifier.includes("local-filesystem") && names.some((name) => mechanicalSpaceReferenceMutations.has(name))) ||
-       specifier.includes("space-reference-mutations"))) {
+       specifier.includes("space-reference-mutations") ||
+       (specifier.includes("managed-asset-routes") && names.some((name) => managedAssetReferenceMutations.has(name))))) {
       report(
         "canonical-application-bypass",
         file,
@@ -87,6 +92,16 @@ for (const file of files) {
           file,
           node,
           `Space Reference adapter must use the canonical Application instead of commands.${command}`,
+          sourceText,
+          source,
+        );
+      }
+      if (command === "updateText" || command === "updateCaption") {
+        report(
+          "canonical-application-bypass",
+          file,
+          node,
+          `Managed Asset reference adapter must use the canonical Content Application instead of commands.${command}`,
           sourceText,
           source,
         );

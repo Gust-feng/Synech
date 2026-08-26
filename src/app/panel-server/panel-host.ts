@@ -109,6 +109,7 @@ import type {
   PanelServerOptions,
 } from "./types.js";
 import { PanelHttpError } from "./http-utils.js";
+import { updateManagedAssetCaptionPreview, updateManagedAssetTextPreview } from "./storage/managed-asset-routes.js";
 import { createOrdinaryAgentRunResourceAcquirer } from "./ordinary/ordinary-agent-run-resources.js";
 import { createHostFeatureAgentToolContributionResolver } from "./ordinary/agent-tool-contributions.js";
 import { resolveTriggeredSkillContexts } from "./settings/skill-service.js";
@@ -153,6 +154,7 @@ import {
   SpaceReferenceContentApplicationError,
   type SpaceReferenceContentApplication,
 } from "../application/space-reference-content-application.js";
+import { isSpaceReferenceContentApplicationErrorCode } from "../space-reference-contracts/application-error.js";
 import { createSpaceReferenceLifecycleApplication, type SpaceReferenceLifecycleApplication } from "../application/space-reference-lifecycle-application.js";
 import type { ManagedSpaceFolderApplication } from "../../domain/managed-space-folder.js";
 import {
@@ -766,23 +768,51 @@ function assemblePanelHost(input: {
       admit: (spaceId, operation) => spaceConversationDeletion.admit(spaceId, operation),
     },
     fileMutationCoordinator: { run: (key, operation) => fileMutationCoordinator.run(key, operation) },
-    resolveFilesystemReference: (item) => resolveSpaceFilesystemReference({ workspaceFeature }, item),
+    resolveFilesystemReference: (item) => asSpaceReferenceContentOperation(() =>
+      resolveSpaceFilesystemReference({ workspaceFeature }, item)),
     operations: {
-      updateText: (item, input, resolved) => updatePanelSpaceReferenceText(item, input, undefined, resolved),
-      updateCaption: async (item, input, actor, resolved) => {
-        const relativePath = input.relativePath ?? "";
-        const current = await createPanelDocumentPreview(item, relativePath, undefined, undefined, resolved);
-        if (current.content.kind !== "media" || current.content.mediaKind !== "image" || current.content.captionEditable !== true) {
-          throw new SpaceReferenceContentApplicationError("space_reference_caption_unavailable", "Only image references support editable captions.");
+      updateText: (item, input, resolved) => asSpaceReferenceContentOperation(async () => {
+        if (item.reference.kind === "managed_asset") {
+          if ((input.relativePath ?? "").length > 0) {
+            throw new PanelHttpError(400, "invalid_managed_asset_input", "托管资产文本不接受子路径。");
+          }
+          return await updateManagedAssetTextPreview(
+            managedAssetFeature.commands,
+            { assetId: item.reference.assetId, expectedFingerprint: input.expectedFingerprint, text: input.text },
+            item.id,
+          );
         }
-        const match = /^space-image-caption:(\d+)$/u.exec(input.expectedFingerprint);
-        if (match === null) throw new SpaceReferenceContentApplicationError("space_reference_image_caption_revision_conflict", "The image caption revision changed while the mutation was waiting.");
-        const updated = await spaceFeature.commands.updateReferenceImageCaption({ itemId: item.id, relativePath, expectedRevision: Number(match[1]), text: input.caption, actor });
-        return await createPanelDocumentPreview(updated, relativePath, undefined, undefined, resolved);
+        return await updatePanelSpaceReferenceText(item, input, undefined, resolved);
+      }),
+      updateCaption: async (item, input, actor, resolved) => {
+        return await asSpaceReferenceContentOperation(async () => {
+          const relativePath = input.relativePath ?? "";
+          if (item.reference.kind === "managed_asset") {
+            if (relativePath.length > 0) {
+              throw new PanelHttpError(400, "invalid_managed_asset_input", "托管资产图片说明不接受子路径。");
+            }
+            return await updateManagedAssetCaptionPreview(
+              managedAssetFeature.commands,
+              { assetId: item.reference.assetId, expectedFingerprint: input.expectedFingerprint, caption: input.caption },
+              item.id,
+            );
+          }
+          const current = await createPanelDocumentPreview(item, relativePath, undefined, undefined, resolved);
+          if (current.content.kind !== "media" || current.content.mediaKind !== "image" || current.content.captionEditable !== true) {
+            throw new SpaceReferenceContentApplicationError("space_reference_caption_unavailable", "Only image references support editable captions.");
+          }
+          const match = /^space-image-caption:(\d+)$/u.exec(input.expectedFingerprint);
+          if (match === null) throw new SpaceReferenceContentApplicationError("space_reference_image_caption_revision_conflict", "The image caption revision changed while the mutation was waiting.");
+          const updated = await spaceFeature.commands.updateReferenceImageCaption({ itemId: item.id, relativePath, expectedRevision: Number(match[1]), text: input.caption, actor });
+          return await createPanelDocumentPreview(updated, relativePath, undefined, undefined, resolved);
+        });
       },
-      createEntry: (item, input, resolved) => createPanelSpaceReferenceEntry(item, input, resolved),
-      renameEntry: (item, input, resolved) => renamePanelSpaceReferenceEntry(item, input, resolved),
-      deleteEntry: (item, relativePath, resolved) => deletePanelSpaceReferenceEntry(item, relativePath, resolved),
+      createEntry: (item, input, resolved) => asSpaceReferenceContentOperation(() =>
+        createPanelSpaceReferenceEntry(item, input, resolved)),
+      renameEntry: (item, input, resolved) => asSpaceReferenceContentOperation(() =>
+        renamePanelSpaceReferenceEntry(item, input, resolved)),
+      deleteEntry: (item, relativePath, resolved) => asSpaceReferenceContentOperation(() =>
+        deletePanelSpaceReferenceEntry(item, relativePath, resolved)),
       updateAnnotation: (item, expectedRevision, patch, actor) => spaceFeature.commands.updateReferenceAnnotation({
         itemId: item.id,
         expectedRevision,
@@ -934,6 +964,21 @@ function managedKnowledgeAssetWriteError(error: unknown): unknown {
     default:
       return new PersonalKnowledgeError("knowledge_asset_write_failed", error.message, { cause: error });
   }
+}
+
+async function asSpaceReferenceContentOperation<T>(operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    throw panelSpaceReferenceContentOperationError(error);
+  }
+}
+
+/** Converts only the Panel failures declared by the canonical Application contract. */
+export function panelSpaceReferenceContentOperationError(error: unknown): unknown {
+  return error instanceof PanelHttpError && isSpaceReferenceContentApplicationErrorCode(error.code)
+    ? new SpaceReferenceContentApplicationError(error.code, error.message, { cause: error })
+    : error;
 }
 
 /**

@@ -232,7 +232,7 @@ export async function updateLocalDocumentText(
     if (error.kind === "not_found") {
       throw new PanelHttpError(404, "space_reference_source_missing", "来源文件已不存在。");
     }
-    throw new PanelHttpError(500, "space_reference_not_editable", "无法保存文件更改。");
+    throw new PanelHttpError(500, "space_reference_mutation_failed", "无法保存文件更改。");
   }
 
   const updatedStat = await fs.stat(source).catch(() => undefined);

@@ -246,15 +246,27 @@ export function spaceReferenceContentApplicationHttpError(error: SpaceReferenceC
     case "space_reference_caption_unavailable":
     case "space_reference_image_caption_revision_conflict":
     case "space_reference_content_unavailable":
-    case "space_reference_source_missing":
     case "space_reference_source_replaced":
+    case "space_reference_not_editable":
+    case "space_reference_revision_conflict":
     case "space_reference_entry_exists":
     case "space_reference_entry_mutation_unavailable":
     case "workspace_not_available":
+    case "managed_asset_not_editable":
+    case "managed_asset_caption_not_editable":
+    case "managed_asset_revision_conflict":
       return new PanelHttpError(409, error.code, error.message);
+    case "space_reference_source_missing":
+    case "managed_asset_not_found":
+      return new PanelHttpError(404, error.code, error.message);
     case "invalid_space_reference_path":
     case "invalid_space_reference_name":
+    case "invalid_managed_asset_input":
       return new PanelHttpError(400, error.code, error.message);
+    case "managed_asset_text_too_large":
+    case "managed_asset_caption_too_large":
+      return new PanelHttpError(413, error.code, error.message);
+    case "space_reference_read_failed":
     case "space_reference_mutation_failed":
       return new PanelHttpError(500, error.code, error.message);
   }
