@@ -7,7 +7,7 @@ import test from "node:test";
 
 const checker = path.resolve("scripts/check-architecture-baseline.mjs");
 
-test("architecture checker rejects barrel, route-symbol, namespace and copy-alias bypasses", async () => {
+test("architecture checker rejects dependency, presentation, persistence, and canonical Application bypasses", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "synech-baseline-checker-"));
   try {
     await write(directory, "scripts/architecture-baseline-allowlist.json", "[]");
@@ -51,6 +51,18 @@ test("architecture checker rejects barrel, route-symbol, namespace and copy-alia
         return JSON.parse(value) as { refId: string };
       }
     `);
+    await write(directory, "src/app/spaces/space-tools.ts", `
+      import { createFile } from "../local-filesystem/index.js";
+      export async function bypass(options) {
+        await options.spaces.commands.addReference({});
+        return createFile("unsafe.txt");
+      }
+    `);
+    await write(directory, "src/app/panel-server/spaces/space-routes.ts", `
+      export async function handleSpaceRoute(feature) {
+        return feature.commands.updateReferenceImageCaption({});
+      }
+    `);
 
     const result = await runChecker(directory);
     assert.notEqual(result.code, 0);
@@ -59,6 +71,7 @@ test("architecture checker rejects barrel, route-symbol, namespace and copy-alia
     assert.match(result.stderr, /panel-http-error-outside-adapter/u);
     assert.match(result.stderr, /presentation-string-control/u);
     assert.match(result.stderr, /persistence-runtime-schema/u);
+    assert.match(result.stderr, /canonical-application-bypass/u);
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }

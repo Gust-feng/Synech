@@ -37,6 +37,11 @@ export type SpaceToolOptions = {
   readonly spaces: Pick<SpaceFeature, "commands" | "queries">;
   readonly workspaceRoot: string;
   readonly runContext?: ContextAttachmentRunContext;
+  /**
+   * These applications are required rather than optional fallbacks. Agent and
+   * HTTP adapters must share admission, lock-time revalidation and error facts;
+   * reintroducing direct Feature/file mutations here creates a second policy.
+   */
   readonly spaceReferenceContentApplication: SpaceReferenceContentApplication;
   readonly spaceReferenceLifecycleApplication: SpaceReferenceLifecycleApplication;
   /** Host-owned durable Space deletion workflow. */

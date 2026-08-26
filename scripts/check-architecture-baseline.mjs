@@ -19,6 +19,23 @@ const allowlist = JSON.parse(fs.readFileSync(path.join(root, "scripts", "archite
 const violations = [];
 const ownedFeatures = new Set(["spaces", "workspaces", "personal-knowledge"]);
 const presentationFields = new Set(["title", "label", "message", "detail", "summary"]);
+const canonicalSpaceReferenceCommands = new Set([
+  "addReference",
+  "move",
+  "rename",
+  "unlinkReference",
+  "removeReference",
+  "refreshReferenceSourceIdentity",
+  "updateReferenceAnnotation",
+  "updateReferenceImageCaption",
+]);
+const mechanicalSpaceReferenceMutations = new Set([
+  "createFile",
+  "createDirectory",
+  "deleteEntry",
+  "renameEntry",
+  "updateLocalDocumentText",
+]);
 
 for (const file of files) {
   const { sourceText, source } = parsedSources.get(file);
@@ -45,6 +62,36 @@ for (const file of files) {
       (names.includes("PanelHttpError") || (names.includes("*") && /(?:^|\/)http-utils\.js$/u.test(specifier)))) {
       report("panel-http-error-outside-adapter", file, node, "PanelHttpError is restricted to panel-server adapters", sourceText, source);
     }
+    if (isCanonicalSpaceReferenceAdapter(file) &&
+      ((specifier.includes("local-filesystem") && names.some((name) => mechanicalSpaceReferenceMutations.has(name))) ||
+       specifier.includes("space-reference-mutations"))) {
+      report(
+        "canonical-application-bypass",
+        file,
+        node,
+        "Space Reference adapters must delegate filesystem mutations to the canonical Content Application",
+        sourceText,
+        source,
+      );
+    }
+  }
+  if (isCanonicalSpaceReferenceAdapter(file)) {
+    // This exact-file guard is intentional. Content/Lifecycle Applications own
+    // admission, lock ordering and lock-time revalidation; adapters may still
+    // call unrelated single-owner commands such as createSpace directly.
+    visit(source, (node) => {
+      const command = referencedCommandName(node);
+      if (command !== undefined && canonicalSpaceReferenceCommands.has(command)) {
+        report(
+          "canonical-application-bypass",
+          file,
+          node,
+          `Space Reference adapter must use the canonical Application instead of commands.${command}`,
+          sourceText,
+          source,
+        );
+      }
+    });
   }
   if (isPresentationControlScope(file)) {
     const isPresentationAlias = createPresentationAliasResolver(source);
@@ -172,6 +219,27 @@ function isRouteAdapter(file) {
   const value = normalized(file);
   return value.includes("/src/app/panel-server/") &&
     (/(?:^|\/)[^/]+-routes?\.ts$/u.test(value) || value.endsWith("/request-handler.ts") || exportsRouteHandler(file));
+}
+
+function isCanonicalSpaceReferenceAdapter(file) {
+  const value = normalized(file);
+  return value.endsWith("/src/app/spaces/space-tools.ts") ||
+    value.endsWith("/src/app/panel-server/spaces/space-routes.ts");
+}
+
+function referencedCommandName(node) {
+  if (!ts.isPropertyAccessExpression(node) && !ts.isElementAccessExpression(node)) return undefined;
+  const command = memberName(node);
+  const receiver = node.expression;
+  if (command === undefined || (!ts.isPropertyAccessExpression(receiver) && !ts.isElementAccessExpression(receiver))) return undefined;
+  return memberName(receiver) === "commands" ? command : undefined;
+}
+
+function memberName(node) {
+  if (ts.isPropertyAccessExpression(node)) return node.name.text;
+  return node.argumentExpression !== undefined && ts.isStringLiteralLike(node.argumentExpression)
+    ? node.argumentExpression.text
+    : undefined;
 }
 
 function exportsRouteHandler(file) {
