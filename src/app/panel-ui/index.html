@@ -20,7 +20,7 @@
         const systemReducedMotion = () =>
           window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
         try {
-          const preferenceKey = (name) => "synech/v1:" + name;
+          const preferenceKey = (name) => "synech/v1-baseline-2:" + name;
           const readPreference = (name) => {
             const key = preferenceKey(name);
             return window.desktopHost?.getLocalPreference?.(key) ?? localStorage.getItem(key);

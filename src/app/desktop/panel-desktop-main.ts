@@ -1,5 +1,7 @@
 import {
   BrowserWindow,
+  Menu,
+  Tray,
   app,
   dialog,
   ipcMain,
@@ -35,6 +37,14 @@ import {
   DESKTOP_APP_NAME,
   desktopAppUserModelId,
 } from "./panel-desktop-identity.js";
+import {
+  DESKTOP_CLOSE_BEHAVIOR_PREFERENCE_KEY,
+  desktopWindowCloseAction,
+  normalizeDesktopPlatform,
+  parseDesktopCloseBehavior,
+  shouldQuitWhenAllWindowsClosed,
+  type DesktopCloseBehavior,
+} from "../panel-api/desktop-lifecycle.js";
 
 const activeWindows = new Set<BrowserWindow>();
 const activeDesktopSessions = new Set<PanelDesktopSession>();
@@ -51,6 +61,9 @@ process.on("warning", (warning) => {
 const desktopWindowStates = new WeakMap<BrowserWindow, DesktopWindowState>();
 let desktopLocalPreferenceStore: DesktopLocalPreferenceStore | undefined;
 let desktopExitCleanup: Promise<void> | undefined;
+let desktopAppQuitting = false;
+let desktopTray: Tray | undefined;
+let desktopSession: PanelDesktopSession | undefined;
 let secondInstanceFocusRequested = false;
 const WINDOW_MINIMIZE_CHANNEL = "desktop:window-minimize";
 const WINDOW_TOGGLE_MAXIMIZE_CHANNEL = "desktop:window-toggle-maximize";
@@ -97,8 +110,15 @@ async function main(): Promise<void> {
       whenReady: () => app.whenReady(),
       onWindowAllClosed: (handler) => {
         app.on("window-all-closed", () => {
-          void handler();
+          if (shouldQuitWhenAllWindowsClosed(normalizeDesktopPlatform(process.platform))) {
+            void handler();
+          }
         });
+      },
+      onActivate: (handler) => {
+        if (normalizeDesktopPlatform(process.platform) === "darwin") {
+          app.on("activate", handler);
+        }
       },
       onBeforeQuit: (handler) => {
         let cleanupStarted = false;
@@ -107,6 +127,7 @@ async function main(): Promise<void> {
           if (cleanupComplete) {
             return;
           }
+          desktopAppQuitting = true;
           event.preventDefault();
           if (cleanupStarted) {
             return;
@@ -119,6 +140,8 @@ async function main(): Promise<void> {
             })
             .finally(() => {
               cleanupComplete = true;
+              desktopTray?.destroy();
+              desktopTray = undefined;
               app.quit();
             });
         });
@@ -127,6 +150,7 @@ async function main(): Promise<void> {
         if (sessionRef !== undefined) {
           activeDesktopSessions.delete(sessionRef);
           sessionRef = undefined;
+          desktopSession = undefined;
         }
       },
       quit: () => {
@@ -136,6 +160,7 @@ async function main(): Promise<void> {
     sessionRef = session;
 
     if (!args.smoke) {
+      desktopSession = session;
       activeDesktopSessions.add(session);
     }
 
@@ -160,14 +185,24 @@ function exitDesktopAfterCleanup(exitCode: number): void {
         console.error(result.reason);
       }
     }
+    desktopTray?.destroy();
+    desktopTray = undefined;
     app.exit(exitCode);
   })();
 }
 
 function focusCurrentDesktopWindow(): void {
+  if (desktopAppQuitting) return;
   const window = BrowserWindow.getFocusedWindow() ??
     [...activeWindows].find((candidate) => !candidate.isDestroyed());
   if (window === undefined) {
+    if (desktopSession !== undefined) {
+      void desktopSession.openWindow().catch((error: unknown) => {
+        console.error("恢复桌面面板窗口失败。");
+        console.error(error);
+      });
+      return;
+    }
     secondInstanceFocusRequested = true;
     return;
   }
@@ -274,7 +309,18 @@ function createElectronPanelWindow(
       preload: getPanelDesktopPreloadPath(),
     },
   });
+  ensureDesktopTray();
   activeWindows.add(mainWindow);
+  mainWindow.on("close", (event) => {
+    const action = desktopWindowCloseAction(
+      normalizeDesktopPlatform(process.platform),
+      readDesktopCloseBehavior(),
+      desktopAppQuitting,
+    );
+    if (action !== "hide") return;
+    event.preventDefault();
+    mainWindow.hide();
+  });
   if (secondInstanceFocusRequested) {
     mainWindow.once("ready-to-show", focusCurrentDesktopWindow);
   }
@@ -324,6 +370,27 @@ function registerDesktopWindowCleanup(window: BrowserWindow): void {
   window.once("closed", () => {
     activeWindows.delete(window);
   });
+}
+
+function ensureDesktopTray(): void {
+  if (normalizeDesktopPlatform(process.platform) !== "win32" || desktopTray !== undefined) return;
+  desktopTray = new Tray(createPanelDesktopWindowOptions().icon);
+  desktopTray.setToolTip(DESKTOP_APP_NAME);
+  desktopTray.setContextMenu(Menu.buildFromTemplate([
+    { label: "打开 Synech", click: focusCurrentDesktopWindow },
+    { type: "separator" },
+    { label: "退出 Synech", click: requestDesktopQuit },
+  ]));
+  desktopTray.on("click", focusCurrentDesktopWindow);
+}
+
+function requestDesktopQuit(): void {
+  desktopAppQuitting = true;
+  app.quit();
+}
+
+function readDesktopCloseBehavior(): DesktopCloseBehavior {
+  return parseDesktopCloseBehavior(getDesktopLocalPreferenceStore().read(DESKTOP_CLOSE_BEHAVIOR_PREFERENCE_KEY));
 }
 
 function installDesktopWindowControlBridge(): void {

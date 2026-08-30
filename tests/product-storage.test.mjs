@@ -166,6 +166,71 @@ test("Desktop storage paths are configured after server startup and before Elect
   });
 });
 
+test("Desktop session can reopen a closed native window without restarting the Panel Server", async () => {
+  const windows = [];
+  let activate;
+  const session = await startPanelDesktopSession(
+    { host: "127.0.0.1", port: 0, productHome: "chosen-home", smoke: false },
+    desktopDependencies({
+      events: [],
+      onActivate(handler) {
+        activate = handler;
+      },
+      createWindow() {
+        const window = {
+          destroyed: false,
+          async loadUrl() {},
+          onReadyToShow() {},
+          show() {},
+          isVisible() { return false; },
+          isDestroyed() { return this.destroyed; },
+        };
+        windows.push(window);
+        return window;
+      },
+    }),
+  );
+  assert.equal(windows.length, 1);
+  windows[0].destroyed = true;
+  activate?.();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(windows.length, 2);
+  await session.close();
+});
+
+test("Desktop session single-flights concurrent native window restores", async () => {
+  const windows = [];
+  let releaseLoad;
+  const loadPending = new Promise((resolve) => { releaseLoad = resolve; });
+  const session = await startPanelDesktopSession(
+    { host: "127.0.0.1", port: 0, productHome: "chosen-home", smoke: false },
+    desktopDependencies({
+      events: [],
+      createWindow() {
+        const window = {
+          destroyed: false,
+          async loadUrl() { if (windows.length > 1) await loadPending; },
+          onReadyToShow() {},
+          show() {},
+          isVisible() { return false; },
+          isDestroyed() { return this.destroyed; },
+        };
+        windows.push(window);
+        return window;
+      },
+    }),
+  );
+  windows[0].destroyed = true;
+  const left = session.openWindow();
+  const right = session.openWindow();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(windows.length, 2);
+  releaseLoad();
+  await Promise.all([left, right]);
+  assert.equal(windows.length, 2);
+  await session.close();
+});
+
 test("A Product Home can start, close and start again", async () => {
   await withTemporaryDirectory(async (temporaryDirectory) => {
     const productHome = path.join(temporaryDirectory, "product");
@@ -197,7 +262,7 @@ test("MCP managed runtime uses the canonical Product Home state path", () => {
   assert.deepEqual(mcpManagedRuntimeDirectories(env, { managedBinDirectory: expected }), [expected]);
 });
 
-function desktopDependencies({ events, configureAppStoragePaths }) {
+function desktopDependencies({ events, configureAppStoragePaths, onActivate, createWindow: createWindowOverride }) {
   return {
     async startPanelServer() {
       events.push("server-started");
@@ -214,7 +279,7 @@ function desktopDependencies({ events, configureAppStoragePaths }) {
     async whenReady() {
       events.push("ready");
     },
-    createWindow() {
+    createWindow: createWindowOverride ?? function createWindow() {
       events.push("window-created");
       return {
         async loadUrl() {
@@ -227,6 +292,7 @@ function desktopDependencies({ events, configureAppStoragePaths }) {
       };
     },
     onWindowAllClosed() {},
+    onActivate,
     onBeforeQuit() {},
     quit() {},
   };

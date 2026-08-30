@@ -33,7 +33,8 @@
     "panel:desktop": "pnpm build && pnpm exec electron dist/app/panel-desktop.js",
     "panel:desktop:smoke": "pnpm build && node scripts/panel-desktop-smoke.mjs",
     "generate:icons": "node scripts/generate-icon-assets.mjs",
-    "dist:desktop:win": "pnpm build && pnpm exec electron-builder --win nsis --x64 --publish never"
+    "dist:desktop:win": "pnpm build && pnpm exec electron-builder --win nsis --x64 --publish never",
+    "dist:desktop:mac": "pnpm build && pnpm exec electron-builder --mac dmg zip --publish never"
   },
   "devDependencies": {
     "@resvg/resvg-js": "2.6.2",

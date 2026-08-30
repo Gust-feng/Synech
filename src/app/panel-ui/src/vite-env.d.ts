@@ -22,6 +22,7 @@ declare module "*.png" {
 
 interface Window {
   readonly desktopHost?: {
+    readonly platform: "win32" | "darwin" | "linux" | "other";
     readonly getLocalPreference: (key: string) => string | undefined;
     readonly setLocalPreference: (key: string, value: string) => boolean;
     readonly getWindowState: () => Promise<{

@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { PRODUCT_DATA_FORMAT_ID } from "../../platform/product-identity.js";
 
 export type DesktopLocalPreferenceStoreOptions = { readonly userDataDirectory: string };
 export type DesktopLocalPreferenceStore = {
@@ -10,6 +11,8 @@ export type DesktopLocalPreferenceStore = {
 };
 
 const DESKTOP_LOCAL_PREFERENCE_FILE = "synech-local-preferences.json";
+const DESKTOP_LOCAL_PREFERENCE_PREFIX = `${PRODUCT_DATA_FORMAT_ID}:`;
+const DESKTOP_LOCAL_PREFERENCE_KEY_PATTERN = /^[a-z0-9][a-z0-9._-]*$/i;
 
 export function createDesktopLocalPreferenceStore(options: DesktopLocalPreferenceStoreOptions): DesktopLocalPreferenceStore {
   const preferencePath = desktopLocalPreferencePath(options.userDataDirectory);
@@ -40,7 +43,9 @@ export function createDesktopLocalPreferenceStore(options: DesktopLocalPreferenc
 export function normalizeDesktopLocalPreferenceKey(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const key = value.trim();
-  return /^synech\/v1:[a-z0-9][a-z0-9._-]*$/i.test(key) ? key : undefined;
+  if (!key.startsWith(DESKTOP_LOCAL_PREFERENCE_PREFIX)) return undefined;
+  const name = key.slice(DESKTOP_LOCAL_PREFERENCE_PREFIX.length);
+  return DESKTOP_LOCAL_PREFERENCE_KEY_PATTERN.test(name) ? key : undefined;
 }
 
 function readDesktopLocalPreferencePayload(payload: unknown): { readonly key: string; readonly value: string } | undefined {

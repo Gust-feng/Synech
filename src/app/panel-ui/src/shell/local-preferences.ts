@@ -18,15 +18,18 @@ export function readLocalPreference(key: string): string | undefined {
   }
 }
 
-export function writeLocalPreference(key: string, value: string): void {
+export function writeLocalPreference(key: string, value: string): boolean {
   const storageKey = panelStorageKey(key);
-  writeDesktopLocalPreference(storageKey, value);
-  if (typeof localStorage === "undefined") return;
+  const desktopSaved = writeDesktopLocalPreference(storageKey, value);
+  if (typeof localStorage === "undefined") return desktopSaved;
+  let browserSaved = false;
   try {
     localStorage.setItem(storageKey, value);
+    browserSaved = true;
   } catch {
     // Browser storage is best-effort; desktop builds persist through the preload bridge.
   }
+  return desktopSaved || browserSaved;
 }
 
 function readDesktopLocalPreference(key: string): string | undefined {

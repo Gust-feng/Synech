@@ -5,6 +5,7 @@ type DesktopWindowPresentationState = {
 };
 
 contextBridge.exposeInMainWorld("desktopHost", {
+  platform: normalizeDesktopPlatform(process.platform),
   getLocalPreference: (key: string): string | undefined => {
     return readDesktopPreference(key);
   },
@@ -36,6 +37,11 @@ contextBridge.exposeInMainWorld("desktopHost", {
     ipcRenderer.send("desktop:window-close");
   },
 });
+
+function normalizeDesktopPlatform(platform: NodeJS.Platform): "win32" | "darwin" | "linux" | "other" {
+  if (platform === "win32" || platform === "darwin" || platform === "linux") return platform;
+  return "other";
+}
 
 function readDesktopWindowPresentationState(payload: unknown): DesktopWindowPresentationState | undefined {
   if (payload === null || typeof payload !== "object") return undefined;

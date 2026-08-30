@@ -40,6 +40,8 @@ export type PanelDesktopSession = {
   readonly url: string;
   readonly productHome: string;
   readonly configDirectory: string;
+  /** Reopen the panel window after a native window close (macOS activate). */
+  readonly openWindow: () => Promise<void>;
   close(): Promise<void>;
 };
 
@@ -53,6 +55,7 @@ export type PanelDesktopDependencies = {
   readonly openExternalResource?: (target: PanelExternalResourceTarget) => Promise<void>;
   readonly whenReady: () => Promise<void>;
   readonly onWindowAllClosed: (handler: () => void) => void;
+  readonly onActivate?: (handler: () => void) => void;
   readonly onBeforeQuit: (handler: () => Promise<void>) => void;
   readonly onSessionClosed?: () => void;
   readonly quit: () => void;
@@ -72,8 +75,10 @@ export async function startPanelDesktopSession(
     externalResourceOpener: args.smoke ? undefined : dependencies.openExternalResource,
   });
   let closePromise: Promise<void> | undefined;
+  let sessionClosing = false;
 
   const closeServer = (): Promise<void> => {
+    sessionClosing = true;
     closePromise ??= (async () => {
       await server.close();
       dependencies.onSessionClosed?.();
@@ -89,6 +94,40 @@ export async function startPanelDesktopSession(
   }
 
   const panelUrl = args.devUrl ?? server.url;
+
+  let windowHandle: PanelDesktopWindowHandle | undefined;
+  let windowOpenPromise: Promise<void> | undefined;
+  const openWindowOnce = async (): Promise<void> => {
+    if (sessionClosing) return;
+    await dependencies.whenReady();
+    if (sessionClosing) return;
+    if (windowHandle !== undefined && !windowHandle.isDestroyed()) {
+      showPanelDesktopWindow(windowHandle);
+      return;
+    }
+    const window = dependencies.createWindow(createPanelDesktopWindowOptions());
+    windowHandle = window;
+    window.onReadyToShow(() => {
+      showPanelDesktopWindow(window);
+    });
+    await window.loadUrl(panelUrl);
+    if (sessionClosing) return;
+    showPanelDesktopWindow(window);
+  };
+  const openWindow = (): Promise<void> => {
+    if (sessionClosing) return Promise.resolve();
+    windowOpenPromise ??= openWindowOnce().finally(() => {
+      windowOpenPromise = undefined;
+    });
+    return windowOpenPromise;
+  };
+
+  dependencies.onActivate?.(() => {
+    void openWindow().catch((error: unknown) => {
+      console.error("恢复桌面面板窗口失败。");
+      console.error(error);
+    });
+  });
 
   dependencies.onBeforeQuit(closeServer);
   dependencies.onWindowAllClosed(() => {
@@ -109,19 +148,13 @@ export async function startPanelDesktopSession(
       url: panelUrl,
       productHome: server.productHome,
       configDirectory: server.configDirectory,
+      openWindow,
       close: closeServer,
     };
   }
 
   try {
-    await dependencies.whenReady();
-    const options = createPanelDesktopWindowOptions();
-    const window = dependencies.createWindow(options);
-    window.onReadyToShow(() => {
-      showPanelDesktopWindow(window);
-    });
-    await window.loadUrl(panelUrl);
-    showPanelDesktopWindow(window);
+    await openWindow();
   } catch (error) {
     await closeServer();
     throw error;
@@ -131,6 +164,7 @@ export async function startPanelDesktopSession(
     url: panelUrl,
     productHome: server.productHome,
     configDirectory: server.configDirectory,
+    openWindow,
     close: closeServer,
   };
 }
