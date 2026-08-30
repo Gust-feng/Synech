@@ -5,6 +5,9 @@ allowBuilds:
   electron-winstaller: false
   protobufjs: false
 
+minimumReleaseAgeExclude:
+  - '@lottiefiles/dotlottie-web@0.80.0'
+
 overrides:
   hono: 4.12.30
   qs: 6.15.3

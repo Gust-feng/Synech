@@ -1,0 +1,4 @@
+#pragma once
+
+#define IDR_SYNECH_SHELL_HTML 101
+#define IDR_SYNECH_BACKEND_INSTALLER 102

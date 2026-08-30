@@ -68,6 +68,8 @@ export type LocalWorkspaceCommandToolOptions = LocalWorkspaceToolOptions & {
   readonly processRegistry?: LocalCommandProcessRegistry;
   readonly portOccupantProbe?: PortOccupantProbe;
   readonly maxBackgroundLogBytes?: number;
+  /** Product-owned directory for command logs; omitted by standalone callers. */
+  readonly commandLogDirectory?: string;
 };
 
 type TextPreview = {
@@ -175,6 +177,7 @@ export function createLocalShellCommandTool(
               waitMs: backgroundWaitMs,
               lifetime,
               maxLogBytes: maxBackgroundLogBytes,
+              commandLogDirectory: options.commandLogDirectory,
               processFacts,
             })
           : await runBackgroundProgramCommand({
@@ -187,6 +190,7 @@ export function createLocalShellCommandTool(
               waitMs: backgroundWaitMs,
               lifetime,
               maxLogBytes: maxBackgroundLogBytes,
+              commandLogDirectory: options.commandLogDirectory,
               processFacts,
             })
         : normalized.directProgram === undefined || !executeDirectly
@@ -197,6 +201,7 @@ export function createLocalShellCommandTool(
               relativeCwd: displayedCwd,
               timeoutMs,
               context,
+              commandLogDirectory: options.commandLogDirectory,
               processFacts,
             })
           : await runForegroundProgramCommand({
@@ -207,6 +212,7 @@ export function createLocalShellCommandTool(
               relativeCwd: displayedCwd,
               timeoutMs,
               context,
+              commandLogDirectory: options.commandLogDirectory,
               processFacts,
             });
       const result = await enrichCommandResult({

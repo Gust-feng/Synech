@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import { runBackgroundProgramCommand } from "../dist/app/tool-center/adapters/background-process.js";
@@ -53,6 +55,28 @@ test("foreground execution preserves stdout, stderr, progress, and registry exit
   assert.equal(registry.exits[0].exitCode, 0);
   assert.equal(progress.at(-1).stdoutTail, "out");
   assert.equal(progress.at(-1).stderrTail, "err");
+});
+
+test("command execution can keep retained logs inside the Product Home cache", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "synech-command-log-test-"));
+  try {
+    const outcome = await runForegroundProgramCommand({
+      command: process.execPath,
+      args: ["-e", "process.stdout.write('x'.repeat(13000))"],
+      commandLine: "node product-home-log-test",
+      workingDirectory: process.cwd(),
+      relativeCwd: ".",
+      timeoutMs: 5_000,
+      commandLogDirectory: path.join(directory, "cache", "command-logs"),
+      context: {},
+    });
+    assert.equal(outcome.result.truncated, true);
+    assert.equal(path.dirname(outcome.result.logPath), path.join(directory, "cache", "command-logs"));
+    assert.match(await fs.readFile(outcome.result.logPath, "utf8"), /x{1000}/u);
+    await fs.rm(outcome.result.logPath, { force: true });
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  }
 });
 
 test("foreground execution preserves UTF-8 characters split across process chunks", async () => {

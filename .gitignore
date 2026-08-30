@@ -9,6 +9,9 @@ release/
 coverage/
 output/
 .turbo/
+packaging/windows/installer-shell/generated/
+packaging/windows/installer-shell/obj/
+packaging/windows/installer-shell/.vite-preview-cache/
 
 # Local configuration and runtime data
 .env
@@ -28,3 +31,6 @@ tmp-*
 .agents/
 .playwright-mcp/
 .playwright-cli/
+
+# Standalone frontend prototype template (to be moved out of this repo)
+panel-template/

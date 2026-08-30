@@ -1,0 +1,929 @@
+:root {
+  font-family: "Noto Sans SC", "Microsoft YaHei UI", "Segoe UI Variable Text", system-ui, sans-serif;
+  color: #2d2a2f;
+  background: transparent;
+  font-synthesis: none;
+}
+
+* { box-sizing: border-box; }
+html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+button, input { font: inherit; }
+button:focus-visible, input:focus-visible + .shortcut-check { outline: 2px solid #716ab0; outline-offset: 3px; }
+
+.installer {
+  --ink: #2d2a2f;
+  --muted: #77717b;
+  --quiet: #77717b;
+  --accent: #716ab0;
+  --accent-soft: rgba(113, 106, 176, 0.12);
+  --install-log-line-height: 21px;
+  --install-log-visible-lines: 9;
+  --completion-canvas: #eeeaf2;
+  /* 外围只提供柔和的色场与极少量绘图标记；景观只留在卡片内，避免重复叙事。 */
+  --completion-background: linear-gradient(126deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0)),
+    radial-gradient(76% 90% at 73% 37%, rgba(255, 242, 218, 0.92) 0%, rgba(255, 242, 218, 0) 66%),
+    radial-gradient(82% 86% at -4% 4%, rgba(215, 210, 238, 0.82) 0%, rgba(215, 210, 238, 0) 69%),
+    radial-gradient(92% 78% at 47% 116%, rgba(210, 226, 216, 0.88) 0%, rgba(210, 226, 216, 0) 65%),
+    linear-gradient(126deg, #e9e6f2 0%, #f3e9e8 49%, #e7efe8 100%);
+  --completion-frame-padding: clamp(22px, 2.5vw, 32px);
+  --completion-frame-bottom-padding: calc(var(--completion-frame-padding) + 6px);
+  --completion-frame-surface:
+    linear-gradient(145deg, #f5f2ed 0%, #efebe5 100%);
+  --completion-paper-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='paper'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.42' numOctaves='2' seed='11' stitchTiles='stitch' result='fine'/%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.014%20.32' numOctaves='2' seed='23' stitchTiles='stitch' result='fiber'/%3E%3CfeBlend in='fine' in2='fiber' mode='multiply'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23paper)' opacity='.46'/%3E%3C/svg%3E");
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--completion-canvas);
+  user-select: none;
+}
+
+.window-drag-region {
+  position: absolute;
+  z-index: 20;
+  inset: 0 58px auto 0;
+  height: 54px;
+}
+
+.installer-layout {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  grid-template-columns: minmax(270px, 38%) minmax(0, 1fr);
+}
+
+.artwork-panel {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--completion-canvas);
+}
+
+.artwork-frame {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: #e8dcf7;
+  transition: transform 720ms cubic-bezier(0.22, 1, 0.36, 1), opacity 420ms ease;
+}
+
+.artwork-frame img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 50% 57%;
+  pointer-events: none;
+}
+
+.artwork-frame::after {
+  position: absolute;
+  inset: 0;
+  border-right: 1px solid rgba(73, 64, 91, 0.08);
+  background: linear-gradient(90deg, transparent 74%, rgba(251, 250, 252, 0.12));
+  content: "";
+  pointer-events: none;
+}
+
+.content-panel {
+  position: relative;
+  min-width: 0;
+  background: linear-gradient(136deg, #faf9fc 0%, #f7f5fa 54%, #efedf5 100%);
+  transition: transform 520ms cubic-bezier(0.4, 0, 0.2, 1), opacity 360ms ease;
+}
+
+.content-panel::after {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  background: var(--completion-canvas);
+  content: "";
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 620ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.content-panel > * { position: relative; z-index: 1; }
+
+.installer.is-completion-scene .installer-layout { pointer-events: none; }
+.installer.is-completion-scene .artwork-frame {
+  opacity: 0;
+  transform: translateX(-104%);
+  transition: transform 1080ms cubic-bezier(0.22, 1, 0.36, 1), opacity 300ms ease 780ms;
+}
+.installer.is-completion-scene .content-panel { opacity: 1; transform: none; }
+.installer.is-completion-scene .content-panel::after { opacity: 1; transition-delay: 60ms; }
+.installer.is-completion-scene .brand-row,
+.installer.is-completion-scene .installer-surface {
+  opacity: 0;
+  transform: translateY(-4px);
+  transition: opacity 300ms ease 120ms, transform 380ms cubic-bezier(0.22, 1, 0.36, 1) 120ms;
+}
+
+.brand-row {
+  position: relative;
+  z-index: 21;
+  display: flex;
+  height: 54px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 14px 0 34px;
+}
+
+.wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: #3c3840;
+  font-family: "Segoe UI Variable Display", "Noto Sans SC", system-ui, sans-serif;
+  font-size: 13px;
+  font-weight: 650;
+  opacity: 1;
+  transition: opacity 260ms ease;
+}
+
+.wordmark.is-hidden { opacity: 0; }
+
+.wordmark-mark {
+  display: block;
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid var(--accent);
+  border-radius: 50%;
+  box-shadow: inset 4px -2px 0 rgba(113, 106, 176, 0.22);
+}
+
+.window-close {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  background: transparent;
+  color: #8f8994;
+  cursor: pointer;
+}
+
+.window-close span::before,
+.window-close span::after {
+  position: absolute;
+  top: 21px;
+  left: 16px;
+  width: 12px;
+  height: 1px;
+  background: currentColor;
+  content: "";
+  transform: rotate(45deg);
+}
+
+.window-close span::after { transform: rotate(-45deg); }
+.window-close:hover:not(:disabled) { color: var(--ink); }
+.window-close:disabled { cursor: default; opacity: 0.28; }
+
+.installer-surface {
+  width: min(438px, calc(100% - 68px));
+  /* 配置页与进度页共用同一锚点，切换时不得重排进度条。 */
+  margin: 34px auto 0;
+}
+
+.surface-heading { min-height: 52px; }
+.surface-title {
+  position: relative;
+  height: 36px;
+  margin: 0;
+  color: var(--ink);
+  font-family: "Segoe UI Variable Display", "Noto Sans SC", system-ui, sans-serif;
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.28;
+  letter-spacing: 0;
+}
+
+.surface-title > span {
+  position: absolute;
+  inset: 0 auto auto 0;
+  opacity: 0;
+  transform: translateY(7px);
+  transition: opacity 180ms ease, transform 320ms cubic-bezier(0.22, 1, 0.36, 1);
+  white-space: nowrap;
+}
+
+.surface-title.mode-configure > .surface-title-configure,
+.surface-title.mode-launching > .surface-title-install,
+.surface-title.mode-install > .surface-title-install,
+.surface-title.mode-settling > .surface-title-settling,
+.surface-title.mode-failed > .surface-title-failed {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.path-field {
+  display: grid;
+  min-height: 70px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  column-gap: 14px;
+  align-items: center;
+  border: 1px solid rgba(72, 65, 81, 0.11);
+  border-radius: 6px;
+  padding: 13px 14px;
+  background: rgba(255, 255, 255, 0.7);
+  box-shadow: 0 8px 26px rgba(68, 58, 82, 0.045);
+}
+
+.path-label {
+  color: #746f78;
+  font-size: 10px;
+  font-weight: 620;
+}
+
+.path-value {
+  min-width: 0;
+  color: #454149;
+  overflow-wrap: anywhere;
+  font-family: "Cascadia Mono", "Segoe UI Mono", Consolas, monospace;
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
+.path-change {
+  grid-row: 1 / 3;
+  grid-column: 2;
+  min-width: 44px;
+  min-height: 44px;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.path-change:disabled { cursor: default; opacity: 0.4; }
+.stage-viewport {
+  position: relative;
+  min-height: 352px;
+}
+
+.stage-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+}
+
+.stage-layer.is-hidden {
+  visibility: hidden;
+  pointer-events: none;
+  opacity: 0;
+}
+
+.stage-layer.is-visible {
+  visibility: visible;
+  pointer-events: auto;
+  opacity: 1;
+}
+
+.configure-stage {
+  min-height: 302px;
+  display: flex;
+  flex-direction: column;
+  transform: translateY(8px);
+  transition: opacity 220ms ease, transform 380ms cubic-bezier(0.22, 1, 0.36, 1), visibility 0s linear 380ms;
+}
+
+.configure-stage.is-visible { transform: translateY(0); transition-delay: 0s; }
+.configure-stage.is-launching {
+  visibility: visible;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(-16px) scale(0.985);
+  transition: opacity 260ms ease, transform 380ms cubic-bezier(0.3, 0, 0.1, 1);
+}
+/* 真实进度进入时必须直接落在最终坐标；只让上一阶段淡出。 */
+.install-stream { transition: opacity 160ms ease, visibility 0s linear 160ms; }
+.install-stream.is-visible { transition-delay: 0s; }
+
+.configure-controls {
+  display: flex;
+  min-height: 302px;
+  flex-direction: column;
+  padding-top: 9px;
+}
+
+.disk-space {
+  margin: 0;
+  padding: 0 3px;
+  color: var(--quiet);
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+.disk-space.is-insufficient { color: #9c5559; font-weight: 620; }
+
+.shortcut-options {
+  display: grid;
+  gap: 0;
+  margin: 20px 0 0;
+  border: 0;
+  padding: 0;
+}
+
+.shortcut-options legend {
+  margin: 0 0 5px;
+  padding: 0;
+  color: #77717b;
+  font-size: 10px;
+}
+
+.shortcut-option {
+  position: relative;
+  display: grid;
+  min-height: 44px;
+  grid-template-columns: 18px 1fr;
+  gap: 10px;
+  align-items: center;
+  border-bottom: 1px solid rgba(72, 65, 81, 0.07);
+  color: #514d54;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.shortcut-option input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.shortcut-check {
+  display: grid;
+  width: 15px;
+  height: 15px;
+  place-items: center;
+  border: 1px solid #8f8994;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.74);
+  transition: border-color 150ms ease, background 150ms ease;
+}
+
+.shortcut-check i {
+  width: 7px;
+  height: 4px;
+  border-bottom: 1.5px solid #fff;
+  border-left: 1.5px solid #fff;
+  opacity: 0;
+  transform: translateY(-1px) rotate(-45deg);
+}
+
+.shortcut-option input:checked + .shortcut-check { border-color: var(--accent); background: var(--accent); }
+.shortcut-option input:checked + .shortcut-check i { opacity: 1; }
+
+.configure-action-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: auto;
+  padding-top: 24px;
+  padding-bottom: 8px;
+}
+
+.install-action,
+.secondary-action {
+  min-height: 44px;
+  border-radius: 6px;
+  padding: 0 22px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.install-action {
+  min-width: 104px;
+  border: 0;
+  background: var(--accent);
+  box-shadow: 0 7px 20px rgba(92, 83, 150, 0.18);
+  color: #fff;
+  transition: background 150ms ease, transform 150ms ease, box-shadow 150ms ease;
+}
+
+.install-action:hover:not(:disabled) { background: #625b9f; box-shadow: 0 9px 24px rgba(92, 83, 150, 0.23); transform: translateY(-1px); }
+.install-action:active:not(:disabled) { transform: translateY(0); }
+.install-action:disabled { cursor: default; opacity: 0.42; }
+
+.secondary-action {
+  border: 1px solid rgba(72, 65, 81, 0.13);
+  background: transparent;
+  color: #625d66;
+}
+
+.install-stream {
+  display: flex;
+  height: 352px;
+  flex-direction: column;
+}
+
+.install-target-context {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  color: #9a93a0;
+}
+
+.install-target-context svg { flex: 0 0 auto; color: #a49ac5; }
+
+.install-target-context code {
+  min-width: 0;
+  color: #77717b;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  font-family: "Cascadia Mono", "Segoe UI Mono", Consolas, monospace;
+  font-size: 10px;
+  line-height: 1.5;
+  user-select: text;
+}
+
+.install-progress {
+  margin-top: 18px;
+}
+
+.install-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.install-progress-track {
+  position: relative;
+  min-width: 0;
+  height: 3px;
+  flex: 1;
+  overflow: hidden;
+  border-radius: 2px;
+  background: rgba(72, 65, 81, 0.09);
+}
+
+.install-progress-fill {
+  position: relative;
+  z-index: 1;
+  width: 0%;
+  height: 100%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, #8f83c4, #716ab0);
+  opacity: 1;
+  transition: width 420ms cubic-bezier(0.22, 1, 0.36, 1), opacity 280ms ease;
+}
+
+/* 准备和安装初期没有可与安装目标对应的百分比；沿用同一条轨道表达“仍在工作”。
+   只移动填充本身，不改变轨道尺寸，也不创建第二套进度组件。 */
+.install-progress-track::before {
+  position: absolute;
+  z-index: 2;
+  left: -34%;
+  width: 34%;
+  height: 100%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, #8f83c4, #716ab0);
+  content: "";
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 280ms ease;
+}
+
+.install-progress-track.is-indeterminate::before {
+  opacity: 1;
+  animation: install-progress-indeterminate 1.35s linear infinite;
+  will-change: left;
+}
+
+.install-progress-track.is-indeterminate .install-progress-fill {
+  opacity: 0;
+}
+
+@keyframes install-progress-indeterminate {
+  0% { left: -34%; }
+  100% { left: 100%; }
+}
+
+.install-progress-data {
+  min-height: 15px;
+  margin: 8px 0 0;
+  color: #8b8492;
+  font-family: "Cascadia Mono", "Segoe UI Mono", Consolas, monospace;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+}
+
+.install-progress-data.is-empty {
+  visibility: hidden;
+}
+
+.install-log {
+  display: grid;
+  align-content: start;
+  height: calc(var(--install-log-visible-lines) * var(--install-log-line-height));
+  margin-top: 14px;
+  overflow: hidden;
+  mask-image: linear-gradient(180deg, transparent 0, #000 18px, #000 calc(100% - 6px), rgba(0, 0, 0, 0.55) 100%);
+  -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 18px, #000 calc(100% - 6px), rgba(0, 0, 0, 0.55) 100%);
+  transition: opacity 280ms ease;
+}
+
+.install-log-line {
+  display: grid;
+  grid-template-columns: 62px minmax(0, 1fr);
+  column-gap: 10px;
+  align-items: baseline;
+  height: var(--install-log-line-height);
+  animation: install-log-line-in 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes install-log-line-in {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.install-log-verb {
+  color: #a49db0;
+  font-family: "Cascadia Mono", "Segoe UI Mono", Consolas, monospace;
+  font-size: 10px;
+  line-height: var(--install-log-line-height);
+}
+
+.install-log-line.is-running .install-log-verb {
+  color: var(--accent);
+  font-weight: 650;
+}
+
+.install-log-detail {
+  color: #77717b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: "Cascadia Mono", "Segoe UI Mono", Consolas, monospace;
+  font-size: 10px;
+  line-height: var(--install-log-line-height);
+  user-select: text;
+}
+
+/* 定型阶段：安装期上下文（目标目录、日志）安静退场，只留进度条做确认脉冲。
+   这样切到完成页时底层已经收干净，不会有两层内容叠加。 */
+.install-stream.is-settling .install-target-context,
+.install-stream.is-settling .install-log {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.install-stream.is-settling .install-progress-track {
+  box-shadow: 0 0 0 1px rgba(113, 106, 176, 0.08);
+  transition: box-shadow 240ms ease;
+}
+
+.install-stream.is-settling .install-progress-fill {
+  animation: installation-confirmed 760ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes installation-confirmed {
+  0% { filter: brightness(1); }
+  46% { filter: brightness(1.13); }
+  100% { filter: brightness(1); }
+}
+
+.completion-stage {
+  position: absolute;
+  z-index: 30;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px clamp(24px, 4vw, 42px);
+  overflow: hidden;
+  isolation: isolate;
+  background: var(--completion-background);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 560ms cubic-bezier(0.22, 1, 0.36, 1), visibility 0s linear 560ms;
+  visibility: hidden;
+}
+
+.completion-stage.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+  transition-delay: 0s;
+  visibility: visible;
+}
+
+.completion-stage.is-visible .completion-frame {
+  animation: completion-frame-enter 680ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes completion-frame-enter {
+  from { opacity: 0; transform: translateY(18px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/*
+ * 外围不是第二张景观插画：它是参考图里的静态色场、细等高线和对位标记。
+ * 景观只在卡片内出现，因此背景即使铺满安装器也不会与入口争夺注意力。
+ */
+.completion-backdrop {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  overflow: hidden;
+  background: var(--completion-background);
+  pointer-events: none;
+}
+
+.completion-backdrop__grain {
+  position: absolute;
+  inset: 0;
+  background-image: var(--completion-paper-grain);
+  background-position: 23px 17px;
+  background-size: 300px 300px;
+  mix-blend-mode: multiply;
+  opacity: 0.018;
+}
+
+.completion-backdrop__marks {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.completion-backdrop__corners {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.8);
+  stroke-linecap: square;
+  stroke-width: 1.1;
+  vector-effect: non-scaling-stroke;
+}
+
+.completion-backdrop__contours {
+  fill: none;
+  stroke: rgba(112, 104, 134, 0.19);
+  stroke-linecap: round;
+  stroke-width: 0.8;
+  vector-effect: non-scaling-stroke;
+}
+
+.completion-backdrop__contours path:nth-child(-n + 4) {
+  stroke: rgba(255, 255, 255, 0.68);
+}
+
+.completion-backdrop__dots {
+  fill: rgba(255, 255, 255, 0.72);
+}
+
+.completion-backdrop__pinpoints {
+  fill: rgba(255, 255, 255, 0.94);
+  filter: drop-shadow(0 0 4px rgba(255, 255, 255, 0.72));
+}
+
+/* 画框本身是一个安静的裱纸层；开口边缘负责表达嵌入，而不是悬浮。 */
+.completion-frame {
+  position: relative;
+  z-index: 2;
+  isolation: isolate;
+  /* 3:2 scene + paper inset must fit inside the padded completion stage. */
+  width: min(780px, calc(100vw - 72px), calc(150vh - 137px));
+  padding: var(--completion-frame-padding) var(--completion-frame-padding) var(--completion-frame-bottom-padding);
+  border: 1px solid rgba(72, 65, 81, 0.13);
+  border-radius: 6px;
+  background: var(--completion-frame-surface);
+  box-shadow:
+    0 1px 1px rgba(70, 57, 88, 0.1),
+    0 7px 18px rgba(70, 57, 88, 0.055),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7),
+    inset 0 -1px 0 rgba(67, 56, 74, 0.07);
+}
+
+.completion-frame::before {
+  position: absolute;
+  z-index: 3;
+  inset: var(--completion-frame-padding) var(--completion-frame-padding) var(--completion-frame-bottom-padding);
+  border: 1px solid rgba(72, 65, 81, 0.11);
+  border-top-color: rgba(255, 255, 255, 0.7);
+  border-left-color: rgba(255, 255, 255, 0.48);
+  border-right-color: rgba(72, 65, 81, 0.1);
+  border-bottom-color: rgba(72, 65, 81, 0.13);
+  border-radius: 3px;
+  box-shadow:
+    0 1px 1px rgba(72, 65, 81, 0.035),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    inset 0 -1px 1px rgba(72, 65, 81, 0.055);
+  content: "";
+  pointer-events: none;
+}
+
+.completion-frame::after {
+  position: absolute;
+  z-index: 3;
+  inset: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.38);
+  border-right-color: rgba(64, 54, 71, 0.07);
+  border-bottom-color: rgba(64, 54, 71, 0.09);
+  border-radius: 3px;
+  box-shadow: inset 0 0 0 1px rgba(64, 54, 71, 0.025);
+  content: "";
+  pointer-events: none;
+}
+
+.completion-frame__grain {
+  position: absolute;
+  z-index: 1;
+  inset: 2px;
+  border-radius: inherit;
+  background-image: var(--completion-paper-grain);
+  background-position: 17px 11px;
+  background-size: 240px 240px;
+  mix-blend-mode: multiply;
+  opacity: 0.035;
+  pointer-events: none;
+}
+
+.completion-close {
+  position: absolute;
+  z-index: 4;
+  top: 5px;
+  right: 8px;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  background: transparent;
+  color: rgba(72, 65, 81, 0.48);
+  cursor: pointer;
+}
+
+.completion-close span::before,
+.completion-close span::after {
+  position: absolute;
+  top: 21px;
+  left: 16px;
+  width: 12px;
+  height: 1px;
+  background: currentColor;
+  content: "";
+  transform: rotate(45deg);
+}
+
+.completion-close span::after { transform: rotate(-45deg); }
+.completion-close:hover:not(:disabled),
+.completion-close:focus-visible { color: var(--ink); }
+.completion-close:disabled { cursor: default; opacity: 0.28; }
+.completion-close:focus-visible {
+  outline: 2px solid rgba(113, 106, 176, 0.52);
+  outline-offset: -1px;
+}
+
+.scene-entry {
+  position: relative;
+  z-index: 2;
+  display: block;
+  width: 100%;
+  /* 与共享场景 1440×960 同比，避免 meet 在上下生成白色信箱边。 */
+  aspect-ratio: 3 / 2;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+  opacity: 1;
+}
+
+.scene-entry:focus-visible {
+  outline: 2px solid rgba(113, 106, 176, 0.58);
+  outline-offset: 8px;
+  border-radius: 4px;
+}
+
+.scene-entry:disabled {
+  cursor: default;
+}
+
+.scene-entry__viewport {
+  position: absolute;
+  inset: 0;
+  display: block;
+  overflow: hidden;
+  border-radius: 3px;
+  background: #f2edf4;
+}
+
+.scene-entry__scene,
+.scene-entry__scene svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* 入口只保留一层纸面边界和一组静态规划线；不模拟礼盒、封条或按钮面板。 */
+.scene-entry__frame {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  border: 1px solid rgba(72, 65, 81, 0.2);
+  border-radius: 3px;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.42),
+    inset 0 0 0 2px rgba(72, 65, 81, 0.045);
+  pointer-events: none;
+}
+
+.scene-entry__tab {
+  position: absolute;
+  z-index: 3;
+  right: 28px;
+  bottom: 24px;
+  display: inline-flex;
+  min-width: 176px;
+  min-height: 44px;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12px;
+  border-top: 1px solid rgba(72, 65, 81, 0.26);
+  border-bottom: 1px solid rgba(72, 65, 81, 0.22);
+  padding: 0 10px 0 0;
+  background: transparent;
+  color: #514b5e;
+  font-size: 12px;
+  font-weight: 560;
+  letter-spacing: 0;
+  line-height: 1;
+  opacity: 0.9;
+  pointer-events: none;
+  transform: none;
+}
+
+.scene-entry__tab::before {
+  width: 22px;
+  height: 1px;
+  flex: 0 0 auto;
+  background: rgba(72, 65, 81, 0.28);
+  content: "";
+}
+
+.scene-entry__tab-action {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.completion-confetti {
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  transition: opacity 520ms ease 220ms, visibility 0s linear 760ms;
+}
+
+.completion-stage.is-confetti-done .completion-confetti {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.failure-controls { height: 302px; padding-top: 22px; }
+.failure-event {
+  display: grid;
+  grid-template-columns: 22px 1fr;
+  gap: 10px;
+  border-left: 2px solid #a45e63;
+  padding: 11px 0 11px 13px;
+}
+
+.failure-event > span { color: #a45e63; font-weight: 700; }
+.failure-event strong { color: #4c4245; font-size: 12px; }
+.failure-event p { margin: 5px 0 0; color: #77717b; font-size: 10.5px; line-height: 1.55; }
+.failure-actions { display: flex; gap: 10px; margin-top: 24px; }
+
+@media (max-width: 760px) {
+  .installer-layout { grid-template-columns: minmax(230px, 36%) minmax(0, 1fr); }
+  .installer-surface { width: calc(100% - 48px); }
+  .brand-row { padding-left: 24px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+
+  .install-progress-track.is-indeterminate .install-progress-fill {
+    opacity: 0;
+  }
+
+  .install-progress-track.is-indeterminate::before {
+    animation: none;
+    left: 0;
+  }
+}

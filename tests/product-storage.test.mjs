@@ -108,7 +108,11 @@ test("Product paths describe the canonical config, data, state, cache and backup
       },
       electron: path.join(state, "electron"),
     },
-    cache: { root: cache, electron: path.join(cache, "electron") },
+    cache: {
+      root: cache,
+      electron: path.join(cache, "electron"),
+      commandLogs: path.join(cache, "command-logs"),
+    },
     backups: path.join(productHome, "backups"),
   });
 

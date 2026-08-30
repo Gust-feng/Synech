@@ -54,6 +54,7 @@ export type ProductStatePaths = {
 export type ProductCachePaths = {
   readonly root: string;
   readonly electron: string;
+  readonly commandLogs: string;
 };
 
 export type ProductPaths = {
@@ -76,6 +77,7 @@ export function resolveProductPaths(options: ResolveProductHomeOptions = {}): Pr
   const runtimeToolsRoot = path.join(stateRoot, "runtime-tools");
   const mcpRuntimeRoot = path.join(runtimeToolsRoot, "mcp");
   const cacheRoot = path.join(productHome, "cache");
+  const commandLogs = path.join(cacheRoot, "command-logs");
   return {
     productHome,
     configDirectory: path.join(productHome, "config"),
@@ -122,6 +124,7 @@ export function resolveProductPaths(options: ResolveProductHomeOptions = {}): Pr
     cache: {
       root: cacheRoot,
       electron: path.join(cacheRoot, "electron"),
+      commandLogs,
     },
     backups: path.join(productHome, "backups"),
   };
@@ -155,6 +158,7 @@ export function productStorageDirectories(paths: ProductPaths): readonly string[
     paths.state.electron,
     paths.cache.root,
     paths.cache.electron,
+    paths.cache.commandLogs,
     paths.backups,
   ];
 }

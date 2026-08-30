@@ -28,10 +28,16 @@ win:
 nsis:
   installerIcon: build/icons/favicon.ico
   uninstallerIcon: build/icons/favicon.ico
-  oneClick: false
+  oneClick: true
   perMachine: false
-  allowToChangeInstallationDirectory: true
-  deleteAppDataOnUninstall: false
+  allowElevation: false
+  packElevateHelper: false
+  runAfterFinish: false
+  include: packaging/windows/installer.nsh
+  uninstallDisplayName: Synech
+  # Keep legacy Electron app-data cleanup enabled. The custom uninstall macro
+  # removes the canonical Synech Product Home as well.
+  deleteAppDataOnUninstall: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: Synech

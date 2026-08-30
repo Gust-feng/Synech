@@ -573,6 +573,7 @@ function assemblePanelHost(input: {
       processRegistry,
       processTerminator,
       toolOutputStore,
+      commandLogDirectory: productPaths.cache.commandLogs,
       managedMcpBinDirectory: productPaths.state.runtimeTools.mcp.bin,
       fileMutationCoordinator,
       resolveManagedAttachmentPath,

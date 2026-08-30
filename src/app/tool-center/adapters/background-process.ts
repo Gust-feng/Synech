@@ -32,6 +32,7 @@ export async function runBackgroundShellCommand(input: {
   readonly waitMs: number;
   readonly lifetime: ProcessLifetime;
   readonly maxLogBytes: number;
+  readonly commandLogDirectory?: string;
   readonly processFacts?: CommandProcessFacts;
 }): Promise<CommandExecutionOutcome> {
   return runBackgroundCommand({
@@ -45,6 +46,7 @@ export async function runBackgroundShellCommand(input: {
     platform: input.shell.platform,
     lifetime: input.lifetime,
     maxLogBytes: input.maxLogBytes,
+    commandLogDirectory: input.commandLogDirectory,
     windowsVerbatimArguments: input.shell.syntax === "cmd",
     processFacts: input.processFacts,
   });
@@ -60,6 +62,7 @@ export async function runBackgroundProgramCommand(input: {
   readonly waitMs: number;
   readonly lifetime: ProcessLifetime;
   readonly maxLogBytes: number;
+  readonly commandLogDirectory?: string;
   readonly processFacts?: CommandProcessFacts;
 }): Promise<CommandExecutionOutcome> {
   return runBackgroundCommand({
@@ -73,6 +76,7 @@ export async function runBackgroundProgramCommand(input: {
     platform: input.shell.platform,
     lifetime: input.lifetime,
     maxLogBytes: input.maxLogBytes,
+    commandLogDirectory: input.commandLogDirectory,
     processFacts: input.processFacts,
   });
 }
@@ -88,10 +92,13 @@ async function runBackgroundCommand(input: {
   readonly platform: NodeJS.Platform;
   readonly lifetime: ProcessLifetime;
   readonly maxLogBytes: number;
+  readonly commandLogDirectory?: string;
   readonly windowsVerbatimArguments?: boolean;
   readonly processFacts?: CommandProcessFacts;
 }): Promise<CommandExecutionOutcome> {
-  const logTarget = await createCommandLogTarget(input.commandLine);
+  const logTarget = await createCommandLogTarget(input.commandLine, {
+    directory: input.commandLogDirectory,
+  });
   const logPath = logTarget.path;
   const logFd = openSync(logPath, "a");
   const stdoutDecoder = new StringDecoder("utf8");
