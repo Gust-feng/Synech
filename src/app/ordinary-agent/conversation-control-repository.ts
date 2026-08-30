@@ -96,7 +96,7 @@ export function createFileSystemOrdinaryConversationControlRepository(rootDir: s
           );
           throw new OrdinaryFeatureError("ordinary_revision_conflict", cause.message, { cause });
         }
-        await fs.rm(path.dirname(documentPath(rootDir, conversationId)), { recursive: true, force: true });
+        await fs.rm(path.dirname(documentPath(rootDir, conversationId)), { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
       });
     },
     get(conversationId) { return readDocument(rootDir, conversationId); },

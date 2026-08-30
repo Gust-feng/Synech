@@ -165,7 +165,7 @@ class FileSystemOrdinaryManagedAttachmentRepository implements OrdinaryManagedAt
         await writeRecordAtomically(pendingDirectory, record);
         await renameWithRetry(pendingDirectory, finalDirectory);
       } catch (error) {
-        await fs.rm(pendingDirectory, { recursive: true, force: true }).catch(() => undefined);
+        await fs.rm(pendingDirectory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }).catch(() => undefined);
         throw error;
       }
       return { record: cloneRecord(record), created: true };
@@ -294,7 +294,7 @@ class FileSystemOrdinaryManagedAttachmentRepository implements OrdinaryManagedAt
           throw ownershipConflict(normalizedId, "attachment owner changed before deletion");
         }
       }
-      await fs.rm(directoryPath(this.rootPath, normalizedId), { recursive: true, force: true });
+      await fs.rm(directoryPath(this.rootPath, normalizedId), { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
     });
   }
 

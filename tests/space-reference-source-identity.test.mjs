@@ -14,7 +14,7 @@ import {
 
 test("a Synech write refreshes the captured identity of a linked local file", async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "synech-space-source-"));
-  t.after(async () => await fs.rm(directory, { recursive: true, force: true }));
+  t.after(async () => await fs.rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }));
   const filePath = path.join(directory, "note.txt");
   await fs.writeFile(filePath, "before", "utf8");
   const repository = memorySpaceRepository();

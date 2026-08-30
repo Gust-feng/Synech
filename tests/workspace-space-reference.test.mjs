@@ -394,5 +394,5 @@ function unavailableWorkspaceFeature() {
 
 async function withTemporaryDirectory(operation) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "synech-workspace-baseline-"));
-  try { await operation(directory); } finally { await fs.rm(directory, { recursive: true, force: true }); }
+  try { await operation(directory); } finally { await fs.rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }); }
 }

@@ -30,7 +30,7 @@ test("file attachment repository stores records while lifecycle owns cleanup pol
     await repository.delete("attachment-1");
     assert.deepEqual(await repository.list(), []);
   } finally {
-    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   }
 });
 

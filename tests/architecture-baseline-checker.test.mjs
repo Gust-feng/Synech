@@ -84,7 +84,7 @@ test("architecture checker rejects dependency, presentation, persistence, and ca
     assert.match(result.stderr, /canonical-application-bypass/u);
     assert.match(result.stderr, /ui-read-model-node-dependency/u);
   } finally {
-    await fs.rm(directory, { recursive: true, force: true });
+    await fs.rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   }
 });
 
@@ -104,7 +104,7 @@ test("architecture checker rejects stale allowlist entries", async () => {
     assert.notEqual(result.code, 0);
     assert.match(result.stderr, /stale-allowlist-entry/u);
   } finally {
-    await fs.rm(directory, { recursive: true, force: true });
+    await fs.rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   }
 });
 
@@ -130,7 +130,7 @@ test("architecture checker allows validated repository JSON and type-only facade
     const result = await runChecker(directory);
     assert.equal(result.code, 0, result.stderr);
   } finally {
-    await fs.rm(directory, { recursive: true, force: true });
+    await fs.rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   }
 });
 

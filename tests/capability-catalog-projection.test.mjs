@@ -57,7 +57,7 @@ test("Skill capability projection preserves hashes and filters unsafe metadata k
     assert.equal(projected.resources[0].relativePath, "guide.md");
     assert.match(projected.resources[0].contentHash, /^sha256:[a-f0-9]{64}$/u);
   } finally {
-    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   }
 });
 

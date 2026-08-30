@@ -38,5 +38,5 @@ test("Workspace persistence rejects overlapping active roots before writing", as
 async function withDatabase(operation) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "synech-persistence-baseline-"));
   const database = new SqliteRuntimeDatabase(path.join(directory, "runtime.sqlite3"));
-  try { await operation(database); } finally { database.close(); await fs.rm(directory, { recursive: true, force: true }); }
+  try { await operation(database); } finally { database.close(); await fs.rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }); }
 }

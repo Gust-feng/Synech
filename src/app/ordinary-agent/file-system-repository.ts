@@ -640,39 +640,21 @@ export function createFileSystemOrdinaryRunRepository(rootDir: string): Ordinary
     async list(limit = 50) {
       const normalizedLimit = Math.max(0, Math.floor(limit));
       const forceRepair = normalizedLimit >= Number.MAX_SAFE_INTEGER;
+      // Manifest entries are committed alongside every snapshot save; listing
+      // consumes them directly instead of re-reading every snapshot. Drift is
+      // reconciled by the forceRepair scan used on the recovery path.
       const summaries = await enqueueManifest(async () => {
         const entries = await currentManifest(forceRepair);
         return sortedSummaries(entries.values());
       });
-      const available: OrdinaryRunSummary[] = [];
-      const invalidRunIds: string[] = [];
-      for (const summary of summaries) {
-        try {
-          const document = await readSnapshot(rootDir, summary.runId);
-          if (document === undefined) {
-            invalidRunIds.push(summary.runId);
-            continue;
-          }
-          available.push(summaryFromDocument(document));
-        } catch (error) {
-          if (!(error instanceof OrdinaryRunSnapshotIncompatibleError)) throw error;
-          invalidRunIds.push(summary.runId);
-        }
-        if (available.length >= normalizedLimit) break;
-      }
-      if (invalidRunIds.length > 0) {
-        await updateManifest((entries) => {
-          for (const runId of invalidRunIds) entries.delete(runId);
-        }).catch(() => undefined);
-      }
-      return toPersistedJsonShape(available);
+      return toPersistedJsonShape(summaries.slice(0, normalizedLimit));
     },
     inspectRecoveryInventory() {
       return scanRecoveryInventory(rootDir);
     },
     delete(runId) {
       return enqueueRun(runId, async () => {
-        await fs.rm(runDirectory(rootDir, runId), { recursive: true, force: true });
+        await fs.rm(runDirectory(rootDir, runId), { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
         await updateManifest((entries) => entries.delete(runId)).catch(() => undefined);
       });
     },

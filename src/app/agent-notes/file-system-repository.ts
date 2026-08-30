@@ -58,7 +58,7 @@ export function createFileSystemAgentNoteRepository(
         // The directory is the complete physical unit for one owner
         // (NOTES.md, owner.json and any interrupted temp write). `force` makes
         // deleting an empty or already deleted owner idempotent.
-        await fs.rm(directory, { recursive: true, force: true });
+        await fs.rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
       } catch (error) {
         throw new AgentNotesError("note_io_failure", `Agent note deletion failed: ${directory}`, { cause: error });
       }
@@ -75,7 +75,7 @@ export function createFileSystemAgentNoteRepository(
         // A notebook directory is the complete physical unit for this scope.
         // Removing it makes deletion immediate and leaves no backup/recovery
         // body; a later read naturally returns the empty baseline notebook.
-        await fs.rm(directory, { recursive: true, force: true });
+        await fs.rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
       } catch (error) {
         throw new AgentNotesError("note_io_failure", `Agent note deletion failed: ${directory}`, { cause: error });
       }

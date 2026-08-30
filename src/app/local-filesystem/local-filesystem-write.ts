@@ -129,7 +129,7 @@ export async function renameEntry(oldPath: string, newPath: string): Promise<FsR
  */
 export async function deleteEntry(targetPath: string): Promise<FsResult<void>> {
   try {
-    await fs.rm(targetPath, { recursive: true, force: false });
+    await fs.rm(targetPath, { recursive: true, force: false, maxRetries: 5, retryDelay: 20 });
   } catch (error) {
     const e = error as NodeJS.ErrnoException;
     if (e.code === "ENOENT") return { ok: false, error: { kind: "not_found" } };

@@ -45,7 +45,7 @@ test("managed-folder application creates the folder and adds one Space membershi
     assert.equal(events[3].input.reference.kind, "managed_folder");
     assert.equal(await fs.stat(events[3].input.reference.path).then(() => true), true);
   } finally {
-    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   }
 });
 
@@ -68,7 +68,7 @@ test("managed-folder application compensates physical state when Space write fai
     );
     assert.deepEqual(await fs.readdir(root), []);
   } finally {
-    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   }
 });
 

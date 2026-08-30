@@ -29,7 +29,7 @@ test("default Space initializer creates the Space and managed directory once", a
     };
 
     await ensureDefaultSpace({ spaceFeature, managedSpaceRoot });
-    await fs.rm(path.join(managedSpaceRoot, "space-default"), { recursive: true, force: true });
+    await fs.rm(path.join(managedSpaceRoot, "space-default"), { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
     await ensureDefaultSpace({ spaceFeature, managedSpaceRoot });
 
     assert.deepEqual(spaces, [{ id: "space-default", title: "我的空间" }]);
@@ -83,6 +83,6 @@ async function withTemporaryDirectory(operation) {
   try {
     await operation(temporaryDirectory);
   } finally {
-    await fs.rm(temporaryDirectory, { recursive: true, force: true });
+    await fs.rm(temporaryDirectory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   }
 }

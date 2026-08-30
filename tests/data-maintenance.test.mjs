@@ -18,7 +18,7 @@ import {
 
 test("backup, stage, and startup restore preserve the complete owned-data bundle", async (t) => {
   const temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "synech-data-maintenance-"));
-  t.after(async () => await fs.rm(temporaryDirectory, { recursive: true, force: true }));
+  t.after(async () => await fs.rm(temporaryDirectory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }));
 
   const sourcePaths = resolveProductPaths({ productHome: path.join(temporaryDirectory, "source") });
   const currentPaths = resolveProductPaths({ productHome: path.join(temporaryDirectory, "current") });
@@ -75,7 +75,7 @@ test("backup, stage, and startup restore preserve the complete owned-data bundle
 
 test("invalid backup is rejected before stopping writes or changing current data", async (t) => {
   const temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "synech-invalid-restore-"));
-  t.after(async () => await fs.rm(temporaryDirectory, { recursive: true, force: true }));
+  t.after(async () => await fs.rm(temporaryDirectory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }));
   const paths = resolveProductPaths({ productHome: temporaryDirectory });
   await initializeProductStorage(paths);
   const database = await createTestDatabase(paths, "current");
@@ -101,7 +101,7 @@ test("invalid backup is rejected before stopping writes or changing current data
 
 test("restore rejects a backup whose schema no longer matches the v1 baseline", async (t) => {
   const temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "synech-schema-restore-"));
-  t.after(async () => await fs.rm(temporaryDirectory, { recursive: true, force: true }));
+  t.after(async () => await fs.rm(temporaryDirectory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }));
   const sourcePaths = resolveProductPaths({ productHome: path.join(temporaryDirectory, "source") });
   const currentPaths = resolveProductPaths({ productHome: path.join(temporaryDirectory, "current") });
   await Promise.all([initializeProductStorage(sourcePaths), initializeProductStorage(currentPaths)]);

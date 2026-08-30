@@ -258,10 +258,12 @@ export function createOrdinaryAgentFeature(input: {
   }
 
   async function recoverPersistedRuns(): Promise<void> {
+    let conversationEnumerationFailed = false;
     let conversationSummaries: readonly Awaited<ReturnType<OrdinaryConversationControlRepository["list"]>>[number][] = [];
     try {
       conversationSummaries = await input.conversationRepository.list(Number.MAX_SAFE_INTEGER);
     } catch (error) {
+      conversationEnumerationFailed = true;
       emitDiagnostic({ kind: "startup_recovery_failed", source: "conversation_repository", error });
     }
     for (const summary of conversationSummaries) {
@@ -291,14 +293,16 @@ export function createOrdinaryAgentFeature(input: {
       runStore.markEnumerationFailed();
       emitDiagnostic({ kind: "startup_recovery_failed", source: "run_repository", error });
     }
-    for (const summary of runSummaries) {
-      if (conversationCoordinator.hasControl(summary.conversationId)) continue;
-      conversationCoordinator.markUnavailable(
-        summary.conversationId,
-        new Error("Conversation control document is missing; the run was isolated from recovery."),
-      );
+    if (!conversationEnumerationFailed) {
+      for (const summary of runSummaries) {
+        if (conversationCoordinator.hasControl(summary.conversationId)) continue;
+        conversationCoordinator.markUnavailable(
+          summary.conversationId,
+          new Error("Conversation control document is missing; the run was isolated from recovery."),
+        );
+      }
     }
-    if (!runStore.enumerationFailed()) {
+    if (!runStore.enumerationFailed() && !conversationEnumerationFailed) {
       for (const control of conversationCoordinator.controls()) {
         const conversationId = control.state.conversationId;
         if (control.state.deletedAt !== undefined ||

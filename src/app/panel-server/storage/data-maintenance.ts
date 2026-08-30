@@ -188,10 +188,10 @@ async function writeBackup(
   } catch (error) {
     await Promise.allSettled([
       rm(temporaryFilePath, { force: true }),
-      rm(temporaryAssetsPath, { recursive: true, force: true }),
+      rm(temporaryAssetsPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }),
       rm(temporaryManifestPath, { force: true }),
       rm(filePath, { force: true }),
-      rm(assetsPath, { recursive: true, force: true }),
+      rm(assetsPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }),
       rm(manifestPath, { force: true }),
     ]);
     throw new DataMaintenanceError("data_maintenance_failed", "应用数据备份失败。", { cause: error });
@@ -220,10 +220,10 @@ async function stageRestoreBundle(runtimePaths: ProductPaths, selectedPath: stri
       createdAt: new Date().toISOString(),
       baseline: databaseBaseline(selectedPath),
     })), "utf8");
-    await rm(pendingPath, { recursive: true, force: true });
+    await rm(pendingPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
     await rename(temporaryPath, pendingPath);
   } catch (error) {
-    await rm(temporaryPath, { recursive: true, force: true }).catch(() => undefined);
+    await rm(temporaryPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }).catch(() => undefined);
     throw new DataMaintenanceError("data_maintenance_failed", "应用恢复文件暂存失败。", { cause: error });
   }
 }
@@ -277,8 +277,8 @@ export function applyPendingRestore(
       renameSync(path.join(pendingPath, storageName), storagePath(runtimePaths, storageName));
       installedStorageNames.add(storageName);
     }
-    rmSync(pendingPath, { recursive: true, force: true });
-    rmSync(rollbackPath, { recursive: true, force: true });
+    rmSync(pendingPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+    rmSync(rollbackPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   } catch (error) {
     try {
       rollbackRestore({
@@ -329,7 +329,7 @@ function rollbackRestore(input: {
     const backup = rollbackDatabasePath(input.rollbackPath, suffix);
     if (existsSync(backup)) renameSync(backup, databaseFilePath(input.runtimePaths, suffix));
   }
-  rmSync(input.rollbackPath, { recursive: true, force: true });
+  rmSync(input.rollbackPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 }
 
 async function validateSelectedBackup(databasePath: string, expected: SqliteDatabaseBaseline): Promise<void> {

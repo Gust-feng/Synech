@@ -53,6 +53,7 @@ export class FileSystemLocalDevSecretStoreError extends Error {
 
 export class FileSystemLocalDevSecretStore implements LocalDevSecretStore {
   readonly secretsPath: string;
+  private mutationQueue = Promise.resolve();
 
   constructor(readonly configDirectory: string) {
     this.secretsPath = path.join(configDirectory, "local-dev-secrets.json");
@@ -69,37 +70,47 @@ export class FileSystemLocalDevSecretStore implements LocalDevSecretStore {
     return secrets.secrets[secretRef]?.value;
   }
 
-  async writeSecret(secretRef: string, value: string): Promise<SecretMetadata> {
-    const current = await this.readSecretsFile();
-    const updatedAt = new Date().toISOString();
-    const next: LocalDevSecretsFile = {
-      version: 1,
-      secrets: {
-        ...current.secrets,
-        [secretRef]: { value, updatedAt },
-      },
-      updatedAt,
-    };
-    await writeJsonFileAtomically(this.secretsPath, next);
-    return { configured: true, updatedAt };
+  writeSecret(secretRef: string, value: string): Promise<SecretMetadata> {
+    return this.enqueueMutation(async () => {
+      const current = await this.readSecretsFile();
+      const updatedAt = new Date().toISOString();
+      const next: LocalDevSecretsFile = {
+        version: 1,
+        secrets: {
+          ...current.secrets,
+          [secretRef]: { value, updatedAt },
+        },
+        updatedAt,
+      };
+      await writeJsonFileAtomically(this.secretsPath, next);
+      return { configured: true, updatedAt };
+    });
   }
 
-  async deleteSecret(secretRef: string): Promise<SecretMetadata> {
-    const current = await this.readSecretsFile();
-    if (current.secrets[secretRef] === undefined) {
+  deleteSecret(secretRef: string): Promise<SecretMetadata> {
+    return this.enqueueMutation(async () => {
+      const current = await this.readSecretsFile();
+      if (current.secrets[secretRef] === undefined) {
+        return { configured: false };
+      }
+      const updatedAt = new Date().toISOString();
+      const remainingSecrets = Object.fromEntries(
+        Object.entries(current.secrets).filter(([candidateRef]) => candidateRef !== secretRef)
+      );
+      const next: LocalDevSecretsFile = {
+        version: 1,
+        secrets: remainingSecrets,
+        updatedAt,
+      };
+      await writeJsonFileAtomically(this.secretsPath, next);
       return { configured: false };
-    }
-    const updatedAt = new Date().toISOString();
-    const remainingSecrets = Object.fromEntries(
-      Object.entries(current.secrets).filter(([candidateRef]) => candidateRef !== secretRef)
-    );
-    const next: LocalDevSecretsFile = {
-      version: 1,
-      secrets: remainingSecrets,
-      updatedAt,
-    };
-    await writeJsonFileAtomically(this.secretsPath, next);
-    return { configured: false };
+    });
+  }
+
+  private enqueueMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.mutationQueue.then(operation, operation);
+    this.mutationQueue = result.then(() => undefined, () => undefined);
+    return result;
   }
 
   private async readSecretsFile(): Promise<LocalDevSecretsFile> {
