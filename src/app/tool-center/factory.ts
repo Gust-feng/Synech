@@ -34,6 +34,7 @@ export type CreateAgentToolCenterOptions = {
   readonly fetch?: AgentToolProviderFetch;
   readonly webSearch?: WebSearchRuntimeConfig;
   readonly workspaceRoot?: string;
+  readonly commandLogDirectory?: string;
   readonly playwrightAvailable?: boolean;
   readonly toolStates?: readonly ToolStateSettings[];
   readonly toolCatalogNames?: readonly string[];

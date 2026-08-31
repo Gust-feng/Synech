@@ -197,12 +197,12 @@ export class McpManager {
     entry.status = "connecting";
     try {
       await withAbortTimeout(
-        (signal) => entry.client.connect({ signal, timeoutMs: this.connectTimeoutMs }),
+        (signal) => entry.client.connect({ signal }),
         this.connectTimeoutMs,
         `MCP server "${entry.config.serverId}" did not connect before timeout.`
       );
       entry.tools = await withAbortTimeout(
-        (signal) => entry.client.listTools({ signal, timeoutMs: this.connectTimeoutMs }),
+        (signal) => entry.client.listTools({ signal }),
         this.connectTimeoutMs,
         `MCP server "${entry.config.serverId}" did not list tools before timeout.`
       );

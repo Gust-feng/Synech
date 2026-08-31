@@ -533,7 +533,9 @@ const rawStateSchema = z.object({
     }
   }
 });
-const stateSchema: z.ZodType<OrdinaryRunState> = z.custom<OrdinaryRunState>((value) => rawStateSchema.safeParse(value).success);
+// Schema output is structurally the persisted state; the assertion bridges the
+// passthrough fields whose domain types declare more members than the schema.
+const stateSchema = rawStateSchema as unknown as z.ZodType<OrdinaryRunState>;
 const documentSchema: z.ZodType<OrdinaryRunSnapshotDocument> = z.object({
   schemaVersion: z.literal(ORDINARY_RUN_SCHEMA_VERSION), revision: z.number().int().positive(), savedAt: z.string().min(1), state: stateSchema,
 }).strict();
@@ -623,56 +625,34 @@ export function createFileSystemOrdinaryRunRepository(rootDir: string): Ordinary
           savedAt: state.timestamps.updatedAt,
           state: toPersistedJsonShape(state),
         };
-        const stateValidation = rawStateSchema.safeParse(document.state);
-        if (!stateValidation.success) {
-          throw new OrdinaryRunSnapshotIncompatibleError(state.runId, z.prettifyError(stateValidation.error));
-        }
         const validation = documentSchema.safeParse(document);
         if (!validation.success) throw new OrdinaryRunSnapshotIncompatibleError(state.runId, z.prettifyError(validation.error));
         await writeJsonAtomically(snapshotPath(rootDir, state.runId), document);
         // The snapshot is the commit. Index maintenance is deliberately separate
         // from run writes so unrelated runs never wait for a full snapshot scan.
         await updateManifest((entries) => entries.set(state.runId, summaryFromDocument(document))).catch(() => undefined);
-        return toPersistedJsonShape(document);
+        return document;
       });
     },
     get(runId) { return readSnapshot(rootDir, runId); },
     async list(limit = 50) {
       const normalizedLimit = Math.max(0, Math.floor(limit));
       const forceRepair = normalizedLimit >= Number.MAX_SAFE_INTEGER;
+      // Manifest entries are committed alongside every snapshot save; listing
+      // consumes them directly instead of re-reading every snapshot. Drift is
+      // reconciled by the forceRepair scan used on the recovery path.
       const summaries = await enqueueManifest(async () => {
         const entries = await currentManifest(forceRepair);
         return sortedSummaries(entries.values());
       });
-      const available: OrdinaryRunSummary[] = [];
-      const invalidRunIds: string[] = [];
-      for (const summary of summaries) {
-        try {
-          const document = await readSnapshot(rootDir, summary.runId);
-          if (document === undefined) {
-            invalidRunIds.push(summary.runId);
-            continue;
-          }
-          available.push(summaryFromDocument(document));
-        } catch (error) {
-          if (!(error instanceof OrdinaryRunSnapshotIncompatibleError)) throw error;
-          invalidRunIds.push(summary.runId);
-        }
-        if (available.length >= normalizedLimit) break;
-      }
-      if (invalidRunIds.length > 0) {
-        await updateManifest((entries) => {
-          for (const runId of invalidRunIds) entries.delete(runId);
-        }).catch(() => undefined);
-      }
-      return toPersistedJsonShape(available);
+      return toPersistedJsonShape(summaries.slice(0, normalizedLimit));
     },
     inspectRecoveryInventory() {
       return scanRecoveryInventory(rootDir);
     },
     delete(runId) {
       return enqueueRun(runId, async () => {
-        await fs.rm(runDirectory(rootDir, runId), { recursive: true, force: true });
+        await fs.rm(runDirectory(rootDir, runId), { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
         await updateManifest((entries) => entries.delete(runId)).catch(() => undefined);
       });
     },
@@ -683,19 +663,11 @@ async function readSnapshot(rootDir: string, runId: string): Promise<OrdinaryRun
   const filePath = snapshotPath(rootDir, runId);
   const stored = await readStoredJson(filePath, runId);
   if (stored === undefined) return undefined;
-  const raw = stored.raw;
-  const rawState = typeof raw === "object" && raw !== null && "state" in raw
-    ? (raw as { readonly state: unknown }).state
-    : undefined;
-  const stateValidation = rawStateSchema.safeParse(rawState);
-  if (!stateValidation.success) {
-    throw new OrdinaryRunSnapshotIncompatibleError(runId, z.prettifyError(stateValidation.error));
-  }
-  const result = documentSchema.safeParse(raw);
+  const result = documentSchema.safeParse(stored.raw);
   if (!result.success || result.data.state.runId !== runId) {
     throw new OrdinaryRunSnapshotIncompatibleError(runId, result.success ? "run identity is invalid" : z.prettifyError(result.error));
   }
-  return toPersistedJsonShape(result.data);
+  return result.data;
 }
 
 async function scanSummaries(rootDir: string): Promise<OrdinaryRunSummary[]> {

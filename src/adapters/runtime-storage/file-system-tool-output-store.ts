@@ -208,7 +208,7 @@ export class FileSystemToolOutputStore implements ToolOutputStore {
           if (await pathExists(target)) continue;
           throw error;
         } finally {
-          await fs.rm(temporary, { recursive: true, force: true }).catch(() => undefined);
+          await fs.rm(temporary, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }).catch(() => undefined);
         }
       }
       throw new ToolOutputStoreError(
@@ -260,7 +260,7 @@ export class FileSystemToolOutputStore implements ToolOutputStore {
         throw corruptEvidence(ref, "Stored tool evidence metadata is missing.");
       }
       const usage = await this.currentUsage();
-      await fs.rm(directory, { recursive: true, force: false });
+      await fs.rm(directory, { recursive: true, force: false, maxRetries: 5, retryDelay: 20 });
       usage.entries = Math.max(0, usage.entries - 1);
       usage.totalBytes = Math.max(0, usage.totalBytes - metadata.byteLength);
       this.deleteVerifiedEntry(ref);
@@ -279,7 +279,7 @@ export class FileSystemToolOutputStore implements ToolOutputStore {
           throw corruptEvidence(path.basename(directory), "Stored tool evidence metadata is missing.");
         }
         if (metadata.ownerId !== normalizedOwner) continue;
-        await fs.rm(directory, { recursive: true, force: false });
+        await fs.rm(directory, { recursive: true, force: false, maxRetries: 5, retryDelay: 20 });
         usage.entries = Math.max(0, usage.entries - 1);
         usage.totalBytes = Math.max(0, usage.totalBytes - metadata.byteLength);
         this.deleteVerifiedEntry(metadata.ref);
@@ -292,7 +292,7 @@ export class FileSystemToolOutputStore implements ToolOutputStore {
   clear(): Promise<void> {
     return this.mutate(async () => {
       for (const directory of await this.entryDirectories(true)) {
-        await fs.rm(directory, { recursive: true, force: true });
+        await fs.rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
       }
       this.usage = { entries: 0, totalBytes: 0 };
       this.clearVerifiedState();

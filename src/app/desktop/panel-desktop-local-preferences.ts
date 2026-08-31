@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { PRODUCT_DATA_FORMAT_ID } from "../../platform/product-identity.js";
 
@@ -79,7 +79,9 @@ function readDesktopLocalPreferences(preferencePath: string): Record<string, str
 function persistDesktopLocalPreferences(preferencePath: string, preferences: Record<string, string>): boolean {
   try {
     mkdirSync(path.dirname(preferencePath), { recursive: true });
-    writeFileSync(preferencePath, `${JSON.stringify(preferences, null, 2)}\n`, "utf8");
+    const tempPath = `${preferencePath}.${process.pid}.${Date.now()}.tmp`;
+    writeFileSync(tempPath, `${JSON.stringify(preferences, null, 2)}\n`, "utf8");
+    renameSync(tempPath, preferencePath);
     return true;
   } catch {
     return false;

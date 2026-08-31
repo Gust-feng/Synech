@@ -6,54 +6,28 @@ import type {
   ModelRequestOptions,
   ModelResponse,
 } from "../../domain/intelligence/index.js";
-import { nowIso } from "../id.js";
-import { createFailedModelResponse, createFailedModelResponseFromError } from "./failures.js";
-import { validateModelRequest, validateModelResponse } from "./validation.js";
+import { createFailedModelResponseFromError } from "./failures.js";
+import { validateModelResponse } from "./validation.js";
 
 export type NativeIntelligenceChannelOptions = {
   readonly provider: ModelProvider;
-  readonly retryPolicy?: ModelRequestRetryPolicy;
 };
 
-export type ModelRequestRetryPolicy = {
-  /** Number of retries after the initial provider attempt. */
-  readonly maxRetries?: number;
-  readonly baseDelayMs?: number;
-  readonly maxDelayMs?: number;
-  readonly jitterRatio?: number;
-  readonly sleep?: (delayMs: number, abortSignal?: AbortSignal) => Promise<void>;
-  readonly random?: () => number;
-};
+const RETRY_POLICY = {
+  maxRetries: 3,
+  baseDelayMs: 300,
+  maxDelayMs: 5_000,
+  jitterRatio: 0.2,
+} as const;
 
 export class NativeIntelligenceChannel implements IntelligenceChannel {
   constructor(private readonly options: NativeIntelligenceChannelOptions) {}
 
   async request(request: ModelRequest, options: ModelRequestOptions = {}): Promise<ModelResponse> {
-    const requestValidation = validateModelRequest(request);
-    if (!requestValidation.passed) {
-      const response = createFailedModelResponse({
-        requestId: request.requestId ?? "invalid-model-request",
-        providerId: this.options.provider.providerId,
-        providerKind: this.options.provider.providerKind,
-        protocolKind: this.options.provider.protocolKind,
-        model: this.options.provider.model,
-        outputKind: request.outputContract?.outputKind ?? "candidate",
-        failureKind: "request_validation",
-        message: "ModelRequest failed intelligence channel validation.",
-        validation: {
-          status: "failed",
-          checkedAt: nowIso(),
-          issues: requestValidation.issues,
-        },
-      });
-      return response;
-    }
-
     const providerResponse = await requestProviderWithRetry(
       this.options.provider,
       request,
       options,
-      this.options.retryPolicy,
     );
 
     const validation = this.validateResponse(request, providerResponse);
@@ -71,9 +45,7 @@ async function requestProviderWithRetry(
   provider: ModelProvider,
   request: ModelRequest,
   options: ModelRequestOptions,
-  retryPolicy: ModelRequestRetryPolicy | undefined,
 ): Promise<ModelResponse> {
-  const policy = normalizeRetryPolicy(retryPolicy);
   let attempt = 0;
   for (;;) {
     let response: ModelResponse;
@@ -91,10 +63,10 @@ async function requestProviderWithRetry(
         fallbackMessage: "Model provider request failed.",
       });
     }
-    if (!shouldRetryFailedResponse(response, attempt, options, policy)) {
+    if (!shouldRetryFailedResponse(response, attempt, options)) {
       return response;
     }
-    await sleepBeforeRetry(policy, attempt, options.abortSignal);
+    await sleepBeforeRetry(attempt, options.abortSignal);
     if (options.abortSignal?.aborted === true) {
       return response;
     }
@@ -105,62 +77,29 @@ async function requestProviderWithRetry(
 function shouldRetryFailedResponse(
   response: ModelResponse,
   attempt: number,
-  options: ModelRequestOptions,
-  policy: Required<ModelRequestRetryPolicy>
+  options: ModelRequestOptions
 ): boolean {
   return options.abortSignal?.aborted !== true &&
     response.status === "failed" &&
     response.failure?.retryable === true &&
-    attempt < policy.maxRetries;
+    attempt < RETRY_POLICY.maxRetries;
 }
 
 async function sleepBeforeRetry(
-  policy: Required<ModelRequestRetryPolicy>,
   retryIndex: number,
   abortSignal: AbortSignal | undefined,
 ): Promise<void> {
-  const delayMs = retryDelayMs(policy, retryIndex);
-  if (delayMs <= 0 || abortSignal?.aborted === true) {
+  const delayMs = retryDelayMs(retryIndex);
+  if (delayMs <= 0 || isAborted(abortSignal)) {
     return;
   }
-  await policy.sleep(delayMs, abortSignal);
+  await defaultRetrySleep(delayMs, abortSignal);
 }
 
-function retryDelayMs(policy: Required<ModelRequestRetryPolicy>, retryIndex: number): number {
-  const base = Math.max(0, policy.baseDelayMs);
-  if (base === 0) {
-    return 0;
-  }
-  const exponential = Math.min(policy.maxDelayMs, base * 2 ** Math.max(0, retryIndex));
-  const jitterRatio = Math.max(0, Math.min(1, policy.jitterRatio));
-  if (jitterRatio === 0) {
-    return Math.round(exponential);
-  }
-  const jitter = 1 + ((policy.random() * 2) - 1) * jitterRatio;
+function retryDelayMs(retryIndex: number): number {
+  const exponential = Math.min(RETRY_POLICY.maxDelayMs, RETRY_POLICY.baseDelayMs * 2 ** Math.max(0, retryIndex));
+  const jitter = 1 + ((Math.random() * 2) - 1) * RETRY_POLICY.jitterRatio;
   return Math.max(0, Math.round(exponential * jitter));
-}
-
-function normalizeRetryPolicy(policy: ModelRequestRetryPolicy | undefined): Required<ModelRequestRetryPolicy> {
-  return {
-    maxRetries: normalizeNonNegativeInteger(policy?.maxRetries, 3),
-    baseDelayMs: normalizeNonNegativeInteger(policy?.baseDelayMs, 300),
-    maxDelayMs: normalizeNonNegativeInteger(policy?.maxDelayMs, 5_000),
-    jitterRatio: normalizeJitterRatio(policy?.jitterRatio, 0.2),
-    sleep: policy?.sleep ?? defaultRetrySleep,
-    random: policy?.random ?? Math.random,
-  };
-}
-
-function normalizeNonNegativeInteger(value: number | undefined, fallback: number): number {
-  return value === undefined || !Number.isFinite(value)
-    ? fallback
-    : Math.max(0, Math.floor(value));
-}
-
-function normalizeJitterRatio(value: number | undefined, fallback: number): number {
-  return value === undefined || !Number.isFinite(value)
-    ? fallback
-    : Math.max(0, Math.min(1, value));
 }
 
 async function defaultRetrySleep(delayMs: number, abortSignal?: AbortSignal): Promise<void> {

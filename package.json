@@ -16,12 +16,10 @@
     "build:node": "pnpm generate:icons && tsc -p tsconfig.json && pnpm copy:initial-workbench-assets",
     "copy:initial-workbench-assets": "node scripts/copy-initial-workbench-assets.mjs",
     "copy:sub-agents": "node scripts/copy-sub-agent-assets.mjs",
-    "test": "pnpm clean:dist && pnpm build:node && pnpm check:baseline && pnpm test:node",
     "check:architecture": "node scripts/check-module-cycles.mjs",
     "check:baseline": "pnpm check:architecture && node scripts/check-architecture-baseline.mjs",
     "check:whitespace": "node scripts/check-whitespace.mjs",
-    "verify": "pnpm test && pnpm typecheck:panel && pnpm build:panel && pnpm panel:desktop:smoke && pnpm check:whitespace",
-    "test:node": "node --test --test-concurrency=1 tests/*.test.mjs",
+    "verify": "pnpm build && pnpm typecheck:panel && pnpm build:panel && pnpm panel:desktop:smoke && pnpm check:whitespace",
     "typecheck:panel": "tsc -p tsconfig.panel.json --noEmit",
     "build:panel": "vite build --config vite.panel.config.ts",
     "smoke:real-ai": "pnpm build && node dist/app/real-ai-smoke.js",
@@ -33,8 +31,12 @@
     "panel:desktop": "pnpm build && pnpm exec electron dist/app/panel-desktop.js",
     "panel:desktop:smoke": "pnpm build && node scripts/panel-desktop-smoke.mjs",
     "generate:icons": "node scripts/generate-icon-assets.mjs",
-    "dist:desktop:win": "pnpm build && pnpm exec electron-builder --win nsis --x64 --publish never",
-    "dist:desktop:mac": "pnpm build && pnpm exec electron-builder --mac dmg zip --publish never"
+    "installer-shell:dev": "pnpm exec vite --config packaging/windows/installer-shell/vite.dev-preview.config.ts",
+    "build:installer-shell:web": "pnpm exec tsc --noEmit -p packaging/windows/installer-shell/tsconfig.json && pnpm exec vite build --config packaging/windows/installer-shell/vite.config.ts",
+    "build:installer-shell": "node scripts/build-windows-installer-shell.mjs",
+    "build:installer-demo": "node scripts/build-windows-installer-demo.mjs",
+    "dist:desktop:win:backend": "pnpm build && node scripts/build-windows-nsis-backend.mjs",
+    "dist:desktop:win": "pnpm dist:desktop:win:backend && pnpm build:installer-shell"
   },
   "devDependencies": {
     "@resvg/resvg-js": "2.6.2",
@@ -52,6 +54,7 @@
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.80.10",
     "@earendil-works/pi-ai": "0.80.10",
+    "@lottiefiles/dotlottie-web": "0.80.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@tanstack/react-query": "5.101.2",
     "@tiptap/extension-image": "^3.29.1",

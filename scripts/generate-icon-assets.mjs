@@ -7,17 +7,14 @@ const source = join(root, "src", "app", "panel-ui", "public", "favicon.svg");
 // Web consumes the SVG directly; Electron and Windows consume these generated platform assets.
 const desktopIcon = join(root, "dist", "app", "desktop-assets", "favicon.png");
 const windowsIcon = join(root, "build", "icons", "favicon.ico");
-const macIcon = join(root, "build", "icons", "favicon.png");
 const sizes = [16, 24, 32, 48, 64, 128, 256];
 const svg = readFileSync(source);
 const images = sizes.map((size) => ({ size, body: renderPng(svg, size) }));
-const macImage = renderPng(svg, 512);
 
 mkdirSync(dirname(desktopIcon), { recursive: true });
 mkdirSync(dirname(windowsIcon), { recursive: true });
 writeFileSync(desktopIcon, images.at(-1).body);
 writeFileSync(windowsIcon, createIco(images));
-writeFileSync(macIcon, macImage);
 
 function renderPng(sourceSvg, size) {
   return new Resvg(sourceSvg, {

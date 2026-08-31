@@ -6,7 +6,7 @@ import {
   rmSync,
   statSync,
 } from "node:fs";
-import { copyFile, cp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { copyFile, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { z } from "zod";
@@ -17,6 +17,7 @@ import {
   type SqliteDatabaseBaseline,
   type SqliteRuntimeDatabase,
 } from "../../../adapters/runtime-storage/index.js";
+import { renameWithRetry } from "../../../kernel/fs/atomic-write.js";
 import type { ProductPaths } from "../../../platform/storage/index.js";
 import { PRODUCT_DATA_FORMAT_ID, PRODUCT_NAMESPACE } from "../../../platform/product-identity.js";
 
@@ -181,17 +182,17 @@ async function writeBackup(
       createdAt,
       baseline,
     })), "utf8");
-    await rename(temporaryFilePath, filePath);
-    await rename(temporaryAssetsPath, assetsPath);
-    await rename(temporaryManifestPath, manifestPath);
+    await renameWithRetry(temporaryFilePath, filePath);
+    await renameWithRetry(temporaryAssetsPath, assetsPath);
+    await renameWithRetry(temporaryManifestPath, manifestPath);
     return { filePath, byteLength: databaseBackup.byteLength, createdAt };
   } catch (error) {
     await Promise.allSettled([
       rm(temporaryFilePath, { force: true }),
-      rm(temporaryAssetsPath, { recursive: true, force: true }),
+      rm(temporaryAssetsPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }),
       rm(temporaryManifestPath, { force: true }),
       rm(filePath, { force: true }),
-      rm(assetsPath, { recursive: true, force: true }),
+      rm(assetsPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }),
       rm(manifestPath, { force: true }),
     ]);
     throw new DataMaintenanceError("data_maintenance_failed", "应用数据备份失败。", { cause: error });
@@ -220,10 +221,10 @@ async function stageRestoreBundle(runtimePaths: ProductPaths, selectedPath: stri
       createdAt: new Date().toISOString(),
       baseline: databaseBaseline(selectedPath),
     })), "utf8");
-    await rm(pendingPath, { recursive: true, force: true });
-    await rename(temporaryPath, pendingPath);
+    await rm(pendingPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+    await renameWithRetry(temporaryPath, pendingPath);
   } catch (error) {
-    await rm(temporaryPath, { recursive: true, force: true }).catch(() => undefined);
+    await rm(temporaryPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }).catch(() => undefined);
     throw new DataMaintenanceError("data_maintenance_failed", "应用恢复文件暂存失败。", { cause: error });
   }
 }
@@ -277,8 +278,8 @@ export function applyPendingRestore(
       renameSync(path.join(pendingPath, storageName), storagePath(runtimePaths, storageName));
       installedStorageNames.add(storageName);
     }
-    rmSync(pendingPath, { recursive: true, force: true });
-    rmSync(rollbackPath, { recursive: true, force: true });
+    rmSync(pendingPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+    rmSync(rollbackPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   } catch (error) {
     try {
       rollbackRestore({
@@ -329,7 +330,7 @@ function rollbackRestore(input: {
     const backup = rollbackDatabasePath(input.rollbackPath, suffix);
     if (existsSync(backup)) renameSync(backup, databaseFilePath(input.runtimePaths, suffix));
   }
-  rmSync(input.rollbackPath, { recursive: true, force: true });
+  rmSync(input.rollbackPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 }
 
 async function validateSelectedBackup(databasePath: string, expected: SqliteDatabaseBaseline): Promise<void> {

@@ -79,7 +79,7 @@ export async function captureKnowledgeAsset(
     else await fs.copyFile(source, content);
     await fs.rename(temporaryDirectory, assetDirectory);
   } catch (error) {
-    await fs.rm(temporaryDirectory, { recursive: true, force: true });
+    await fs.rm(temporaryDirectory, RECONCILIATION_RM_OPTIONS);
     throw error;
   }
   return {
@@ -149,7 +149,7 @@ function captureLimitError(message: string): PanelHttpError {
 }
 
 export async function removeKnowledgeAsset(root: string, refId: string): Promise<void> {
-  await fs.rm(path.join(root, safeAssetId(refId)), { recursive: true, force: true });
+  await fs.rm(path.join(root, safeAssetId(refId)), RECONCILIATION_RM_OPTIONS);
 }
 
 export async function stageKnowledgeAssetRemoval(
@@ -168,7 +168,7 @@ export async function stageKnowledgeAssetRemoval(
     commit: async () => {
       // The asset is already unreachable after the rename. Startup
       // reconciliation removes this directory if cleanup is interrupted.
-      await fs.rm(stagedDirectory, { recursive: true, force: true }).catch(() => undefined);
+      await fs.rm(stagedDirectory, RECONCILIATION_RM_OPTIONS).catch(() => undefined);
     },
     rollback: async () => await fs.rename(stagedDirectory, assetDirectory),
   };

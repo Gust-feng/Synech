@@ -1,0 +1,12 @@
+/* 统一场景源的明暗变体切换：所有消费方（主页背景、启动动画）共用同一规则。 */
+.home-scene__variant--dark {
+  display: none;
+}
+
+html[data-style='default'][data-color='dark'] .home-scene__variant--light {
+  display: none;
+}
+
+html[data-style='default'][data-color='dark'] .home-scene__variant--dark {
+  display: block;
+}

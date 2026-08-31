@@ -40,12 +40,18 @@
           document.documentElement.dataset.colorPreference = colorPreference;
           document.documentElement.dataset.motion = motion;
           document.documentElement.dataset.motionEffective = motionEffective;
+          // 桌面启动模式（安装后首次 / 更新后）。只接受两个结构化取值，
+          // 其余一律按普通启动处理；供首帧与启动动画决定呈现档位。
+          const launchValue = new URLSearchParams(window.location.search).get("launch");
+          document.documentElement.dataset.launch =
+            launchValue === "installed" || launchValue === "updated" ? launchValue : "ordinary";
         } catch {
           document.documentElement.dataset.style = "default";
           document.documentElement.dataset.color = "light";
           document.documentElement.dataset.colorPreference = "light";
           document.documentElement.dataset.motion = "system";
           document.documentElement.dataset.motionEffective = systemReducedMotion() ? "reduced" : "standard";
+          document.documentElement.dataset.launch = "ordinary";
         }
       })();
     </script>
@@ -134,6 +140,20 @@
 
         html[data-style="default"][data-color="dark"] .workbench-bootstrap__line {
           background: #33323a;
+        }
+
+        /* 首启/更新启动：第一帧是安静纸面，而不是软件结构骨架。
+           React 启动动画挂载后立即呈现同一视觉世界的场景卡片。 */
+        html[data-launch='installed'] .workbench-bootstrap,
+        html[data-launch='updated'] .workbench-bootstrap {
+          display: none;
+        }
+
+        /* Reduced motion skips the intro entirely, so keep a useful loading
+           frame visible until React mounts the ordinary workbench. */
+        html[data-motion-effective='reduced'][data-launch='installed'] .workbench-bootstrap,
+        html[data-motion-effective='reduced'][data-launch='updated'] .workbench-bootstrap {
+          display: flex;
         }
 
       </style>

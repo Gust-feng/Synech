@@ -33,8 +33,11 @@ export type LocalCommandLogReadEntry = {
   readonly metadata: Readonly<Record<string, string | number | boolean>>;
 };
 
-export async function createCommandLogTarget(commandLine: string): Promise<CommandLogTarget> {
-  const directory = commandLogDirectory();
+export async function createCommandLogTarget(
+  commandLine: string,
+  options: { readonly directory?: string } = {},
+): Promise<CommandLogTarget> {
+  const directory = commandLogDirectory(options.directory);
   await fs.mkdir(directory, { recursive: true });
   await pruneLocalCommandLogs({ directory, activeLogPaths: activeCommandLogPaths }).catch(() => undefined);
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -60,9 +63,10 @@ export async function removeCommandLog(target: CommandLogTarget): Promise<void> 
 export async function readLocalCommandLogRef(
   ref: string,
   request: { readonly maxLength: number; readonly abortSignal?: AbortSignal },
+  options: { readonly directory?: string } = {},
 ): Promise<LocalCommandLogReadEntry | undefined> {
   throwIfAborted(request.abortSignal);
-  const target = commandLogTargetFromRef(ref);
+  const target = commandLogTargetFromRef(ref, options.directory);
   if (target === undefined) return undefined;
   let content: string;
   try {
@@ -174,15 +178,15 @@ export async function readCommandLogPreview(logPath: string, maxChars: number): 
   }
 }
 
-function commandLogTargetFromRef(ref: string): CommandLogTarget | undefined {
+function commandLogTargetFromRef(ref: string, directory?: string): CommandLogTarget | undefined {
   if (!ref.startsWith(COMMAND_LOG_REF_PREFIX)) return undefined;
   const id = ref.slice(COMMAND_LOG_REF_PREFIX.length);
   if (!COMMAND_LOG_ID_PATTERN.test(id)) return undefined;
-  return { id, ref, path: path.join(commandLogDirectory(), `${id}.log`) };
+  return { id, ref, path: path.join(commandLogDirectory(directory), `${id}.log`) };
 }
 
-function commandLogDirectory(): string {
-  return path.join(os.tmpdir(), COMMAND_LOG_DIRECTORY_NAME);
+function commandLogDirectory(directory?: string): string {
+  return path.resolve(directory ?? path.join(os.tmpdir(), COMMAND_LOG_DIRECTORY_NAME));
 }
 
 function positiveSafeIntegerOrFallback(value: number | undefined, fallback: number): number {

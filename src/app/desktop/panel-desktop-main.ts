@@ -5,12 +5,10 @@ import {
   app,
   dialog,
   ipcMain,
-  screen,
   shell,
   type IpcMainEvent,
   type IpcMainInvokeEvent,
   type OpenDialogOptions,
-  type Rectangle,
 } from "electron";
 import { stat } from "node:fs/promises";
 import path from "node:path";
@@ -75,6 +73,7 @@ const LOCAL_PREFERENCE_SET_CHANNEL = "desktop:local-preference-set";
 type DesktopWindowState = {
   readonly nativeWindowEvents: DesktopWindowNativeEventState;
 };
+
 
 // NOTE: 不使用顶层 await，因为 ESM 顶层 await 会阻塞事件循环，
 // 导致 app.whenReady() 永远无法 resolve（死锁）。
@@ -294,15 +293,10 @@ function currentPanelDialogWindow(): BrowserWindow | undefined {
 }
 
 function createElectronPanelWindow(
-  options: ReturnType<typeof createPanelDesktopWindowOptions> = createPanelDesktopWindowOptions()
+  options: ReturnType<typeof createPanelDesktopWindowOptions> = createPanelDesktopWindowOptions(),
 ) {
-  const targetBounds = centeredBoundsForPrimaryDisplay(options.width, options.height);
   const mainWindow = new BrowserWindow({
     ...options,
-    x: targetBounds.x,
-    y: targetBounds.y,
-    width: targetBounds.width,
-    height: targetBounds.height,
     show: false,
     webPreferences: {
       ...options.webPreferences,
@@ -352,9 +346,7 @@ function createElectronPanelWindow(
   });
 
   return {
-    loadUrl: async (url: string) => {
-      await mainWindow.loadURL(url);
-    },
+    loadUrl: (url: string) => mainWindow.loadURL(url),
     onReadyToShow: (handler: () => void) => {
       readyToShowHandler = handler;
     },
@@ -469,16 +461,6 @@ function notifyCurrentDesktopWindowState(window: BrowserWindow): void {
 function showWindowIfAlive(window: BrowserWindow): void {
   if (window.isDestroyed() || window.isVisible()) return;
   window.show();
-}
-
-function centeredBoundsForPrimaryDisplay(width: number, height: number): Rectangle {
-  const area = screen.getPrimaryDisplay().workArea;
-  return {
-    x: Math.round(area.x + (area.width - width) / 2),
-    y: Math.round(area.y + (area.height - height) / 2),
-    width,
-    height,
-  };
 }
 
 function getPanelDesktopPreloadPath(): string {

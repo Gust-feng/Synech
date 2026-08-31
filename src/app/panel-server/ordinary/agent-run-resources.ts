@@ -37,6 +37,8 @@ export type AgentRunResourceHost = {
   /** Present when a run-scoped Host lease is allowed to terminate owned processes. */
   readonly processTerminator?: ProcessTerminator;
   readonly toolOutputStore?: ToolOutputStore;
+  /** Product-owned command-log directory shared by local shell executors. */
+  readonly commandLogDirectory?: string;
   readonly fileMutationCoordinator?: LocalWorkspaceMutationCoordinator;
   readonly resolveManagedAttachmentPath?: (attachmentId: string) => Promise<string | undefined>;
   readonly managedMcpBinDirectory?: string;
@@ -63,6 +65,7 @@ export type AgentHostRunResources<
   readonly processRegistry?: LocalCommandProcessRegistry;
   readonly processTerminator?: ProcessTerminator;
   readonly toolOutputStore?: ToolOutputStore;
+  readonly commandLogDirectory?: string;
   readonly fileMutationCoordinator?: LocalWorkspaceMutationCoordinator;
   readonly resolveManagedAttachmentPath?: (attachmentId: string) => Promise<string | undefined>;
 };
@@ -149,6 +152,7 @@ async function prepareAgentHostRunResourcesWithEnvironment<
     processRegistry: runtime.processRegistry,
     processTerminator: runtime.processTerminator,
     toolOutputStore: runtime.toolOutputStore,
+    commandLogDirectory: runtime.commandLogDirectory,
     fileMutationCoordinator: runtime.fileMutationCoordinator,
     resolveManagedAttachmentPath: runtime.resolveManagedAttachmentPath,
   };
@@ -227,6 +231,7 @@ export function createAgentToolCenterFactory(
     runContext: context?.runContext,
     modelCapabilities: resources.capabilitySnapshot.modelCapabilities,
     toolOutputStore: resources.toolOutputStore,
+    commandLogDirectory: resources.commandLogDirectory,
     outputTokenCounter: context?.outputTokenCounter,
     metricsSink: context?.metricsSink,
     fileMutationCoordinator: resources.fileMutationCoordinator,

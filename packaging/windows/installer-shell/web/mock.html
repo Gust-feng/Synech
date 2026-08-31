@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light" />
+    <title>安装 Synech（调试剧本）</title>
+    <style>
+      .mock-toolbar {
+        position: fixed;
+        right: 10px;
+        bottom: 10px;
+        z-index: 9999;
+        display: flex;
+        gap: 6px;
+        font: 11px/1 system-ui, sans-serif;
+      }
+      .mock-toolbar button {
+        border: 1px solid rgba(0, 0, 0, 0.18);
+        border-radius: 5px;
+        padding: 5px 10px;
+        background: #fff;
+        cursor: pointer;
+      }
+      .mock-toolbar .mock-status { align-self: center; color: #888; padding: 0 4px; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <div class="mock-toolbar" id="mock-toolbar">
+      <span class="mock-status" id="mock-status">待命</span>
+      <button type="button" id="mock-step">下一步 ▶</button>
+      <button type="button" id="mock-auto">自动播放</button>
+    </div>
+    <script>
+      // WebView2 宿主模拟：复现 installer-shell/src/main.cpp 的真实事件序列。
+      // 原则与原生侧一致：只发真实事件——真实字节进度、真实文件快照 diff，
+      // 没有字节变化时保持安静，不投影、不补间。
+      const listeners = new Set();
+      const installParentPath = "C:\\Users\\Max\\AppData\\Local\\Programs";
+      const installPath = installParentPath + "\\Synech";
+      const manualPlayback = new URLSearchParams(location.search).get("manual") === "1";
+
+      window.__synechInstallerMockWebview = {
+        postMessage(message) {
+          if (message && message.type === "shell.ready") {
+            emit({ type: "host.ready", payload: {
+              installParentPath,
+              installPath,
+              requiredBytes: 135246208,
+              availableBytes: 250513678336,
+            } });
+          }
+          if (message && message.type === "install.start") {
+            status("安装中 · 点击「下一步」推进事件");
+            if (!manualPlayback) setTimeout(playAuto, 250);
+          }
+        },
+        addEventListener(type, fn) { if (type === "message") listeners.add(fn); },
+        removeEventListener(type, fn) { listeners.delete(fn); },
+      };
+
+      function emit(data) { listeners.forEach((fn) => fn({ data })); }
+      function status(text) { document.getElementById("mock-status").textContent = text; }
+
+      const activity = (id, kind, state, objects = []) => ({
+        type: "install.activity",
+        payload: { id, kind, state, objects },
+      });
+      const phase = (value) => ({ type: "install.phase", payload: { phase: value } });
+      const artifacts = (list) => ({
+        type: "install.artifacts",
+        payload: { artifacts: list.map(([path, sizeBytes]) => ({ path: installPath + "\\" + path, sizeBytes, key: installPath + "\\" + path })) },
+      });
+      const writeProgress = (writtenBytes) => activity("install-application", "files", "progress", [{
+        kind: "directory",
+        path: installPath,
+        value: String(manifestTotal),
+        sizeBytes: writtenBytes,
+      }]);
+
+      // 真实文件（相对安装目录）+ 字节数；累计总和即进度分母
+      const manifestFiles = [
+        ["vk_swiftshader_icd.json", 1160],
+        ["resources\\app\\package.json", 3072],
+        ["locales\\zh-CN.pak", 98304],
+        ["locales\\en-US.pak", 108544],
+        ["chrome_100_percent.pak", 178208],
+        ["snapshot_blob.bin", 278528],
+        ["Uninstall Synech.exe", 286720],
+        ["libEGL.dll", 462848],
+        ["v8_context_snapshot.bin", 647168],
+        ["vulkan-1.dll", 1423360],
+        ["ffmpeg.dll", 2785280],
+        ["libGLESv2.dll", 3631552],
+        ["vk_swiftshader.dll", 4128768],
+        ["resources.pak", 4428160],
+        ["d3dcompiler_47.dll", 4552192],
+        ["icudtl.dat", 6133216],
+        ["Synech.exe", 48579584],
+        ["resources\\app.asar", 58000000],
+      ];
+      const manifestTotal = manifestFiles.reduce((sum, [, size]) => sum + size, 0);
+
+      // 写入阶段：按 180ms 快照节奏构造真实观测序列。
+      // 小文件先成批出现，大文件（Synech.exe、app.asar）分多次增长，
+      // 每步同时发 artifacts（快照 diff）与 progress（累计真实字节）。
+      const writeSteps = [];
+      let written = 0;
+      const bigFiles = new Map([["Synech.exe", 48579584], ["resources\\app.asar", 58000000]]);
+      // 小文件两轮快照全部落盘
+      const smallFiles = manifestFiles.filter(([name]) => !bigFiles.has(name));
+      for (let round = 0; round < 2; round += 1) {
+        const batch = smallFiles.slice(Math.floor(smallFiles.length / 2) * round, Math.floor(smallFiles.length / 2) * (round + 1));
+        written += batch.reduce((sum, [, size]) => sum + size, 0);
+        writeSteps.push({
+          label: `快照 diff · ${batch.length} 个文件`,
+          delay: 180,
+          messages: [artifacts(batch), writeProgress(written)],
+        });
+      }
+      // 大文件分块增长：每步是一批“同一文件的新观测”+ 累计字节
+      const bigSteps = 14;
+      for (const [name, size] of bigFiles) {
+        const stepBytes = Math.floor(size / bigSteps);
+        for (let step = 1; step <= bigSteps; step += 1) {
+          const observed = step === bigSteps ? size : stepBytes * step;
+          written += step === bigSteps ? size - stepBytes * (bigSteps - 1) : stepBytes;
+          writeSteps.push({
+            label: `写入 ${name} · ${Math.round(observed / 1048576)} MB`,
+            delay: 180,
+            messages: [artifacts([[name, observed]]), writeProgress(written)],
+          });
+        }
+      }
+
+      const script = [
+        { label: "阶段：preparing", delay: 400, message: phase("preparing") },
+        { label: "活动：extract（开始）", delay: 120, message: activity("prepare-installer", "package", "started", [{ kind: "package", path: "Synech-Setup.exe" }]) },
+        ...[18, 41, 66, 88, 100].map((percent) => ({
+          label: `释放真实字节 ${percent}%`,
+          delay: 120,
+          message: activity("prepare-installer", "package", "progress", [{
+            kind: "package",
+            path: "Synech-Setup.exe",
+            value: String(105696460),
+            sizeBytes: Math.round(105696460 * percent / 100),
+          }]),
+        })),
+        { label: "活动：extract（完成）→ 进入 installing", delay: 300, messages: [
+          activity("prepare-installer", "package", "completed", [{ kind: "package", path: "Synech-Setup.exe" }]),
+          phase("installing"),
+          activity("install-application", "files", "started", [{ kind: "directory", path: installPath }]),
+        ] },
+        // 后端自解压黑盒期：没有任何事件，画面保持安静（不定态流光）
+        { label: "黑盒期：无事件（约 2 秒）", delay: 2000, message: null },
+        ...writeSteps.map((step) => ({ label: step.label, delay: step.delay, messages: step.messages })),
+        { label: "活动：install（完成）", delay: 240, message: activity("install-application", "files", "completed", [{ kind: "directory", path: installPath }]) },
+        { label: "活动：verify（开始）", delay: 160, message: activity("verify-application-files", "verification", "started", [{ kind: "directory", path: installPath }]) },
+        { label: "活动：verify（完成）", delay: 260, message: activity("verify-application-files", "verification", "completed", [
+          { kind: "executable", path: installPath + "\\Synech.exe" },
+          { kind: "file", path: installPath + "\\resources\\app.asar" },
+          { kind: "file", path: installPath + "\\resources.pak" },
+        ]) },
+        { label: "活动：register（开始+完成）", delay: 320, messages: [
+          activity("verify-uninstall-info", "uninstall", "started", [{ kind: "directory", path: installPath }]),
+          activity("verify-uninstall-info", "uninstall", "completed", [
+            { kind: "registry", path: "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Synech" },
+            { kind: "executable", path: installPath + "\\Uninstall Synech.exe", value: "Uninstaller" },
+          ]),
+        ] },
+        { label: "活动：shortcut（开始+完成）", delay: 300, messages: [
+          activity("sync-shortcuts", "shortcuts", "started", []),
+          activity("sync-shortcuts", "shortcuts", "completed", [
+            { kind: "shortcut", path: "C:\\Users\\Max\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Synech.lnk", value: "start-menu" },
+          ]),
+        ] },
+        { label: "阶段：completed · 等待用户选择彩蛋", delay: 220, message: phase("completed") },
+      ];
+
+      let cursor = 0;
+      let autoTimer = 0;
+
+      function playStep() {
+        if (cursor >= script.length) { status("剧本已播完"); return 1000; }
+        const step = script[cursor];
+        cursor += 1;
+        const messages = step.messages ?? (step.message === null ? [] : [step.message]);
+        messages.forEach((message) => emit(message));
+        status(`${cursor}/${script.length} · ${step.label}`);
+        return step.delay ?? 600;
+      }
+
+      function playAuto() {
+        clearTimeout(autoTimer);
+        const tick = () => {
+          if (cursor >= script.length) return;
+          const delay = playStep();
+          autoTimer = setTimeout(tick, delay);
+        };
+        tick();
+      }
+
+      document.getElementById("mock-step").addEventListener("click", () => { clearTimeout(autoTimer); playStep(); });
+      document.getElementById("mock-auto").addEventListener("click", playAuto);
+
+      window.__mockStep = playStep;
+    </script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -311,6 +311,11 @@ function installerForMcpCommand(command: string): McpExecutableInstallerKind | u
   return undefined;
 }
 
+// Pinned installer versions verified against upstream releases; bump together
+// with a re-check of the upstream install script contract.
+const PINNED_UV_INSTALLER_VERSION = "0.12.7";
+const PINNED_BUN_INSTALLER_VERSION = "1.4.0";
+
 function installPlanForMcpExecutable(
   installer: McpExecutableInstallerKind,
   env: Readonly<Record<string, string | undefined>>,
@@ -327,12 +332,12 @@ function installPlanForMcpExecutable(
     if (process.platform === "win32") {
       return {
         command: "powershell.exe",
-        args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "irm https://astral.sh/uv/install.ps1 | iex"],
+        args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `irm https://astral.sh/uv/${PINNED_UV_INSTALLER_VERSION}/install.ps1 | iex`],
       };
     }
     return {
       command: "sh",
-      args: ["-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"],
+      args: ["-c", `curl -LsSf https://astral.sh/uv/${PINNED_UV_INSTALLER_VERSION}/install.sh | sh`],
     };
   }
   if (installer === "pnpm") {
@@ -343,15 +348,25 @@ function installPlanForMcpExecutable(
     if (process.platform === "win32") {
       return {
         command: "powershell.exe",
-        args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "irm https://bun.sh/install.ps1 | iex"],
+        args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `& ([scriptblock]::Create((irm https://bun.sh/install.ps1))) -Version ${PINNED_BUN_INSTALLER_VERSION}`],
       };
     }
     return {
       command: "sh",
-      args: ["-c", "curl -fsSL https://bun.sh/install | bash"],
+      args: ["-c", `curl -fsSL https://bun.sh/install | bash -s "bun-v${PINNED_BUN_INSTALLER_VERSION}"`],
     };
   }
   return undefined;
+}
+
+function killInstallProcessTree(child: ReturnType<typeof spawn>): void {
+  if (child.pid === undefined) return;
+  if (process.platform === "win32") {
+    spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" })
+      .once("error", () => undefined);
+    return;
+  }
+  child.kill();
 }
 
 function runInstallCommand(
@@ -366,7 +381,7 @@ function runInstallCommand(
       stdio: "ignore",
     });
     const timeout = setTimeout(() => {
-      child.kill();
+      killInstallProcessTree(child);
       resolve({ ok: false, errorSummary: "安装超时。" });
     }, 120_000);
     child.once("error", () => {

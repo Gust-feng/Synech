@@ -1,0 +1,2 @@
+export const DESKTOP_WORKBENCH_WIDTH = 1440;
+export const DESKTOP_WORKBENCH_HEIGHT = 960;

@@ -52,6 +52,8 @@ export type CreateAgentToolRegistryOptions = {
   readonly fetch?: ToolRegistryFetchLike;
   readonly webSearch?: WebSearchRuntimeConfig;
   readonly workspaceRoot?: string;
+  /** Product-owned command-log directory for local shell execution. */
+  readonly commandLogDirectory?: string;
   readonly playwrightAvailable?: boolean;
   readonly toolStates?: readonly ToolStateSettings[];
   readonly toolCatalogNames?: readonly string[];
@@ -112,7 +114,13 @@ export function createAgentToolRegistry(
     createLocalGrepFilesTool(workspaceRoot, { sandboxPolicy, outputTokenCounter: options.outputTokenCounter, pathAuthorization: options.workspacePathAuthorization }),
     createLocalWriteFileTool(workspaceRoot, { sandboxPolicy, mutationCoordinator, pathAuthorization: options.workspacePathAuthorization }),
     createLocalEditFileTool(workspaceRoot, { sandboxPolicy, mutationCoordinator, pathAuthorization: options.workspacePathAuthorization }),
-    createLocalShellCommandTool(workspaceRoot, { sandboxPolicy, commandShell, processRegistry: options.processRegistry, pathAuthorization: options.workspacePathAuthorization }),
+    createLocalShellCommandTool(workspaceRoot, {
+      sandboxPolicy,
+      commandShell,
+      processRegistry: options.processRegistry,
+      commandLogDirectory: options.commandLogDirectory,
+      pathAuthorization: options.workspacePathAuthorization,
+    }),
     ...managedProcessExecutors(options, workspaceRoot, sandboxPolicy, commandShell),
     ...contextAttachmentExecutors(options, workspaceRoot),
     createHttpRequestTool({ outputStore: options.toolOutputStore }),

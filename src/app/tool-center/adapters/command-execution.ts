@@ -264,6 +264,7 @@ export async function runForegroundShellCommand(input: {
   readonly relativeCwd: string;
   readonly timeoutMs: number;
   readonly context: ToolExecutionContext;
+  readonly commandLogDirectory?: string;
   readonly processFacts?: CommandProcessFacts;
 }): Promise<CommandExecutionOutcome> {
   return runSpawnedCommand({
@@ -274,6 +275,7 @@ export async function runForegroundShellCommand(input: {
     relativeCwd: input.relativeCwd,
     timeoutMs: input.timeoutMs,
     abortSignal: input.context.abortSignal,
+    commandLogDirectory: input.commandLogDirectory,
     windowsVerbatimArguments: input.shell.syntax === "cmd",
     processFacts: input.processFacts,
     progress: createCommandProgressReporter(input.context),
@@ -288,6 +290,7 @@ export async function runForegroundProgramCommand(input: {
   readonly relativeCwd: string;
   readonly timeoutMs: number;
   readonly context: ToolExecutionContext;
+  readonly commandLogDirectory?: string;
   readonly processFacts?: CommandProcessFacts;
 }): Promise<CommandExecutionOutcome> {
   return runSpawnedCommand({
@@ -298,6 +301,7 @@ export async function runForegroundProgramCommand(input: {
     relativeCwd: input.relativeCwd,
     timeoutMs: input.timeoutMs,
     abortSignal: input.context.abortSignal,
+    commandLogDirectory: input.commandLogDirectory,
     processFacts: input.processFacts,
     progress: createCommandProgressReporter(input.context),
   });
@@ -311,11 +315,14 @@ async function runSpawnedCommand(input: {
   readonly relativeCwd: string;
   readonly timeoutMs: number;
   readonly abortSignal?: AbortSignal;
+  readonly commandLogDirectory?: string;
   readonly windowsVerbatimArguments?: boolean;
   readonly processFacts?: CommandProcessFacts;
   readonly progress: CommandProgressReporter;
 }): Promise<CommandExecutionOutcome> {
-  const logTarget = await createCommandLogTarget(input.commandLine);
+  const logTarget = await createCommandLogTarget(input.commandLine, {
+    directory: input.commandLogDirectory,
+  });
   return new Promise((resolve, reject) => {
     let settled = false;
     let timedOut = false;

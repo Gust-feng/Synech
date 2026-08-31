@@ -18,5 +18,5 @@ export async function deleteManagedSpaceFolder(root: string, folder: string): Pr
   if (path.relative(rootPath, folderPath).length === 0 || !isWithinRoot(rootPath, folderPath)) {
     throw new Error("Managed Space folder is outside its storage root.");
   }
-  await fs.rm(folderPath, { recursive: true, force: false });
+  await fs.rm(folderPath, { recursive: true, force: false, maxRetries: 5, retryDelay: 20 });
 }

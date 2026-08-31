@@ -110,10 +110,12 @@ export async function createPanelUsageStatistics(input: {
   const runs = (await Promise.all(summaries.map((summary) =>
     input.ordinaryAgentFeature.queries.getRun(summary.runId))))
     .filter((run): run is OrdinaryRunState => run !== undefined);
+  const statistics = createOrdinaryUsageStatistics({ generatedAt, conversations, runs });
+  await input.ordinaryAgentFeature.queries.releaseTerminalRunCaches(runs.map((run) => run.runId));
   return {
     ok: true,
     status: "completed",
-    statistics: createOrdinaryUsageStatistics({ generatedAt, conversations, runs }),
+    statistics,
   };
 }
 

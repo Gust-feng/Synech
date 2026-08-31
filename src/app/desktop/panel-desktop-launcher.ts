@@ -1,11 +1,14 @@
 import { resolvePanelDesktopIconPath } from "../panel-server/panel-assets.js";
 import { DESKTOP_APP_NAME, PRODUCT_CHROMIUM_PARTITION } from "./panel-desktop-identity.js";
 import type { PanelLaunchArgs } from "../panel-server/panel-launch-args.js";
+import { DESKTOP_WORKBENCH_HEIGHT, DESKTOP_WORKBENCH_WIDTH } from "./panel-desktop-window-geometry.js";
 import type { PanelContextAttachmentSelection, PanelExternalResourceTarget, PanelServerOptions, StartedPanelServer } from "../panel-server/index.js";
 
 export type PanelDesktopWindowOptions = {
   readonly title: string;
   readonly icon: string;
+  readonly x?: number;
+  readonly y?: number;
   readonly width: number;
   readonly height: number;
   readonly minWidth: number;
@@ -44,6 +47,23 @@ export type PanelDesktopSession = {
   readonly openWindow: () => Promise<void>;
   close(): Promise<void>;
 };
+
+/**
+ * 把桌面启动模式作为查询参数附加到面板 URL。
+ *
+ * 这只是 Electron 自身启动事实的传递（安装后首次启动 / 更新后启动），
+ * 供渲染端决定播放完整礼品卡展开、缩短版场景展开还是直接进入工作台。
+ * URL 只负责让 renderer 选择首次安装/更新场景；窗口生命周期由 Electron 自己拥有。
+ */
+export function panelLaunchUrl(
+  baseUrl: string,
+  desktopLaunch: "installed" | "updated" | undefined,
+): string {
+  if (desktopLaunch === undefined) return baseUrl;
+  const params = [`launch=${desktopLaunch}`];
+  const separator = baseUrl.includes("?") ? "&" : "?";
+  return `${baseUrl}${separator}${params.join("&")}`;
+}
 
 export type PanelDesktopDependencies = {
   readonly startPanelServer: (options: PanelServerOptions) => Promise<StartedPanelServer>;
@@ -97,6 +117,7 @@ export async function startPanelDesktopSession(
 
   let windowHandle: PanelDesktopWindowHandle | undefined;
   let windowOpenPromise: Promise<void> | undefined;
+  let initialWindowOpened = false;
   const openWindowOnce = async (): Promise<void> => {
     if (sessionClosing) return;
     await dependencies.whenReady();
@@ -110,7 +131,8 @@ export async function startPanelDesktopSession(
     window.onReadyToShow(() => {
       showPanelDesktopWindow(window);
     });
-    await window.loadUrl(panelUrl);
+    await window.loadUrl(initialWindowOpened ? panelUrl : panelLaunchUrl(panelUrl, args.desktopLaunch));
+    initialWindowOpened = true;
     if (sessionClosing) return;
     showPanelDesktopWindow(window);
   };
@@ -180,8 +202,8 @@ export function createPanelDesktopWindowOptions(): PanelDesktopWindowOptions {
   return {
     title: DESKTOP_APP_NAME,
     icon: resolvePanelDesktopIconPath(),
-    width: 1440,
-    height: 960,
+    width: DESKTOP_WORKBENCH_WIDTH,
+    height: DESKTOP_WORKBENCH_HEIGHT,
     minWidth: 960,
     minHeight: 640,
     frame: false,

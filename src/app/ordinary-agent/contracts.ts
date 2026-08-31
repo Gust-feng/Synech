@@ -695,6 +695,8 @@ export interface OrdinaryAgentFeature {
     listConversationsByOwner(owner: ConversationOwner): Promise<readonly OrdinaryConversationReadModel[]>;
     getManagedAttachment(attachmentId: string): Promise<OrdinaryManagedAttachmentRecord | undefined>;
     listMemoryFacts(query?: { readonly runId?: string; readonly memoryId?: string }): Promise<readonly OrdinaryMemoryFact[]>;
+    /** Releases cached terminal run snapshots after bulk reads so full-history scans do not pin them in memory. */
+    releaseTerminalRunCaches(runIds: readonly string[]): Promise<void>;
     /** Returns undefined until the run's terminal facts are durably settled. */
     getStableTerminalRunFacts(runId: string): Promise<OrdinaryStableTerminalRunFacts | undefined>;
   };
