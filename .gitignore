@@ -2,29 +2,25 @@
 node_modules/
 .pnpm-store/
 
-# Generated output
+# Generated output and caches
 dist/
 build/
 release/
+release-mvp/
 coverage/
 output/
 .turbo/
-packaging/windows/installer-shell/generated/
-packaging/windows/installer-shell/obj/
-packaging/windows/installer-shell/.vite-preview-cache/
+generated/
+obj/
+.vite-preview-cache/
 
-# Local configuration and runtime data
-.env
-.env.*
-!.env.example
-*.log
-*.sqlite
-*.sqlite3
-*.db
+# Local documents and media
+docs/
+local-assets/
+.workbuddy/
 
 # Local development state
 .tmp/
-tmp-*
 .codex/
 .opencode/
 .claude/
@@ -32,5 +28,5 @@ tmp-*
 .playwright-mcp/
 .playwright-cli/
 
-# Standalone frontend prototype template (to be moved out of this repo)
+# Standalone frontend prototype template
 panel-template/

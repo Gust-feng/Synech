@@ -44,7 +44,7 @@
 .ui-code-document__language { flex: none; padding: 2px 7px; border-radius: 4px; background: rgba(95,138,134,.13); color: var(--ui-teal-text, #4f7e79); font-size: 10px; text-transform: lowercase; }
 .ui-code-document__encoding { margin-left: auto; flex: none; color: var(--ui-text-3, #aba39b); font: 10px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace; text-transform: lowercase; }
 .ui-code-document__source { margin: 0; padding: 22px 24px 28px; overflow: auto; color: #e8e3da; white-space: pre; tab-size: 2; font: 12px/1.72 ui-monospace, SFMono-Regular, Consolas, monospace; }
-.ui-code-document--cover { width: 100%; height: 132px; border: 0; border-radius: 0; box-shadow: none; }
+.ui-code-document--cover { width: 100%; height: 148px; border: 0; border-radius: 0; box-shadow: none; }
 .ui-code-document--cover .ui-code-document__source { height: 100%; padding: 18px 24px; overflow: hidden; font-size: 9px; line-height: 1.72; }
 .ui-code-document__source .hljs-attr, .ui-code-document__source .hljs-attribute, .ui-code-document__source .hljs-property { color: #c9a7e8; }
 .ui-code-document__source .hljs-string, .ui-code-document__source .hljs-regexp { color: #9bc5a9; }
@@ -130,11 +130,11 @@
 .ui-pdf-document__page--text pre { margin: 0; color: var(--ui-text-1, #292722); white-space: pre-wrap; font: 14px/1.8 var(--reading-font, ui-serif, Georgia, serif); }
 .ui-pdf-document__page--canvas { min-height: 0; }
 .ui-pdf-document__page--canvas canvas { display: block; width: 100%; height: 100%; }
-.ui-pdf-document__thumbnail { width: 100%; height: 132px; overflow: hidden; padding: 16px 16px 0; background: var(--ui-surface-hover, #eeebe6); }
-.ui-pdf-document__thumbnail-paper { width: 100%; height: 100%; overflow: hidden; border: 1px solid var(--ui-border, rgba(45,40,34,.08)); border-bottom: 0; border-radius: 5px 5px 0 0; background: var(--ui-paper, #ffffff); }
-.ui-pdf-document__thumbnail-paper canvas { display: block; width: 100%; height: auto; }
-.ui-pdf-document__thumbnail-paper p { margin: 0; padding: 14px 16px; color: var(--ui-text-2, #6b655e); white-space: pre-wrap; font: 8.5px/1.5 var(--reading-font, ui-serif, Georgia, serif); }
-.ui-pdf-document__thumbnail-placeholder { display: flex; flex-direction: column; gap: 8px; padding: 18px 16px; }
+.ui-pdf-document__thumbnail { width: 100%; height: 148px; overflow: hidden; padding: 12px; background: var(--ui-surface-hover, #eeebe6); }
+.ui-pdf-document__thumbnail-paper { width: 100%; height: 100%; overflow: hidden; display: flex; align-items: flex-start; justify-content: center; border: 1px solid var(--ui-border, rgba(45,40,34,.08)); border-radius: 5px; background: var(--ui-paper, #ffffff); box-shadow: 0 1px 4px rgba(45,40,34,.06); }
+.ui-pdf-document__thumbnail-paper canvas { display: block; width: 100%; height: 100%; object-fit: cover; object-position: top center; }
+.ui-pdf-document__thumbnail-paper p { margin: 0; width: 100%; height: 100%; overflow: hidden; padding: 12px 14px; color: var(--ui-text-2, #6b655e); white-space: pre-wrap; font: 8.5px/1.5 var(--reading-font, ui-serif, Georgia, serif); }
+.ui-pdf-document__thumbnail-placeholder { display: flex; flex-direction: column; gap: 8px; width: 100%; padding: 16px; }
 .ui-pdf-document__thumbnail-placeholder span { display: block; height: 5px; border-radius: 3px; background: var(--ui-border, rgba(45,40,34,.12)); }
 .ui-pdf-document__page-number { position: absolute; right: 24px; bottom: 20px; padding: 2px 4px; border-radius: 3px; background: color-mix(in srgb, var(--ui-paper, #ffffff) 86%, transparent); color: var(--ui-text-3, #aba39b); font-size: 11px; }
 .ui-pdf-document__continuation { display: flex; min-height: 42px; align-items: center; gap: 10px; color: var(--ui-text-3, #aba39b); font-size: 11px; }

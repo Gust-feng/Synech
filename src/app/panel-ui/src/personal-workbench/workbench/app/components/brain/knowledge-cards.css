@@ -1,0 +1,269 @@
+/*
+ * 知识卡片封面：所有格式共用同一固定高度，保证网格行高一致；
+ * 每种格式在封面内保留自己的视觉特征（图片全幅、PDF 整页、纸张文字、
+ * 表格网格、浏览器外框、视频首帧、代码高亮等）。
+ */
+
+.knowledge-card-cover {
+  position: relative;
+  flex: none;
+  width: 100%;
+  height: 148px;
+  overflow: hidden;
+  background: var(--ui-surface-hover, #eeebe6);
+}
+
+.knowledge-card-cover__image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 240ms ease;
+}
+
+/* 通用占位：格式元数据尚未到达时的纸张骨架，高度与真实封面一致，避免行高跳动。 */
+.knowledge-card-cover__placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--ui-text-3, #aba39b);
+  background: var(--ui-surface-hover, #eeebe6);
+}
+
+.knowledge-card-cover__skeleton {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 20px 18px;
+}
+
+.knowledge-card-cover__skeleton span {
+  display: block;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--ui-border, rgba(45, 40, 34, 0.12));
+}
+
+/* 文字类封面（笔记 / Markdown / 文本）：白纸 + 多行正文，保留“文档”观感。 */
+.knowledge-card-cover__paper {
+  position: absolute;
+  inset: 0;
+  padding: 16px 18px;
+  background: var(--ui-paper, #ffffff);
+}
+
+.knowledge-card-cover__paper-text {
+  margin: 0;
+  color: var(--ui-text-2, #6b655e);
+  font: 10.5px/1.7 var(--reading-font, ui-serif, Georgia, serif);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 7;
+  overflow: hidden;
+}
+
+.knowledge-card-cover__paper-text--mono {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 9.5px;
+  line-height: 1.65;
+}
+
+/* docx：把整页 Word 纸张等比缩放进封面，只露出上半页，像真实的文档缩略图。 */
+.knowledge-card-cover__docx-viewport {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: var(--ui-canvas, #f7f5f2);
+}
+
+.knowledge-card-cover__docx-page {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: top left;
+}
+
+.knowledge-card-cover__docx-page .ui-docx-wrapper {
+  padding: 0 !important;
+  background: transparent;
+}
+
+.knowledge-card-cover__docx-page section.ui-docx {
+  margin: 0 !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+/* xlsx：行列网格缩略。 */
+.knowledge-card-cover__sheet {
+  position: absolute;
+  inset: 0;
+  padding: 10px 0 0;
+  overflow: hidden;
+  background: var(--ui-paper, #ffffff);
+}
+
+.knowledge-card-cover__sheet-name {
+  display: flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 12px;
+  color: var(--ui-text-3, #aba39b);
+  font-size: 9px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.knowledge-card-cover__sheet table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+  font: 9px/1 ui-sans-serif, system-ui, sans-serif;
+}
+
+.knowledge-card-cover__sheet th,
+.knowledge-card-cover__sheet td {
+  height: 17px;
+  padding: 0 6px;
+  overflow: hidden;
+  color: var(--ui-text-2, #6b655e);
+  border-right: 1px solid var(--ui-border, rgba(45, 40, 34, 0.08));
+  border-bottom: 1px solid var(--ui-border, rgba(45, 40, 34, 0.08));
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.knowledge-card-cover__sheet thead th {
+  background: var(--ui-surface-hover, #eeebe6);
+  color: var(--ui-text-3, #aba39b);
+  text-align: center;
+  font-weight: 600;
+}
+
+.knowledge-card-cover__sheet tbody th {
+  background: var(--ui-surface-hover, #eeebe6);
+  color: var(--ui-text-3, #aba39b);
+  text-align: right;
+  font-weight: 500;
+}
+
+/* web：迷你浏览器外框。 */
+.knowledge-card-cover__browser {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--ui-paper, #ffffff);
+}
+
+.knowledge-card-cover__browser-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px;
+  background: var(--ui-surface-hover, #eeebe6);
+  color: var(--ui-text-3, #aba39b);
+  font-size: 9px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.knowledge-card-cover__browser-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--ui-border, rgba(45, 40, 34, 0.2));
+}
+
+.knowledge-card-cover__browser-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  overflow: hidden;
+}
+
+.knowledge-card-cover__browser-title {
+  width: 64%;
+  height: 8px;
+  border-radius: 3px;
+  background: var(--ui-text-1, #292722);
+  opacity: 0.78;
+}
+
+.knowledge-card-cover__browser-line {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--ui-border, rgba(45, 40, 34, 0.14));
+}
+
+/* 视频：首帧封面 + 播放钮 + 时长角标。 */
+.knowledge-card-cover__video-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.knowledge-card-cover__play {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(45, 40, 34, 0.16);
+}
+
+.knowledge-card-cover__play span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.9);
+  color: #2d2822;
+  transition: transform 200ms ease;
+}
+
+.knowledge-card-cover:hover .knowledge-card-cover__play span {
+  transform: scale(1.08);
+}
+
+.knowledge-card-cover__badge {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(45, 40, 34, 0.62);
+  color: #fff;
+  font: 10px/1.5 ui-sans-serif, system-ui, sans-serif;
+}
+
+.knowledge-card-cover__ext {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: rgba(45, 40, 34, 0.55);
+  color: #fff;
+  font: 9px/1.5 ui-sans-serif, system-ui, sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}

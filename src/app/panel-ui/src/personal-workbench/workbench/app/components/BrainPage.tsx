@@ -21,6 +21,7 @@ import {
   SearchResults,
 } from './brain/knowledge-cards'
 import { KnowledgeReader } from './brain/knowledge-reader'
+import { useKnowledgeCardWarmup } from './knowledgeCardWarmup'
 import {
   KnowledgeWiki,
   WIKI_PANE_WIDTH,
@@ -124,6 +125,10 @@ export function BrainPage({
           : cards.filter((c) => themeApi.themesOf(c.refId).includes(nav))
   const activeTheme = themeApi.themes.find((t) => t.id === nav) ?? null
 
+  // 网格级有界预热：按当前可见卡片补拉预览元数据与重型封面渲染，
+  // 让图片 / PDF / Office / 视频等格式封面在不打开阅读视图时也能成形。
+  useKnowledgeCardWarmup(searching ? results : navCards)
+
   if (resolved.length === 0) {
     return (
       <section className="flex-1 overflow-y-auto" style={{ minHeight: 0 }}>
@@ -208,7 +213,6 @@ export function BrainPage({
                       <button
                         type="button"
                         aria-label="清除搜索"
-                        title="清除搜索"
                         onClick={() => setQuery('')}
                         className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full hover:bg-[var(--ui-hover-tint)]"
                       >
