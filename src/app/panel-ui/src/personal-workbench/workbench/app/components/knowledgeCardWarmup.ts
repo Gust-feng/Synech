@@ -19,8 +19,8 @@ import type { ResolvedPage } from './brainStore'
  * 冷却，不会演变成全量扫描。
  */
 
-const MAX_METADATA_PREVIEWS = 30
-const MAX_SURFACE_PREVIEWS = 12
+const MAX_METADATA_PREVIEWS = 12
+const MAX_SURFACE_PREVIEWS = 6
 const MAX_CONCURRENT_METADATA = 2
 const ERROR_RETRY_COOLDOWN_MS = 30_000
 
@@ -122,7 +122,6 @@ async function runWarmup(
 function needsSurfaceWarmup(preview: DocumentPreview): boolean {
   if (preview.content.kind === 'media') {
     return preview.content.mediaKind === 'image'
-      || preview.content.mediaKind === 'pdf'
       || preview.content.mediaKind === 'video'
   }
   return preview.content.kind === 'office'

@@ -1,24 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
-import {
-  Check,
-  Code2,
-  File as FileIcon,
-  FileSpreadsheet,
-  FileType2,
-  Film,
-  Globe,
-  Image as ImageIcon,
-  Link2,
-  Lock,
-  LockOpen,
-  Music,
-  NotebookPen,
-  Play,
-  Plus,
-  Tag,
-} from 'lucide-react'
+import { useState, type ReactNode } from 'react'
+import { Check, Film, Link2, Lock, LockOpen, Plus, Tag } from 'lucide-react'
 import { CodeDocumentSurface } from '../CodeDocumentSurface'
-import { PdfDocumentThumbnail } from '../PdfDocumentSurface'
 import type { ResolvedPage } from '../brainStore'
 import {
   cleanKnowledgeText,
@@ -31,23 +13,8 @@ import {
 } from '../knowledge-view-projection'
 import { useThemes } from '../themesStore'
 import { ImageWithFallback } from '../ImageWithFallback'
-import { getCachedReferencePreview, type DocumentPreview } from '../referencePreviewClient'
+import { getCachedReferencePreview } from '../referencePreviewClient'
 import { prefetchDocumentSurface } from '../documentPreviewWarmup'
-import {
-  getCachedDocxPreviewMarkup,
-  getCachedSpreadsheetPreview,
-  loadDocxPreviewMarkup,
-  loadSpreadsheetPreview,
-  type DocxPreviewMarkup,
-} from '../officePreviewRuntime'
-import { getWarmedVideoPoster, subscribeVideoPreviewPoster } from '../videoPreviewRuntime'
-import type { SpreadsheetCellValue, SpreadsheetSheet } from '../spreadsheetPreviewTypes'
-import './knowledge-cards.css'
-
-/** 所有格式封面统一高度：网格行高只由正文决定，不会被某一种格式撑大。 */
-export const CARD_COVER_HEIGHT = 148
-const SHEET_PREVIEW_ROWS = 6
-const SHEET_PREVIEW_COLS = 6
 
 export function CardGrid({ children }: { children: ReactNode }) {
   return (
@@ -101,10 +68,13 @@ export function SearchResults({
   )
 }
 
-/** 封面本身已经承载正文的格式，卡片正文不再重复摘录。 */
-function coverCarriesBodyText(page: ResolvedPage): boolean {
-  if (page.kind === 'note') return true
-  return page.contentKind === 'markdown' || page.contentKind === 'code' || page.contentKind === 'web'
+
+function pageHasCover(p: ResolvedPage): boolean {
+  if (p.contentKind === 'code') return Boolean(p.previewText)
+  if (p.contentKind === 'pdf') return true
+  return p.contentKind === 'image'
+    || p.contentKind === 'video'
+    || p.contentKind === 'audio'
 }
 
 export function KnowledgeCard({
@@ -120,8 +90,9 @@ export function KnowledgeCard({
 }) {
   const [hovered, setHovered] = useState(false)
   const [tagOpen, setTagOpen] = useState(false)
+  const cover = pageHasCover(page)
   const isWeb = page.kind !== 'note' && page.contentKind === 'web'
-  const excerpt = coverCarriesBodyText(page) ? '' : getKnowledgePreviewText(page)
+  const preview = cover || page.contentKind === 'pdf' ? '' : getKnowledgePreviewText(page)
 
   const myThemeIds = themeApi.themesOf(page.refId)
   const myThemes = themeApi.themes.filter((t) => myThemeIds.includes(t.id))
@@ -147,6 +118,7 @@ export function KnowledgeCard({
       style={{
         background: 'var(--ui-surface, #fff)',
         border: '1px solid var(--ui-border, rgba(45,40,34,0.09))',
+        minHeight: 132,
         transform: hovered ? 'translateY(-2px)' : 'none',
         boxShadow: hovered ? '0 6px 20px rgba(45,40,34,0.08)' : '0 1px 2px rgba(45,40,34,0.03)',
       }}
@@ -157,7 +129,7 @@ export function KnowledgeCard({
         onClick={onOpen}
         className="absolute inset-0 z-[1] rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset"
       />
-      <KnowledgeCardCover page={page} hovered={hovered} />
+      {cover && <CardCover page={page} hovered={hovered} />}
 
       {/* 悬停时右上角出现「标签」入口 */}
       {(hovered || tagOpen) && (
@@ -198,12 +170,12 @@ export function KnowledgeCard({
         >
           {page.title}
         </h3>
-        {excerpt && (
+        {preview && (
           <p
-            className="m-0 mt-2 text-xs leading-relaxed line-clamp-3"
+            className="m-0 mt-2 text-xs leading-relaxed line-clamp-6"
             style={{ color: 'var(--ui-text-2, #87827c)' }}
           >
-            {excerpt}
+            {preview}
           </p>
         )}
         <div className="flex-1" />
@@ -250,419 +222,70 @@ function prefetchPageOfficePreview(page: ResolvedPage): void {
   }
 }
 
-/* ------------------------------ 封面分发 ------------------------------ */
-
-function KnowledgeCardCover({ page, hovered }: { page: ResolvedPage; hovered: boolean }) {
-  if (page.kind === 'note') {
-    return <TextPaperCover text={getKnowledgePreviewText(page)} icon={<NotebookPen size={22} />} />
-  }
-  switch (page.contentKind) {
-    case 'image':
-      return <ImageCover page={page} hovered={hovered} />
-    case 'video':
-      return <VideoCover page={page} />
-    case 'audio':
-      return <AudioCover page={page} />
-    case 'pdf':
-      return <PdfCover page={page} />
-    case 'docx':
-      return <DocxCover page={page} />
-    case 'xlsx':
-      return <SpreadsheetCover page={page} />
-    case 'code':
-      return page.previewText
-        ? <CodeDocumentSurface source={page.previewText} language={page.language} variant="cover" />
-        : <IconCover icon={<Code2 size={24} />} />
-    case 'markdown':
-      return <TextPaperCover text={getKnowledgePreviewText(page)} />
-    case 'web':
-      return <WebCover page={page} />
-    default:
-      // 纯文本文件在元数据到达后也走纸张摘录；其余通用文件显示类型占位。
-      return page.previewText
-        ? <TextPaperCover text={cleanKnowledgeText(page.previewText)} />
-        : <GenericFileCover page={page} />
-  }
-}
-
-function pageCachedPreview(page: ResolvedPage): DocumentPreview | undefined {
-  const target = page.documentTarget
-  return target === undefined ? undefined : getCachedReferencePreview(target.itemId, '', target.apiBase)
-}
-
-type MediaContent = Extract<DocumentPreview['content'], { kind: 'media' }>
-function mediaContent<K extends MediaContent['mediaKind']>(
-  page: ResolvedPage,
-  mediaKind: K,
-): (MediaContent & { mediaKind: K }) | undefined {
-  const preview = pageCachedPreview(page)
-  return preview?.content.kind === 'media' && preview.content.mediaKind === mediaKind
-    ? (preview.content as MediaContent & { mediaKind: K })
-    : undefined
-}
-
-function previewFingerprint(page: ResolvedPage): string | undefined {
-  return pageCachedPreview(page)?.fingerprint
-}
-
-/* ------------------------------ 图片 ------------------------------ */
-
-function ImageCover({ page, hovered }: { page: ResolvedPage; hovered: boolean }) {
-  if (!page.thumbnail) return <IconCover icon={<ImageIcon size={24} />} />
-  return (
-    <div className="knowledge-card-cover">
-      <ImageWithFallback
-        src={page.thumbnail}
-        alt={page.title}
-        className="knowledge-card-cover__image"
-        style={{ transform: hovered ? 'scale(1.04)' : 'none' }}
-      />
+function CardCover({ page, hovered }: { page: ResolvedPage; hovered: boolean }) {
+  const kind = page.contentKind
+  if (kind === 'image' && page.thumbnail) return <div className="w-full overflow-hidden" style={{ height: 132 }}><ImageWithFallback src={page.thumbnail} alt={page.title} className="w-full h-full object-cover" style={{ transform: hovered ? 'scale(1.04)' : 'none', transition: 'transform 240ms ease' }} /></div>
+  if (kind === 'video') {
+    return <div className="relative w-full flex items-center justify-center" style={{ height: 132, background: 'linear-gradient(135deg, #2d2822 0%, #4a4038 100%)' }}>
+      <span className="flex items-center justify-center rounded-full transition-transform" style={{ width: 44, height: 44, background: 'rgba(255,255,255,0.16)', transform: hovered ? 'scale(1.1)' : 'none' }}>
+        <Film size={18} style={{ color: '#fff' }} />
+      </span>
     </div>
-  )
+  }
+  if (kind === 'audio') {
+    return <div className="relative w-full flex items-end justify-center gap-1 px-6" style={{ height: 132, background: 'linear-gradient(135deg, #b0885a22 0%, #b0885a3d 100%)', paddingBottom: 28 }}>
+      {WAVE.map((height, index) => <span key={index} style={{ width: 4, height: `${height}%`, borderRadius: 2, background: '#b0885a', opacity: 0.75 }} />)}
+    </div>
+  }
+  if (kind === 'pdf') {
+    return <PdfCardCover text={page.previewText} />
+  }
+  if (kind === 'code' && page.previewText) {
+    return <CodeDocumentSurface source={page.previewText} language={page.language} variant="cover" />
+  }
+  return null
 }
 
-/* ------------------------------ 视频 ------------------------------ */
-
-function VideoCover({ page }: { page: ResolvedPage }) {
-  const video = mediaContent(page, 'video')
-  const fingerprint = previewFingerprint(page)
-  const [, force] = useState(0)
-  useEffect(() => subscribeVideoPreviewPoster(() => force((value) => value + 1)), [])
-  const poster = video?.poster ?? (video ? getWarmedVideoPoster(video.url, fingerprint) : undefined)
-
-  if (!poster) {
-    return (
+function PdfCardCover({ text: sourceText }: { text: string | undefined }) {
+  const text = sourceText === undefined ? '' : cleanKnowledgeText(sourceText).slice(0, 240)
+  return (
+    <div className="w-full overflow-hidden px-4 pt-4" style={{ height: 132, background: 'var(--ui-surface-hover, #eeebe6)' }}>
       <div
-        className="knowledge-card-cover"
-        style={{ background: 'linear-gradient(135deg, #2d2822 0%, #4a4038 100%)' }}
+        className="w-full h-full rounded-t-md overflow-hidden"
+        style={{
+          boxSizing: 'border-box',
+          background: 'var(--ui-paper, #fff)',
+          border: '1px solid var(--ui-border, rgba(45,40,34,0.08))',
+          borderBottom: 0,
+          padding: '14px 16px 18px',
+        }}
       >
-        <span className="knowledge-card-cover__play">
-          <span>
-            <Film size={18} />
-          </span>
-        </span>
-        {video?.duration && <span className="knowledge-card-cover__badge">{video.duration}</span>}
-      </div>
-    )
-  }
-  return (
-    <div className="knowledge-card-cover">
-      <img src={poster} alt={page.title} className="knowledge-card-cover__video-frame" />
-      <span className="knowledge-card-cover__play">
-        <span>
-          <Play size={18} fill="currentColor" />
-        </span>
-      </span>
-      {video?.duration && <span className="knowledge-card-cover__badge">{video.duration}</span>}
-    </div>
-  )
-}
-
-/* ------------------------------ 音频 ------------------------------ */
-
-function AudioCover({ page }: { page: ResolvedPage }) {
-  const audio = mediaContent(page, 'audio')
-  return (
-    <div
-      className="knowledge-card-cover"
-      style={{
-        display: 'flex',
-        alignItems: 'flex-end',
-        justifyContent: 'center',
-        gap: 4,
-        padding: '0 24px 28px',
-        background: 'linear-gradient(135deg, #b0885a22 0%, #b0885a3d 100%)',
-      }}
-    >
-      {WAVE.map((height, index) => (
-        <span
-          key={index}
-          style={{ width: 4, height: `${height}%`, borderRadius: 2, background: '#b0885a', opacity: 0.75 }}
-        />
-      ))}
-      <span className="absolute left-3 top-3" style={{ color: '#b0885a' }}>
-        <Music size={16} />
-      </span>
-      {audio?.duration && <span className="knowledge-card-cover__badge">{audio.duration}</span>}
-    </div>
-  )
-}
-
-/* ------------------------------ PDF ------------------------------ */
-
-function PdfCover({ page }: { page: ResolvedPage }) {
-  const preview = pageCachedPreview(page)
-  const source = preview?.content.kind === 'media' && preview.content.mediaKind === 'pdf'
-    ? { url: preview.content.url, byteLength: preview.byteLength, sourceVersion: preview.fingerprint }
-    : undefined
-  return (
-    <PdfDocumentThumbnail
-      source={source}
-      title={page.title}
-      fallbackText={page.previewText === undefined ? undefined : cleanKnowledgeText(page.previewText).slice(0, 480)}
-    />
-  )
-}
-
-/* ------------------------------ Word ------------------------------ */
-
-const injectedDocxStyles = new Set<string>()
-
-function ensureDocxStylesInjected(styleHtml: string): void {
-  if (injectedDocxStyles.has(styleHtml)) return
-  injectedDocxStyles.add(styleHtml)
-  const host = globalThis.document.createElement('div')
-  host.setAttribute('aria-hidden', 'true')
-  host.style.position = 'absolute'
-  host.style.width = '0'
-  host.style.height = '0'
-  host.style.overflow = 'hidden'
-  host.innerHTML = styleHtml
-  globalThis.document.body.append(host)
-}
-
-function DocxCover({ page }: { page: ResolvedPage }) {
-  const preview = pageCachedPreview(page)
-  const office = preview?.content.kind === 'office' && preview.content.officeKind === 'docx' ? preview.content : undefined
-  const [markup, setMarkup] = useState<DocxPreviewMarkup | undefined>(() =>
-    office === undefined ? undefined : getCachedDocxPreviewMarkup(office.url, preview?.fingerprint),
-  )
-
-  useEffect(() => {
-    if (office === undefined || preview === undefined) {
-      setMarkup(undefined)
-      return
-    }
-    const controller = new AbortController()
-    const cached = getCachedDocxPreviewMarkup(office.url, preview.fingerprint)
-    if (cached !== undefined) {
-      setMarkup(cached)
-      return () => controller.abort()
-    }
-    void loadDocxPreviewMarkup({
-      url: office.url,
-      byteLength: preview.byteLength,
-      sourceVersion: preview.fingerprint,
-      signal: controller.signal,
-    }).then((next) => {
-      if (!controller.signal.aborted) setMarkup(next)
-    }).catch(() => undefined)
-    return () => controller.abort()
-  }, [office?.url, preview?.fingerprint, preview?.byteLength])
-
-  const viewportRef = useRef<HTMLDivElement>(null)
-  const pageRef = useRef<HTMLDivElement>(null)
-  const [scale, setScale] = useState(0.32)
-
-  useLayoutEffect(() => {
-    if (markup === undefined) return
-    ensureDocxStylesInjected(markup.styleHtml)
-    const viewport = viewportRef.current
-    const measure = () => {
-      const section = pageRef.current?.querySelector('section.ui-docx') ?? pageRef.current?.firstElementChild
-      const pageWidth = (section as HTMLElement | null)?.offsetWidth
-      if (viewport !== null && pageWidth !== undefined && pageWidth > 0) {
-        setScale(viewport.clientWidth / pageWidth)
-      }
-    }
-    measure()
-    if (typeof ResizeObserver === 'undefined' || viewport === null) return
-    const observer = new ResizeObserver(measure)
-    observer.observe(viewport)
-    return () => observer.disconnect()
-  }, [markup])
-
-  if (markup === undefined) return <IconCover icon={<FileType2 size={24} />} />
-  return (
-    <div className="knowledge-card-cover">
-      <div className="knowledge-card-cover__docx-viewport" ref={viewportRef}>
-        <div
-          className="knowledge-card-cover__docx-page"
-          ref={pageRef}
-          style={{ transform: `scale(${scale})` }}
-          dangerouslySetInnerHTML={{ __html: markup.bodyHtml }}
-        />
-      </div>
-    </div>
-  )
-}
-
-/* ------------------------------ Excel ------------------------------ */
-
-function SpreadsheetCover({ page }: { page: ResolvedPage }) {
-  const preview = pageCachedPreview(page)
-  const office = preview?.content.kind === 'office' && preview.content.officeKind === 'xlsx' ? preview.content : undefined
-  const [sheets, setSheets] = useState<readonly SpreadsheetSheet[] | undefined>(() =>
-    office === undefined ? undefined : getCachedSpreadsheetPreview(office.url, preview?.fingerprint),
-  )
-
-  useEffect(() => {
-    if (office === undefined || preview === undefined) {
-      setSheets(undefined)
-      return
-    }
-    const controller = new AbortController()
-    const cached = getCachedSpreadsheetPreview(office.url, preview.fingerprint)
-    if (cached !== undefined) {
-      setSheets(cached)
-      return () => controller.abort()
-    }
-    void loadSpreadsheetPreview({
-      url: office.url,
-      byteLength: preview.byteLength,
-      sourceVersion: preview.fingerprint,
-      signal: controller.signal,
-    }).then((next) => {
-      if (!controller.signal.aborted) setSheets(next)
-    }).catch(() => undefined)
-    return () => controller.abort()
-  }, [office?.url, preview?.fingerprint, preview?.byteLength])
-
-  if (sheets === undefined || sheets[0] === undefined) {
-    return <IconCover icon={<FileSpreadsheet size={24} />} />
-  }
-  const sheet = sheets[0]
-  const rows = sheet.data.slice(0, SHEET_PREVIEW_ROWS)
-  const widestRow = rows.reduce((max, row) => Math.max(max, row.length), 0)
-  const columnCount = Math.max(1, Math.min(SHEET_PREVIEW_COLS, widestRow))
-  return (
-    <div className="knowledge-card-cover">
-      <div className="knowledge-card-cover__sheet">
-        <div className="knowledge-card-cover__sheet-name">{sheet.sheet}</div>
-        <table>
-          <thead>
-            <tr>
-              <th style={{ width: 28 }} />
-              {Array.from({ length: columnCount }, (_, index) => (
-                <th key={index}>{columnLetter(index)}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row, rowIndex) => (
-              <tr key={rowIndex}>
-                <th>{rowIndex + 1}</th>
-                {Array.from({ length: columnCount }, (_, columnIndex) => (
-                  <td key={columnIndex}>{formatSheetCell(row[columnIndex])}</td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  )
-}
-
-function columnLetter(index: number): string {
-  return String.fromCharCode(65 + index)
-}
-
-function formatSheetCell(value: SpreadsheetCellValue | undefined): string {
-  if (value === null || value === undefined) return ''
-  if (value instanceof Date) return value.toLocaleDateString()
-  if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE'
-  return String(value)
-}
-
-/* --------------------------- 文字纸张（笔记 / Markdown / 文本） --------------------------- */
-
-function TextPaperCover({ text, icon }: { text: string; icon?: ReactNode }) {
-  const body = cleanKnowledgeText(text)
-  return (
-    <div className="knowledge-card-cover">
-      <div className="knowledge-card-cover__paper">
-        {body ? (
-          <p className="knowledge-card-cover__paper-text">{body.slice(0, 320)}</p>
+        {text ? (
+          <p
+            className="m-0 whitespace-pre-wrap"
+            style={{
+              display: '-webkit-box',
+              overflow: 'hidden',
+              color: 'var(--ui-text-2, #6b655e)',
+              fontSize: 8.5,
+              lineHeight: 1.5,
+              fontFamily: 'var(--reading-font)',
+              WebkitBoxOrient: 'vertical',
+              WebkitLineClamp: 6,
+            }}
+          >
+            {text}
+          </p>
         ) : (
-          <div className="knowledge-card-cover__skeleton">
-            {icon !== undefined && (
-              <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 4 }}>{icon}</div>
-            )}
-            {[92, 84, 96, 70, 88, 62].map((width, index) => (
-              <span key={index} style={{ width: `${width}%` }} />
+          <div className="flex flex-col gap-2" aria-hidden="true">
+            {[72, 92, 84, 58, 88, 66].map((width) => (
+              <span key={width} className="block h-1 rounded-full" style={{ width: `${width}%`, background: 'var(--ui-border, rgba(45,40,34,0.12))' }} />
             ))}
           </div>
         )}
       </div>
     </div>
   )
-}
-
-/* ------------------------------ 网页 ------------------------------ */
-
-function WebCover({ page }: { page: ResolvedPage }) {
-  const preview = pageCachedPreview(page)
-  const web = preview?.content.kind === 'web' ? preview.content : undefined
-  const host = hostnameOf(web?.site ?? web?.url ?? page.detail)
-  const body = cleanKnowledgeText(page.previewText)
-  return (
-    <div className="knowledge-card-cover">
-      <div className="knowledge-card-cover__browser">
-        <div className="knowledge-card-cover__browser-bar">
-          <span className="knowledge-card-cover__browser-dot" />
-          <span className="knowledge-card-cover__browser-dot" />
-          <span className="knowledge-card-cover__browser-dot" />
-          <span style={{ marginLeft: 4, display: 'inline-flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
-            <Globe size={10} aria-hidden="true" />
-            <span className="min-w-0 truncate">{host || '网页'}</span>
-          </span>
-        </div>
-        <div className="knowledge-card-cover__browser-body">
-          {body ? (
-            <p className="knowledge-card-cover__paper-text" style={{ WebkitLineClamp: 6 }}>{body.slice(0, 260)}</p>
-          ) : (
-            <>
-              <span className="knowledge-card-cover__browser-title" />
-              {[96, 90, 82, 70].map((width, index) => (
-                <span key={index} className="knowledge-card-cover__browser-line" style={{ width: `${width}%` }} />
-              ))}
-            </>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function hostnameOf(source: string | undefined): string {
-  if (source === undefined) return ''
-  const trimmed = source.trim()
-  if (/^https?:\/\//u.test(trimmed)) {
-    try {
-      return new URL(trimmed).hostname.replace(/^www\./u, '')
-    } catch {
-      return trimmed
-    }
-  }
-  return trimmed
-}
-
-/* ------------------------------ 通用占位 ------------------------------ */
-
-function IconCover({ icon }: { icon: ReactNode }) {
-  return (
-    <div className="knowledge-card-cover">
-      <div className="knowledge-card-cover__placeholder">{icon}</div>
-    </div>
-  )
-}
-
-function GenericFileCover({ page }: { page: ResolvedPage }) {
-  const ext = fileExtension(page.detail ?? page.title)
-  return (
-    <div className="knowledge-card-cover">
-      <div className="knowledge-card-cover__placeholder">
-        <FileIcon size={26} />
-      </div>
-      {ext && <span className="knowledge-card-cover__ext">{ext}</span>}
-    </div>
-  )
-}
-
-function fileExtension(label: string): string {
-  const match = /\.([a-z0-9]{1,8})$/iu.exec(label.trim())
-  return match?.[1] ?? ''
 }
 
 const WAVE = [30, 55, 40, 80, 60, 95, 50, 70, 45, 85, 35, 65, 50, 90, 40, 60, 30]

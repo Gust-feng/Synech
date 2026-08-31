@@ -125,9 +125,7 @@ export function BrainPage({
           : cards.filter((c) => themeApi.themesOf(c.refId).includes(nav))
   const activeTheme = themeApi.themes.find((t) => t.id === nav) ?? null
 
-  // 网格级有界预热：按当前可见卡片补拉预览元数据与重型封面渲染，
-  // 让图片 / PDF / Office / 视频等格式封面在不打开阅读视图时也能成形。
-  useKnowledgeCardWarmup(searching ? results : navCards)
+  useKnowledgeCardWarmup(searching ? results : nav === 'recent' ? recentPages : navCards)
 
   if (resolved.length === 0) {
     return (
