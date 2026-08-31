@@ -3,7 +3,6 @@ import {
   Home,
   Layers,
   Library,
-  BookOpen,
   Pencil,
   Trash2,
   Plus,
@@ -374,14 +373,6 @@ export function Sidebar({
             collapsed={collapsed}
             icon={<Library size={14}/>}
             label="知识库"
-          />
-          <SidebarNavRow
-            active={view === 'memory'}
-            onClick={() => onNavigate('memory')}
-            labelsVisible={labelsVisible}
-            collapsed={collapsed}
-            icon={<BookOpen size={14}/>}
-            label="记忆"
           />
         </div>
       </nav>

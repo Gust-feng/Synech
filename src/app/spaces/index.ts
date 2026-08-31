@@ -27,6 +27,7 @@ export {
   type SpaceReferenceAnnotationPatch,
   type SpaceReferenceImageCaption,
   type SpaceReferenceItem,
+  type SpaceWebReferenceMetadata,
   type SpaceRepository,
   type SpaceSummary,
   type SpaceTarget,
@@ -34,7 +35,7 @@ export {
   type SpaceTreeEntry,
   type SpaceTreeSnapshot,
 } from "./contracts.js";
-export { validateSpaceTreeSnapshot } from "./space-validation.js";
+export { validateSpaceTreeSnapshot, validateSpaceWebReferenceMetadata } from "./space-validation.js";
 export { createSqliteSpaceRepository } from "./sqlite-repository.js";
 export { createSpaceFeature, type CreateSpaceFeatureInput } from "./space-feature.js";
 export {

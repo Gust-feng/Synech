@@ -10,13 +10,14 @@ import {
   type SpaceReferenceAnnotationInput,
   type SpaceReferenceAnnotationPatch,
   type SpaceReferenceImageCaption,
+  type SpaceWebReferenceMetadata,
   type SpaceReferenceItem,
   type SpaceRepository,
   type SpaceOwnedAssetDeletionPort,
   type SpaceTarget,
   type SpaceTreeSnapshot,
 } from "./contracts.js";
-import { validateSpaceReference, validateSpaceReferenceAnnotation, validateSpaceReferenceImageCaption } from "./space-validation.js";
+import { validateSpaceReference, validateSpaceReferenceAnnotation, validateSpaceReferenceImageCaption, validateSpaceWebReferenceMetadata } from "./space-validation.js";
 import {
   createSpaceReferenceDeletionLifecycle,
   type SpaceReferenceDeletionDiagnostic,
@@ -271,6 +272,7 @@ export function createSpaceFeature(input: CreateSpaceFeatureInput): SpaceFeature
             reference: validatedReference,
             ...(sourceIdentity === undefined ? {} : { sourceIdentity }),
             ...(annotation === undefined ? {} : { annotation: initialAnnotation(annotation, at, actor) }),
+            ...(validatedReference.kind === "web_page" ? { webMetadata: { status: "pending" as const } } : {}),
             createdAt: at,
             updatedAt: at,
           };
@@ -331,6 +333,27 @@ export function createSpaceFeature(input: CreateSpaceFeatureInput): SpaceFeature
             spaces: touchSpaces(snapshot.spaces, [current.spaceId], at),
           });
           publish({ type: "space.reference_annotation_updated", item });
+          return item;
+        });
+      },
+      updateWebReferenceMetadata({ itemId, expectedUrl, metadata }) {
+        assertUsable("update web reference metadata");
+        return serialize(async () => {
+          const snapshot = await input.repository.read();
+          const current = snapshot.referenceItems.find((item) => item.id === itemId);
+          if (current === undefined || current.reference.kind !== "web_page" || current.reference.url !== expectedUrl) return undefined;
+          const at = now();
+          const item: SpaceReferenceItem = {
+            ...current,
+            webMetadata: validateSpaceWebReferenceMetadata(metadata),
+            updatedAt: at,
+          };
+          await input.repository.write({
+            ...snapshot,
+            referenceItems: snapshot.referenceItems.map((entry) => entry.id === itemId ? item : entry),
+            spaces: touchSpaces(snapshot.spaces, [current.spaceId], at),
+          });
+          publish({ type: "space.reference_web_metadata_updated", item });
           return item;
         });
       },
@@ -451,6 +474,12 @@ export function createSpaceFeature(input: CreateSpaceFeatureInput): SpaceFeature
         assertUsable("read a reference");
         await waitUntilUsable();
         return (await input.repository.read()).referenceItems.find((entry) => entry.id === itemId);
+      },
+      async listWebReferencesByMetadataStatus(status) {
+        assertUsable("list web references");
+        await waitUntilUsable();
+        return (await input.repository.read()).referenceItems.filter((item) =>
+          item.reference.kind === "web_page" && item.webMetadata?.status === status);
       },
       async listReferencesByWorkspace(workspaceId) {
         assertUsable("list Workspace references");

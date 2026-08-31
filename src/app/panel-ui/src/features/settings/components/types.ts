@@ -39,6 +39,7 @@ export type SettingsGroup =
   | "basicCapabilities"
   | "mcp"
   | "skills"
+  | "memory"
   | "subAgents"
   | "workspace"
   | "appearance"

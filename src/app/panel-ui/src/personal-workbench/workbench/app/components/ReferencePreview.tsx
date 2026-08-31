@@ -1,6 +1,6 @@
 import { Fragment, forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ForwardedRef, type ReactNode, type UIEvent } from 'react'
 import { diffLines, type Change } from 'diff'
-import { AlertTriangle, Check, ChevronRight, Code2, ExternalLink, FileText, Folder, RefreshCw } from 'lucide-react'
+import { AlertTriangle, Check, ChevronRight, Clipboard, Code2, ExternalLink, FileText, Folder, RefreshCw } from 'lucide-react'
 import { fetchDocumentPreview, getCachedReferencePreview, refreshDocumentPreview, saveDocumentCaption, saveDocumentText, subscribeReferencePreviewCache, type DocumentPreview } from './referencePreviewClient'
 import type { SpaceReferenceAnnotation } from '@panel-api/spaces'
 import { MarkdownDocumentSurface } from './MarkdownDocumentSurface'
@@ -232,7 +232,14 @@ function ReferenceDocumentSessionView({
         if (disposed) return
         const annotationChanged = annotationRevisionChanged(preview, next)
         const captionChanged = imageCaptionRevisionChanged(preview, next)
+        const webMetadataChanged = webMetadataChangedBetween(preview, next)
         const sourceChanged = hasSourceChanged(preview, next)
+        if (webMetadataChanged) {
+          setPreview(next)
+          setIncoming(undefined)
+          setShowDiff(false)
+          return
+        }
         if (annotationChanged && sourceChanged) {
           // annotation 与来源同时变化：立即应用新整理内容（Space 自己的内容），
           // 同时保留来源冲突提示，不能吞掉用户对正文变化的知情权。
@@ -387,10 +394,7 @@ function WebDocument({
   return (
     <div className="ui-reference-preview__reader" data-document-scroll="content">
       <article className="ui-reference-preview__markdown ui-reference-preview__web-document reading-prose">
-        <div className="ui-reference-preview__web-source">
-          <span>{content.site ?? content.url}</span>
-          <a href={content.url} target="_blank" rel="noreferrer">访问原网页<ExternalLink size={12} /></a>
-        </div>
+        <WebSourceIdentity url={content.url} faviconUrl={content.faviconUrl} />
         <MarkdownDocumentSurface markdown={markdown} sourceVersion={sourceVersion} />
         {annotation?.keyPoints !== undefined && annotation.keyPoints.length > 0 && (
           <ul className="ui-reference-preview__annotation-points">
@@ -405,6 +409,41 @@ function WebDocument({
       </article>
     </div>
   )
+}
+
+function WebSourceIdentity({ url, faviconUrl }: { readonly url: string; readonly faviconUrl?: string }) {
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
+
+  async function copyUrl(): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(url)
+      setCopyState('copied')
+    } catch {
+      setCopyState('failed')
+    }
+  }
+
+  return (
+    <div className="ui-reference-preview__web-source">
+      {faviconUrl !== undefined && <WebSourceFavicon url={faviconUrl} />}
+      <span className="ui-reference-preview__source-url">{url}</span>
+      <button
+        type="button"
+        className="ui-reference-preview__copy-source"
+        onClick={() => void copyUrl()}
+        aria-label="复制原文链接"
+      >
+        <Clipboard size={12} />
+        <span>{copyState === 'copied' ? '已复制' : copyState === 'failed' ? '复制失败' : '复制链接'}</span>
+      </button>
+    </div>
+  )
+}
+
+function WebSourceFavicon({ url }: { readonly url: string }) {
+  const [failed, setFailed] = useState(false)
+  if (failed) return null
+  return <img className="ui-reference-preview__site-icon" src={url} alt="" onError={() => setFailed(true)} />
 }
 
 function ReferenceHeader({ rootTitle, relativePath, source, actions, canOpen, onOpen, saveState, sourceMode, onToggleSourceMode }: {
@@ -623,6 +662,11 @@ function PreviewState({ title, message, error, onRetry }: { title: string; messa
 
 function hasSourceChanged(current: DocumentPreview, next: DocumentPreview): boolean {
   return current.fingerprint !== next.fingerprint || current.status !== next.status
+}
+
+function webMetadataChangedBetween(current: DocumentPreview, next: DocumentPreview): boolean {
+  if (current.content.kind !== 'web' || next.content.kind !== 'web') return false
+  return current.content.site !== next.content.site || current.content.faviconUrl !== next.content.faviconUrl
 }
 
 function annotationRevisionChanged(current: DocumentPreview, next: DocumentPreview): boolean {

@@ -39,10 +39,23 @@ export type SpaceReferenceItem = {
   readonly sourceIdentity?: string;
   /** Agent/user-maintained understanding of the source. It is never the source body itself. */
   readonly annotation?: SpaceReferenceAnnotation;
+  /** Server-collected facts about a web reference. They are never Agent-authored annotation. */
+  readonly webMetadata?: SpaceWebReferenceMetadata;
   /** Space-owned image captions keyed by normalized relative path; the empty key addresses a root file. */
   readonly imageCaptions?: Readonly<Record<string, SpaceReferenceImageCaption>>;
   readonly createdAt: string;
   readonly updatedAt: string;
+};
+
+export type SpaceWebReferenceMetadata = {
+  readonly status: "pending" | "ready" | "failed";
+  readonly finalUrl?: string;
+  readonly canonicalUrl?: string;
+  readonly pageTitle?: string;
+  readonly siteName?: string;
+  readonly favicon?: { readonly mediaType: string };
+  readonly fetchedAt?: string;
+  readonly failureCode?: string;
 };
 
 /**
@@ -160,6 +173,7 @@ export type SpaceEvent =
   | { readonly type: "space.reference_added"; readonly item: SpaceReferenceItem }
   | { readonly type: "space.reference_source_identity_updated"; readonly item: SpaceReferenceItem }
   | { readonly type: "space.reference_annotation_updated"; readonly item: SpaceReferenceItem }
+  | { readonly type: "space.reference_web_metadata_updated"; readonly item: SpaceReferenceItem }
   | { readonly type: "space.reference_image_caption_updated"; readonly item: SpaceReferenceItem; readonly relativePath: string }
   | { readonly type: "space.renamed"; readonly target: SpaceTarget; readonly spaceId: string }
   | { readonly type: "space.moved"; readonly target: SpaceMovableTarget; readonly sourceSpaceId: string; readonly destinationSpaceId: string }
@@ -177,6 +191,8 @@ export type SpaceFeature = {
     refreshReferenceSourceIdentity(itemId: string): Promise<SpaceReferenceItem>;
     /** Updates the annotation content of one reference with optimistic concurrency; revision advances on success. */
     updateReferenceAnnotation(input: { readonly itemId: string; readonly expectedRevision: number; readonly patch: SpaceReferenceAnnotationPatch; readonly actor: SpaceReferenceActorRecord }): Promise<SpaceReferenceItem>;
+    /** Internal enrichment worker updates only web-source facts after revalidating the target URL. */
+    updateWebReferenceMetadata(input: { readonly itemId: string; readonly expectedUrl: string; readonly metadata: SpaceWebReferenceMetadata }): Promise<SpaceReferenceItem | undefined>;
     /** Updates one image caption without mutating the referenced image file. */
     updateReferenceImageCaption(input: { readonly itemId: string; readonly relativePath: string; readonly expectedRevision: number; readonly text: string; readonly actor: SpaceReferenceActorRecord }): Promise<SpaceReferenceItem>;
     rename(input: { readonly target: SpaceTarget; readonly title: string }): Promise<SpaceTarget>;
@@ -190,6 +206,7 @@ export type SpaceFeature = {
     list(): Promise<readonly SpaceSummary[]>;
     getTree(spaceId: string): Promise<SpaceTree | undefined>;
     getReference(itemId: string): Promise<SpaceReferenceItem | undefined>;
+    listWebReferencesByMetadataStatus(status: SpaceWebReferenceMetadata["status"]): Promise<readonly SpaceReferenceItem[]>;
     listReferencesByWorkspace(workspaceId: string): Promise<readonly SpaceReferenceItem[]>;
   };
   readonly events: { subscribe(listener: (event: SpaceEvent) => void): () => void };

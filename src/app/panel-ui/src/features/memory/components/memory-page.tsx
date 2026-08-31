@@ -22,6 +22,7 @@ import type {
   MemoryVerification,
   PathDependency,
 } from "@panel-api/memory";
+import "./memory-page.css";
 
 type NoteScope = "global" | "owner";
 type MemoryKind = "notes" | "paths";

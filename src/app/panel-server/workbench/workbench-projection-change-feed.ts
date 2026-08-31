@@ -40,6 +40,7 @@ export function projectionChangeFromSpace(event: SpaceEvent): WorkbenchProjectio
       return { owners: ["spaces"], spaceIds: [event.item.spaceId], referenceIds: [event.item.id] };
     case "space.reference_source_identity_updated":
     case "space.reference_annotation_updated":
+    case "space.reference_web_metadata_updated":
     case "space.reference_image_caption_updated":
       return { owners: ["spaces"], spaceIds: [event.item.spaceId], referenceIds: [event.item.id] };
     case "space.renamed":

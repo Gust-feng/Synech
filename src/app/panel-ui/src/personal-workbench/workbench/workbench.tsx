@@ -427,7 +427,6 @@ function viewLabel(view: WorkbenchView): string {
     case "home": return "个人首页";
     case "space": return "空间";
     case "brain": return "知识库";
-    case "memory": return "记忆";
     case "search": return "搜索";
   }
 }

@@ -6,6 +6,7 @@ import {
   type SpaceReference,
   type SpaceReferenceAnnotation,
   type SpaceReferenceImageCaption,
+  type SpaceWebReferenceMetadata,
   type SpaceTreeSnapshot,
 } from "./contracts.js";
 import { toPersistedJsonShape } from "../../kernel/values/index.js";
@@ -64,6 +65,24 @@ export const spaceReferenceImageCaptionsSchema = z.record(
   spaceReferenceImageCaptionSchema,
 );
 
+export const spaceWebReferenceMetadataSchema: z.ZodType<SpaceWebReferenceMetadata> = z.object({
+  status: z.enum(["pending", "ready", "failed"]),
+  finalUrl: z.string().url().optional(),
+  canonicalUrl: z.string().url().optional(),
+  pageTitle: z.string().min(1).max(512).optional(),
+  siteName: z.string().min(1).max(256).optional(),
+  favicon: z.object({ mediaType: z.string().min(1).max(128) }).strict().optional(),
+  fetchedAt: z.string().min(1).optional(),
+  failureCode: z.string().min(1).max(128).optional(),
+}).strict().superRefine((metadata, context) => {
+  if (metadata.status === "ready" && metadata.fetchedAt === undefined) {
+    context.addIssue({ code: "custom", path: ["fetchedAt"], message: "ready web metadata requires fetchedAt" });
+  }
+  if (metadata.status === "failed" && metadata.failureCode === undefined) {
+    context.addIssue({ code: "custom", path: ["failureCode"], message: "failed web metadata requires failureCode" });
+  }
+});
+
 const spaceSchema = z.object({
   id: z.string().min(1),
   title: z.string().min(1),
@@ -79,6 +98,7 @@ const referenceItemSchema = z.object({
   reference: spaceReferenceSchema,
   sourceIdentity: z.string().min(1).optional(),
   annotation: spaceReferenceAnnotationSchema.optional(),
+  webMetadata: spaceWebReferenceMetadataSchema.optional(),
   imageCaptions: spaceReferenceImageCaptionsSchema.optional(),
   createdAt: z.string().min(1),
   updatedAt: z.string().min(1),
@@ -154,6 +174,14 @@ export function validateSpaceReferenceImageCaption(caption: SpaceReferenceImageC
       tooLarge ? "space_reference_image_caption_too_large" : "space_reference_image_caption_invalid",
       `Space reference image caption is ${tooLarge ? "too large" : "invalid"}: ${z.prettifyError(result.error)}`,
     );
+  }
+  return toPersistedJsonShape(result.data);
+}
+
+export function validateSpaceWebReferenceMetadata(metadata: SpaceWebReferenceMetadata): SpaceWebReferenceMetadata {
+  const result = spaceWebReferenceMetadataSchema.safeParse(metadata);
+  if (!result.success) {
+    throw new SpaceFeatureError("space_invalid_input", `Space web reference metadata is invalid: ${z.prettifyError(result.error)}`);
   }
   return toPersistedJsonShape(result.data);
 }

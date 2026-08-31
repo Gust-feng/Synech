@@ -150,6 +150,8 @@ import {
   createContextAttachmentUploadApplication,
   type ContextAttachmentUploadApplication,
 } from "../application/context-attachment-application.js";
+import { createWebReferenceMetadataWorker, type WebReferenceMetadataWorker } from "./spaces/web-reference-metadata-worker.js";
+import { createWebReferenceMetadataDiagnostics, type WebReferenceMetadataDiagnostics } from "./spaces/web-reference-metadata-diagnostics.js";
 
 /**
  * The sole process-lifetime composition root for the local Panel host. Route
@@ -184,6 +186,8 @@ export type PanelHost = {
   readonly agentNotesFeature: AgentNotesFeature;
   readonly pathDependencyFeature: PathDependencyFeature;
   readonly spaceFeature: SpaceFeature;
+  readonly webReferenceMetadataWorker: WebReferenceMetadataWorker;
+  readonly webReferenceMetadataDiagnostics: WebReferenceMetadataDiagnostics;
   readonly workspaceFeature: WorkspaceFeature;
   readonly conversationLifecycle: ConversationLifecycleCoordinator;
   readonly spaceConversationDeletion: SpaceConversationDeletionCoordinator;
@@ -392,6 +396,18 @@ function assemblePanelHost(input: {
       deleteOwnedAssets: async (assetIds) => await managedAssets.removeMany(assetIds),
     },
   });
+  const webReferenceMetadataDiagnostics = createWebReferenceMetadataDiagnostics(
+    productPaths.state.diagnostics.webReferenceMetadata,
+  );
+  const webReferenceMetadataWorker = createWebReferenceMetadataWorker({
+    spaces: spaceFeature,
+    faviconRoot: productPaths.data.spaces.webMetadata,
+    onDiagnostic: webReferenceMetadataDiagnostics.record,
+  });
+  void webReferenceMetadataWorker.ready().catch((error) => console.error(
+    "[panel-server] Web metadata worker startup scan failed; pending references will retry on next startup",
+    error,
+  ));
   const invalidateSpaceReferenceAccess = async (
     referenceId: string,
     expectedMountVersion?: string,
@@ -767,6 +783,8 @@ function assemblePanelHost(input: {
     agentNotesFeature,
     pathDependencyFeature,
     spaceFeature,
+    webReferenceMetadataWorker,
+    webReferenceMetadataDiagnostics,
     workspaceFeature,
     conversationLifecycle,
     spaceConversationDeletion,
@@ -799,6 +817,7 @@ function assemblePanelHost(input: {
     await pathDependencyFeature.release();
     await initialWorkbenchData.ensure();
     await personalKnowledgeFeature.release();
+    await webReferenceMetadataWorker.release();
     await spaceFeature.release();
   })();
   return host;

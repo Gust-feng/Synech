@@ -162,7 +162,7 @@ export function TopBar({
 }
 
 function topBarSectionLabel(view: View): string {
-  if (view === 'search' || view === 'memory') return view === 'search' ? '搜索' : '记忆'
+  if (view === 'search') return '搜索'
   return '首页'
 }
 

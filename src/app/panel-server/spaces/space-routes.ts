@@ -18,6 +18,7 @@ import { resolveSpaceFilesystemReference, type ResolvedSpaceFilesystemReference 
 import type { ManagedSpaceFolderApplication } from "../../../domain/managed-space-folder.js";
 import type { SpaceReferenceContentApplication } from "../../application/space-reference-content-application.js";
 import type { SpaceReferenceLifecycleApplication } from "../../application/space-reference-lifecycle-application.js";
+import type { WebReferenceMetadataWorker } from "./web-reference-metadata-worker.js";
 
 const titleSchema = z.string().trim().min(1).max(160);
 const referenceSchema = z.discriminatedUnion("kind", [
@@ -73,6 +74,7 @@ export type SpaceReferenceRouteDependencies = {
   readonly managedAssets: {
     readonly queries: Pick<ManagedAssetsFeature["queries"], "get">;
   };
+  readonly webReferenceMetadataWorker: Pick<WebReferenceMetadataWorker, "readFavicon">;
 };
 
 /** HTTP adapter for SpaceFeature and explicitly authorized local reference operations. */
@@ -212,6 +214,25 @@ export async function handlePanelSpaceRoute(
   }
 
   const previewReference = /^\/api\/spaces\/references\/([^/]+)\/preview$/u.exec(url.pathname);
+
+  const webFavicon = /^\/api\/spaces\/references\/([^/]+)\/web-favicon$/u.exec(url.pathname);
+  if (webFavicon !== null && request.method === "GET") {
+    const item = await feature.queries.getReference(decode(webFavicon[1]));
+    if (item?.reference.kind !== "web_page" || item.webMetadata?.favicon === undefined) {
+      throw new PanelHttpError(404, "web_reference_favicon_not_found", "网页图标暂不可用。");
+    }
+    const favicon = await runtime.webReferenceMetadataWorker.readFavicon(item.id);
+    if (favicon === undefined) throw new PanelHttpError(404, "web_reference_favicon_not_found", "网页图标暂不可用。");
+    response.writeHead(200, {
+      "content-type": item.webMetadata.favicon.mediaType,
+      "cache-control": "private, max-age=86400",
+      "content-length": favicon.byteLength,
+      "x-content-type-options": "nosniff",
+    });
+    response.end(favicon);
+    return true;
+  }
+
   if (previewReference !== null && request.method === "GET") {
     const item = await feature.queries.getReference(decode(previewReference[1]));
     if (item === undefined) throw new PanelHttpError(404, "space_reference_not_found", "未找到空间引用。");

@@ -422,6 +422,7 @@ async function handlePanelRequest(
     flushSpaceKnowledgeSync: runtime.flushSpaceKnowledgeSync,
     externalResourceOpener: runtime.externalResourceOpener,
     managedAssets: runtime.managedAssetFeature,
+    webReferenceMetadataWorker: runtime.webReferenceMetadataWorker,
   }, request, response, url)) {
     return;
   }
@@ -618,6 +619,8 @@ export async function releasePanelHostResources(
   const errors: unknown[] = [];
   await captureCleanupError(errors, () => ordinaryDisposal);
   await captureCleanupError(errors, () => runtime.pathDependencyFeature.release());
+  await captureCleanupError(errors, () => runtime.webReferenceMetadataWorker.release());
+  await captureCleanupError(errors, () => runtime.webReferenceMetadataDiagnostics.release());
   await captureCleanupError(errors, async () => runtime.spaceReferenceRuntimeGuard.release());
   await captureCleanupError(errors, async () => runtime.projectionRuntime.release());
   await captureCleanupError(errors, () => releaseWorkbenchStorage(runtime));

@@ -5,7 +5,6 @@ import type { PersonalSpaceActions, PersonalSpaceProjection } from "../../../spa
 import type { WorkspaceProjectionState } from "../../../../features/spaces/workspace-state";
 import { BrainPage } from "./BrainPage";
 import { HomePage } from "./HomePage";
-import { MemoryPage } from "./MemoryPage";
 import { SearchPage } from "./SearchPage";
 import { SpacePage } from "./SpacePage";
 import { ConversationSurface } from "./ConversationSurface";
@@ -106,9 +105,6 @@ export function WorkbenchViewRenderer(input: WorkbenchViewRendererProps): React.
       selectedId={input.brainSelectedId}
       onSelect={input.onBrainSelect}
     />;
-  }
-  if (input.view === "memory") {
-    return <MemoryPage />;
   }
   if (input.view === "search") {
     return <SearchPage

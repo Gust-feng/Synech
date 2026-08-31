@@ -75,7 +75,12 @@ async function buildPanelDocumentPreview(
   resolved?: ResolvedSpaceFilesystemReference,
 ): Promise<DocumentPreview> {
   if (item.reference.kind === "web_page") {
-    const content = { kind: "web" as const, url: item.reference.url };
+    const content = {
+      kind: "web" as const,
+      url: item.reference.url,
+      ...(item.webMetadata?.siteName === undefined ? {} : { site: item.webMetadata.siteName }),
+      ...(item.webMetadata?.favicon === undefined ? {} : { faviconUrl: `/api/spaces/references/${encodeURIComponent(item.id)}/web-favicon` }),
+    };
     return {
       itemId: item.id,
       title: item.title,

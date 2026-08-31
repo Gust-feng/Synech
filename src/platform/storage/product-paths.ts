@@ -14,6 +14,7 @@ export type AgentDataPaths = {
 export type SpaceDataPaths = {
   readonly root: string;
   readonly files: string;
+  readonly webMetadata: string;
 };
 
 export type KnowledgeDataPaths = {
@@ -40,6 +41,10 @@ export type ProductStatePaths = {
   readonly root: string;
   readonly journals: string;
   readonly locks: string;
+  readonly diagnostics: {
+    readonly root: string;
+    readonly webReferenceMetadata: string;
+  };
   readonly restoreMarkers: string;
   readonly runtimeTools: {
     readonly root: string;
@@ -74,6 +79,7 @@ export function resolveProductPaths(options: ResolveProductHomeOptions = {}): Pr
   const knowledgeRoot = path.join(dataRoot, "knowledge");
   const memoryRoot = path.join(dataRoot, "memory");
   const stateRoot = path.join(productHome, "state");
+  const diagnosticsRoot = path.join(stateRoot, "diagnostics");
   const runtimeToolsRoot = path.join(stateRoot, "runtime-tools");
   const mcpRuntimeRoot = path.join(runtimeToolsRoot, "mcp");
   const cacheRoot = path.join(productHome, "cache");
@@ -96,6 +102,7 @@ export function resolveProductPaths(options: ResolveProductHomeOptions = {}): Pr
       spaces: {
         root: spacesRoot,
         files: path.join(spacesRoot, "files"),
+        webMetadata: path.join(spacesRoot, "web-metadata"),
       },
       knowledge: {
         root: knowledgeRoot,
@@ -111,6 +118,10 @@ export function resolveProductPaths(options: ResolveProductHomeOptions = {}): Pr
       root: stateRoot,
       journals: path.join(stateRoot, "journals"),
       locks: path.join(stateRoot, "locks"),
+      diagnostics: {
+        root: diagnosticsRoot,
+        webReferenceMetadata: path.join(diagnosticsRoot, "web-reference-metadata.jsonl"),
+      },
       restoreMarkers: path.join(stateRoot, "restore-markers"),
       runtimeTools: {
         root: runtimeToolsRoot,
@@ -143,6 +154,7 @@ export function productStorageDirectories(paths: ProductPaths): readonly string[
     paths.data.agent.memoryFacts,
     paths.data.spaces.root,
     paths.data.spaces.files,
+    paths.data.spaces.webMetadata,
     paths.data.knowledge.root,
     paths.data.knowledge.assets,
     paths.data.memory.root,
@@ -151,6 +163,7 @@ export function productStorageDirectories(paths: ProductPaths): readonly string[
     paths.state.root,
     paths.state.journals,
     paths.state.locks,
+    paths.state.diagnostics.root,
     paths.state.restoreMarkers,
     paths.state.runtimeTools.root,
     paths.state.runtimeTools.mcp.root,

@@ -36,6 +36,15 @@ export type PanelSpaceReferenceItem = {
     readonly mountVersion?: string;
   };
   readonly annotation?: PanelSpaceReferenceAnnotation;
+  readonly webMetadata?: {
+    readonly status: "pending" | "ready" | "failed";
+    readonly finalUrl?: string;
+    readonly canonicalUrl?: string;
+    readonly pageTitle?: string;
+    readonly siteName?: string;
+    readonly favicon?: { readonly mediaType: string };
+    readonly fetchedAt?: string;
+  };
   readonly imageCaptions?: Readonly<Record<string, {
     readonly text: string;
     readonly revision: number;
