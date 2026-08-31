@@ -83,7 +83,7 @@ export function createFileSystemOrdinaryConversationControlRepository(rootDir: s
         const result = documentSchema.safeParse(document);
         if (!result.success) throw new OrdinaryConversationSnapshotIncompatibleError(state.conversationId, z.prettifyError(result.error));
         await writeJsonAtomically(documentPath(rootDir, state.conversationId), document);
-        return structuredClone(document);
+        return document;
       });
     },
     delete(conversationId, expectedRevision) {
@@ -137,7 +137,7 @@ async function readDocument(rootDir: string, conversationId: string): Promise<Or
   if (!result.success || result.data.state.conversationId !== conversationId) {
     throw new OrdinaryConversationSnapshotIncompatibleError(conversationId, result.success ? "conversation identity is invalid" : z.prettifyError(result.error));
   }
-  return structuredClone(result.data);
+  return result.data;
 }
 
 function summary(document: OrdinaryConversationControlDocument): OrdinaryConversationControlSummary {

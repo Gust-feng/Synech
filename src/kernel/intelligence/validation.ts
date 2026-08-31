@@ -8,54 +8,6 @@ import type {
 } from "../../domain/intelligence/index.js";
 import { nowIso } from "../id.js";
 
-export type ModelRequestValidationResult = {
-  readonly passed: boolean;
-  readonly issues: readonly ModelOutputValidationIssue[];
-};
-
-export function validateModelRequest(request: ModelRequest): ModelRequestValidationResult {
-  const issues: ModelOutputValidationIssue[] = [];
-  const record = request as Partial<ModelRequest>;
-
-  if (typeof record.requestId !== "string" || record.requestId.trim().length === 0) {
-    issues.push(issue("MODEL_REQUEST_ID_REQUIRED", "ModelRequest.requestId is required.", "requestId"));
-  }
-  if (typeof record.traceId !== "string" || record.traceId.trim().length === 0) {
-    issues.push(issue("MODEL_TRACE_ID_REQUIRED", "ModelRequest.traceId is required.", "traceId"));
-  }
-  if (record.callerRef === undefined || record.callerRef === null) {
-    issues.push(issue("MODEL_CALLER_REF_REQUIRED", "ModelRequest.callerRef is required.", "callerRef"));
-  }
-  if (typeof record.purpose !== "string" || record.purpose.trim().length === 0) {
-    issues.push(issue("MODEL_PURPOSE_REQUIRED", "ModelRequest.purpose is required.", "purpose"));
-  }
-  if (!isOutputContract(record.outputContract)) {
-    issues.push(
-      issue("MODEL_OUTPUT_CONTRACT_REQUIRED", "ModelRequest.outputContract is required.", "outputContract")
-    );
-  }
-  if (!isBudget(record.budget)) {
-    issues.push(issue(
-      "MODEL_BUDGET_REQUIRED",
-      "ModelRequest.budget must be an object; declared budget limits must be positive numbers.",
-      "budget",
-    ));
-  }
-  if (!Array.isArray(record.inputRefs)) {
-    issues.push(issue("MODEL_INPUT_REFS_REQUIRED", "ModelRequest.inputRefs must be an array.", "inputRefs"));
-  }
-  if (!Array.isArray(record.sanitizedMessages)) {
-    issues.push(
-      issue("MODEL_SANITIZED_MESSAGES_REQUIRED", "ModelRequest.sanitizedMessages must be an array.", "sanitizedMessages")
-    );
-  }
-
-  return {
-    passed: issues.length === 0,
-    issues,
-  };
-}
-
 export function validateModelResponse(
   request: ModelRequest,
   response: ModelResponse
@@ -149,29 +101,6 @@ export function failedModelOutputValidation(
     checkedAt: nowIso(),
     issues: [issue(code, message, path)],
   };
-}
-
-function isOutputContract(value: unknown): value is ModelOutputContract {
-  const record = asOptionalRecord(value);
-  return (
-    record !== undefined &&
-    typeof record.contractId === "string" &&
-    record.contractId.trim().length > 0 &&
-    typeof record.outputKind === "string" &&
-    (record.format === "json_object" || record.format === "text")
-  );
-}
-
-function isBudget(value: unknown): boolean {
-  const record = asOptionalRecord(value);
-  if (record === undefined) {
-    return false;
-  }
-  return ["maxInputTokens", "maxOutputTokens", "maxTotalTokens", "maxLatencyMs", "maxCostUsd"].every((field) => {
-    const budgetValue = record[field];
-    return budgetValue === undefined ||
-      (typeof budgetValue === "number" && Number.isFinite(budgetValue) && budgetValue > 0);
-  });
 }
 
 function issue(code: string, message: string, path?: string): ModelOutputValidationIssue {

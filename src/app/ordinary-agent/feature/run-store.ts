@@ -34,6 +34,7 @@ export type OrdinaryRunStore = {
   ): Promise<OrdinaryRunState>;
   markEnumerationFailed(): void;
   enumerationFailed(): boolean;
+  evictCachedTerminal(runId: string): void;
   awaitIdle(): Promise<void>;
   clear(): void;
 };
@@ -163,6 +164,12 @@ export function createOrdinaryRunStore(options: {
     mutateLocked,
     markEnumerationFailed() { startupEnumerationFailed = true; },
     enumerationFailed: () => startupEnumerationFailed,
+    evictCachedTerminal(runId) {
+      if (unpublishedRunIds.has(runId)) return;
+      const cached = documents.get(runId);
+      if (cached === undefined || !isTerminal(cached.state)) return;
+      documents.delete(runId);
+    },
     async awaitIdle() { await Promise.allSettled(mutationQueues.values()); },
     clear() {
       documents.clear();

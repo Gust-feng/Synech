@@ -668,7 +668,11 @@ export function createOrdinaryAgentFeature(input: {
       },
       async listMemoryFacts(query) {
         await readyPromise;
-        return structuredClone(await memoryFactRepository.list(query));
+        return memoryFactRepository.list(query);
+      },
+      async releaseTerminalRunCaches(runIds) {
+        await readyPromise;
+        for (const runId of runIds) runStore.evictCachedTerminal(runId);
       },
       async getStableTerminalRunFacts(runId) {
         // Startup reconciliation must finish first so recovered runs already

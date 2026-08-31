@@ -6,7 +6,7 @@ import {
   rmSync,
   statSync,
 } from "node:fs";
-import { copyFile, cp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { copyFile, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { z } from "zod";
@@ -17,6 +17,7 @@ import {
   type SqliteDatabaseBaseline,
   type SqliteRuntimeDatabase,
 } from "../../../adapters/runtime-storage/index.js";
+import { renameWithRetry } from "../../../kernel/fs/atomic-write.js";
 import type { ProductPaths } from "../../../platform/storage/index.js";
 import { PRODUCT_DATA_FORMAT_ID, PRODUCT_NAMESPACE } from "../../../platform/product-identity.js";
 
@@ -181,9 +182,9 @@ async function writeBackup(
       createdAt,
       baseline,
     })), "utf8");
-    await rename(temporaryFilePath, filePath);
-    await rename(temporaryAssetsPath, assetsPath);
-    await rename(temporaryManifestPath, manifestPath);
+    await renameWithRetry(temporaryFilePath, filePath);
+    await renameWithRetry(temporaryAssetsPath, assetsPath);
+    await renameWithRetry(temporaryManifestPath, manifestPath);
     return { filePath, byteLength: databaseBackup.byteLength, createdAt };
   } catch (error) {
     await Promise.allSettled([
@@ -221,7 +222,7 @@ async function stageRestoreBundle(runtimePaths: ProductPaths, selectedPath: stri
       baseline: databaseBaseline(selectedPath),
     })), "utf8");
     await rm(pendingPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
-    await rename(temporaryPath, pendingPath);
+    await renameWithRetry(temporaryPath, pendingPath);
   } catch (error) {
     await rm(temporaryPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }).catch(() => undefined);
     throw new DataMaintenanceError("data_maintenance_failed", "应用恢复文件暂存失败。", { cause: error });

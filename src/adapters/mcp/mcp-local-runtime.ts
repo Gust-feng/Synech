@@ -359,6 +359,16 @@ function installPlanForMcpExecutable(
   return undefined;
 }
 
+function killInstallProcessTree(child: ReturnType<typeof spawn>): void {
+  if (child.pid === undefined) return;
+  if (process.platform === "win32") {
+    spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" })
+      .once("error", () => undefined);
+    return;
+  }
+  child.kill();
+}
+
 function runInstallCommand(
   install: { readonly command: string; readonly args: readonly string[] },
   env: Readonly<Record<string, string | undefined>>,
@@ -371,7 +381,7 @@ function runInstallCommand(
       stdio: "ignore",
     });
     const timeout = setTimeout(() => {
-      child.kill();
+      killInstallProcessTree(child);
       resolve({ ok: false, errorSummary: "安装超时。" });
     }, 120_000);
     child.once("error", () => {
