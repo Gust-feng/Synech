@@ -28,6 +28,7 @@ import type { createTerminalSettlement } from "../terminal-settlement.js";
 import type { OrdinaryRunStore } from "./run-store.js";
 
 type OrdinaryTerminalSettlement = ReturnType<typeof createTerminalSettlement>;
+const AUTO_TITLE_RETRY_DELAYS_MS = [0, 1_000, 2_000] as const;
 type ConversationRunStore = Pick<
   OrdinaryRunStore,
   "cached" | "cachedDocuments" | "delete" | "has" | "inspectPersisted" |
@@ -80,7 +81,8 @@ export function createOrdinaryConversationCoordinator(options: {
   const successorActivationTasks = new Map<string, Promise<void>>();
   const conversationCleanupJobs = new Map<string, ConversationCleanupJob>();
   const pendingUncommittedConversationBirths = new Map<string, { readonly sessionRef: AgentSessionRef }>();
-  const autoTitleAttemptedConversationIds = new Set<string>();
+  const autoTitleGenerationTasks = new Map<string, Promise<void>>();
+  const conversationTitleListeners = new Set<(conversationId: string) => void>();
   const mutationQueues = new Map<string, Promise<void>>();
   const runStore = options.runStore;
   const managedAttachments = options.managedAttachments;
@@ -146,41 +148,79 @@ export function createOrdinaryConversationCoordinator(options: {
     const generator = options.generateConversationTitle;
     if (generator === undefined) return;
     const document = runStore.cached(runId);
-    if (document === undefined || isHiddenRun(document.state) || !terminalSettlement.isStable(document.state)) return;
-    // 只在首轮触发；旧会话不会批量回填。
+    if (document === undefined || isHiddenRun(document.state)) return;
+    // 只在首轮触发；标题只依赖已持久化的第一条用户消息。
     if (document.state.turn.predecessorRunId !== undefined) return;
     const conversationId = document.state.turn.conversationId;
-    if (autoTitleAttemptedConversationIds.has(conversationId)) return;
-    autoTitleAttemptedConversationIds.add(conversationId);
-    const control = conversationDocuments.get(conversationId);
-    if (control === undefined || control.state.deletedAt !== undefined ||
-        control.state.titleOverride !== undefined || control.state.autoTitle !== undefined) {
-      return;
-    }
+    const existing = autoTitleGenerationTasks.get(conversationId);
+    if (existing !== undefined) return existing;
+    const task = generateAutoConversationTitle({ conversationId, document, generator });
+    autoTitleGenerationTasks.set(conversationId, task);
     try {
-      const generated = await generator({
-        conversationId,
-        userMessage: document.state.input.userMessage,
-        birth: document.state.birth,
-      });
-      if (generated === undefined || generated.trim().length === 0) return;
-      const normalized = normalizeOrdinaryConversationTitle(generated);
-      await withConversationLock(conversationId, async () => {
-        await settlePendingUncommittedConversationCleanup(conversationId);
-        const current = await loadControl(conversationId);
-        if (current === undefined || current.state.deletedAt !== undefined) return;
-        // 落盘前防覆盖：用户手动重命名或已有自动标题时让位。
-        if (current.state.titleOverride !== undefined || current.state.autoTitle !== undefined) return;
-        const changedAt = now();
-        const saved = await options.conversationRepository.save(
-          { ...current.state, autoTitle: normalized, autoTitleAt: changedAt },
-          current.revision,
-          changedAt,
-        );
-        conversationDocuments.set(conversationId, saved);
-      });
-    } catch (error) {
-      emitDiagnostic({ kind: "conversation_title_generation_failed", conversationId, error });
+      await task;
+    } finally {
+      if (autoTitleGenerationTasks.get(conversationId) === task) {
+        autoTitleGenerationTasks.delete(conversationId);
+      }
+    }
+  }
+
+  async function generateAutoConversationTitle(input: {
+    readonly conversationId: string;
+    readonly document: OrdinaryRunSnapshotDocument;
+    readonly generator: OrdinaryConversationTitleGenerator;
+  }): Promise<void> {
+    let lastError: unknown;
+    for (const delayMs of AUTO_TITLE_RETRY_DELAYS_MS) {
+      if (delayMs > 0) await delay(delayMs);
+      if (options.isReleased()) return;
+      const control = await loadControl(input.conversationId);
+      if (control === undefined || control.state.deletedAt !== undefined ||
+          control.state.titleOverride !== undefined || control.state.autoTitle !== undefined) {
+        return;
+      }
+      try {
+        const generated = await input.generator({
+          conversationId: input.conversationId,
+          userMessage: input.document.state.input.userMessage,
+          birth: input.document.state.birth,
+        });
+        if (generated === undefined || generated.trim().length === 0) continue;
+        const normalized = normalizeOrdinaryConversationTitle(generated);
+        let savedTitle = false;
+        await withConversationLock(input.conversationId, async () => {
+          await settlePendingUncommittedConversationCleanup(input.conversationId);
+          const current = await loadControl(input.conversationId);
+          if (current === undefined || current.state.deletedAt !== undefined) return;
+          // 落盘前防覆盖：用户手动重命名或已有自动标题时让位。
+          if (current.state.titleOverride !== undefined || current.state.autoTitle !== undefined) return;
+          const changedAt = now();
+          const saved = await options.conversationRepository.save(
+            { ...current.state, autoTitle: normalized, autoTitleAt: changedAt },
+            current.revision,
+            changedAt,
+          );
+          conversationDocuments.set(input.conversationId, saved);
+          savedTitle = true;
+        });
+        if (savedTitle) notifyConversationTitleChanged(input.conversationId);
+        return;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    if (lastError !== undefined) {
+      emitDiagnostic({ kind: "conversation_title_generation_failed", conversationId: input.conversationId, error: lastError });
+    }
+  }
+
+  function notifyConversationTitleChanged(conversationId: string): void {
+    for (const listener of [...conversationTitleListeners]) {
+      try {
+        listener(conversationId);
+      } catch {
+        // Projection observers cannot affect the committed conversation title.
+      }
     }
   }
 
@@ -384,6 +424,7 @@ function schedulingFacts(runId: string): OrdinaryRunSchedulingFacts {
     runStore.publishBirth(created);
     activityHub.recordTransition(initial.timeline[0]);
     if (predecessor === undefined) {
+      trackPostExecutionTask(requestAutoConversationTitleIfMissing(initial.runId));
       try {
         const running = await runStore.mutate(initial.runId, { type: "start" });
         executionCoordinator.start(initial.runId);
@@ -941,6 +982,10 @@ function schedulingFacts(runId: string): OrdinaryRunSchedulingFacts {
 
   return {
     requestAutoConversationTitleIfMissing,
+    subscribeConversationTitleChanges(listener: (conversationId: string) => void) {
+      conversationTitleListeners.add(listener);
+      return () => conversationTitleListeners.delete(listener);
+    },
     activateSuccessor,
     activateRootQueued,
     start,
@@ -987,7 +1032,8 @@ function schedulingFacts(runId: string): OrdinaryRunSchedulingFacts {
       conversationCleanupJobs.clear();
       conversationDocuments.clear();
       unavailableConversationIds.clear();
-      autoTitleAttemptedConversationIds.clear();
+      autoTitleGenerationTasks.clear();
+      conversationTitleListeners.clear();
       mutationQueues.clear();
     },
   };
@@ -995,4 +1041,8 @@ function schedulingFacts(runId: string): OrdinaryRunSchedulingFacts {
 
 function clone<T>(value: T): T {
   return globalThis.structuredClone(value);
+}
+
+function delay(durationMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, durationMs));
 }

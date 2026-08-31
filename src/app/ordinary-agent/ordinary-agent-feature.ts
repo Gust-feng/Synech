@@ -208,9 +208,7 @@ export function createOrdinaryAgentFeature(input: {
     hasActivitySubscribers: activityHub.hasSubscribers,
     releaseActivityStream: activityHub.releaseStream,
     emitDiagnostic,
-    onStable(runId) {
-      executionState.trackPostExecutionTask(conversationCoordinator.requestAutoConversationTitleIfMissing(runId));
-    },
+    onStable() {},
   });
   executionCoordinator = createOrdinaryExecutionOperations({
     state: executionState,
@@ -713,6 +711,10 @@ export function createOrdinaryAgentFeature(input: {
       subscribeStableTerminalRuns(listener) {
         assertLive();
         return terminalSettlement.subscribeStable(listener);
+      },
+      subscribeConversationTitleChanges(listener) {
+        assertLive();
+        return conversationCoordinator.subscribeConversationTitleChanges(listener);
       },
     },
     async release() {

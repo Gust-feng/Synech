@@ -705,6 +705,8 @@ export interface OrdinaryAgentFeature {
     subscribe(runId: string, listener: (activity: OrdinaryRunActivity) => void): () => void;
     /** Notifies once terminal facts are stable; the same run may notify again and consumers must be idempotent. */
     subscribeStableTerminalRuns(listener: (runId: string) => void): () => void;
+    /** Notifies after an automatically generated title is durably written. */
+    subscribeConversationTitleChanges(listener: (conversationId: string) => void): () => void;
   };
   release(): Promise<void>;
 }

@@ -66,6 +66,9 @@ export function createPanelProjectionRuntime(input: {
       // Missing Space sources are reported by actual access, never by a background scan.
       changes.publish({ owners: ["mounted_files"] });
     }),
+    input.ordinary.events.subscribeConversationTitleChanges((conversationId) => {
+      changes.publish({ owners: ["conversations"], conversationIds: [conversationId] });
+    }),
   ];
 
   return {
