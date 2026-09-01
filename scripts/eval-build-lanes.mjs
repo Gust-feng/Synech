@@ -147,7 +147,7 @@ async function main() {
       spaceId,
       fromOrdinal: turns[0]?.ordinal ?? 1,
       toOrdinal: turns.at(-1)?.ordinal ?? 1,
-      evidenceGroups: [{ conversationId, fromOrdinal: 1, toOrdinal: turns.at(-1)?.ordinal ?? 1 }],
+      evidenceGroups: [{ conversationId, fromOrdinal: turns[0]?.ordinal ?? 1, toOrdinal: turns.at(-1)?.ordinal ?? 1 }],
       text,
     });
   }
