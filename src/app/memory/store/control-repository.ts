@@ -26,7 +26,7 @@ import {
  *   能被 recoverInterruptedJobs 枚举并回到 queued（durable 边界不丢）。
  */
 
-const MIGRATIONS = [{
+export const MEMORY_MIGRATIONS = [{
   version: 1,
   sql: `
     CREATE TABLE memory_policy (
@@ -62,6 +62,65 @@ const MIGRATIONS = [{
     CREATE INDEX memory_job_conversation_idx ON memory_job(conversation_id);
     CREATE UNIQUE INDEX memory_job_active_unique_idx ON memory_job(conversation_id)
       WHERE status IN ('queued', 'running');
+  `,
+}, {
+  version: 2,
+  sql: `
+    CREATE TABLE memory_record (
+      record_id TEXT NOT NULL,
+      revision INTEGER NOT NULL CHECK(revision >= 1),
+      owner_key TEXT NOT NULL,
+      owner_kind TEXT NOT NULL CHECK(owner_kind IN ('global', 'space', 'workspace')),
+      kind TEXT NOT NULL CHECK(kind IN ('preference', 'goal', 'decision', 'constraint', 'open_loop', 'episode')),
+      model_text TEXT NOT NULL CHECK(length(model_text) > 0),
+      status TEXT NOT NULL CHECK(status IN ('active', 'retired')),
+      evidence_class TEXT NOT NULL CHECK(evidence_class IN ('quoted_user_evidence', 'observed_result', 'derived_synthesis')),
+      confirmation TEXT NOT NULL CHECK(confirmation IN ('unconfirmed', 'user_confirmed')),
+      content_hash TEXT NOT NULL CHECK(length(content_hash) > 0),
+      generation INTEGER NOT NULL CHECK(generation >= 0),
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      effective_at INTEGER NOT NULL,
+      PRIMARY KEY(record_id, revision)
+    ) STRICT;
+    CREATE INDEX memory_record_owner_idx ON memory_record(owner_key, status);
+    CREATE UNIQUE INDEX memory_record_active_unique_idx ON memory_record(record_id)
+      WHERE status = 'active';
+
+    CREATE TABLE memory_record_source (
+      source_id TEXT PRIMARY KEY,
+      record_id TEXT NOT NULL,
+      revision INTEGER NOT NULL CHECK(revision >= 1),
+      conversation_id TEXT NOT NULL,
+      run_id TEXT,
+      turn_id TEXT,
+      from_ordinal INTEGER CHECK(from_ordinal IS NULL OR from_ordinal >= 0),
+      to_ordinal INTEGER CHECK(to_ordinal IS NULL OR to_ordinal >= 0),
+      source_revision INTEGER NOT NULL CHECK(source_revision >= 0),
+      FOREIGN KEY(record_id, revision) REFERENCES memory_record(record_id, revision) ON DELETE CASCADE
+    ) STRICT;
+    CREATE INDEX memory_record_source_record_idx ON memory_record_source(record_id, revision);
+    CREATE INDEX memory_record_source_conversation_idx ON memory_record_source(conversation_id);
+
+    CREATE TABLE memory_capture_cursor (
+      conversation_id TEXT PRIMARY KEY,
+      owner_key TEXT NOT NULL,
+      covered_through_ordinal INTEGER NOT NULL CHECK(covered_through_ordinal >= 0),
+      source_fingerprint TEXT NOT NULL CHECK(length(source_fingerprint) > 0),
+      updated_at INTEGER NOT NULL
+    ) STRICT;
+
+    CREATE TABLE memory_index_outbox (
+      outbox_id TEXT PRIMARY KEY,
+      record_id TEXT NOT NULL,
+      revision INTEGER NOT NULL CHECK(revision >= 1),
+      op TEXT NOT NULL CHECK(op IN ('index', 'remove')),
+      status TEXT NOT NULL CHECK(status IN ('pending', 'done', 'failed')),
+      attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0),
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    ) STRICT;
+    CREATE INDEX memory_index_outbox_status_idx ON memory_index_outbox(status, created_at);
   `,
 }] as const;
 
@@ -120,7 +179,7 @@ export function createSqliteMemoryControlRepository(
   database: SqliteRuntimeDatabase,
   options: { readonly idFactory?: IdFactory } = {},
 ): MemoryControlRepository {
-  database.migrate("memory", MIGRATIONS);
+  database.migrate("memory", MEMORY_MIGRATIONS);
   const idFactory = options.idFactory ?? createId;
 
   const readPolicy = (key: string): MemoryPolicyRow | undefined => {

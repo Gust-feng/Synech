@@ -52,10 +52,18 @@ export {
 } from "./policy/effective-admission.js";
 export {
   createSqliteMemoryControlRepository,
+  MEMORY_MIGRATIONS,
   type EnqueueJobInput,
   type MemoryControlRepository,
   type SetPolicyInput,
 } from "./store/control-repository.js";
+export {
+  createSqliteMemoryContentRepository,
+  type CommitConsolidationInput,
+  type CommitConsolidationResult,
+  type ConsolidationRecordInput,
+  type MemoryContentRepository,
+} from "./store/content-repository.js";
 export {
   type MemoryJobRow,
   type MemoryLifecycleRow,
