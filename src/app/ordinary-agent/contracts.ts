@@ -663,6 +663,22 @@ export type OrdinaryStableTerminalRunFacts = {
   readonly terminalAt: string;
 };
 
+/**
+ * 供 Memory Capture 连续证据窗使用的稳定 run 投影（只读 DTO，不暴露 snapshot document）。
+ * 仅包含已 durable settle 的稳定终态 run，按 ordinal 升序；Memory 侧据此展开 user/assistant 证据 turn。
+ */
+export type OrdinaryStableEvidenceRun = {
+  readonly runId: string;
+  readonly ordinal: number;
+  readonly userTurnId: string;
+  readonly assistantTurnId: string;
+  readonly userMessage: string;
+  /** 稳定终态可见的 assistant 文本；可能为空串（无文本产出时）。 */
+  readonly assistantText: string;
+  readonly sourceRevision: number;
+  readonly occurredAt: string;
+};
+
 export interface OrdinaryAgentFeature {
   readonly commands: {
     start(input: StartOrdinaryRunInput): Promise<OrdinaryRunState>;
@@ -699,6 +715,14 @@ export interface OrdinaryAgentFeature {
     releaseTerminalRunCaches(runIds: readonly string[]): Promise<void>;
     /** Returns undefined until the run's terminal facts are durably settled. */
     getStableTerminalRunFacts(runId: string): Promise<OrdinaryStableTerminalRunFacts | undefined>;
+    /**
+     * 列出某 conversation 在 [fromOrdinal, throughOrdinal] 闭区间内的稳定终态 run，
+     * 按 ordinal 升序。供 Memory Capture 从连续游标读取证据；不稳定/隐藏 run 被排除。
+     */
+    listStableEvidenceRuns(
+      conversationId: string,
+      range: { readonly fromOrdinal: number; readonly throughOrdinal: number },
+    ): Promise<readonly OrdinaryStableEvidenceRun[]>;
   };
   readonly events: {
     replay(runId: string, cursor?: OrdinaryRunActivityCursor): Promise<OrdinaryRunActivityReplay | undefined>;

@@ -24,6 +24,7 @@ import type {
   OrdinaryRunState,
   OrdinaryRunInput,
   OrdinaryRunTurn,
+  OrdinaryStableEvidenceRun,
   OrdinaryMemoryFact,
   OrdinaryMemoryFactRepository,
   OrdinaryConversationTitleGenerator,
@@ -679,6 +680,38 @@ export function createOrdinaryAgentFeature(input: {
         const document = await runStore.load(runId);
         if (document === undefined || isHiddenRun(document.state) || !terminalSettlement.isStable(document.state)) return undefined;
         return projectStableTerminalRunFacts(document);
+      },
+      async listStableEvidenceRuns(conversationId, range) {
+        // Startup reconciliation first (same reason as getStableTerminalRunFacts).
+        await readyPromise;
+        // MAX_SAFE_INTEGER selects the force-repair manifest scan, so a long
+        // conversation's early stable runs are not truncated by the recent-N limit.
+        const summaries = await runStore.listSummaries(Number.MAX_SAFE_INTEGER);
+        const matched = summaries.filter((summary) => summary.conversationId === conversationId);
+        const evidence: OrdinaryStableEvidenceRun[] = [];
+        const loadedRunIds: string[] = [];
+        for (const summary of matched) {
+          const document = await runStore.load(summary.runId);
+          if (document === undefined || isHiddenRun(document.state)) continue;
+          if (!terminalSettlement.isStable(document.state)) continue;
+          const ordinal = document.state.turn.ordinal;
+          if (ordinal < range.fromOrdinal || ordinal > range.throughOrdinal) continue;
+          loadedRunIds.push(summary.runId);
+          evidence.push({
+            runId: document.state.runId,
+            ordinal,
+            userTurnId: document.state.turn.userTurnId,
+            assistantTurnId: document.state.turn.assistantTurnId,
+            userMessage: document.state.input.userMessage,
+            assistantText: document.state.visibleAssistantText ?? "",
+            sourceRevision: document.revision,
+            occurredAt: summary.createdAt,
+          });
+        }
+        // Bulk read must not pin terminal snapshots; release what it loaded.
+        for (const runId of loadedRunIds) runStore.evictCachedTerminal(runId);
+        evidence.sort((left, right) => left.ordinal - right.ordinal);
+        return evidence;
       },
     },
     events: {
