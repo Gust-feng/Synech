@@ -23,17 +23,37 @@ import process from "node:process";
 
 const groupKey = (group) => `${group.conversationId}#${group.fromOrdinal}-${group.toOrdinal}`;
 
+/**
+ * 候选与标注证据组的命中语义：同一 conversation 内 turn 区间**重叠**即命中
+ * （候选能交付标注证据的一部分；chunk/summary 的覆盖范围宽于标注区间是常态，
+ * 精确相等会漏判全部宽候选）。
+ */
+export function coversLabeled(candidateGroups, labeledKeys) {
+  return (candidateGroups ?? []).some((candidate) =>
+    [...labeledKeys].some((key) => {
+      const labeled = labeledByKey.get(key);
+      return labeled !== undefined && labeled.conversationId === candidate.conversationId &&
+        candidate.fromOrdinal <= labeled.toOrdinal && labeled.fromOrdinal <= candidate.toOrdinal;
+    }));
+}
+
+let labeledByKey = new Map();
+
 /** 折叠同源重复：只折叠"相关组"的重复文档，无关文档保留（占据预算槽位）。 */
-export function foldRanking(results, relevantGroupKeys) {
-  const seenRelevantGroups = new Set();
+export function foldRanking(results, labeledGroups) {
+  labeledByKey = new Map(labeledGroups.map((group) => [groupKey(group), group]));
+  const covered = new Set();
   const folded = [];
   for (const result of results) {
-    const docGroups = result.evidenceGroups ?? [];
-    const isRelevant = docGroups.some((group) => relevantGroupKeys.has(groupKey(group)));
-    if (isRelevant) {
-      const newGroups = docGroups.filter((group) => relevantGroupKeys.has(groupKey(group)) && !seenRelevantGroups.has(groupKey(group)));
+    const coveredByDoc = (result.evidenceGroups ?? []).flatMap((candidate) =>
+      labeledGroups
+        .filter((labeled) => labeled.conversationId === candidate.conversationId &&
+          candidate.fromOrdinal <= labeled.toOrdinal && labeled.fromOrdinal <= candidate.toOrdinal)
+        .map(groupKey));
+    if (coveredByDoc.length > 0) {
+      const newGroups = coveredByDoc.filter((key) => !covered.has(key));
       if (newGroups.length === 0) continue; // 纯重复：折叠掉。
-      for (const group of newGroups) seenRelevantGroups.add(groupKey(group));
+      for (const key of newGroups) covered.add(key);
       folded.push({ ...result, relevant: true });
     } else {
       folded.push({ ...result, relevant: false });
@@ -47,17 +67,25 @@ function dcg(gains) {
 }
 
 export function scoreQuery(query, results, k, expectation) {
-  const relevantGroupKeys = new Set((query.evidenceGroups ?? []).map(groupKey));
-  const folded = foldRanking(results, relevantGroupKeys).slice(0, k);
+  const labeledGroups = query.evidenceGroups ?? [];
+  const labeledGroupKeys = new Set(labeledGroups.map(groupKey));
+  const folded = foldRanking(results, labeledGroups).slice(0, k);
   const topK = folded;
-  const relevantCount = (query.evidenceGroups ?? []).length;
+  const relevantCount = labeledGroups.length;
   const hasRelevantGroups = relevantCount > 0;
 
   const gains = topK.map((entry) => (entry.relevant ? 1 : 0));
-  const hitGroups = new Set();
+  // 命中的标注组数：由折叠过程覆盖的组累计（与 topK 一致）。
+  const coveredGroups = new Set();
   for (const entry of topK) {
-    for (const group of entry.evidenceGroups ?? []) {
-      if (relevantGroupKeys.has(groupKey(group))) hitGroups.add(groupKey(group));
+    if (!entry.relevant) continue;
+    for (const candidate of entry.evidenceGroups ?? []) {
+      for (const labeled of labeledGroups) {
+        if (labeled.conversationId === candidate.conversationId &&
+          candidate.fromOrdinal <= labeled.toOrdinal && labeled.fromOrdinal <= candidate.toOrdinal) {
+          coveredGroups.add(groupKey(labeled));
+        }
+      }
     }
   }
   const firstRelevantRank = topK.find((entry) => entry.relevant)?.rank ?? 0;
@@ -69,12 +97,12 @@ export function scoreQuery(query, results, k, expectation) {
     resultCount: results.length,
   };
   if (expectation === "answer_with_evidence") {
-    record.recallAtK = hasRelevantGroups ? hitGroups.size / relevantCount : null;
+    record.recallAtK = hasRelevantGroups ? coveredGroups.size / relevantCount : null;
     record.precisionAtK = gains.reduce((sum, gain) => sum + gain, 0) / k;
     const idealGains = [...Array(Math.min(relevantCount, k))].map(() => 1);
     record.ndcgAtK = dcg(gains) / (dcg(idealGains) || 1);
     record.mrr = firstRelevantRank > 0 ? 1 / firstRelevantRank : 0;
-    record.miss = hasRelevantGroups && hitGroups.size === 0;
+    record.miss = hasRelevantGroups && coveredGroups.size === 0;
   } else {
     record.falsePositive = results.length > 0;
   }
@@ -135,12 +163,18 @@ export function computeMetrics(queries, resultsByQuery, { k = 4, runMode = "base
 function runSelfcheck() {
   const g1 = { conversationId: "c1", fromOrdinal: 1, toOrdinal: 2 };
   const g2 = { conversationId: "c1", fromOrdinal: 3, toOrdinal: 4 };
-  const relevantKeys = new Set([groupKey(g1), groupKey(g2)]);
+  const wide = { conversationId: "c1", fromOrdinal: 1, toOrdinal: 4 }; // 宽候选（如整会话 chunk）
   const doc = (id, groups) => ({ docId: id, evidenceGroups: groups });
   const approx = (value, expected) => Math.abs(value - expected) < 1e-9;
 
+  // 用例 0：重叠命中——宽候选覆盖标注组即相关；不同会话不命中。
+  const folded0 = foldRanking([doc("wide", [wide]), doc("other", [{ conversationId: "c2", fromOrdinal: 1, toOrdinal: 2 }])], [g1]);
+  if (folded0.length !== 2 || !folded0[0].relevant || folded0[1].relevant) {
+    throw new Error("selfcheck case0 overlap mismatch");
+  }
+
   // 用例 1：无关、g1、g2、无关 → 折叠保持 4 项，nDCG = DCG([0,1,1,0])/IDCG([1,1])。
-  const folded1 = foldRanking([doc("d1", []), doc("d2", [g1]), doc("d3", [g2]), doc("d4", [])], relevantKeys);
+  const folded1 = foldRanking([doc("d1", []), doc("d2", [g1]), doc("d3", [g2]), doc("d4", [])], [g1, g2]);
   if (folded1.length !== 4 || !folded1[1].relevant || !folded1[2].relevant) throw new Error("selfcheck case1 fold mismatch");
   const gains1 = folded1.map((entry) => (entry.relevant ? 1 : 0));
   const ndcg1 = dcg(gains1) / dcg([1, 1]);
@@ -149,7 +183,7 @@ function runSelfcheck() {
   }
 
   // 用例 2：同组重复折叠（g1, g1, g2, 无关）→ 折叠后 [g1, g2, 无关]。
-  const folded2 = foldRanking([doc("a", [g1]), doc("b", [g1]), doc("c", [g2]), doc("d", [])], relevantKeys);
+  const folded2 = foldRanking([doc("a", [g1]), doc("b", [g1]), doc("c", [g2]), doc("d", [])], [g1, g2]);
   if (folded2.length !== 3 || folded2[0].docId !== "a" || folded2[1].docId !== "c" || folded2[2].docId !== "d") {
     throw new Error("selfcheck case2 fold-dedupe mismatch");
   }
@@ -162,6 +196,16 @@ function runSelfcheck() {
   );
   if (perfect.recallAtK !== 1 || perfect.precisionAtK !== 0.5 || !approx(perfect.ndcgAtK, 1) || perfect.mrr !== 1 || perfect.miss) {
     throw new Error("selfcheck case3 perfect-ranking mismatch");
+  }
+
+  // 用例 3b：宽候选重叠也算命中（recall 1）。
+  const viaWide = scoreQuery(
+    { queryId: "qw", scenarioClass: "s", evidenceGroups: [g2] },
+    [doc("wide-doc", [wide])].map((entry, index) => ({ rank: index + 1, ...entry })),
+    4, "answer_with_evidence",
+  );
+  if (viaWide.recallAtK !== 1 || viaWide.mrr !== 1 || viaWide.miss) {
+    throw new Error("selfcheck case3b wide-candidate overlap mismatch");
   }
 
   // 用例 4：空结果 → miss，mrr 0。
@@ -177,7 +221,7 @@ function runSelfcheck() {
   );
   if (!fp.falsePositive) throw new Error("selfcheck case5 false-positive mismatch");
 
-  console.log(JSON.stringify({ selfcheck: "ok", cases: 5 }, null, 2));
+  console.log(JSON.stringify({ selfcheck: "ok", cases: 6 }, null, 2));
 }
 
 async function main() {
