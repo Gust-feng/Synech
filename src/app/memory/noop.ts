@@ -32,7 +32,7 @@ function emptyContribution(owner: MemoryOwner): MemoryContextContribution {
     source: "implicit_memory",
     snapshot: {
       recallId: "noop",
-      sourceRevision: "0",
+      storeRevision: "0",
       policyRevision: NOOP_POLICY_REVISION,
       generation: 0,
       ownerKey: memoryOwnerKey(owner),

@@ -173,7 +173,8 @@ export type RecalledMemory = {
 
 export type MemoryRecallSnapshot = {
   readonly recallId: string;
-  readonly sourceRevision: string;
+  /** Memory store 自身修订（字符串）；注意区别于证据侧 number 类型的 sourceRevision（= document.revision）。 */
+  readonly storeRevision: string;
   readonly policyRevision: PolicyRevision;
   readonly generation: number;
   readonly scope: MemoryOwner;
@@ -209,7 +210,8 @@ export type MemoryContextContribution = {
   readonly source: "implicit_memory";
   readonly snapshot: {
     readonly recallId: string;
-    readonly sourceRevision: string;
+    /** Memory store 自身修订；区别于证据侧 number sourceRevision。 */
+    readonly storeRevision: string;
     readonly policyRevision: PolicyRevision;
     readonly generation: number;
     readonly ownerKey: string;

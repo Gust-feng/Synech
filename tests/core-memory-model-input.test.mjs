@@ -65,7 +65,7 @@ test("renderer exposes only modelText, never provenance", () => {
   const block = renderImplicitMemoryBlock({
     source: "implicit_memory",
     snapshot: {
-      recallId: "r1", sourceRevision: "1", policyRevision: "p1", generation: 0, ownerKey: "space:s1",
+      recallId: "r1", storeRevision: "1", policyRevision: "p1", generation: 0, ownerKey: "space:s1",
     },
     entries: [{
       ref: { id: "m1", revision: 1 },
