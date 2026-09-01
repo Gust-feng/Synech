@@ -40,6 +40,12 @@ export {
   createProvenAbsentMemoryLifecycle,
 } from "./noop.js";
 export {
+  IMPLICIT_MEMORY_BLOCK_HEADER,
+  renderImplicitMemoryBlock,
+} from "./context/render-contribution.js";
+export { createControlMemoryLifecycle } from "./lifecycle/control-lifecycle.js";
+export { createMemoryRuntime, type MemoryRuntime } from "./memory-runtime.js";
+export {
   ADMISSION_REASON,
   resolveEffectiveMemoryAdmission,
   type EffectiveAdmissionInput,

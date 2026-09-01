@@ -19,6 +19,11 @@ export type BuildOrdinaryAgentModelInputOptions = {
   readonly skillContexts?: readonly SelectedSkillContext[];
   /** 模型可见的 Owner 与环境上下文；随 Run 出生事实冻结，未提供时不注入。 */
   readonly ownerContext?: string;
+  /**
+   * 隐式长期记忆 advisory 段（已渲染）；位于 [Current user request] 之前。
+   * undefined/空字符串时不追加任何内容，输出与无记忆时字节一致。
+   */
+  readonly implicitMemoryBlock?: string;
 };
 
 /**
@@ -66,7 +71,12 @@ function currentUserMessageContent(input: BuildOrdinaryAgentModelInputOptions): 
     .filter(isString);
   const goal = normalizeModelFacingText(input.goal);
   const owner = input.ownerContext === undefined ? undefined : normalizeModelFacingText(input.ownerContext);
-  if (skills.length === 0 && ownerReferences.length === 0 && attachments.length === 0 && owner === undefined) {
+  // 隐式记忆是 advisory data：不做 normalize 之外的改写，晚置于当前请求之前。
+  const implicitMemory = input.implicitMemoryBlock === undefined || input.implicitMemoryBlock.length === 0
+    ? undefined
+    : input.implicitMemoryBlock;
+  if (skills.length === 0 && ownerReferences.length === 0 && attachments.length === 0 &&
+      owner === undefined && implicitMemory === undefined) {
     return goal;
   }
   return [
@@ -76,6 +86,7 @@ function currentUserMessageContent(input: BuildOrdinaryAgentModelInputOptions): 
       ? undefined
       : `[Conversation owner resources]\n${ownerReferences.join("\n")}`,
     attachments.length === 0 ? undefined : `[User-provided context]\n${attachments.join("\n")}`,
+    implicitMemory,
     `[Current user request]\n${goal}`,
   ].filter(isString).join("\n\n");
 }

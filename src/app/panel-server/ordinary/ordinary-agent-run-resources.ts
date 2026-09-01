@@ -88,6 +88,15 @@ export type CreateOrdinaryAgentRunResourceAcquirerInput = {
     readonly runId: string;
     readonly conversationId: string;
   }) => NonNullable<Parameters<HostFeatureAgentToolContributionResolver>[0]["memoryFacts"]>;
+  /**
+   * Resolves the implicit long-term memory advisory block for this turn
+   * (Memory v2 Context Provider). Degrades to undefined when absent/empty.
+   */
+  readonly resolveImplicitMemoryBlock?: (input: {
+    readonly owner: import("../../../domain/memory/index.js").MemoryOwner;
+    readonly conversationId?: string;
+    readonly userText: string;
+  }) => Promise<string | undefined>;
   readonly resolveSubAgentRoots: (workspaceRoot: string) => readonly SubAgentRootInput[];
   readonly contextAttachmentReadAuthorization?: ContextAttachmentReadAuthorization;
   readonly resolveWorkspacePathAuthorization?: (input: {
@@ -275,12 +284,18 @@ export function createOrdinaryAgentRunResourceAcquirer(
           exposedToolNames: toolBoundary.allowedAgentToolNames,
           dynamicSpawnAvailable: true,
         });
+        const implicitMemoryBlock = await options.resolveImplicitMemoryBlock?.({
+          owner: input.birth.memoryOwner,
+          conversationId: input.conversationId,
+          userText: input.runInput.userMessage,
+        }).catch(() => undefined) ?? undefined;
         const modelInput = buildOrdinaryAgentModelInput({
           agentDefinition: definition,
           goal: input.runInput.userMessage,
           runContext,
           skillContexts,
           ownerContext: input.birth.ownerContext,
+          implicitMemoryBlock,
         });
         const messagesWithAttachments = await attachOrdinaryFileInputsToModelMessages({
           messages: modelInput.messages,
