@@ -24,6 +24,7 @@ import type {
 } from "../spaces/space-conversation-deletion-journal.js";
 import { deletionLifecycleLockKey } from "./deletion-lifecycle-lock.js";
 import type { PersonalKnowledgeFeature } from "../../personal-knowledge/index.js";
+import type { MemoryLifecycle } from "../../memory/contracts.js";
 import type { PathDependencyFeature } from "../../path-dependencies/index.js";
 import type { SpaceFeature } from "../../spaces/index.js";
 import type { WorkspaceFeature } from "../../workspaces/index.js";
@@ -54,6 +55,10 @@ export function createApplicationRuntime(input: {
   readonly personalKnowledgeFeature: Pick<PersonalKnowledgeFeature, "commands">;
   readonly agentNotesFeature: Pick<AgentNotesFeature, "commands">;
   readonly pathDependencyFeature: Pick<PathDependencyFeature, "commands">;
+  readonly memoryLifecycle: Pick<
+    MemoryLifecycle,
+    "prepareOwnerRemoval" | "finalizeOwnerRemoval" | "prepareConversationRemoval" | "finalizeConversationRemoval"
+  >;
   readonly processRegistry: Pick<InMemoryProcessRegistry, "cleanupBySpace" | "cleanupByConversation">;
   readonly processTerminator: ProcessTerminator;
   readonly fileMutationCoordinator: Pick<LocalWorkspaceMutationCoordinator, "runExclusive">;
@@ -73,6 +78,7 @@ export function createApplicationRuntime(input: {
     personalKnowledge: input.personalKnowledgeFeature,
     agentNotes: input.agentNotesFeature.commands,
     memory: input.pathDependencyFeature.commands,
+    memoryLifecycle: input.memoryLifecycle,
     processes: input.processRegistry,
     processTerminator: input.processTerminator,
     journal: input.spaceConversationDeletionJournal,
@@ -104,6 +110,7 @@ export function createApplicationRuntime(input: {
     },
     agentNotes: input.agentNotesFeature.commands,
     memory: input.pathDependencyFeature.commands,
+    memoryLifecycle: input.memoryLifecycle,
     processes: input.processRegistry,
     processTerminator: input.processTerminator,
     runExclusive: runDeletionExclusive,
@@ -124,6 +131,11 @@ export function createApplicationRuntime(input: {
     processes: input.processRegistry,
     processTerminator: input.processTerminator,
     journal: input.conversationLifecycleJournal,
+    onConversationDeleted: async (conversationId) => {
+      // Memory v2：会话删除走两阶段 durable fence（generation bump → tombstone）。
+      const ticket = await input.memoryLifecycle.prepareConversationRemoval(conversationId);
+      await input.memoryLifecycle.finalizeConversationRemoval(ticket);
+    },
     runExclusive: runDeletionExclusive,
   });
 

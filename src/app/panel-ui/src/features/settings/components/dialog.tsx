@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
   Bot,
-  BookOpen,
   CheckCircle2,
   ChartColumn,
   CloudCog,
@@ -38,7 +37,6 @@ import { SubAgentSettings } from "./sub-agents";
 import { DeveloperToolStatistics, UsageStatisticsSettings, preloadUsageStatistics } from "./usage-statistics";
 import { ResponsivenessDiagnostics } from "../../../components/responsiveness-diagnostics";
 import { RuntimeSettings } from "./runtime";
-import { MemoryPage } from "../../memory/components/memory-page";
 import "./capability.css";
 
 export type { McpServerForm, ModelForm, SettingsGroup, ToolForm } from "./types";
@@ -175,7 +173,7 @@ export function SettingsDialog(props: {
           <header>
             <h2>{activeInfo.label}</h2>
           </header>
-          <div className={`settings-content ${visibleActiveGroup === "models" ? "model-settings-content" : ""} ${visibleActiveGroup === "memory" ? "memory-settings-content" : ""}`}>
+          <div className={`settings-content ${visibleActiveGroup === "models" ? "model-settings-content" : ""}`}>
             <div
               className="settings-panel-slot model-settings-slot"
               hidden={visibleActiveGroup !== "models"}
@@ -249,7 +247,6 @@ export function SettingsDialog(props: {
                 onUpdateSkill={props.onUpdateSkill}
               />
             )}
-            {visibleActiveGroup === "memory" && <MemoryPage />}
             {visibleActiveGroup === "subAgents" && (
               <SubAgentSettings
                 subAgents={props.subAgents}
@@ -301,7 +298,6 @@ const SETTINGS_GROUPS: readonly { readonly id: SettingsGroup; readonly label: st
   { id: "basicCapabilities", label: "基础能力", icon: <SlidersHorizontal size={15} /> },
   { id: "mcp", label: "MCP 服务", icon: <Server size={15} /> },
   { id: "skills", label: "技能", icon: <FileText size={15} /> },
-  { id: "memory", label: "记忆", icon: <BookOpen size={15} /> },
   { id: "subAgents", label: "Sub Agent", icon: <Bot size={15} /> },
   { id: "workspace", label: "运行环境", icon: <Database size={15} /> },
   { id: "appearance", label: "外观", icon: <Palette size={15} /> },

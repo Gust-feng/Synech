@@ -54,6 +54,8 @@ export function createConversationLifecycleCoordinator(input: {
   readonly journal: ConversationLifecycleJournal;
   readonly workspaceAdmission?: <T>(workspaceId: string, operation: () => Promise<T>) => Promise<T>;
   readonly spaceAdmission?: <T>(spaceId: string, operation: () => Promise<T>) => Promise<T>;
+  /** Conversation 原始数据删除后的级联钩子（Memory v2 两阶段 fence 等），在同一恢复阶段内执行。 */
+  readonly onConversationDeleted?: (conversationId: string) => Promise<void>;
   readonly runExclusive?: <T>(operation: () => Promise<T>) => Promise<T>;
   readonly now?: () => string;
 }): ConversationLifecycleCoordinator {
@@ -108,6 +110,7 @@ export function createConversationLifecycleCoordinator(input: {
     }
     if (record.phase === "processes_stopped") {
       await input.ordinary.commands.deleteConversation(record.conversationId);
+      await input.onConversationDeleted?.(record.conversationId);
       record = await saveDeleteCheckpoint(input.journal, record, "conversation_deleted", now());
     }
     await input.journal.delete(record.operationId);

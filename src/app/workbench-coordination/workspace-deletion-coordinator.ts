@@ -2,6 +2,7 @@ import type { OrdinaryAgentFeature } from "../ordinary-agent/index.js";
 import type { SpaceFeature } from "../spaces/index.js";
 import type { AgentNotesFeature } from "../agent-notes/index.js";
 import type { PathDependencyFeature } from "../path-dependencies/index.js";
+import type { MemoryLifecycle } from "../memory/contracts.js";
 import type { WorkspaceFeature } from "../workspaces/index.js";
 import {
   processCleanupHasUnresolvedStops,
@@ -43,6 +44,7 @@ export function createWorkspaceDeletionCoordinator(input: {
   };
   readonly agentNotes: Pick<AgentNotesFeature["commands"], "deleteByOwner">;
   readonly memory?: Pick<PathDependencyFeature["commands"], "deleteByOwner">;
+  readonly memoryLifecycle: Pick<MemoryLifecycle, "prepareOwnerRemoval" | "finalizeOwnerRemoval">;
   readonly processes: Pick<InMemoryProcessRegistry, "cleanupByConversation">;
   readonly processTerminator: ProcessTerminator;
   readonly runExclusive?: <T>(operation: () => Promise<T>) => Promise<T>;
@@ -130,6 +132,9 @@ export function createWorkspaceDeletionCoordinator(input: {
             }
             await input.memory?.deleteByOwner({ kind: "workspace", id: workspaceId });
             await input.agentNotes.deleteByOwner({ kind: "workspace", id: workspaceId });
+            // Memory v2：两阶段 durable fence（generation bump → tombstone）。
+            const memoryRemovalTicket = await input.memoryLifecycle.prepareOwnerRemoval({ kind: "workspace", id: workspaceId });
+            await input.memoryLifecycle.finalizeOwnerRemoval(memoryRemovalTicket);
             const references = await input.spaces.queries.listReferencesByWorkspace(workspaceId);
             for (const reference of references) {
               if (!spaceIds.includes(reference.spaceId)) {

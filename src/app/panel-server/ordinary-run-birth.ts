@@ -48,6 +48,8 @@ export type OrdinaryRunBirthHost = {
   readonly workspaceFeature: WorkspaceFeature;
   readonly spaceConversationDeletion: SpaceConversationDeletionCoordinator;
   readonly workspaceDeletion: WorkspaceDeletionCoordinator;
+  /** 每次 run birth 的活动钩子：用于重启缺口的异步补整理，不得阻塞或抛出。 */
+  readonly onRunBirthActivity?: (input: { readonly conversationId?: string; readonly owner: ConversationOwner }) => void;
   readonly productPaths: ProductPaths;
 };
 
@@ -89,6 +91,14 @@ export async function prepareOrdinaryRunBirth(
       excerptChars: 240,
     }),
   ]);
+  // 活动钩子：重启遗留的整理缺口在本会话再次活动时异步补做，绝不阻塞 run birth。
+  if (conversationId !== undefined) {
+    try {
+      runtime.onRunBirthActivity?.({ conversationId, owner: scope.owner });
+    } catch {
+      // 钩子异常不得影响 run 准备。
+    }
+  }
   const definition = definitionWithMemoryContext(
     configuredDefinition,
     noteSnapshot.injection,
@@ -209,7 +219,12 @@ function definitionWithMemoryContext(
   countMemoryTokens: (text: string) => number,
 ): AgentDefinition {
   const directoryInjection = renderPathDependencyDirectory(pathDependencyDirectory, countMemoryTokens);
-  if (noteInjection === undefined && directoryInjection === undefined) return definition;
+  if (noteInjection === undefined && directoryInjection === undefined) {
+    return definition;
+  }
+  const segmentTags: string[] = [];
+  if (noteInjection !== undefined) segmentTags.push("agent-notes");
+  if (directoryInjection !== undefined) segmentTags.push("path-dependencies");
   const systemPrompt = [
     definition.prompt.systemPrompt,
     ...(noteInjection === undefined ? [] : ["<agent_notes>", noteInjection, "</agent_notes>"]),
@@ -218,14 +233,13 @@ function definitionWithMemoryContext(
       : ["<path_dependency_directory>", directoryInjection, "</path_dependency_directory>"]),
   ].join("\n\n");
   const fingerprint = createHash("sha256").update(systemPrompt, "utf8").digest("hex").slice(0, 12);
-  const promptSuffix = noteInjection === undefined ? "path-dependencies" : "agent-notes";
-  const versionSuffix = noteInjection === undefined ? "path-dependencies" : "notes";
+  const suffix = segmentTags.join("+");
   return {
     ...definition,
     prompt: {
       ...definition.prompt,
-      promptRef: `${definition.prompt.promptRef}:${promptSuffix}`,
-      version: `${definition.prompt.version}:${versionSuffix}-${fingerprint}`,
+      promptRef: `${definition.prompt.promptRef}:${suffix}`,
+      version: `${definition.prompt.version}:${suffix}-${fingerprint}`,
       systemPrompt,
     },
   };

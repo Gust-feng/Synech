@@ -65,6 +65,7 @@ import {
   PersonalKnowledgeError,
   type PersonalKnowledgeFeature,
 } from "../personal-knowledge/index.js";
+import { createMemoryRuntime, renderImplicitMemoryBlock, type MemoryRuntime } from "../memory/index.js";
 import {
   createSqliteWorkspaceRepository,
   createWorkspaceFeature,
@@ -197,6 +198,9 @@ export type PanelHost = {
   readonly managedSpaceFolderApplication: ManagedSpaceFolderApplication<import("../spaces/index.js").SpaceReferenceItem>;
   readonly spaceReferenceApplications: SpaceReferenceApplicationRuntime;
   readonly personalKnowledgeFeature: PersonalKnowledgeFeature<import("../panel-api/workbench.js").DocumentPreview>;
+  /** Memory v2 运行时（Context Provider / Capture / Lifecycle）。 */
+  readonly memoryRuntime: MemoryRuntime;
+  readonly onRunBirthActivity?: (input: { readonly conversationId?: string; readonly owner: import("../../domain/execution-scope/index.js").ConversationOwner }) => void;
   readonly dataMaintenance: DataMaintenance;
   readonly toolOutputStore: ToolOutputStore;
   readonly database: SqliteRuntimeDatabase;
@@ -315,6 +319,7 @@ function assemblePanelHost(input: {
     managedAssets,
     spaceRepository,
     personalKnowledgeRepository,
+    memoryControlRepository,
   } = openPanelStorage(productPaths);
   const managedAssetFeature = createManagedAssetsFeature(managedAssets);
   const spaceConversationDeletionJournal = createSqliteSpaceConversationDeletionJournal(database);
@@ -467,6 +472,11 @@ function assemblePanelHost(input: {
     },
     readManagedKnowledgeAsset: async (input) =>
       await readManagedKnowledgeAsset(knowledgeAssetRoot, input.page, input),
+  });
+  // Memory v2（隐式长期记忆）：Phase 1 装配走 Noop Provider/Capture（恒空贡献/跳过
+  // 提炼）+ 基于控制表的 Durable 删除生命周期；主链路模型可见输出零变化。
+  const memoryRuntime: MemoryRuntime = createMemoryRuntime({
+    controlRepository: memoryControlRepository,
   });
   const initialWorkbenchData = createInitialWorkbenchDataInitializer(async () =>
     await initializeInitialWorkbenchData({
@@ -622,6 +632,16 @@ function assemblePanelHost(input: {
       recordReference: async (fact) =>
         await ordinaryAgentFeature.commands.recordMemoryReference({ runId, ...fact }),
     }),
+    resolveImplicitMemoryBlock: async ({ owner, conversationId, userText }) => {
+      // Recall 截止时间是实验参数（《手册》检索预算），Noop 不消费；Phase 3 接真实预算。
+      const contribution = await memoryRuntime.contextProvider.contribute({
+        owner,
+        conversationId,
+        currentUserText: userText,
+        deadlineAt: Date.now() + 700,
+      });
+      return renderImplicitMemoryBlock(contribution);
+    },
     contextAttachmentReadAuthorization,
     resolveWorkspacePathAuthorization: ({ runContext, workspaceRoot }) =>
       createSpaceRunPathAuthorization({
@@ -696,6 +716,30 @@ function assemblePanelHost(input: {
       configCenter: input.configCenter,
     }),
   });
+  // Memory v2 Capture：run 稳定终结后把信号交给 Capture Runtime（Phase 1 Noop 恒 skipped）。
+  const unsubscribeStableTerminalRuns = ordinaryAgentFeature.events.subscribeStableTerminalRuns((runId) => {
+    void (async () => {
+      try {
+        const facts = await ordinaryAgentFeature.queries.getStableTerminalRunFacts(runId);
+        if (facts === undefined) return;
+        const owner = await ordinaryAgentFeature.queries
+          .getConversationOwner(facts.turn.conversationId);
+        if (owner === undefined) return;
+        // Memory v2 Capture 口：Phase 1 Noop 恒 skipped；Phase 3 起在此 durable 接单。
+        await memoryRuntime.captureRuntime.acceptStableSignal({
+          owner,
+          conversationId: facts.turn.conversationId,
+          stableThrough: {
+            turnId: facts.turn.userTurnId,
+            ordinal: facts.turn.ordinal,
+            sourceRevision: facts.sourceRevision,
+          },
+        });
+      } catch (error) {
+        console.error("[panel-server] Could not accept stable memory capture signal", error);
+      }
+    })();
+  });
   const contextAttachmentUploadApplication = createContextAttachmentUploadApplication({
     ordinaryAgentFeature,
     resolveManagedAttachmentPath,
@@ -710,6 +754,7 @@ function assemblePanelHost(input: {
     personalKnowledgeFeature,
     agentNotesFeature,
     pathDependencyFeature,
+    memoryLifecycle: memoryRuntime.lifecycle,
     processRegistry,
     processTerminator,
     fileMutationCoordinator,
@@ -794,6 +839,15 @@ function assemblePanelHost(input: {
     managedSpaceFolderApplication,
     spaceReferenceApplications,
     personalKnowledgeFeature,
+    memoryRuntime,
+    // run birth 时异步补扫 Capture 缺口（典型为上次关闭错过稳定信号）；
+    // Memory v2 Capture 口要求不阻塞、不向主链路抛出。
+    onRunBirthActivity: ({ conversationId, owner }) => {
+      if (conversationId === undefined) return;
+      void memoryRuntime.captureRuntime.noteActivity({ conversationId, owner }).catch((error) => {
+        console.error("[panel-server] Memory capture catch-up failed", error);
+      });
+    },
     dataMaintenance,
     toolOutputStore,
     database,
@@ -813,6 +867,8 @@ function assemblePanelHost(input: {
   let restorePreparation: Promise<void> | undefined;
   beforeRestoreStage = () => restorePreparation ??= (async () => {
     host.isQuiescing = true;
+    unsubscribeStableTerminalRuns();
+    await memoryRuntime.captureRuntime.release();
     await ordinaryAgentFeature.release();
     await pathDependencyFeature.release();
     await initialWorkbenchData.ensure();

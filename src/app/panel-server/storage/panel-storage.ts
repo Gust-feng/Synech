@@ -4,6 +4,7 @@ import path from "node:path";
 import { SqliteRuntimeDatabase } from "../../../adapters/runtime-storage/index.js";
 import type { ProductPaths } from "../../../platform/storage/index.js";
 import { createSqliteManagedAssetRepository } from "../../managed-assets/index.js";
+import { createSqliteMemoryControlRepository } from "../../memory/index.js";
 import { createSqlitePersonalKnowledgeRepository } from "../../personal-knowledge/index.js";
 import {
   createFileSystemSpaceReferenceDeletionJournal,
@@ -82,6 +83,7 @@ export function openPanelStorage(productPaths: ProductPaths) {
       managedAssets: createSqliteManagedAssetRepository(database),
       spaceRepository: createSqliteSpaceRepository(database),
       personalKnowledgeRepository: createSqlitePersonalKnowledgeRepository(database),
+      memoryControlRepository: createSqliteMemoryControlRepository(database),
     };
   } catch (startupError) {
     try {

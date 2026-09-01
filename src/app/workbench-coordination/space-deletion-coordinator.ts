@@ -4,6 +4,7 @@ import type { OrdinaryAgentFeature } from "../ordinary-agent/index.js";
 import type { SpaceFeature } from "../spaces/index.js";
 import type { AgentNotesFeature } from "../agent-notes/index.js";
 import type { PathDependencyFeature } from "../path-dependencies/index.js";
+import type { MemoryLifecycle } from "../memory/contracts.js";
 import {
   processCleanupHasUnresolvedStops,
   type InMemoryProcessRegistry,
@@ -43,6 +44,7 @@ export function createSpaceConversationDeletionCoordinator(input: {
   };
   readonly agentNotes: Pick<AgentNotesFeature["commands"], "deleteByOwner">;
   readonly memory: Pick<PathDependencyFeature["commands"], "deleteByOwner">;
+  readonly memoryLifecycle: Pick<MemoryLifecycle, "prepareOwnerRemoval" | "finalizeOwnerRemoval">;
   readonly processes: Pick<InMemoryProcessRegistry, "cleanupBySpace">;
   readonly processTerminator: ProcessTerminator;
   readonly journal: SpaceConversationDeletionJournal;
@@ -102,6 +104,9 @@ export function createSpaceConversationDeletionCoordinator(input: {
       if (checkpoint === "conversations_deleted") {
         await input.memory.deleteByOwner({ kind: "space", id: record.spaceId });
         await input.agentNotes.deleteByOwner({ kind: "space", id: record.spaceId });
+        // Memory v2：两阶段 durable fence（generation bump → tombstone），紧邻执行且对 resume 幂等。
+        const memoryRemovalTicket = await input.memoryLifecycle.prepareOwnerRemoval({ kind: "space", id: record.spaceId });
+        await input.memoryLifecycle.finalizeOwnerRemoval(memoryRemovalTicket);
         const tree = await input.spaces.queries.getTree(record.spaceId);
         const referenceIds = record.referenceIds === undefined || record.referenceIds.length === 0
           ? (tree?.entries.map((entry) => entry.item.id) ?? [])
