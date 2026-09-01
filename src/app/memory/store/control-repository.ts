@@ -94,6 +94,8 @@ export interface MemoryControlRepository {
     fenceState: PersistedFenceState,
     captureAfter?: number | null,
   ): Promise<MemoryLifecycleRow>;
+  /** 删除准备：单事务内 generation+1 并立 fenced（消除 advance 与 fence 之间的交错窗口）。 */
+  fenceForRemoval(ownerKey: string): Promise<MemoryLifecycleRow>;
   /** 存在活跃（queued/running）job 时推进其边界，否则新建 queued job。 */
   enqueueOrAdvanceJob(input: EnqueueJobInput): Promise<MemoryJobRow>;
   listJobsByStatus(status: PersistedJobStatus): Promise<readonly MemoryJobRow[]>;
@@ -227,6 +229,28 @@ export function createSqliteMemoryControlRepository(
         const saved = readLifecycle(ownerKey);
         if (saved === undefined) {
           throw new MemoryError("memory_store_failure", `Memory lifecycle ${ownerKey} vanished after fence write.`);
+        }
+        return saved;
+      });
+    },
+
+    async fenceForRemoval(ownerKey) {
+      return database.transaction(() => {
+        const existing = readLifecycle(ownerKey);
+        const now = Date.now();
+        const nextGeneration = (existing?.generation ?? 0) + 1;
+        database.connection.prepare(`
+          INSERT INTO memory_lifecycle(owner_key, generation, capture_after, fence_state, updated_at)
+          VALUES (?, ?, NULL, 'fenced', ?)
+          ON CONFLICT(owner_key) DO UPDATE SET
+            generation = excluded.generation,
+            capture_after = NULL,
+            fence_state = 'fenced',
+            updated_at = excluded.updated_at
+        `).run(ownerKey, nextGeneration, now);
+        const saved = readLifecycle(ownerKey);
+        if (saved === undefined || saved.generation !== nextGeneration || saved.fenceState !== "fenced") {
+          throw new MemoryError("memory_store_failure", `Atomic removal fence for ${ownerKey} did not settle.`);
         }
         return saved;
       });

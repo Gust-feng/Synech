@@ -22,14 +22,8 @@ export function createControlMemoryLifecycle(
 
   const prepare = async (scope: RemovalTicket["scope"]): Promise<RemovalTicket> => {
     const ownerKey = scope.kind === "owner" ? memoryOwnerKey(scope.owner) : conversationKey(scope.conversationId);
-    const advanced = await repository.advanceGeneration(ownerKey);
-    const fenced = await repository.setLifecycleFence(ownerKey, "fenced");
-    if (fenced.generation !== advanced.generation) {
-      throw new MemoryError(
-        "memory_store_failure",
-        `Memory fence generation for ${ownerKey} changed mid-prepare (${advanced.generation} -> ${fenced.generation}).`,
-      );
-    }
+    // 单事务原子地 bump generation + 立 fenced，避免两步之间被并发 prepare/写入交错。
+    const fenced = await repository.fenceForRemoval(ownerKey);
     return {
       ticketId: idFactory("memrm"),
       scope,
