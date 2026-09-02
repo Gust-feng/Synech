@@ -277,6 +277,46 @@ function selectCurated(scored, { target, minScore }) {
     take(s, "top_quality_fill_relaxed");
   }
 
+  // 5) 质量交换：广度覆盖锁定后，用"高分落选"替换"可替代的最低分入选"，
+  //    约束：被换者在 space/任务类型/深度档/17.2 标签上都不是独苗（覆盖维度不归零），
+  //    且候选分数高出至少 SWAP_MARGIN；同时单 Space 设软上限防止交换后重新垄断。
+  const SWAP_MARGIN = 15;
+  const SWAP_SPACE_SOFT_CAP = Math.max(4, Math.round(target * 0.3)); // 单 Space 交换后不超过 30%
+  // 维度厚度阈值：只有某维度里同类样本"足够厚"，其中的低分项才允许被高分落选项替换，
+  // 避免把小 Space / 稀缺深度档 / 独苗类型的广度厚度换没。
+  const THICK = { space: 3, type: 2, band: 4 };
+  for (let pass = 0; pass < 60; pass += 1) {
+    if (chosen.size < target) break;
+    const chosenArr = [...chosen.values()];
+    const count = (sel) => {
+      const bySpace = {}, byType = {}, byBand = {}, byPot = {};
+      for (const s of sel) {
+        bySpace[s.spaceId] = (bySpace[s.spaceId] ?? 0) + 1;
+        byType[s.taskType] = (byType[s.taskType] ?? 0) + 1;
+        byBand[s.depthBand] = (byBand[s.depthBand] ?? 0) + 1;
+        for (const t of s.evalPotential) byPot[t] = (byPot[t] ?? 0) + 1;
+      }
+      return { bySpace, byType, byBand, byPot };
+    };
+    const c = count(chosenArr);
+    const replaceable = chosenArr.filter((s) =>
+      c.bySpace[s.spaceId] >= THICK.space       // 小 Space（仅 1–2 个代表）受保护
+      && c.byType[s.taskType] >= THICK.type      // 独苗类型受保护
+      && c.byBand[s.depthBand] >= THICK.band     // 稀缺深度档（short/medium）受保护
+      && s.evalPotential.every((t) => c.byPot[t] >= 2))
+      .sort((a, b) => a.score - b.score);
+    if (!replaceable.length) break;
+    const victim = replaceable[0];
+    const candidate = eligible
+      .filter((s) => !chosen.has(s.conversationId)
+        && s.score >= victim.score + SWAP_MARGIN
+        && (c.bySpace[s.spaceId] ?? 0) < SWAP_SPACE_SOFT_CAP)
+      .sort((a, b) => b.score - a.score)[0];
+    if (!candidate) break;
+    chosen.delete(victim.conversationId);
+    take(candidate, `quality_swap(replaced ${victim.score})`);
+  }
+
   const reasonById = new Map(reasons.map((r) => [r.id, r.reason]));
   const curated = [...chosen.values()].sort((a, b) =>
     a.spaceId.localeCompare(b.spaceId) || b.score - a.score)
@@ -356,7 +396,7 @@ const report = {
   curatedByDepthBand: groupCount(curated, "depthBand"),
   selectedReasonCounts: groupCount(curated, "selectedReason"),
   curatedTokens: curated.reduce((n, s) => n + s.metrics.totalTokens, 0),
-  scoreRange: { min: curated.at(-1)?.score, max: curated[0]?.score },
+  scoreRange: { min: Math.min(...curated.map((s) => s.score)), max: Math.max(...curated.map((s) => s.score)) },
   dropped: scored.filter((s) => !curatedIds.has(s.conversationId))
     .map((s) => ({ conversationId: s.conversationId, spaceId: s.spaceId, taskType: s.taskType,
       depthBand: s.depthBand, title: s.title, score: s.score, flags: s.flags })),
