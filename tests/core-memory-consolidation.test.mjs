@@ -10,7 +10,10 @@ import {
   createSqliteMemoryContentRepository,
   createSqliteMemoryControlRepository,
 } from "../dist/app/memory/index.js";
-import { consolidateJob } from "../dist/app/memory/capture/consolidation.js";
+import {
+  buildExtractionMessages,
+  consolidateJob,
+} from "../dist/app/memory/capture/consolidation.js";
 import { createMemoryCaptureScheduler } from "../dist/app/panel-server/memory/capture-scheduler.js";
 import {
   POLICY_KEY,
@@ -155,7 +158,7 @@ test("consolidation commits record, sources, cursor and job atomically", async (
   });
 });
 
-test("admission revoked during the model call discards the whole batch and keeps the cursor", async () => {
+test("admission revoked during the model call discards the whole batch and skips its cursor interval", async () => {
   await withHarness(async ({ control, content, model, runtime, deps }) => {
     await admitOwner(control);
     const job = await acceptJob(runtime, control);
@@ -168,8 +171,9 @@ test("admission revoked during the model call discards the whole batch and keeps
     assert.equal(outcome.reason, "admission_off");
 
     assert.deepEqual(await content.listActiveByOwner(OWNER_KEY), []);
-    assert.equal(await content.getCursor(CONVERSATION_ID), undefined);
-    assert.equal((await control.listJobsByStatus("queued")).length, 1);
+    assert.equal((await control.listJobsByStatus("queued")).length, 0);
+    assert.equal((await control.listJobsByStatus("done")).length, 1);
+    assert.equal((await content.getCursor(CONVERSATION_ID))?.coveredThroughOrdinal, 3);
   });
 });
 
@@ -186,7 +190,7 @@ test("policy revision bump during the model call discards the batch even while s
     assert.equal(outcome.status, "deferred");
     assert.equal(outcome.reason, "admission_revision_changed");
     assert.deepEqual(await content.listActiveByOwner(OWNER_KEY), []);
-    assert.equal(await content.getCursor(CONVERSATION_ID), undefined);
+    assert.equal((await content.getCursor(CONVERSATION_ID))?.coveredThroughOrdinal, 3);
   });
 });
 
@@ -238,6 +242,32 @@ test("model unavailable keeps the job retryable without writing any record", asy
     assert.deepEqual(await content.listActiveByOwner(OWNER_KEY), []);
     assert.equal(await content.getCursor(CONVERSATION_ID), undefined);
     assert.equal((await control.listJobsByStatus("queued")).length, 1);
+  });
+});
+
+test("consolidation redacts credential-shaped evidence before the model and rejects credential-shaped output", async () => {
+  const messages = buildExtractionMessages([
+    {
+      turnId: "t1",
+      ordinal: 1,
+      role: "user",
+      text: "api_key=super-secret-value-123456789",
+      runId: "r1",
+      occurredAt: "2026-09-02T00:00:00.000Z",
+      sourceRevision: 1,
+    },
+  ], []);
+  assert.equal(messages[1].content.includes("super-secret-value-123456789"), false);
+  assert.equal(messages[1].content.includes("[redacted]"), true);
+
+  await withHarness(async ({ control, content, model, runtime, deps }) => {
+    await admitOwner(control);
+    const job = await acceptJob(runtime, control);
+    model.setHandler(() => completed(createOp(1, 3, "api_key=super-secret-value-123456789")));
+    const outcome = await consolidateJob(deps, job.jobId);
+    assert.equal(outcome.status, "failed");
+    assert.equal(outcome.reason, "sensitive_content_rejected");
+    assert.deepEqual(await content.listActiveByOwner(OWNER_KEY), []);
   });
 });
 

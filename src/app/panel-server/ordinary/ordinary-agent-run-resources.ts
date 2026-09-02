@@ -96,6 +96,7 @@ export type CreateOrdinaryAgentRunResourceAcquirerInput = {
     readonly owner: import("../../../domain/memory/index.js").MemoryOwner;
     readonly conversationId?: string;
     readonly userText: string;
+    readonly turnOverrideOff: boolean;
   }) => Promise<string | undefined>;
   readonly resolveSubAgentRoots: (workspaceRoot: string) => readonly SubAgentRootInput[];
   readonly contextAttachmentReadAuthorization?: ContextAttachmentReadAuthorization;
@@ -288,7 +289,8 @@ export function createOrdinaryAgentRunResourceAcquirer(
           owner: input.birth.memoryOwner,
           conversationId: input.conversationId,
           userText: input.runInput.userMessage,
-        }).catch(() => undefined) ?? undefined;
+          turnOverrideOff: input.runInput.turnMemoryOverrideOff === true,
+        }) ?? undefined;
         const modelInput = buildOrdinaryAgentModelInput({
           agentDefinition: definition,
           goal: input.runInput.userMessage,

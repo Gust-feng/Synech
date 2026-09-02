@@ -1,5 +1,5 @@
 // 隐式长期记忆系统（Memory v2）公共 facade。
-// Phase 1 切片 1：仅契约与可缺席 No-op 实现，尚未接线、未建 SQLite schema。
+// 对外只导出稳定契约与组合入口；SQL、索引和模型适配仍留在各自内部模块。
 export {
   MEMORY_ERROR_CODES,
   MemoryError,
@@ -9,7 +9,9 @@ export {
   type EvidenceTurn,
   type EvidenceWindow,
   type MemoryAdminApplication,
+  type MemoryCapabilityQuery,
   type MemoryCapabilityStatus,
+  type MemoryDiagnosticSnapshot,
   type MemoryCaptureAcceptance,
   type MemoryCaptureRuntime,
   type MemoryCaptureSignal,
@@ -38,6 +40,7 @@ export {
   createNoopMemoryCaptureRuntime,
   createNoopMemoryContextProvider,
   createProvenAbsentMemoryLifecycle,
+  createUnavailableMemoryLifecycle,
 } from "./noop.js";
 export {
   IMPLICIT_MEMORY_BLOCK_HEADER,

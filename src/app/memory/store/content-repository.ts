@@ -135,10 +135,27 @@ export interface MemoryContentRepository {
     input: CommitConsolidationWithAdmissionInput,
   ): Promise<CommitConsolidationWithAdmissionResult>;
   getCursor(conversationId: string): Promise<MemoryCaptureCursorRow | undefined>;
+  /** 在不产生 Record 的情况下越过不参与区间，防止未来重新开启时回填。 */
+  advanceCaptureCursor(input: {
+    readonly conversationId: string;
+    readonly ownerKey: string;
+    readonly coveredThroughOrdinal: number;
+    readonly sourceFingerprint: string;
+    readonly generation: number;
+  }): Promise<MemoryCaptureCursorRow>;
+  /** 丢弃策略已失效的 running job，并把其区间标记为已跳过，防止重新开启后回填。 */
+  skipStaleConsolidationJob(jobId: string): Promise<boolean>;
   listActiveByOwner(ownerKey: string): Promise<readonly MemoryRecordRow[]>;
+  listActiveAll(): Promise<readonly MemoryRecordRow[]>;
   listSources(recordId: string, revision: number): Promise<readonly MemoryRecordSourceRow[]>;
   claimPendingOutbox(limit: number): Promise<readonly MemoryIndexOutboxRow[]>;
   markOutbox(outboxId: string, status: PersistedOutboxStatus): Promise<MemoryIndexOutboxRow | undefined>;
+  /** 清除 owner 派生内容；必须在 durable fence 之后调用，重复执行幂等。 */
+  purgeOwner(ownerKey: string, options?: { readonly preserveCursors?: boolean }): Promise<void>;
+  /** 清除全部 owner 的派生内容；重复执行幂等。 */
+  purgeAll(options?: { readonly preserveCursors?: boolean }): Promise<void>;
+  /** 删除 Conversation 派生内容；MVP 按来源命中记录整体清除，重复执行幂等。 */
+  purgeConversation(conversationId: string, options?: { readonly preserveCursor?: boolean }): Promise<void>;
   /**
    * 检索投影查询（memory/3，《手册》8.4/16.2）：FTS5 MATCH + bm25 排序后回表
    * 复核 scope（owner_key + status='active' + generation），跨 scope 泄漏恒为 0
@@ -231,6 +248,12 @@ export function createSqliteMemoryContentRepository(
 
     // 2. 连续游标只进不退。
     const existingCursor = readCursor(write.conversationId);
+    if (existingCursor !== undefined && existingCursor.ownerKey !== write.ownerKey) {
+      throw new MemoryError(
+        "memory_invalid_owner",
+        `Capture cursor for ${write.conversationId} belongs to ${existingCursor.ownerKey}, not ${write.ownerKey}.`,
+      );
+    }
     if (
       existingCursor !== undefined &&
       existingCursor.coveredThroughOrdinal > write.advanceCursorTo.coveredThroughOrdinal
@@ -247,6 +270,15 @@ export function createSqliteMemoryContentRepository(
     const recordRefs: { id: string; revision: number }[] = [];
     for (const record of write.records) {
       const recordId = record.recordId ?? idFactory("memrec");
+      const existingOwnerRow = database.connection
+        .prepare("SELECT owner_key FROM memory_record WHERE record_id = ? ORDER BY revision DESC LIMIT 1")
+        .get(recordId) as { readonly owner_key: SQLInputValue } | undefined;
+      if (existingOwnerRow !== undefined && String(existingOwnerRow.owner_key) !== write.ownerKey) {
+        throw new MemoryError(
+          "memory_invalid_owner",
+          `Memory record ${recordId} belongs to ${String(existingOwnerRow.owner_key)}, not ${write.ownerKey}.`,
+        );
+      }
       const maxRevisionRow = database.connection
         .prepare("SELECT MAX(revision) AS max_revision FROM memory_record WHERE record_id = ?")
         .get(recordId) as { max_revision: number | null };
@@ -335,6 +367,15 @@ export function createSqliteMemoryContentRepository(
     // 3b. retire 操作：active 版本置 retired 并同事务退出索引投影；
     // 记录已不活跃（并发 retire / 重复 op）时幂等跳过。
     for (const recordId of write.retireRecordIds) {
+      const ownerRow = database.connection
+        .prepare("SELECT owner_key FROM memory_record WHERE record_id = ? ORDER BY revision DESC LIMIT 1")
+        .get(recordId) as { readonly owner_key: SQLInputValue } | undefined;
+      if (ownerRow !== undefined && String(ownerRow.owner_key) !== write.ownerKey) {
+        throw new MemoryError(
+          "memory_invalid_owner",
+          `Memory record ${recordId} belongs to ${String(ownerRow.owner_key)}, not ${write.ownerKey}.`,
+        );
+      }
       const activeRow = database.connection
         .prepare("SELECT revision FROM memory_record WHERE record_id = ? AND status = 'active'")
         .get(recordId) as { revision: number } | undefined;
@@ -473,10 +514,125 @@ export function createSqliteMemoryContentRepository(
       return readCursor(conversationId);
     },
 
+    async advanceCaptureCursor(input) {
+      return database.transaction(() => {
+        const lifecycleRow = database.connection
+          .prepare("SELECT generation, fence_state FROM memory_lifecycle WHERE owner_key = ?")
+          .get(input.ownerKey) as { readonly generation: number; readonly fence_state: string } | undefined;
+        if (lifecycleRow !== undefined &&
+          (lifecycleRow.fence_state === "fenced" || lifecycleRow.fence_state === "tombstone")) {
+          throw new MemoryError(
+            "memory_generation_fenced",
+            `Owner ${input.ownerKey} is ${lifecycleRow.fence_state}; capture cursor cannot advance.`,
+          );
+        }
+        if (lifecycleRow !== undefined && lifecycleRow.generation !== input.generation) {
+          throw new MemoryError(
+            "memory_generation_fenced",
+            `Capture cursor generation ${input.generation} != current ${lifecycleRow.generation}.`,
+          );
+        }
+        const existing = readCursor(input.conversationId);
+        if (existing !== undefined && existing.ownerKey !== input.ownerKey) {
+          throw new MemoryError(
+            "memory_invalid_owner",
+            `Capture cursor for ${input.conversationId} belongs to ${existing.ownerKey}, not ${input.ownerKey}.`,
+          );
+        }
+        if (existing !== undefined && existing.coveredThroughOrdinal >= input.coveredThroughOrdinal) return existing;
+        const now = Date.now();
+        database.connection.prepare(`
+          INSERT INTO memory_capture_cursor(
+            conversation_id, owner_key, covered_through_ordinal, source_fingerprint, updated_at
+          ) VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT(conversation_id) DO UPDATE SET
+            owner_key = excluded.owner_key,
+            covered_through_ordinal = excluded.covered_through_ordinal,
+            source_fingerprint = excluded.source_fingerprint,
+            updated_at = excluded.updated_at
+        `).run(
+          input.conversationId,
+          input.ownerKey,
+          input.coveredThroughOrdinal,
+          input.sourceFingerprint,
+          now,
+        );
+        const saved = readCursor(input.conversationId);
+        if (saved === undefined) throw new MemoryError("memory_store_failure", "Capture cursor vanished after skip.");
+        return saved;
+      });
+    },
+
+    async skipStaleConsolidationJob(jobId) {
+      return database.transaction(() => {
+        const job = database.connection.prepare(`
+          SELECT job_id, conversation_id, owner_key, covered_through_ordinal,
+                 source_fingerprint, status, generation
+          FROM memory_job WHERE job_id = ?
+        `).get(jobId) as {
+          readonly job_id: SQLInputValue;
+          readonly conversation_id: SQLInputValue;
+          readonly owner_key: SQLInputValue;
+          readonly covered_through_ordinal: SQLInputValue;
+          readonly source_fingerprint: SQLInputValue;
+          readonly status: SQLInputValue;
+          readonly generation: SQLInputValue;
+        } | undefined;
+        if (job === undefined || String(job.status) !== "running") return false;
+        const ownerKey = String(job.owner_key);
+        const lifecycleRow = database.connection
+          .prepare("SELECT generation, fence_state FROM memory_lifecycle WHERE owner_key = ?")
+          .get(ownerKey) as { readonly generation: number; readonly fence_state: string } | undefined;
+        if (lifecycleRow !== undefined &&
+          (lifecycleRow.fence_state === "fenced" || lifecycleRow.fence_state === "tombstone" ||
+            lifecycleRow.generation !== Number(job.generation))) {
+          database.connection.prepare("DELETE FROM memory_job WHERE job_id = ?").run(jobId);
+          return true;
+        }
+        const conversationId = String(job.conversation_id);
+        const existing = readCursor(conversationId);
+        if (existing !== undefined && existing.ownerKey !== ownerKey) {
+          throw new MemoryError(
+            "memory_invalid_owner",
+            `Capture cursor for ${conversationId} belongs to ${existing.ownerKey}, not ${ownerKey}.`,
+          );
+        }
+        if (existing === undefined || existing.coveredThroughOrdinal < Number(job.covered_through_ordinal)) {
+          database.connection.prepare(`
+            INSERT INTO memory_capture_cursor(
+              conversation_id, owner_key, covered_through_ordinal, source_fingerprint, updated_at
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(conversation_id) DO UPDATE SET
+              owner_key = excluded.owner_key,
+              covered_through_ordinal = excluded.covered_through_ordinal,
+              source_fingerprint = excluded.source_fingerprint,
+              updated_at = excluded.updated_at
+          `).run(
+            conversationId,
+            ownerKey,
+            Number(job.covered_through_ordinal),
+            String(job.source_fingerprint),
+            Date.now(),
+          );
+        }
+        database.connection.prepare(
+          "UPDATE memory_job SET status = 'done', updated_at = ? WHERE job_id = ? AND status = 'running'",
+        ).run(Date.now(), jobId);
+        return true;
+      });
+    },
+
     async listActiveByOwner(ownerKey) {
       const rows = database.connection
         .prepare(`SELECT ${RECORD_COLUMNS} FROM memory_record WHERE owner_key = ? AND status = 'active' ORDER BY updated_at`)
         .all(ownerKey) as Record<string, SQLInputValue>[];
+      return rows.map(parseRecordRow);
+    },
+
+    async listActiveAll() {
+      const rows = database.connection
+        .prepare(`SELECT ${RECORD_COLUMNS} FROM memory_record WHERE status = 'active' ORDER BY updated_at, record_id`)
+        .all() as Record<string, SQLInputValue>[];
       return rows.map(parseRecordRow);
     },
 
@@ -502,6 +658,72 @@ export function createSqliteMemoryContentRepository(
           UPDATE memory_index_outbox SET status = ?, attempts = attempts + 1, updated_at = ? WHERE outbox_id = ?
         `).run(status, Date.now(), outboxId);
         return readOutbox(outboxId);
+      });
+    },
+
+    async purgeOwner(ownerKey, options = {}) {
+      await database.transaction(() => {
+        const rows = database.connection
+          .prepare("SELECT record_id FROM memory_record WHERE owner_key = ?")
+          .all(ownerKey) as { readonly record_id: SQLInputValue }[];
+        const deleteProjection = database.connection.prepare(
+          "DELETE FROM memory_record_fts WHERE record_id = ?",
+        );
+        const deleteOutbox = database.connection.prepare(
+          "DELETE FROM memory_index_outbox WHERE record_id = ?",
+        );
+        for (const row of rows) {
+          deleteProjection.run(String(row.record_id));
+          deleteOutbox.run(String(row.record_id));
+        }
+        database.connection.prepare("DELETE FROM memory_record WHERE owner_key = ?").run(ownerKey);
+        if (options.preserveCursors !== true) {
+          database.connection.prepare("DELETE FROM memory_capture_cursor WHERE owner_key = ?").run(ownerKey);
+        }
+        database.connection.prepare("DELETE FROM memory_job WHERE owner_key = ?").run(ownerKey);
+      });
+    },
+
+    async purgeAll(options = {}) {
+      await database.transaction(() => {
+        database.connection.prepare("DELETE FROM memory_record_fts").run();
+        database.connection.prepare("DELETE FROM memory_index_outbox").run();
+        database.connection.prepare("DELETE FROM memory_record").run();
+        database.connection.prepare("DELETE FROM memory_job").run();
+        if (options.preserveCursors !== true) {
+          database.connection.prepare("DELETE FROM memory_capture_cursor").run();
+        }
+      });
+    },
+
+    async purgeConversation(conversationId, options = {}) {
+      await database.transaction(() => {
+        const rows = database.connection
+          .prepare(`
+            SELECT DISTINCT record_id
+            FROM memory_record_source
+            WHERE conversation_id = ?
+          `)
+          .all(conversationId) as { readonly record_id: SQLInputValue }[];
+        const deleteProjection = database.connection.prepare(
+          "DELETE FROM memory_record_fts WHERE record_id = ?",
+        );
+        const deleteOutbox = database.connection.prepare(
+          "DELETE FROM memory_index_outbox WHERE record_id = ?",
+        );
+        const deleteRecord = database.connection.prepare(
+          "DELETE FROM memory_record WHERE record_id = ?",
+        );
+        for (const row of rows) {
+          const recordId = String(row.record_id);
+          deleteProjection.run(recordId);
+          deleteOutbox.run(recordId);
+          deleteRecord.run(recordId);
+        }
+        if (options.preserveCursor !== true) {
+          database.connection.prepare("DELETE FROM memory_capture_cursor WHERE conversation_id = ?").run(conversationId);
+        }
+        database.connection.prepare("DELETE FROM memory_job WHERE conversation_id = ?").run(conversationId);
       });
     },
 

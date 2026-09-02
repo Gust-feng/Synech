@@ -81,3 +81,18 @@ test("a run with empty assistant text contributes only the user turn", async () 
   assert.equal(window.turns[0].role, "user");
   assert.deepEqual(window.nextCursor?.coveredThroughOrdinal, 1);
 });
+
+test("a per-turn memory override excludes that run while keeping later ordinals continuous", async () => {
+  const reader = createOrdinaryEvidenceReader(fakeQueries([
+    run(1),
+    run(2, { turnMemoryOverrideOff: true }),
+    run(3),
+  ]));
+  const window = await reader.readTurnWindow({
+    conversationId: "c1",
+    fromOrdinal: 1,
+    through: { turnId: "t3", ordinal: 3, sourceRevision: 1 },
+  });
+  assert.deepEqual([...new Set(window.turns.map((turn) => turn.ordinal))], [1, 3]);
+  assert.equal(window.nextCursor.coveredThroughOrdinal, 3);
+});

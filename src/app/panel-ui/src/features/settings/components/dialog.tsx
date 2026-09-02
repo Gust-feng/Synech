@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
   Bot,
+  Brain,
   CheckCircle2,
   ChartColumn,
   CloudCog,
@@ -37,6 +38,8 @@ import { SubAgentSettings } from "./sub-agents";
 import { DeveloperToolStatistics, UsageStatisticsSettings, preloadUsageStatistics } from "./usage-statistics";
 import { ResponsivenessDiagnostics } from "../../../components/responsiveness-diagnostics";
 import { RuntimeSettings } from "./runtime";
+import { MemorySettingsPanel, type MemorySettingsScope } from "../../memory/MemorySettingsPanel";
+import { MemoryDiagnosticsPanel } from "../../memory/MemoryDiagnosticsPanel";
 import "./capability.css";
 
 export type { McpServerForm, ModelForm, SettingsGroup, ToolForm } from "./types";
@@ -45,6 +48,7 @@ export function SettingsDialog(props: {
   readonly open: boolean;
   readonly onClose: () => void;
   readonly initialGroup?: SettingsGroup;
+  readonly memoryScope: MemorySettingsScope | null;
   readonly config?: ConfigResponse;
   readonly modelForm: ModelForm;
   readonly setModelForm: (form: ModelForm) => void;
@@ -173,7 +177,7 @@ export function SettingsDialog(props: {
           <header>
             <h2>{activeInfo.label}</h2>
           </header>
-          <div className={`settings-content ${visibleActiveGroup === "models" ? "model-settings-content" : ""}`}>
+          <div className={`settings-content ${visibleActiveGroup === "models" ? "model-settings-content" : ""} ${visibleActiveGroup === "memory" ? "memory-settings-content" : ""}`}>
             <div
               className="settings-panel-slot model-settings-slot"
               hidden={visibleActiveGroup !== "models"}
@@ -261,6 +265,7 @@ export function SettingsDialog(props: {
                 onSaveCommandShell={props.onSaveCommandShell}
               />
             )}
+            {visibleActiveGroup === "memory" && <MemorySettingsPanel scope={props.memoryScope} />}
             {visibleActiveGroup === "appearance" && <AppearanceSettings />}
             {visibleActiveGroup === "statistics" && <UsageStatisticsSettings />}
             {visibleActiveGroup === "developer" && (
@@ -277,6 +282,7 @@ export function SettingsDialog(props: {
                 </div>
                 <ResponsivenessDiagnostics />
                 <DeveloperToolStatistics />
+                <MemoryDiagnosticsPanel />
               </>
             )}
             {visibleActiveGroup === "about" && (
@@ -296,6 +302,7 @@ export function SettingsDialog(props: {
 const SETTINGS_GROUPS: readonly { readonly id: SettingsGroup; readonly label: string; readonly icon: React.ReactNode }[] = [
   { id: "models", label: "模型服务", icon: <CloudCog size={15} /> },
   { id: "basicCapabilities", label: "基础能力", icon: <SlidersHorizontal size={15} /> },
+  { id: "memory", label: "智能记忆", icon: <Brain size={15} /> },
   { id: "mcp", label: "MCP 服务", icon: <Server size={15} /> },
   { id: "skills", label: "技能", icon: <FileText size={15} /> },
   { id: "subAgents", label: "Sub Agent", icon: <Bot size={15} /> },

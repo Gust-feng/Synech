@@ -21,7 +21,7 @@ async function withStore(run) {
     await run({ repository, database, filePath });
   } finally {
     database.close();
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 }
 
@@ -53,7 +53,7 @@ test("durable job boundary survives repository/database recreation", async () =>
     assert.equal(queued[0].coveredThroughOrdinal, 1);
     second.close();
   } finally {
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 

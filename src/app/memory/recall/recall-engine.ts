@@ -1,5 +1,6 @@
 import { memoryOwnerKey } from "../../../domain/memory/index.js";
 import { createId } from "../../../kernel/id.js";
+import { MemoryError } from "../contracts.js";
 import type {
   MemoryEvidenceRef,
   MemoryRecallInput,
@@ -7,7 +8,7 @@ import type {
   MemoryRecallSnapshot,
   RecalledMemory,
 } from "../contracts.js";
-import { resolveAdmissionFromPolicy } from "../policy/policy-snapshot.js";
+import { conversationExclusionKey, resolveAdmissionFromPolicy } from "../policy/policy-snapshot.js";
 import type { MemoryContentRepository } from "../store/content-repository.js";
 import type { MemoryControlRepository } from "../store/control-repository.js";
 import { lexicalMatchExpression } from "./lexical-projection.js";
@@ -22,7 +23,7 @@ import { lexicalMatchExpression } from "./lexical-projection.js";
  * - FTS5 检索：lexical projection MATCH + bm25 排序（与 eval 工具链同源算法），
  *   scope 过滤（owner_key + status='active' + generation）在投影过滤与回表复核
  *   两处生效，跨 scope 泄漏恒为 0（10.2）；
- * - deadlineAt 只做简单时间检查：超时返回已得候选（不足则 no_hit），不阻塞主 Run
+ * - deadlineAt 只做简单时间检查：超时返回已得候选（不足则 degraded），不阻塞主 Run
  *   （16.4）；FTS 查询异常返回 outcome='degraded'（与 no_hit 可区分，6.2）。
  *
  * 近期上下文（recentContext）按 10.1 允许进入确定性投影，但 T11 验证的检索基线
@@ -60,7 +61,8 @@ export function createRealMemoryRecallEngine(deps: MemoryRecallEngineDeps): Memo
     async recall(input: MemoryRecallInput): Promise<MemoryRecallSnapshot> {
       const ownerKey = memoryOwnerKey(input.owner);
       const conversationId = input.conversationId ?? "";
-      const candidateLimit = input.candidateLimit > 0 ? input.candidateLimit : DEFAULT_RECALL_CANDIDATE_LIMIT;
+      const requestedLimit = input.candidateLimit > 0 ? Math.floor(input.candidateLimit) : DEFAULT_RECALL_CANDIDATE_LIMIT;
+      const candidateLimit = Math.min(DEFAULT_RECALL_CANDIDATE_LIMIT, requestedLimit);
       const recallId = createId("memrecall");
 
       // 1. Policy Gate（recall 返回边界，当次重算，fail-closed）。
@@ -72,7 +74,7 @@ export function createRealMemoryRecallEngine(deps: MemoryRecallEngineDeps): Memo
       const admission = resolveAdmissionFromPolicy({
         owner: input.owner,
         conversationId,
-        turnOverrideOff: false,
+        turnOverrideOff: input.turnOverrideOff === true,
         policyRows,
         ownerLifecycle,
         conversationLifecycle,
@@ -93,7 +95,7 @@ export function createRealMemoryRecallEngine(deps: MemoryRecallEngineDeps): Memo
 
       // deadline 预检：已过期就不启动检索（16.4 超时返回空，不阻塞主 Run）。
       if (Date.now() >= input.deadlineAt) {
-        return { ...base, storeRevision: await readStoreRevision(), candidates: [], outcome: "no_hit" };
+        return { ...base, storeRevision: await readStoreRevision(), candidates: [], outcome: "degraded" };
       }
 
       // 2. lexical projection → FTS5 MATCH（空投影 = 查询无可用 token，no-hit）。
@@ -120,7 +122,21 @@ export function createRealMemoryRecallEngine(deps: MemoryRecallEngineDeps): Memo
       for (const record of rankedRecords) {
         if (candidates.length >= candidateLimit) break;
         if (Date.now() >= input.deadlineAt) break;
-        const sources = await deps.contentRepository.listSources(record.recordId, record.revision);
+        let sources: Awaited<ReturnType<MemoryContentRepository["listSources"]>>;
+        try {
+          sources = await deps.contentRepository.listSources(record.recordId, record.revision);
+        } catch (error) {
+          throw new MemoryError(
+            "memory_index_degraded",
+            `Memory provenance for ${record.recordId} could not be read.`,
+            { cause: error },
+          );
+        }
+        if (sources.some((source) =>
+          policyRows.some((policy) =>
+            policy.key === conversationExclusionKey(source.conversationId) && policy.enabled))) {
+          continue;
+        }
         candidates.push({
           ref: { id: record.recordId, revision: record.revision },
           scope: input.owner,

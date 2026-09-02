@@ -369,6 +369,7 @@ const rawStateSchema = z.object({
   }).strict(),
   input: z.object({
     userMessage: z.string(),
+    turnMemoryOverrideOff: z.boolean().optional(),
     context: z.object({
       contextRefs: z.array(z.object({
         attachmentId: z.string().optional(),

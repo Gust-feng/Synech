@@ -34,16 +34,18 @@ export function createOrdinaryEvidenceReader(queries: EvidenceRunQueries): Ordin
       // queries 已按 ordinal 升序返回；这里只累加连续块。
       for (const run of runs) {
         if (run.ordinal !== expectedOrdinal) break;
-        turns.push({
-          turnId: run.userTurnId,
-          ordinal: run.ordinal,
-          role: "user",
-          text: run.userMessage,
-          runId: run.runId,
-          occurredAt: run.occurredAt,
-          sourceRevision: run.sourceRevision,
-        });
-        if (run.assistantText.length > 0) {
+        if (!run.turnMemoryOverrideOff) {
+          turns.push({
+            turnId: run.userTurnId,
+            ordinal: run.ordinal,
+            role: "user",
+            text: run.userMessage,
+            runId: run.runId,
+            occurredAt: run.occurredAt,
+            sourceRevision: run.sourceRevision,
+          });
+        }
+        if (!run.turnMemoryOverrideOff && run.assistantText.length > 0) {
           turns.push({
             turnId: run.assistantTurnId,
             ordinal: run.ordinal,

@@ -164,6 +164,8 @@ export type OrdinaryRunBirth = {
 
 export type OrdinaryRunInput = {
   readonly userMessage: string;
+  /** Ordinary-owned one-turn override; the Memory feature only consumes it. */
+  readonly turnMemoryOverrideOff?: boolean;
   /**
    * Canonical Ordinary context input persisted by the first run format.
    */
@@ -640,6 +642,7 @@ export type OrdinaryStableTerminalRunFacts = {
   readonly sourceRevision: number;
   readonly turn: OrdinaryRunTurn;
   readonly userMessage: string;
+  readonly turnMemoryOverrideOff: boolean;
   readonly taskContextRefs: readonly string[];
   readonly workspaceRoot: string;
   readonly executionStarted: boolean;
@@ -675,6 +678,8 @@ export type OrdinaryStableEvidenceRun = {
   readonly userMessage: string;
   /** 稳定终态可见的 assistant 文本；可能为空串（无文本产出时）。 */
   readonly assistantText: string;
+  /** True when this user turn explicitly opted out of Memory. */
+  readonly turnMemoryOverrideOff: boolean;
   readonly sourceRevision: number;
   readonly occurredAt: string;
 };

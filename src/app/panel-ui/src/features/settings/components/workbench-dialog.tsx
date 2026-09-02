@@ -5,6 +5,7 @@ import type { ModelProviderModelCatalog } from "@panel-api/config";
 import type { ConversationFollowUpMode } from "../../../contracts/composer";
 import { SettingsDialog } from "./dialog";
 import type { McpServerForm, ModelForm, SettingsGroup, ToolForm } from "./types";
+import type { MemorySettingsScope } from "../../memory/MemorySettingsPanel";
 
 type WorkbenchSettingsDialogFormState = {
   readonly modelForm: ModelForm;
@@ -37,6 +38,7 @@ export type WorkbenchSettingsDialogProps = {
   readonly open: boolean;
   readonly onClose: () => void;
   readonly initialGroup?: SettingsGroup;
+  readonly memoryScope: MemorySettingsScope | null;
   readonly app: Pick<AppState, "config" | "tools" | "skills" | "subAgents">;
   readonly modelCatalogs?: Readonly<Record<string, ModelProviderModelCatalog>>;
   readonly forms: WorkbenchSettingsDialogFormState;
@@ -51,6 +53,7 @@ export function WorkbenchSettingsDialog(props: WorkbenchSettingsDialogProps): Re
       open={props.open}
       onClose={props.onClose}
       initialGroup={props.initialGroup}
+      memoryScope={props.memoryScope}
       config={props.app.config}
       modelForm={props.forms.modelForm}
       setModelForm={props.forms.setModelForm}

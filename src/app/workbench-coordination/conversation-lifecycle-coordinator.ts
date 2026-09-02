@@ -28,6 +28,8 @@ export type ConversationLifecycleCoordinator = {
   ready(): Promise<void>;
   /** Rejects a new turn while a durable single-conversation deletion is unresolved. */
   assertConversationAvailable(conversationId: string): void;
+  /** Serializes owner-scoped mutations with conversation deletion. */
+  admitConversation<T>(conversationId: string, operation: () => Promise<T>): Promise<T>;
   submit(input: {
     readonly owner: ConversationOwner;
     readonly submissionId: string;
@@ -62,10 +64,22 @@ export function createConversationLifecycleCoordinator(input: {
   const now = input.now ?? (() => new Date().toISOString());
   const runExclusive = input.runExclusive ?? (async <T>(operation: () => Promise<T>) => await operation());
   const deletingConversationIds = new Set<string>();
+  const admissionTails = new Map<string, Promise<void>>();
   let tail = Promise.resolve();
   const serialize = <T>(operation: () => Promise<T>): Promise<T> => {
     const result = tail.then(operation, operation);
     tail = result.then(() => undefined, () => undefined);
+    return result;
+  };
+
+  const admitInOrder = <T>(conversationId: string, operation: () => Promise<T>): Promise<T> => {
+    const previous = admissionTails.get(conversationId) ?? Promise.resolve();
+    const result = previous.then(operation, operation);
+    const next = result.then(() => undefined, () => undefined);
+    admissionTails.set(conversationId, next);
+    void next.finally(() => {
+      if (admissionTails.get(conversationId) === next) admissionTails.delete(conversationId);
+    });
     return result;
   };
 
@@ -133,6 +147,15 @@ export function createConversationLifecycleCoordinator(input: {
       if (deletingConversationIds.has(conversationId)) {
         throw new WorkbenchCoordinationError("conversation_deletion_in_progress", `Conversation ${conversationId} is being deleted.`);
       }
+    },
+    admitConversation(conversationId, operation) {
+      if (deletingConversationIds.has(conversationId)) {
+        return Promise.reject(new WorkbenchCoordinationError(
+          "conversation_deletion_in_progress",
+          `Conversation ${conversationId} is being deleted.`,
+        ));
+      }
+      return admitInOrder(conversationId, operation);
     },
     submit(submission) {
       const operation = () => serialize(async () => await runExclusive(async () => {
@@ -209,7 +232,7 @@ export function createConversationLifecycleCoordinator(input: {
     },
     deleteConversation(conversationId) {
       deletingConversationIds.add(conversationId);
-      return serialize(async () => await runExclusive(async () => {
+      return serialize(async () => await admitInOrder(conversationId, async () => await runExclusive(async () => {
         try {
           const pending = await input.journal.getByConversation(conversationId);
           if (pending !== undefined) {
@@ -235,7 +258,7 @@ export function createConversationLifecycleCoordinator(input: {
           }
           throw error;
         }
-      }));
+      })));
     },
   };
 }

@@ -6,6 +6,7 @@ import test from "node:test";
 
 import { SqliteRuntimeDatabase } from "../dist/adapters/runtime-storage/index.js";
 import {
+  MemoryError,
   createMemoryRuntime,
   createSqliteMemoryContentRepository,
   createSqliteMemoryControlRepository,
@@ -91,7 +92,7 @@ async function withRuntime(run, { availableOrdinals = [1, 2, 3], evidenceCalls =
     evidenceReader: fakeEvidenceReader(availableOrdinals, evidenceCalls),
   });
   try {
-    await run({ runtime, controlRepository, database, filePath, evidenceCalls });
+    await run({ runtime, controlRepository, contentRepository, database, filePath, evidenceCalls });
   } finally {
     database.close();
     await rm(dir, { recursive: true, force: true });
@@ -107,18 +108,30 @@ test("absent content/evidence composition keeps capture as noop skip", async () 
     });
     const acceptance = await runtime.captureRuntime.acceptStableSignal(signalThrough(2));
     assert.deepEqual(acceptance, { status: "skipped", reason: "memory_capture_disabled" });
+    await assert.rejects(
+      () => runtime.lifecycle.clearOwnerMemory(OWNER),
+      (error) => error instanceof MemoryError && error.code === "memory_store_failure",
+    );
   } finally {
     database.close();
     await rm(dir, { recursive: true, force: true });
   }
 });
 
-test("capture is fail-closed without persisted policy rows", async () => {
-  await withRuntime(async ({ runtime, controlRepository }) => {
+test("capture skips and checkpoints disabled intervals so reopening cannot backfill them", async () => {
+  await withRuntime(async ({ runtime, controlRepository, contentRepository, evidenceCalls }) => {
     const acceptance = await runtime.captureRuntime.acceptStableSignal(signalThrough(3));
     assert.equal(acceptance.status, "skipped");
     assert.equal(acceptance.reason, "global_consent");
     assert.equal((await controlRepository.listJobsByStatus("queued")).length, 0);
+    assert.equal((await contentRepository.getCursor(CONVERSATION_ID))?.coveredThroughOrdinal, 3);
+    assert.equal((await runtime.captureRuntime.acceptStableSignal(signalThrough(3))).status, "skipped");
+    assert.equal(evidenceCalls.length, 0, "disabled capture must not read evidence");
+    await admitSpaceOwner(controlRepository);
+    const reopened = await runtime.captureRuntime.acceptStableSignal(signalThrough(3));
+    assert.equal(reopened.status, "skipped");
+    assert.equal(reopened.reason, "no_new_stable_evidence");
+    assert.equal(evidenceCalls[0].fromOrdinal, 4, "reopening must start after the disabled interval");
   });
 });
 

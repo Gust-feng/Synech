@@ -16,13 +16,28 @@ const setConversationSchema = z.object({ op: z.literal("setConversationParticipa
 const clearSchema = z.object({ op: z.literal("clearImplicitMemory"), scope: memoryOwnerSchema }).strict();
 const mutationBodySchema = z.discriminatedUnion("op", [setConsentSchema, setSpaceSchema, setConversationSchema, clearSchema]);
 
-export function handleMemoryCapabilityRoute(
+export async function handleMemoryCapabilityRoute(
   feature: Pick<MemoryFeature, "queries">,
+  request: IncomingMessage,
   response: ServerResponse,
-): void {
-  void feature.queries.getCapabilityStatus()
-    .then((status) => writeJson(response, 200, { ok: true, status }))
-    .catch((error) => respondError(response, error));
+  url: URL,
+): Promise<boolean> {
+  if (request.method !== "GET" || url.pathname !== "/api/memory/capability") return false;
+  const query = capabilityQueryFromUrl(url);
+  const status = await feature.queries.getCapabilityStatus(query);
+  writeJson(response, 200, { ok: true, status });
+  return true;
+}
+
+export async function handleMemoryDiagnosticsRoute(
+  feature: Pick<MemoryFeature, "queries">,
+  request: IncomingMessage,
+  response: ServerResponse,
+  url: URL,
+): Promise<boolean> {
+  if (request.method !== "GET" || url.pathname !== "/api/memory/diagnostics") return false;
+  writeJson(response, 200, { ok: true, diagnostics: await feature.queries.getDiagnosticSnapshot() });
+  return true;
 }
 
 export async function handleMemoryMutationRoute(
@@ -30,48 +45,50 @@ export async function handleMemoryMutationRoute(
   request: IncomingMessage,
   response: ServerResponse,
 ): Promise<void> {
-  try {
-    const body = await readJsonBody(request);
-    const parsed = mutationBodySchema.safeParse(body);
-    if (!parsed.success) throw new PanelHttpError(400, "memory_mutation_invalid", parsed.error.message);
-    const input = parsed.data;
-    switch (input.op) {
-      case "setConsent": {
-        const result = await feature.commands.setConsent({ globalConsent: input.globalConsent });
-        writeJson(response, 200, { ok: true, policyRevision: result.policyRevision });
-        return;
-      }
-      case "setSpaceParticipation": {
-        const result = await feature.commands.setSpaceParticipation({ spaceId: input.spaceId, enabled: input.enabled });
-        writeJson(response, 200, { ok: true, policyRevision: result.policyRevision });
-        return;
-      }
-      case "setConversationParticipation": {
-        const result = await feature.commands.setConversationParticipation({ conversationId: input.conversationId, excluded: input.excluded });
-        writeJson(response, 200, { ok: true, policyRevision: result.policyRevision });
-        return;
-      }
-      case "clearImplicitMemory": {
-        // conversation scope 在 UI 层不传 memory 域（conversation 不属于 MemoryOwner）；
-        // UI 上"本对话不参与"只写 conversation_exclusion policy 行，不触发清除。
-        if (input.scope.kind === "conversation") {
-          throw new PanelHttpError(400, "memory_scope_invalid", "conversation scope cannot be cleared via memory API");
-        }
-        const result = await feature.commands.clearImplicitMemory({ scope: input.scope as MemoryOwner });
-        writeJson(response, 200, { ok: true, generation: result.generation });
-        return;
-      }
+  const body = await readJsonBody(request);
+  const parsed = mutationBodySchema.safeParse(body);
+  if (!parsed.success) throw new PanelHttpError(400, "memory_mutation_invalid", parsed.error.message);
+  const input = parsed.data;
+  switch (input.op) {
+    case "setConsent": {
+      const result = await feature.commands.setConsent({ globalConsent: input.globalConsent });
+      writeJson(response, 200, { ok: true, policyRevision: result.policyRevision });
+      return;
     }
-  } catch (error) {
-    respondError(response, error);
+    case "setSpaceParticipation": {
+      const result = await feature.commands.setSpaceParticipation({ spaceId: input.spaceId, enabled: input.enabled });
+      writeJson(response, 200, { ok: true, policyRevision: result.policyRevision });
+      return;
+    }
+    case "setConversationParticipation": {
+      const result = await feature.commands.setConversationParticipation({ conversationId: input.conversationId, excluded: input.excluded });
+      writeJson(response, 200, { ok: true, policyRevision: result.policyRevision });
+      return;
+    }
+    case "clearImplicitMemory": {
+      const result = await feature.commands.clearImplicitMemory({ scope: input.scope as MemoryOwner });
+      writeJson(response, 200, { ok: true, generation: result.generation });
+      return;
+    }
   }
 }
 
-function respondError(response: ServerResponse, error: unknown): void {
-  if (error instanceof PanelHttpError) {
-    writeJson(response, error.statusCode, { ok: false, code: error.code, message: error.message });
-    return;
+function capabilityQueryFromUrl(url: URL): {
+  readonly owner?: MemoryOwner;
+  readonly conversationId?: string;
+} {
+  const ownerKind = url.searchParams.get("ownerKind");
+  const ownerId = url.searchParams.get("ownerId");
+  if (ownerKind === null && ownerId === null) {
+    const conversationId = url.searchParams.get("conversationId");
+    return conversationId === null ? {} : { conversationId };
   }
-  const message = error instanceof Error ? error.message : "memory_route_failed";
-  writeJson(response, 500, { ok: false, code: "memory_route_failed", message });
+  if ((ownerKind !== "space" && ownerKind !== "workspace") || ownerId === null || ownerId.length === 0) {
+    throw new PanelHttpError(400, "memory_capability_query_invalid", "记忆状态查询范围无效。");
+  }
+  const conversationId = url.searchParams.get("conversationId");
+  return {
+    owner: { kind: ownerKind, id: ownerId },
+    ...(conversationId === null ? {} : { conversationId }),
+  };
 }

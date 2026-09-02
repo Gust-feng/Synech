@@ -50,6 +50,7 @@ const MAX_MODEL_TEXT_CHARS = 600;
 /** 提示词中展示的已有记忆条目上限与单条截断长度。 */
 const MAX_PROMPT_RECORDS = 50;
 const MAX_PROMPT_RECORD_CHARS = 200;
+const SENSITIVE_CONTENT_PATTERN = /\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{16,}|xox[baprs]-[A-Za-z0-9-]{16,})\b|(?:api[_-]?key|access[_-]?token|secret|password|bearer)\s*[:=]\s*\S+/giu;
 
 // ---------------------------------------------------------------------------
 // 模型口：Memory Feature 只依赖窄端口，通道机制由 panel-server 适配（组合根装配）
@@ -162,7 +163,7 @@ export function buildExtractionMessages(
       .slice(0, MAX_PROMPT_RECORDS)
       .map((record) => `- (id=${record.recordId}, kind=${record.kind}) ${truncateForPrompt(record.modelText, MAX_PROMPT_RECORD_CHARS)}`)
       .join("\n");
-  const evidenceLines = batch.map((turn) => `[轮 ${turn.ordinal} | ${turn.role}] ${turn.text}`);
+  const evidenceLines = batch.map((turn) => `[轮 ${turn.ordinal} | ${turn.role}] ${redactSensitiveContent(turn.text)}`);
   return [
     { role: "system", content: extractionSystemPrompt() },
     {
@@ -176,6 +177,15 @@ export function buildExtractionMessages(
       ].join("\n"),
     },
   ];
+}
+
+function redactSensitiveContent(text: string): string {
+  return text.replace(SENSITIVE_CONTENT_PATTERN, "[redacted]");
+}
+
+function containsSensitiveContent(text: string): boolean {
+  SENSITIVE_CONTENT_PATTERN.lastIndex = 0;
+  return SENSITIVE_CONTENT_PATTERN.test(text);
 }
 
 // ---------------------------------------------------------------------------
@@ -278,6 +288,9 @@ function validateAndBuildOperations(
       return { ok: false, reason: "evidence_out_of_batch_range" };
     }
     if (operation.op === "create") {
+      if (containsSensitiveContent(operation.text)) {
+        return { ok: false, reason: "sensitive_content_rejected" };
+      }
       creates.push({
         kind: operation.kind,
         modelText: operation.text,
@@ -291,6 +304,9 @@ function validateAndBuildOperations(
         return { ok: false, reason: "unknown_record_target" };
       }
       const text = operation.text ?? existing.modelText;
+      if (containsSensitiveContent(text)) {
+        return { ok: false, reason: "sensitive_content_rejected" };
+      }
       reinforces.push({
         // reinforce 保留既有 kind/evidenceClass，仅按模型更新表述与证据。
         recordId: existing.recordId,
@@ -344,6 +360,9 @@ export async function consolidateJob(deps: ConsolidationDeps, jobId: string): Pr
       // 次生失败不再传播；残留 running 由重启恢复兜底（recoverInterruptedJobs）。
     }
   };
+  const skipStaleJob = async (): Promise<void> => {
+    await deps.contentRepository.skipStaleConsolidationJob(jobId);
+  };
   const failJob = async (reason: string): Promise<ConsolidationJobOutcome> => {
     try {
       await deps.controlRepository.transitionJob(jobId, "running", "failed");
@@ -375,11 +394,11 @@ export async function consolidateJob(deps: ConsolidationDeps, jobId: string): Pr
       conversationLifecycle,
     });
     if (admission.effective === "off") {
-      await requeueQuietly();
+      await skipStaleJob();
       return { status: "deferred", reason: admission.reasons[0] ?? "effective_off" };
     }
     if (admission.policyRevision !== job.policyRevision || admission.generation !== job.generation) {
-      await requeueQuietly();
+      await skipStaleJob();
       return { status: "deferred", reason: "admission_changed_since_accept" };
     }
 
@@ -446,7 +465,7 @@ export async function consolidateJob(deps: ConsolidationDeps, jobId: string): Pr
         completeJob,
       });
       if (commit.status === "discarded") {
-        await requeueQuietly();
+        await skipStaleJob();
         return { status: "deferred", reason: commit.reason };
       }
 

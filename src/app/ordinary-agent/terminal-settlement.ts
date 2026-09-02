@@ -283,6 +283,7 @@ export function projectStableTerminalRunFacts(
     sourceRevision: document.revision,
     turn: state.turn,
     userMessage: state.input.userMessage,
+    turnMemoryOverrideOff: state.input.turnMemoryOverrideOff === true,
     taskContextRefs: (state.input.context?.contextRefs ?? []).map((contextRef) => contextRef.ref),
     workspaceRoot: state.birth.capabilitySnapshot.executionRoot,
     executionStarted: state.timeline.some((event) => event.type === "run.started"),

@@ -16,8 +16,8 @@ import {
 } from "./persistence-schema.js";
 
 /**
- * Memory 控制状态仓储（Phase 1）：只拥有 policy 分账、lifecycle fence/generation、
- * durable job 边界三类控制状态；不含 MemoryRecord / Source / 检索投影（Phase 3）。
+ * Memory 控制状态仓储：拥有 policy 分账、lifecycle fence/generation 和 durable job
+ * 边界；Record/Source/游标/索引投影由 MemoryContentRepository 拥有。
  *
  * 不变量：
  * - policy 写入走 CAS（expectedRevision），冲突即 memory_policy_revision_stale；
@@ -173,6 +173,7 @@ export interface MemoryControlRepository {
     ownerKey: string,
     fenceState: PersistedFenceState,
     captureAfter?: number | null,
+    expectedGeneration?: number,
   ): Promise<MemoryLifecycleRow>;
   /** 删除准备：单事务内 generation+1 并立 fenced（消除 advance 与 fence 之间的交错窗口）。 */
   fenceForRemoval(ownerKey: string): Promise<MemoryLifecycleRow>;
@@ -293,11 +294,17 @@ export function createSqliteMemoryControlRepository(
       });
     },
 
-    async setLifecycleFence(ownerKey, fenceState, captureAfter = null) {
+    async setLifecycleFence(ownerKey, fenceState, captureAfter = null, expectedGeneration) {
       return database.transaction(() => {
         const existing = readLifecycle(ownerKey);
         const now = Date.now();
         const generation = existing?.generation ?? 0;
+        if (expectedGeneration !== undefined && generation !== expectedGeneration) {
+          throw new MemoryError(
+            "memory_generation_fenced",
+            `Memory lifecycle ${ownerKey} generation ${generation} does not match expected ${expectedGeneration}.`,
+          );
+        }
         database.connection.prepare(`
           INSERT INTO memory_lifecycle(owner_key, generation, capture_after, fence_state, updated_at)
           VALUES (?, ?, ?, ?, ?)
@@ -345,6 +352,12 @@ export function createSqliteMemoryControlRepository(
         `).get(input.conversationId) as Record<string, SQLInputValue> | undefined;
         const now = Date.now();
         if (active !== undefined) {
+          if (String(active.owner_key) !== input.ownerKey) {
+            throw new MemoryError(
+              "memory_invalid_owner",
+              `Active memory job for ${input.conversationId} belongs to ${String(active.owner_key)}, not ${input.ownerKey}.`,
+            );
+          }
           database.connection.prepare(`
             UPDATE memory_job SET
               covered_through_turn_id = ?,

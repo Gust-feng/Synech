@@ -65,7 +65,17 @@ import {
   PersonalKnowledgeError,
   type PersonalKnowledgeFeature,
 } from "../personal-knowledge/index.js";
-import { createMemoryRuntime, renderImplicitMemoryBlock, type MemoryRuntime } from "../memory/index.js";
+import {
+  createMemoryAdminApplication,
+  createMemoryFeature,
+  createMemoryRuntime,
+  MemoryError,
+  POLICY_KEY,
+  renderImplicitMemoryBlock,
+  type MemoryControlRepository,
+  type MemoryFeature,
+  type MemoryRuntime,
+} from "../memory/index.js";
 import { createMemoryCaptureScheduler } from "./memory/capture-scheduler.js";
 import { createConfigCenterConsolidationModel } from "./memory/consolidation-model.js";
 import {
@@ -154,6 +164,10 @@ import {
   createContextAttachmentUploadApplication,
   type ContextAttachmentUploadApplication,
 } from "../application/context-attachment-application.js";
+import {
+  createMemoryCaptureApplication,
+  type MemoryCaptureApplication,
+} from "../application/memory-capture-application.js";
 import { createWebReferenceMetadataWorker, type WebReferenceMetadataWorker } from "./spaces/web-reference-metadata-worker.js";
 import { createWebReferenceMetadataDiagnostics, type WebReferenceMetadataDiagnostics } from "./spaces/web-reference-metadata-diagnostics.js";
 
@@ -203,6 +217,11 @@ export type PanelHost = {
   readonly personalKnowledgeFeature: PersonalKnowledgeFeature<import("../panel-api/workbench.js").DocumentPreview>;
   /** Memory v2 运行时（Context Provider / Capture / Lifecycle）。 */
   readonly memoryRuntime: MemoryRuntime;
+  /** Memory 用户控制命令与状态查询的唯一 Feature facade。 */
+  readonly memoryFeature: MemoryFeature;
+  /** Memory 发布默认策略完成后，Panel Server 才开始接受请求。 */
+  readonly memoryReady: Promise<void>;
+  readonly memoryCaptureApplication: MemoryCaptureApplication;
   readonly onRunBirthActivity?: (input: { readonly conversationId?: string; readonly owner: import("../../domain/execution-scope/index.js").ConversationOwner }) => void;
   readonly dataMaintenance: DataMaintenance;
   readonly toolOutputStore: ToolOutputStore;
@@ -325,6 +344,7 @@ function assemblePanelHost(input: {
     memoryControlRepository,
     memoryContentRepository,
   } = openPanelStorage(productPaths);
+  const memoryReady = ensureMemoryRolloutPolicy(memoryControlRepository);
   const managedAssetFeature = createManagedAssetsFeature(managedAssets);
   const spaceConversationDeletionJournal = createSqliteSpaceConversationDeletionJournal(database);
   const conversationLifecycleJournal = createSqliteConversationLifecycleJournal(database);
@@ -477,8 +497,9 @@ function assemblePanelHost(input: {
     readManagedKnowledgeAsset: async (input) =>
       await readManagedKnowledgeAsset(knowledgeAssetRoot, input.page, input),
   });
-  // Memory v2（隐式长期记忆）：Context Provider 仍为 No-op（注入侧到 Shadow/Canary 才切换）；
-  // Capture 在内容表与证据读取口齐备时装配真实实现（Policy Gate→连续证据窗→durable job）。
+  // Memory v2（隐式长期记忆）：内容表与证据读取口齐备时装配真实 Provider/Capture；
+  // policy 行仍决定 off/shadow/active，默认由发布初始化写入 active，但用户 consent
+  // 与 Space participation 仍 fail-closed。
   // evidence reader 惰性委托 ordinaryAgentFeature（装配在本函数后段），与上方
   // invalidateSpaceReferenceAccess 引用 workspaceFeature 的模式一致。
   const memoryEvidenceReader = createOrdinaryEvidenceReader({
@@ -498,9 +519,11 @@ function assemblePanelHost(input: {
     evidenceReader: memoryEvidenceReader,
     model: createConfigCenterConsolidationModel({ configCenter: input.configCenter }),
   });
-  void memoryCaptureScheduler.recoverQueuedJobs().catch((error) => {
-    console.error("[panel-server] Memory consolidation startup recovery failed", error);
-  });
+  void memoryReady
+    .then(() => memoryCaptureScheduler.recoverQueuedJobs())
+    .catch((error) => {
+      console.error("[panel-server] Memory consolidation startup recovery failed", error);
+    });
   const initialWorkbenchData = createInitialWorkbenchDataInitializer(async () =>
     await initializeInitialWorkbenchData({
       database,
@@ -657,13 +680,20 @@ function assemblePanelHost(input: {
     }),
     resolveImplicitMemoryBlock: async ({ owner, conversationId, userText }) => {
       // Recall 截止时间是实验参数（《手册》检索预算），Noop 不消费；Phase 3 接真实预算。
-      const contribution = await memoryRuntime.contextProvider.contribute({
-        owner,
-        conversationId,
-        currentUserText: userText,
-        deadlineAt: Date.now() + 700,
-      });
-      return renderImplicitMemoryBlock(contribution);
+      try {
+        const contribution = await memoryRuntime.contextProvider.contribute({
+          owner,
+          conversationId,
+          currentUserText: userText,
+          deadlineAt: Date.now() + 700,
+        });
+        return renderImplicitMemoryBlock(contribution);
+      } catch (error) {
+        // 只有 Memory 自有检索/索引故障可以在 Host 的可选贡献边界降级；
+        // Product Home/SQLite 完整性与未知错误继续上抛，不能伪装成 no-hit。
+        if (error instanceof MemoryError && error.code === "memory_index_degraded") return undefined;
+        throw error;
+      }
     },
     contextAttachmentReadAuthorization,
     resolveWorkspacePathAuthorization: ({ runContext, workspaceRoot }) =>
@@ -740,26 +770,16 @@ function assemblePanelHost(input: {
     }),
   });
   // Memory v2 Capture：run 稳定终结后把信号交给 Capture Runtime（Policy Gate 决定接单与否）。
+  const memoryCaptureApplication = createMemoryCaptureApplication({
+    ordinary: ordinaryAgentFeature,
+    captureRuntime: memoryRuntime.captureRuntime,
+    onActivity: (conversationId) => memoryCaptureScheduler.noteActivity({ conversationId }),
+  });
   const unsubscribeStableTerminalRuns = ordinaryAgentFeature.events.subscribeStableTerminalRuns((runId) => {
     void (async () => {
       try {
-        const facts = await ordinaryAgentFeature.queries.getStableTerminalRunFacts(runId);
-        if (facts === undefined) return;
-        const owner = await ordinaryAgentFeature.queries
-          .getConversationOwner(facts.turn.conversationId);
-        if (owner === undefined) return;
-        // Memory v2 Capture 口：effective=off 一律 skipped；effective=on 时 durable 接单。
-        await memoryRuntime.captureRuntime.acceptStableSignal({
-          owner,
-          conversationId: facts.turn.conversationId,
-          stableThrough: {
-            turnId: facts.turn.userTurnId,
-            ordinal: facts.turn.ordinal,
-            sourceRevision: facts.sourceRevision,
-          },
-        });
-        // 稳定 Run 完成重置 Consolidation idle timer（手册 9.2）。
-        memoryCaptureScheduler.noteActivity({ conversationId: facts.turn.conversationId });
+        // Memory v2 Capture Application owns facts → owner → capture → idle order.
+        await memoryCaptureApplication.acceptStableRun(runId);
       } catch (error) {
         console.error("[panel-server] Could not accept stable memory capture signal", error);
       }
@@ -801,6 +821,56 @@ function assemblePanelHost(input: {
     spaceConversationDeletion,
     workspaceDeletion,
   } = applicationRuntime;
+  const memoryAdminApplication = createMemoryAdminApplication({
+    controlRepository: memoryControlRepository,
+    lifecycle: memoryRuntime.lifecycle,
+    contentRepository: memoryContentRepository,
+    spaceAdmission: {
+      assertAvailable: (spaceId) => spaceConversationDeletion.assertAvailable(spaceId),
+      admit: (spaceId, operation) => spaceConversationDeletion.admit(spaceId, operation),
+    },
+    workspaceAdmission: {
+      admit: (workspaceId, operation) => workspaceDeletion.admit(workspaceId, operation),
+    },
+    conversationAdmission: {
+      admit: (conversationId, operation) => conversationLifecycle.admitConversation(conversationId, operation),
+    },
+    ownerExistsQuery: {
+      isSpaceAvailable: async (spaceId) => await spaceFeature.queries.getTree(spaceId) !== undefined,
+      isWorkspaceAvailable: async (workspaceId) => {
+        const workspace = await workspaceFeature.queries.get(workspaceId);
+        return workspace?.status === "available" && !workspaceDeletion.isDeleting(workspaceId);
+      },
+      getConversationOwner: async (conversationId) => {
+        const owner = await ordinaryAgentFeature.queries.getConversationOwner(conversationId);
+        return owner === undefined ? undefined : { exists: true, owner };
+      },
+    },
+  });
+  const memoryFeature = createMemoryFeature({
+    adminApplication: memoryAdminApplication,
+    diagnostics: {
+      async getSnapshot() {
+        const [queued, running, done, failed] = await Promise.all([
+          memoryControlRepository.listJobsByStatus("queued"),
+          memoryControlRepository.listJobsByStatus("running"),
+          memoryControlRepository.listJobsByStatus("done"),
+          memoryControlRepository.listJobsByStatus("failed"),
+        ]);
+        return {
+          enabled: true,
+          traces: memoryRuntime.traceLog?.snapshot() ?? [],
+          shadowWouldInject: memoryRuntime.shadowInjectionLog?.snapshot() ?? [],
+          jobs: {
+            queued: queued.length,
+            running: running.length,
+            done: done.length,
+            failed: failed.length,
+          },
+        };
+      },
+    },
+  });
   managedSpaceFolderApplication = applicationRuntime.managedSpaceFolderApplication;
   workbenchCoordination = applicationRuntime.workbenchCoordination;
   spaceReferenceApplications = createSpaceReferenceApplicationRuntime({
@@ -865,6 +935,9 @@ function assemblePanelHost(input: {
     spaceReferenceApplications,
     personalKnowledgeFeature,
     memoryRuntime,
+    memoryFeature,
+    memoryReady,
+    memoryCaptureApplication,
     // run birth 时异步补扫 Capture 缺口（典型为上次关闭错过稳定信号）；
     // Memory v2 Capture 口要求不阻塞、不向主链路抛出。
     onRunBirthActivity: ({ conversationId, owner }) => {
@@ -905,6 +978,22 @@ function assemblePanelHost(input: {
     await spaceFeature.release();
   })();
   return host;
+}
+
+async function ensureMemoryRolloutPolicy(
+  controlRepository: MemoryControlRepository,
+): Promise<void> {
+  const existing = (await controlRepository.readAllPolicy()).find((row) => row.key === POLICY_KEY.rollout);
+  if (existing !== undefined) return;
+  // Consent and per-Space participation remain opt-in and fail closed. This
+  // host-owned default only declares that the released implementation may run;
+  // it never overwrites an explicit off/shadow developer rollout.
+  await controlRepository.setPolicy({
+    key: POLICY_KEY.rollout,
+    kind: "rollout",
+    scopeOwnerKey: "active",
+    enabled: true,
+  });
 }
 
 function managedKnowledgeAssetWriteError(error: unknown): unknown {

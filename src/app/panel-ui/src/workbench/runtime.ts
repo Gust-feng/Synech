@@ -43,6 +43,8 @@ export type AppWorkbenchRuntimeOptions = {
   readonly aiMode: VisibleAiMode;
   readonly composerReasoningEffort: ComposerReasoningEffort;
   readonly toolConfirmationPolicy: ComposerToolConfirmationPolicy;
+  readonly turnMemoryOverrideOff: boolean;
+  readonly setTurnMemoryOverrideOff: React.Dispatch<React.SetStateAction<boolean>>;
   readonly setToolConfirmationPolicy: React.Dispatch<React.SetStateAction<ComposerToolConfirmationPolicy>>;
   readonly setComposerSelectedModelId: React.Dispatch<React.SetStateAction<string | undefined>>;
   readonly modelForm: ModelForm;
@@ -192,6 +194,8 @@ export function useAppWorkbenchRuntime(options: AppWorkbenchRuntimeOptions): App
     aiMode: options.aiMode,
     composerReasoningEffort: options.composerReasoningEffort,
     toolConfirmationPolicy: options.toolConfirmationPolicy,
+    turnMemoryOverrideOff: options.turnMemoryOverrideOff,
+    setTurnMemoryOverrideOff: options.setTurnMemoryOverrideOff,
     selectedModelId: options.selectedModelId,
     selectedModelSupportsReasoningEffort: options.selectedModelSupportsReasoningEffort,
     confirmationBusy,
@@ -221,6 +225,7 @@ export function useAppWorkbenchRuntime(options: AppWorkbenchRuntimeOptions): App
     options.setAttachments,
     options.setGoal,
     options.toolConfirmationPolicy,
+    options.turnMemoryOverrideOff,
   ]);
 
   useConversationProjectionChanges({

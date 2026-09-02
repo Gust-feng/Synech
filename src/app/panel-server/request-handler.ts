@@ -45,7 +45,13 @@ import { WorkspaceFeatureError } from "../workspaces/index.js";
 import { handlePanelWorkspaceRoute, workspaceFeatureHttpError } from "./spaces/workspace-routes.js";
 import { PersonalKnowledgeError } from "../personal-knowledge/index.js";
 import { WorkbenchCoordinationError } from "../workbench-coordination/index.js";
+import { MemoryError } from "../memory/index.js";
 import { handlePanelPersonalKnowledgeRoute, personalKnowledgeHttpError } from "./storage/personal-knowledge-routes.js";
+import {
+  handleMemoryCapabilityRoute,
+  handleMemoryDiagnosticsRoute,
+  handleMemoryMutationRoute,
+} from "./routes-memory.js";
 import { createPanelUsageStatistics } from "./workbench/panel-usage-statistics.js";
 import { handlePanelDataRoute, dataMaintenanceHttpError } from "./storage/data-routes.js";
 import { DataMaintenanceError } from "./storage/data-maintenance.js";
@@ -111,6 +117,7 @@ export async function startLocalPanelServer(options: PanelServerOptions = {}): P
       productPaths,
     });
     runtime = createdRuntime;
+    await createdRuntime.memoryReady;
     await createdRuntime.spaceFeature.ready();
     await createdRuntime.conversationLifecycle.ready();
     await createdRuntime.spaceConversationDeletion.ready();
@@ -221,6 +228,10 @@ function createPanelRequestHandler(runtime: PanelHost): (request: IncomingMessag
       }
       if (error instanceof WorkbenchCoordinationError) {
         writePanelError(response, workbenchCoordinationHttpError(error));
+        return;
+      }
+      if (error instanceof MemoryError) {
+        writePanelError(response, memoryHttpError(error));
         return;
       }
       if (error instanceof DataMaintenanceError) {
@@ -400,6 +411,17 @@ async function handlePanelRequest(
     return;
   }
 
+  if (await handleMemoryCapabilityRoute(runtime.memoryFeature, request, response, url)) {
+    return;
+  }
+  if (await handleMemoryDiagnosticsRoute(runtime.memoryFeature, request, response, url)) {
+    return;
+  }
+  if (request.method === "POST" && url.pathname === "/api/memory") {
+    await handleMemoryMutationRoute(runtime.memoryFeature, request, response);
+    return;
+  }
+
   if (await handlePanelSpaceMetadataRoute({
     spaceFeature: runtime.spaceFeature,
     workspaceFeature: runtime.workspaceFeature,
@@ -507,6 +529,23 @@ function workbenchCoordinationHttpError(error: WorkbenchCoordinationError): Pane
     case "background_process_stop_pending":
       return new PanelHttpError(409, error.code, error.message);
     case "coordination_attach_compensation_failed":
+      return new PanelHttpError(500, error.code, error.message);
+  }
+}
+
+function memoryHttpError(error: MemoryError): PanelHttpError {
+  switch (error.code) {
+    case "memory_invalid_owner":
+      return new PanelHttpError(400, error.code, error.message);
+    case "memory_owner_deleted":
+      return new PanelHttpError(404, error.code, error.message);
+    case "memory_policy_revision_stale":
+    case "memory_generation_fenced":
+      return new PanelHttpError(409, error.code, error.message);
+    case "memory_model_unavailable":
+    case "memory_index_degraded":
+      return new PanelHttpError(503, error.code, error.message);
+    case "memory_store_failure":
       return new PanelHttpError(500, error.code, error.message);
   }
 }

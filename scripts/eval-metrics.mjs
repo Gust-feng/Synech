@@ -28,20 +28,16 @@ const groupKey = (group) => `${group.conversationId}#${group.fromOrdinal}-${grou
  * （候选能交付标注证据的一部分；chunk/summary 的覆盖范围宽于标注区间是常态，
  * 精确相等会漏判全部宽候选）。
  */
-export function coversLabeled(candidateGroups, labeledKeys) {
+export function coversLabeled(candidateGroups, labeledGroups) {
   return (candidateGroups ?? []).some((candidate) =>
-    [...labeledKeys].some((key) => {
-      const labeled = labeledByKey.get(key);
-      return labeled !== undefined && labeled.conversationId === candidate.conversationId &&
+    (labeledGroups ?? []).some((labeled) => {
+      return labeled.conversationId === candidate.conversationId &&
         candidate.fromOrdinal <= labeled.toOrdinal && labeled.fromOrdinal <= candidate.toOrdinal;
     }));
 }
 
-let labeledByKey = new Map();
-
 /** 折叠同源重复：只折叠"相关组"的重复文档，无关文档保留（占据预算槽位）。 */
 export function foldRanking(results, labeledGroups) {
-  labeledByKey = new Map(labeledGroups.map((group) => [groupKey(group), group]));
   const covered = new Set();
   const folded = [];
   for (const result of results) {

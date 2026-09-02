@@ -704,6 +704,7 @@ export function createOrdinaryAgentFeature(input: {
             assistantTurnId: document.state.turn.assistantTurnId,
             userMessage: document.state.input.userMessage,
             assistantText: document.state.visibleAssistantText ?? "",
+            turnMemoryOverrideOff: document.state.input.turnMemoryOverrideOff === true,
             sourceRevision: document.revision,
             occurredAt: summary.createdAt,
           });

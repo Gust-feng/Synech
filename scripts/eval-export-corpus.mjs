@@ -21,7 +21,7 @@
  * Not a product fact consumer: eval data lives outside the target schema and is
  * explicitly deletable (《手册》17.1).
  *
- * Usage: node scripts/eval-export-corpus.mjs [--home <ProductHome>] [--out <dir>] [--with-sessions]
+ * Usage: node scripts/eval-export-corpus.mjs [--home <ProductHome>] [--out <dir>] [--with-sessions] [--with-memory]
  */
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -34,15 +34,21 @@ import {
   createFileSystemOrdinaryConversationControlRepository,
   createFileSystemOrdinaryRunRepository,
 } from "../dist/app/ordinary-agent/index.js";
+import { createSqliteMemoryContentRepository } from "../dist/app/memory/index.js";
+import { SqliteRuntimeDatabase } from "../dist/adapters/runtime-storage/index.js";
 
 /** Terminal statuses whose facts are durably settled (OrdinaryStableTerminalRunFacts). */
 const STABLE_STATUSES = new Set(["completed", "failed", "cancelled", "blocked"]);
 
 function parseArgs(argv) {
-  const args = { home: undefined, out: undefined, withSessions: false };
+  const args = { home: undefined, out: undefined, withSessions: false, withMemory: false };
   for (let index = 0; index < argv.length; index += 1) {
     if (argv[index] === "--with-sessions") {
       args.withSessions = true;
+      continue;
+    }
+    if (argv[index] === "--with-memory") {
+      args.withMemory = true;
       continue;
     }
     const value = argv[index + 1];
@@ -195,6 +201,10 @@ async function main() {
   const conversationRepository = createFileSystemOrdinaryConversationControlRepository(agentDataRoot);
   // T17: transcript reading is opt-in so the default export stays backward compatible.
   const transcript = args.withSessions ? createSessionTranscriptRepository(agentDataRoot) : null;
+  const memoryDatabase = args.withMemory
+    ? new SqliteRuntimeDatabase(path.join(productHome, "data", "synech.sqlite3"))
+    : null;
+  const memoryContent = memoryDatabase === null ? null : createSqliteMemoryContentRepository(memoryDatabase);
 
   const conversationRecords = [];
   for (const summary of await conversationRepository.list()) {
@@ -279,6 +289,37 @@ async function main() {
   await writeFile(conversationPath, conversationRecords.map((record) => JSON.stringify(record)).join("\n") + (conversationRecords.length > 0 ? "\n" : ""), "utf8");
   await writeFile(runPath, runRecords.map((record) => JSON.stringify(record)).join("\n") + (runRecords.length > 0 ? "\n" : ""), "utf8");
 
+  let memoryRecordCount = null;
+  let memoryRecordPath = null;
+  if (memoryContent !== null && memoryDatabase !== null) {
+    const records = [];
+    for (const record of await memoryContent.listActiveAll()) {
+      const sources = await memoryContent.listSources(record.recordId, record.revision);
+      records.push({
+        type: "memory_record",
+        recordId: record.recordId,
+        revision: record.revision,
+        ownerKey: record.ownerKey,
+        ownerKind: record.ownerKind,
+        kind: record.kind,
+        modelText: record.modelText,
+        status: record.status,
+        evidenceClass: record.evidenceClass,
+        confirmation: record.confirmation,
+        contentHash: record.contentHash,
+        generation: record.generation,
+        createdAt: record.createdAt,
+        updatedAt: record.updatedAt,
+        effectiveAt: record.effectiveAt,
+        sources,
+      });
+    }
+    memoryRecordCount = records.length;
+    memoryRecordPath = path.join(outDir, "records.jsonl");
+    await writeFile(memoryRecordPath, records.map((record) => JSON.stringify(record)).join("\n") + (records.length > 0 ? "\n" : ""), "utf8");
+    memoryDatabase.close();
+  }
+
   console.log(JSON.stringify({
     productHome,
     outDir,
@@ -286,10 +327,16 @@ async function main() {
     runs: runRecords.length,
     skippedUnstableRuns: skippedUnstable,
     withSessions: args.withSessions,
+    withMemory: args.withMemory,
+    memoryRecords: memoryRecordCount,
     assistantMessages: transcript === null ? null : assistantMessageCount,
     sessionTranscriptFailures: transcript === null ? null : sessionTranscriptFailures,
     sessionRefAnomalies: transcript === null ? null : sessionRefAnomalies,
-    files: { conversations: conversationPath, runs: runPath },
+    files: {
+      conversations: conversationPath,
+      runs: runPath,
+      ...(memoryRecordPath === null ? {} : { records: memoryRecordPath }),
+    },
   }, null, 2));
 }
 

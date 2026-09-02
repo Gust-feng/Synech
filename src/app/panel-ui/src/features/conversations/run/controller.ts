@@ -40,6 +40,8 @@ export type AppRunControllerOptions = {
   readonly aiMode: VisibleAiMode;
   readonly composerReasoningEffort: ComposerReasoningEffort;
   readonly toolConfirmationPolicy: ComposerToolConfirmationPolicy;
+  readonly turnMemoryOverrideOff: boolean;
+  readonly setTurnMemoryOverrideOff: React.Dispatch<React.SetStateAction<boolean>>;
   readonly selectedModelId: string;
   readonly selectedModelSupportsReasoningEffort: boolean;
   readonly confirmationBusy: boolean;

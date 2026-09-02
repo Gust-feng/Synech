@@ -5,7 +5,7 @@ import type {
   MemoryCaptureSignal,
   OrdinaryEvidenceReader,
 } from "../contracts.js";
-import { resolveAdmissionFromPolicy } from "../policy/policy-snapshot.js";
+import { ADMISSION_REASON, resolveAdmissionFromPolicy } from "../policy/policy-snapshot.js";
 import type { MemoryContentRepository } from "../store/content-repository.js";
 import type { MemoryControlRepository } from "../store/control-repository.js";
 
@@ -16,12 +16,13 @@ import type { MemoryControlRepository } from "../store/control-repository.js";
  *
  * 边界（《手册》9.1/9.2/12.2）：
  * - effective=off（未同意/未参与/被排除/被 fence/rollout off）一律 skipped，不读证据、不落 job；
+ *   非 fence 的关闭区间会通过内容仓储推进 skip cursor，防止重新开启后回填；
  * - shadow 与 active 在 capture 阶段行为一致（都接单），差别只在注入侧（Provider，T22）；
  * - 只接受连续无洞且达到最小完整轮次门的证据段；证据窗为空或游标不动则 skipped；
  * - accepted 只表示 durable job/checkpoint 已落盘，不保证一定形成长期 Memory（提炼见
- *   capture/consolidation.ts，T21：模型提炼 + Record/Source/Cursor/job 原子提交）。
+ *   capture/consolidation.ts：模型提炼 + Record/Source/Cursor/job 原子提交）。
  *
- * 本层不调模型、不做 idle 计时（T21 起由 panel-server/memory/capture-scheduler.ts
+ * 本层不调模型、不做 idle 计时（由 panel-server/memory/capture-scheduler.ts
  * 持有 idle timer 并经 listJobsByStatus('queued') 补扫）；noteActivity 保持 no-op
  * 且绝不抛出，调度接线在组合根完成。
  */
@@ -61,12 +62,21 @@ export function createCaptureRuntime(deps: CaptureRuntimeDeps): MemoryCaptureRun
     const admission = resolveAdmissionFromPolicy({
       owner: signal.owner,
       conversationId: signal.conversationId,
-      turnOverrideOff: false,
+      turnOverrideOff: signal.turnOverrideOff === true,
       policyRows,
       ownerLifecycle,
       conversationLifecycle,
     });
     if (admission.effective === "off") {
+      if (!admission.reasons.includes(ADMISSION_REASON.generationFence)) {
+        await deps.contentRepository.advanceCaptureCursor({
+          conversationId: signal.conversationId,
+          ownerKey,
+          coveredThroughOrdinal: signal.stableThrough.ordinal,
+          sourceFingerprint: `rev:${signal.stableThrough.sourceRevision}`,
+          generation: admission.generation,
+        });
+      }
       return skipped(admission.reasons[0] ?? "effective_off");
     }
 
@@ -85,7 +95,7 @@ export function createCaptureRuntime(deps: CaptureRuntimeDeps): MemoryCaptureRun
 
     // 3. 捕获门：本次连续覆盖到的新增完整轮次达到下限才接单。
     const previousOrdinal = existingCursor?.coveredThroughOrdinal ?? 0;
-    const newFullTurns = window.nextCursor.coveredThroughOrdinal - previousOrdinal;
+    const newFullTurns = new Set(window.turns.map((turn) => turn.ordinal)).size;
     if (newFullTurns < minFullTurns) {
       // 不推进游标、不落 job，等后续稳定轮次凑够门限。
       return skipped("below_capture_threshold");

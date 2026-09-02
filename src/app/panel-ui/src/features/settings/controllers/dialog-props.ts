@@ -1,10 +1,12 @@
 import type { WorkbenchSettingsDialogProps } from "../components/workbench-dialog";
 import type { SettingsGroup } from "../components/types";
+import type { MemorySettingsScope } from "../../memory/MemorySettingsPanel";
 
 export function workbenchSettingsDialogPropsFrom(options: {
   readonly settingsOpen: boolean;
   readonly closeSettings: () => void;
   readonly settingsGroup: SettingsGroup;
+  readonly memoryScope: MemorySettingsScope | null;
   readonly app: WorkbenchSettingsDialogProps["app"];
   readonly modelCatalogs: WorkbenchSettingsDialogProps["modelCatalogs"];
   readonly forms: WorkbenchSettingsDialogProps["forms"];
@@ -17,6 +19,7 @@ export function workbenchSettingsDialogPropsFrom(options: {
     open: true,
     onClose: options.closeSettings,
     initialGroup: options.settingsGroup,
+    memoryScope: options.memoryScope,
     app: options.app,
     modelCatalogs: options.modelCatalogs,
     forms: options.forms,

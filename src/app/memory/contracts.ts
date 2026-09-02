@@ -87,6 +87,8 @@ export type MemoryEvidenceRef = {
 export type MemoryCaptureSignal = {
   readonly owner: MemoryOwner;
   readonly conversationId: string;
+  /** Ordinary-owned per-turn opt-out; it advances the skip cursor only. */
+  readonly turnOverrideOff?: boolean;
   readonly stableThrough: {
     readonly turnId: string;
     readonly ordinal: number;
@@ -155,6 +157,8 @@ export type MemoryRecallInput = {
   readonly conversationId?: string;
   readonly currentUserText: string;
   readonly recentContext?: readonly { readonly role: "user" | "assistant"; readonly text: string }[];
+  /** Ordinary-owned per-user-turn override; it is never persisted by Memory. */
+  readonly turnOverrideOff?: boolean;
   readonly candidateLimit: number;
   readonly deadlineAt: number;
 };
@@ -223,6 +227,8 @@ export type MemoryContributeInput = {
   readonly owner: MemoryOwner;
   readonly conversationId?: string;
   readonly currentUserText: string;
+  /** Ordinary-owned per-user-turn override; it is never persisted by Memory. */
+  readonly turnOverrideOff?: boolean;
   readonly deadlineAt: number;
 };
 
@@ -233,6 +239,40 @@ export type MemoryContributeInput = {
 export interface MemoryContextProvider {
   contribute(input: MemoryContributeInput): Promise<MemoryContextContribution>;
 }
+
+export type MemoryRecallTrace = {
+  readonly at: number;
+  readonly ownerKey: string;
+  readonly conversationId?: string;
+  readonly recallId: string;
+  readonly effective: "off" | "shadow" | "active";
+  readonly outcome: "off" | "no_hit" | "degraded" | "ok" | "invalidated";
+  readonly policyRevision: string;
+  readonly generation: number;
+  readonly retrievedRefs: readonly { readonly id: string; readonly revision: number }[];
+  readonly injectedRefs: readonly { readonly id: string; readonly revision: number }[];
+  readonly latencyMs: number;
+};
+
+export type MemoryDiagnosticSnapshot = {
+  readonly enabled: boolean;
+  readonly traces: readonly MemoryRecallTrace[];
+  readonly shadowWouldInject: readonly {
+    readonly at: number;
+    readonly ownerKey: string;
+    readonly conversationId?: string;
+    readonly recallId: string;
+    readonly policyRevision: string;
+    readonly generation: number;
+    readonly candidateRefs: readonly { readonly id: string; readonly revision: number }[];
+  }[];
+  readonly jobs: {
+    readonly queued: number;
+    readonly running: number;
+    readonly done: number;
+    readonly failed: number;
+  };
+};
 
 // ---------------------------------------------------------------------------
 // Lifecycle Port（《手册》6.4 / 12.5 / 12.6，两阶段，只供 WorkbenchCoordination）
@@ -250,6 +290,8 @@ export type RemovalTicket = {
 export interface MemoryLifecycle {
   prepareOwnerRemoval(owner: MemoryOwner): Promise<RemovalTicket>;
   finalizeOwnerRemoval(ticket: RemovalTicket): Promise<void>;
+  /** 清除 owner 派生内容后恢复可参与状态，旧历史不得被重新捕获。 */
+  clearOwnerMemory(owner: MemoryOwner): Promise<{ readonly generation: number }>;
   prepareConversationRemoval(conversationId: string): Promise<RemovalTicket>;
   finalizeConversationRemoval(ticket: RemovalTicket): Promise<void>;
 }
@@ -263,6 +305,15 @@ export type MemoryCapabilityStatus = {
   readonly rollout: MemoryRolloutMode;
   readonly health: MemoryRuntimeHealth;
   readonly effective: "off" | "shadow" | "active";
+  /** Scope-specific participation, omitted for the global capability view. */
+  readonly scopeParticipation?: boolean;
+  /** Conversation-specific exclusion, omitted when no conversation was requested. */
+  readonly conversationExcluded?: boolean;
+};
+
+export type MemoryCapabilityQuery = {
+  readonly owner?: MemoryOwner;
+  readonly conversationId?: string;
 };
 
 /** 用户清除结果：内部自完成 fence/generation 与 purge。 */
@@ -273,7 +324,7 @@ export type ClearImplicitMemoryResult = { readonly generation: number };
  * Route 只解析 HTTP 并调用其中一个命令。
  */
 export interface MemoryAdminApplication {
-  getCapabilityStatus(): Promise<MemoryCapabilityStatus>;
+  getCapabilityStatus(input?: MemoryCapabilityQuery): Promise<MemoryCapabilityStatus>;
   setConsent(input: { globalConsent: boolean }): Promise<{ policyRevision: PolicyRevision }>;
   setSpaceParticipation(input: { spaceId: string; enabled: boolean }):
     Promise<{ policyRevision: PolicyRevision }>;

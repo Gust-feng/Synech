@@ -9,11 +9,9 @@
  * - setSpaceParticipation / setConversationParticipation 必须先经 owner admission
  *   在锁内重读 owner/conversation 当前状态，确认未被 fence/tombstone 才允许写
  *   participation policy；防止删除中的 owner 重新出现 participation 事实；
- * - clearImplicitMemory 是单个 destructive 命令（不是 lifecycle prepare/finalize
- *   两阶段）：lifecycle.prepareOwnerRemoval 已把 owner 升 generation+1 并立
- *   fenced，本 Application 拿到 ticket 后自完成 fence=tombstone 并 retireActive
- *   （Phase 1 没有 records/source 表时 fence=tombstone 即物理清理）；不通过
- *   WorkbenchCoordination，只在 Memory Feature 内部完成 fence/purge；
+ * - clearImplicitMemory 是单个 destructive 命令（不向外暴露两阶段）：在 owner
+ *   admission 内由 lifecycle 完成 generation fence、派生内容 purge，再恢复为可
+ *   继续参与的状态；不通过 WorkbenchCoordination，也不改变用户开关；
  * - getCapabilityStatus 重算 effective admission（global scope）并报告当前
  *   rollout / health 派生事实，不缓存（手册 7.1）。
  *
@@ -23,15 +21,16 @@
  */
 
 import { memoryOwnerKey, type MemoryOwner } from "../../../domain/memory/index.js";
+import type { ConversationOwner } from "../../../domain/execution-scope/index.js";
 import type { SpaceAdmission } from "../../ownership/admission.js";
 import {
   MemoryError,
   type ClearImplicitMemoryResult,
   type MemoryAdminApplication,
+  type MemoryCapabilityQuery,
   type MemoryCapabilityStatus,
   type MemoryRuntimeHealth,
   type PolicyRevision,
-  type RemovalTicket,
 } from "../contracts.js";
 import type { MemoryContentRepository } from "../store/content-repository.js";
 import type { MemoryControlRepository } from "../store/control-repository.js";
@@ -58,10 +57,10 @@ export type MemoryOwnerExistsQuery = {
    返回 undefined 表示 conversation 不存在或已删除。
    */
   readonly getConversationOwner:
-    | ((conversationId: string) => Promise<{ readonly exists: boolean; readonly owner: MemoryOwner } | undefined>);
+    | ((conversationId: string) => Promise<{ readonly exists: boolean; readonly owner: ConversationOwner } | undefined>);
 };
 
-/** Runtime health 派生端口；Phase 1 固定为 ready/degraded（来自 controlRepository 状态）。 */
+/** Runtime health 派生端口；健康是运行投影，不回写用户策略。 */
 export type MemoryRuntimeHealthQuery = {
   readonly read: () => Promise<MemoryRuntimeHealth>;
 };
@@ -69,9 +68,13 @@ export type MemoryRuntimeHealthQuery = {
 export type CreateMemoryAdminApplicationInput = {
   readonly controlRepository: MemoryControlRepository;
   readonly lifecycle: MemoryLifecycle;
-  /** 提供则在 clearImplicitMemory 同事务内 retire 所有 active records；缺省 Phase 1 行为仅 fence/purge。 */
-  readonly contentRepository?: MemoryContentRepository;
+  /** 由 lifecycle 在 fence 后清理派生 Record/Source/Index/Job。 */
+  readonly contentRepository: MemoryContentRepository;
   readonly spaceAdmission: SpaceAdmission;
+  /** Workspace owner admission, shared with the workspace deletion coordinator. */
+  readonly workspaceAdmission: Pick<SpaceAdmission, "admit">;
+  /** Conversation admission, shared with the conversation deletion coordinator. */
+  readonly conversationAdmission: Pick<SpaceAdmission, "admit">;
   readonly ownerExistsQuery: MemoryOwnerExistsQuery;
   readonly runtimeHealth?: MemoryRuntimeHealthQuery;
 };
@@ -107,6 +110,8 @@ export function createMemoryAdminApplication(
   const controlRepository = input.controlRepository;
   const lifecycle = input.lifecycle;
   const spaceAdmission = input.spaceAdmission;
+  const workspaceAdmission = input.workspaceAdmission;
+  const conversationAdmission = input.conversationAdmission;
   const ownerExistsQuery = input.ownerExistsQuery;
 
   const readPolicyRevision = async (): Promise<PolicyRevision> => {
@@ -123,20 +128,50 @@ export function createMemoryAdminApplication(
   };
 
   return {
-    async getCapabilityStatus(): Promise<MemoryCapabilityStatus> {
+    async getCapabilityStatus(query: MemoryCapabilityQuery = {}): Promise<MemoryCapabilityStatus> {
+      let owner = query.owner;
+      let conversationExcluded: boolean | undefined;
+      if (query.conversationId !== undefined) {
+        const detail = await ownerExistsQuery.getConversationOwner(query.conversationId);
+        if (detail === undefined || !detail.exists) {
+          throw new MemoryError(
+            "memory_owner_deleted",
+            `Conversation ${query.conversationId} is unavailable for memory status.`,
+          );
+        }
+        if (owner !== undefined && memoryOwnerKey(owner) !== memoryOwnerKey(detail.owner)) {
+          throw new MemoryError(
+            "memory_owner_deleted",
+            `Conversation ${query.conversationId} does not belong to the requested memory owner.`,
+          );
+        }
+        owner ??= detail.owner;
+      }
+      owner ??= { kind: "global" };
       const policyRows = await controlRepository.readAllPolicy();
-      const ownerLifecycle = await controlRepository.getLifecycle("global");
+      const ownerKey = memoryOwnerKey(owner);
+      const ownerLifecycle = await controlRepository.getLifecycle(ownerKey);
+      const conversationLifecycle = query.conversationId === undefined
+        ? undefined
+        : await controlRepository.getLifecycle(`conversation:${query.conversationId}`);
       const health = input.runtimeHealth === undefined ? "ready" : await input.runtimeHealth.read();
-      // global scope：participation 行被忽略，但 generation/fence 与 globalConsent/rollout
-      // 仍决定 effective；用于 UI 与 health 字段配套报告（手册 12.1）。
+      // global scope：participation 行被忽略；具体 owner/conversation 查询则返回
+      // 同一 policy snapshot 的 scoped participation，避免 UI 用 global consent 猜局部状态。
       const admission = resolveAdmissionFromPolicy({
-        owner: { kind: "global" },
-        conversationId: "__capability_status__",
+        owner,
+        conversationId: query.conversationId ?? "__capability_status__",
         turnOverrideOff: false,
         policyRows,
         ownerLifecycle,
-        conversationLifecycle: undefined,
+        conversationLifecycle,
       });
+      const participationRow = owner.kind === "global"
+        ? undefined
+        : policyRows.find((row) => row.key === participationKey(ownerKey));
+      const requestedConversationId = query.conversationId;
+      if (requestedConversationId !== undefined) {
+        conversationExcluded = policyRows.find((row) => row.key === conversationExclusionKey(requestedConversationId))?.enabled ?? false;
+      }
       return {
         globalConsent: policyRows.find((row) => row.key === POLICY_KEY.consent)?.enabled ?? false,
         rollout: (() => {
@@ -148,6 +183,8 @@ export function createMemoryAdminApplication(
         })(),
         health,
         effective: admission.effective,
+        ...(owner.kind === "global" ? {} : { scopeParticipation: participationRow?.enabled ?? false }),
+        ...(conversationExcluded === undefined ? {} : { conversationExcluded }),
       };
     },
 
@@ -193,38 +230,69 @@ export function createMemoryAdminApplication(
       // Conversation participation（exclusion）必须先确认 conversation 仍存在
       // 且 owner 未删除；conversation-control-repo.get 返回 undefined 即拒。
       // 重读避免迟到的删除与 admission 之间的交错（手册 12.4）。
-      const detail = await ownerExistsQuery.getConversationOwner(conversationId);
-      if (detail === undefined || !detail.exists) {
+      const initialDetail = await ownerExistsQuery.getConversationOwner(conversationId);
+      if (initialDetail === undefined || !initialDetail.exists) {
         throw new MemoryError(
           "memory_owner_deleted",
           `Conversation ${conversationId} is unavailable for participation.`,
         );
       }
-      await assertOwnerAvailable(ownerExistsQuery, detail.owner);
-      const policyRows = await controlRepository.readAllPolicy();
-      const existing = policyRows.find((row) => row.key === conversationExclusionKey(conversationId));
-      await controlRepository.setPolicy({
-        key: conversationExclusionKey(conversationId),
-        kind: "conversation_exclusion",
-        scopeOwnerKey: null,
-        enabled: excluded,
-        ...(existing === undefined ? {} : { expectedRevision: existing.revision }),
-      });
-      return { policyRevision: await readPolicyRevision() };
+      const ownerAdmission = initialDetail.owner.kind === "space"
+        ? spaceAdmission
+        : workspaceAdmission;
+      return await ownerAdmission.admit(initialDetail.owner.id, async () => await conversationAdmission.admit(
+        conversationId,
+        async () => {
+          const detail = await ownerExistsQuery.getConversationOwner(conversationId);
+          if (detail === undefined || !detail.exists) {
+            throw new MemoryError(
+              "memory_owner_deleted",
+              `Conversation ${conversationId} is unavailable for participation.`,
+            );
+          }
+          await assertOwnerAvailable(ownerExistsQuery, detail.owner);
+          const policyRows = await controlRepository.readAllPolicy();
+          const existing = policyRows.find((row) => row.key === conversationExclusionKey(conversationId));
+          await controlRepository.setPolicy({
+            key: conversationExclusionKey(conversationId),
+            kind: "conversation_exclusion",
+            scopeOwnerKey: null,
+            enabled: excluded,
+            ...(existing === undefined ? {} : { expectedRevision: existing.revision }),
+          });
+          if (excluded) {
+            // 排除从生效边界起立即撤销含该对话 provenance 的派生记录；保留游标，
+            // 允许未来重新参与时只处理新的稳定轮次，不回填排除区间。
+            await input.contentRepository.purgeConversation(conversationId, { preserveCursor: true });
+          }
+          return { policyRevision: await readPolicyRevision() };
+        },
+      ));
     },
 
     async clearImplicitMemory({ scope }): Promise<ClearImplicitMemoryResult> {
-      // Phase 1 fence=单事务完成：prepare 立 durable fence（generation+1 + fenced）；
-      // 然后自完成 fence=tombstone。后续 recall 会因 generation 不匹配自动过滤掉旧
-      // records（《手册》7.1 / 12.4），不依赖 WorkbenchCoordination 的两阶段（用户
-      // 清除只破坏 MemoryFeature 内部状态，不触发 owner/conversation 本体删除）。
-      const ticket: RemovalTicket = await lifecycle.prepareOwnerRemoval(scope);
-      const ownerKey = memoryOwnerKey(scope);
-      // fence=tombstone：把 lifecycle 翻到终态；后续任何 owner/conversation
-      // admission 重读都会看到 generation 已经 bump（不与删除工作流冲突）。
-      await controlRepository.setLifecycleFence(ownerKey, "tombstone");
-      const finalLifecycle = await controlRepository.getLifecycle(ownerKey);
-      return { generation: finalLifecycle?.generation ?? ticket.fencedGeneration };
+      // 清除是 Memory Feature 内部的 fence → purge → 可继续参与工作流：不改变
+      // 用户 consent/participation，也不让清除前历史在重新开启后被回填。
+      const clear = async (): Promise<ClearImplicitMemoryResult> => {
+        await assertOwnerAvailable(ownerExistsQuery, scope);
+        if (scope.kind === "global") {
+          // Global clear invalidates every in-flight capture without changing
+          // consent: the same policy row is CAS-written with a new revision.
+          const policyRows = await controlRepository.readAllPolicy();
+          const consent = policyRows.find((row) => row.key === POLICY_KEY.consent);
+          await controlRepository.setPolicy({
+            key: POLICY_KEY.consent,
+            kind: "global_consent",
+            scopeOwnerKey: null,
+            enabled: consent?.enabled ?? false,
+            ...(consent === undefined ? {} : { expectedRevision: consent.revision }),
+          });
+        }
+        return await lifecycle.clearOwnerMemory(scope);
+      };
+      if (scope.kind === "space") return await spaceAdmission.admit(scope.id, clear);
+      if (scope.kind === "workspace") return await workspaceAdmission.admit(scope.id, clear);
+      return await clear();
     },
   };
 }

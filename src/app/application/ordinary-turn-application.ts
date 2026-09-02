@@ -6,11 +6,13 @@ import type { ModelRuntimeMode } from "../model-runtime/index.js";
 import type {
   OrdinaryAgentFeature,
   OrdinaryRunBirth,
+  OrdinaryRunInput,
   SubmitOrdinaryTurnResult,
 } from "../ordinary-agent/index.js";
 
 export type OrdinaryTurnInput = {
   readonly goal: string;
+  readonly turnMemoryOverrideOff?: boolean;
   readonly submissionId?: string;
   readonly owner?: ConversationOwner;
   readonly aiMode?: ModelRuntimeMode;
@@ -64,7 +66,7 @@ export type OrdinaryTurnApplicationDependencies = {
     submit(input: {
       readonly owner: ConversationOwner;
       readonly submissionId: string;
-      readonly runInput: { readonly userMessage: string; readonly context?: OrdinaryRunContextInput };
+      readonly runInput: OrdinaryRunInput;
       readonly birth: OrdinaryRunBirth;
     }): Promise<SubmitOrdinaryTurnResult>;
   };
@@ -147,7 +149,11 @@ export function createOrdinaryTurnApplication(
         ? await runtime.conversationLifecycle.submit({
             owner,
             submissionId: submissionId!,
-            runInput: { userMessage: effectiveRunInput.goal, context: effectiveRunInput.contextInput },
+            runInput: {
+              userMessage: effectiveRunInput.goal,
+              turnMemoryOverrideOff: effectiveRunInput.turnMemoryOverrideOff,
+              context: effectiveRunInput.contextInput,
+            },
             birth,
           })
         : owner.kind === "workspace"
@@ -170,7 +176,11 @@ async function submitExistingConversationTurn(
     conversationId,
     owner,
     submissionId: input.submissionId,
-    input: { userMessage: input.goal, context: input.contextInput },
+    input: {
+      userMessage: input.goal,
+      turnMemoryOverrideOff: input.turnMemoryOverrideOff,
+      context: input.contextInput,
+    },
     birth,
   });
 }

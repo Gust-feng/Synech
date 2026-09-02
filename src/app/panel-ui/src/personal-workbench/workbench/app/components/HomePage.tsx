@@ -60,9 +60,11 @@ export function HomePage({
   const [compositionBaseValue, setCompositionBaseValue] = useState<string | null>(null)
   const ambientDraftValue = compositionBaseValue ?? input.value
   const hasDraft = ambientDraftValue.trim().length > 0
-  const homeInput = input.contextUsage === undefined
-    ? input
-    : { ...input, contextUsage: undefined }
+  const homeInput = {
+    ...(input.contextUsage === undefined ? input : { ...input, contextUsage: undefined }),
+    turnMemoryOverrideOff: false,
+    onTurnMemoryOverrideChange: undefined,
+  }
 
   const handleCompositionChange = (composing: boolean): void => {
     setCompositionBaseValue(composing ? input.value : null)

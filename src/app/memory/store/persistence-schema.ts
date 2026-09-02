@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 /**
- * Memory 控制状态三表的行 schema（Phase 1，只持久化控制状态，不冻结 Record schema）。
+ * Memory 控制与内容表的行 schema。
  * 所有从 SQLite 读出的行必须先经 zod parse 才进入领域层，禁止 `JSON.parse(x) as T`。
  * 结构字段（kind/status/fence_state）用枚举约束，负责程序分支。
  */

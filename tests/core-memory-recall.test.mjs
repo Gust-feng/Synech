@@ -148,6 +148,25 @@ test("active mode injects candidates and renders model text for latin and CJK re
   });
 });
 
+test("per-turn override disables both recall and injection without deleting stored memory", async () => {
+  await withStore(async ({ content, control }) => {
+    await enablePolicy(control, "active");
+    await content.commitConsolidation(commit());
+    const contextProvider = provider(control, content);
+
+    const contribution = await contextProvider.contribute({
+      owner: SPACE_S1,
+      conversationId: "c1",
+      currentUserText: "deploy pipeline",
+      turnOverrideOff: true,
+      deadlineAt: Date.now() + 5000,
+    });
+
+    assert.deepEqual(contribution.entries, []);
+    assert.equal((await content.listActiveByOwner("space:s1")).length, 1);
+  });
+});
+
 test("recall never leaks candidates across owner scopes (hard gate: 0)", async () => {
   await withStore(async ({ content, control }) => {
     await enablePolicy(control, "active", "space:s1");
@@ -273,6 +292,22 @@ test("no_hit and degraded outcomes are distinguishable", async () => {
   });
 });
 
+test("recall deadline is reported as degraded rather than indistinguishable no-hit", async () => {
+  await withStore(async ({ content, control }) => {
+    await enablePolicy(control, "active");
+    await content.commitConsolidation(commit());
+    const result = await recallEngine(control, content).recall({
+      owner: SPACE_S1,
+      conversationId: "c1",
+      currentUserText: "deploy pipeline",
+      candidateLimit: 4,
+      deadlineAt: Date.now() - 1,
+    });
+    assert.equal(result.outcome, "degraded");
+    assert.deepEqual(result.candidates, []);
+  });
+});
+
 test("runtime assembles the real provider with fail-closed policy and shadow diagnostics", async () => {
   await withStore(async ({ content, control }) => {
     const runtime = createMemoryRuntime({ controlRepository: control, contentRepository: content });
@@ -283,5 +318,6 @@ test("runtime assembles the real provider with fail-closed policy and shadow dia
     assert.notEqual(contribution.snapshot.policyRevision, "noop:0");
     assert.equal(contribution.entries.length, 0);
     assert.equal(renderImplicitMemoryBlock(contribution), undefined);
+    assert.equal(runtime.traceLog?.snapshot()[0]?.outcome, "off");
   });
 });

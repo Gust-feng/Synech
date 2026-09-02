@@ -12,11 +12,12 @@
  *
  * Usage:
  *   node scripts/eval-run.mjs --lanes <lanesDir> --queries <queries.jsonl> \
- *        [--lane chunk|summary|both] [--k 4] [--clear-conversations id1,id2] \
+ *        [--lane chunk|summary|record|both|all] [--k 4] [--clear-conversations id1,id2] \
  *        [--out-dir <dir>]
  * Output: <out-dir>/results-<lane>.jsonl（供 eval-metrics.mjs --results 使用）。
  */
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { DatabaseSync } from "node:sqlite";
@@ -37,7 +38,7 @@ function parseArgs(argv) {
     else throw new Error(`Unknown or incomplete argument: ${flag ?? "(none)"}`);
   }
   if (args.lanes === undefined || args.queries === undefined) throw new Error("--lanes and --queries are required");
-  if (!["chunk", "summary", "both"].includes(args.lane)) throw new Error("--lane must be chunk|summary|both");
+  if (!["chunk", "summary", "record", "both", "all"].includes(args.lane)) throw new Error("--lane must be chunk|summary|record|both|all");
   return args;
 }
 
@@ -131,7 +132,11 @@ async function main() {
   const outDir = args.outDir ?? path.join(args.lanes, "runs");
   await mkdir(outDir, { recursive: true });
 
-  const lanes = args.lane === "both" ? ["chunk", "summary"] : [args.lane];
+  const lanes = args.lane === "both"
+    ? ["chunk", "summary"]
+    : args.lane === "all"
+      ? ["chunk", "summary", ...(existsSync(path.join(args.lanes, "record", "docs.jsonl")) ? ["record"] : [])]
+      : [args.lane];
   const summary = { outDir, lanes: {}, clearConversations: [...args.clearConversations] };
   for (const lane of lanes) {
     const { records, emptyQueries, docCount } = await runLane(lane, args, queries);

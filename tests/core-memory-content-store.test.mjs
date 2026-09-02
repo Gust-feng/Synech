@@ -149,3 +149,22 @@ test("new revision of a logical record retires the previous active version and q
     assert.deepEqual(ops, ["index:1", "index:2", "remove:1"]);
   });
 });
+
+test("content commits cannot move a logical record or cursor across owner scopes", async () => {
+  await withStores(async ({ content }) => {
+    const first = await content.commitConsolidation(commit());
+    const id = first.recordRefs[0].id;
+
+    await assert.rejects(
+      () => content.commitConsolidation(commit({
+        conversationId: "c2",
+        ownerKey: "space:s2",
+        records: [record({ recordId: id, contentHash: "cross-owner" })],
+      })),
+      (error) => error instanceof MemoryError && error.code === "memory_invalid_owner",
+    );
+    assert.equal((await content.listActiveByOwner("space:s1")).length, 1);
+    assert.equal((await content.listActiveByOwner("space:s2")).length, 0);
+    assert.equal(await content.getCursor("c2"), undefined);
+  });
+});

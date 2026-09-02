@@ -8,6 +8,7 @@ import { SqliteRuntimeDatabase } from "../dist/adapters/runtime-storage/index.js
 import {
   MemoryError,
   createControlMemoryLifecycle,
+  createSqliteMemoryContentRepository,
   createSqliteMemoryControlRepository,
 } from "../dist/app/memory/index.js";
 
@@ -17,11 +18,13 @@ async function withLifecycle(run) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "synech-memory-lifecycle-"));
   const database = new SqliteRuntimeDatabase(path.join(dir, "synech.sqlite3"));
   const repository = createSqliteMemoryControlRepository(database);
+  const content = createSqliteMemoryContentRepository(database);
   const lifecycle = createControlMemoryLifecycle(repository, {
     idFactory: (() => { let n = 0; return () => `memrm-${++n}`; })(),
+    contentRepository: content,
   });
   try {
-    await run({ lifecycle, repository });
+    await run({ lifecycle, repository, content, database });
   } finally {
     database.close();
     await rm(dir, { recursive: true, force: true });
@@ -41,6 +44,58 @@ test("owner removal: prepare fences and finalize leaves tombstone with advanced 
     row = await repository.getLifecycle("space:s1");
     assert.equal(row?.fenceState, "tombstone");
     assert.equal(row?.generation, 1);
+  });
+});
+
+test("owner finalize physically purges records, sources, cursor, jobs, and FTS projection", async () => {
+  await withLifecycle(async ({ lifecycle, content, database }) => {
+    await content.commitConsolidation({
+      conversationId: "purge-conversation",
+      ownerKey: "space:purge-space",
+      records: [{
+        kind: "decision",
+        modelText: "Only a removal test record.",
+        evidenceClass: "quoted_user_evidence",
+        confirmation: "unconfirmed",
+        contentHash: "purge-hash",
+        generation: 0,
+        sources: [{ conversationId: "purge-conversation", sourceRevision: 1 }],
+      }],
+      advanceCursorTo: { coveredThroughOrdinal: 1, sourceFingerprint: "purge-source" },
+    });
+    assert.equal((await content.listActiveByOwner("space:purge-space")).length, 1);
+
+    const ticket = await lifecycle.prepareOwnerRemoval({ kind: "space", id: "purge-space" });
+    await lifecycle.finalizeOwnerRemoval(ticket);
+
+    assert.equal((await content.listActiveByOwner("space:purge-space")).length, 0);
+    assert.equal(await content.getCursor("purge-conversation"), undefined);
+    assert.equal(database.connection.prepare("SELECT COUNT(*) AS count FROM memory_record_source").get().count, 0);
+    assert.equal(database.connection.prepare("SELECT COUNT(*) AS count FROM memory_record_fts").get().count, 0);
+  });
+});
+
+test("conversation finalize purges every record carrying that conversation provenance", async () => {
+  await withLifecycle(async ({ lifecycle, content }) => {
+    await content.commitConsolidation({
+      conversationId: "conversation-to-remove",
+      ownerKey: "space:shared",
+      records: [{
+        kind: "episode",
+        modelText: "This memory came from a conversation that will be removed.",
+        evidenceClass: "derived_synthesis",
+        confirmation: "unconfirmed",
+        contentHash: "conversation-purge-hash",
+        generation: 0,
+        sources: [{ conversationId: "conversation-to-remove", sourceRevision: 1 }],
+      }],
+      advanceCursorTo: { coveredThroughOrdinal: 2, sourceFingerprint: "conversation-purge-source" },
+    });
+    const ticket = await lifecycle.prepareConversationRemoval("conversation-to-remove");
+    await lifecycle.finalizeConversationRemoval(ticket);
+
+    assert.equal((await content.listActiveByOwner("space:shared")).length, 0);
+    assert.equal(await content.getCursor("conversation-to-remove"), undefined);
   });
 });
 
