@@ -84,6 +84,7 @@ import { resolveConversationSpaceAccess } from "./spaces/space-agent-access.js";
 import {
   createOrdinaryConversationTitleGenerator,
 } from "./ordinary/ordinary-conversation-title.js";
+import { createOrdinaryEvidenceReader } from "./ordinary/ordinary-evidence-reader.js";
 import {
   createPlatformProcessTerminator,
   InMemoryProcessRegistry,
@@ -320,6 +321,7 @@ function assemblePanelHost(input: {
     spaceRepository,
     personalKnowledgeRepository,
     memoryControlRepository,
+    memoryContentRepository,
   } = openPanelStorage(productPaths);
   const managedAssetFeature = createManagedAssetsFeature(managedAssets);
   const spaceConversationDeletionJournal = createSqliteSpaceConversationDeletionJournal(database);
@@ -473,10 +475,17 @@ function assemblePanelHost(input: {
     readManagedKnowledgeAsset: async (input) =>
       await readManagedKnowledgeAsset(knowledgeAssetRoot, input.page, input),
   });
-  // Memory v2（隐式长期记忆）：Phase 1 装配走 Noop Provider/Capture（恒空贡献/跳过
-  // 提炼）+ 基于控制表的 Durable 删除生命周期；主链路模型可见输出零变化。
+  // Memory v2（隐式长期记忆）：Context Provider 仍为 No-op（注入侧到 Shadow/Canary 才切换）；
+  // Capture 在内容表与证据读取口齐备时装配真实实现（Policy Gate→连续证据窗→durable job）。
+  // evidence reader 惰性委托 ordinaryAgentFeature（装配在本函数后段），与上方
+  // invalidateSpaceReferenceAccess 引用 workspaceFeature 的模式一致。
   const memoryRuntime: MemoryRuntime = createMemoryRuntime({
     controlRepository: memoryControlRepository,
+    contentRepository: memoryContentRepository,
+    evidenceReader: createOrdinaryEvidenceReader({
+      listStableEvidenceRuns: (conversationId, range) =>
+        ordinaryAgentFeature.queries.listStableEvidenceRuns(conversationId, range),
+    }),
   });
   const initialWorkbenchData = createInitialWorkbenchDataInitializer(async () =>
     await initializeInitialWorkbenchData({
@@ -716,7 +725,7 @@ function assemblePanelHost(input: {
       configCenter: input.configCenter,
     }),
   });
-  // Memory v2 Capture：run 稳定终结后把信号交给 Capture Runtime（Phase 1 Noop 恒 skipped）。
+  // Memory v2 Capture：run 稳定终结后把信号交给 Capture Runtime（Policy Gate 决定接单与否）。
   const unsubscribeStableTerminalRuns = ordinaryAgentFeature.events.subscribeStableTerminalRuns((runId) => {
     void (async () => {
       try {
@@ -725,7 +734,7 @@ function assemblePanelHost(input: {
         const owner = await ordinaryAgentFeature.queries
           .getConversationOwner(facts.turn.conversationId);
         if (owner === undefined) return;
-        // Memory v2 Capture 口：Phase 1 Noop 恒 skipped；Phase 3 起在此 durable 接单。
+        // Memory v2 Capture 口：effective=off 一律 skipped；effective=on 时 durable 接单。
         await memoryRuntime.captureRuntime.acceptStableSignal({
           owner,
           conversationId: facts.turn.conversationId,

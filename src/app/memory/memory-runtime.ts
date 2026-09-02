@@ -3,20 +3,23 @@ import {
   createNoopMemoryCaptureRuntime,
   createNoopMemoryContextProvider,
 } from "./noop.js";
+import { createCaptureRuntime } from "./capture/capture-runtime.js";
+import type { MemoryContentRepository } from "./store/content-repository.js";
 import type { MemoryControlRepository } from "./store/control-repository.js";
 import type {
   MemoryCaptureRuntime,
   MemoryContextProvider,
   MemoryLifecycle,
+  OrdinaryEvidenceReader,
 } from "./contracts.js";
 
 /**
- * Memory Feature 运行时装配。Phase 1：
- * - ContextProvider / CaptureRuntime 为 No-op（Recall 恒空贡献、信号恒 skipped），
- *   用于走通装配、注入插槽与 durable 控制状态，主链路模型可见输出零变化；
- * - Lifecycle 为 Durable（基于控制表的 fence/generation 两阶段删除），因为
- *   memory/1 迁移一旦注册就不再满足 ProvenAbsent 的"从未建 schema"前提。
- * Phase 3 起把 Provider/Capture 换成 Real 实现，本装配签名不变。
+ * Memory Feature 运行时装配。
+ * - ContextProvider 仍为 No-op（Recall 恒空贡献；M3 只做 Capture/Consolidation 的写入侧，
+ *   注入侧到 Shadow/Canary 才切换）；
+ * - Lifecycle 恒为 Durable（memory/1 迁移一旦注册就不再满足 ProvenAbsent 前提）；
+ * - CaptureRuntime：当 contentRepository + evidenceReader 齐备时装配真实 Capture
+ *   （Policy Gate→连续证据窗→durable job）；缺省回退 No-op，保留"可缺席组合"。
  */
 export type MemoryRuntime = {
   readonly contextProvider: MemoryContextProvider;
@@ -24,12 +27,24 @@ export type MemoryRuntime = {
   readonly lifecycle: MemoryLifecycle;
 };
 
-export function createMemoryRuntime(input: {
+export type CreateMemoryRuntimeInput = {
   readonly controlRepository: MemoryControlRepository;
-}): MemoryRuntime {
+  /** 提供则启用真实 Capture；缺省（无可写内容表/证据读取口）回退 No-op capture。 */
+  readonly contentRepository?: MemoryContentRepository;
+  readonly evidenceReader?: OrdinaryEvidenceReader;
+};
+
+export function createMemoryRuntime(input: CreateMemoryRuntimeInput): MemoryRuntime {
+  const realCaptureAvailable = input.contentRepository !== undefined && input.evidenceReader !== undefined;
   return {
     contextProvider: createNoopMemoryContextProvider(),
-    captureRuntime: createNoopMemoryCaptureRuntime(),
+    captureRuntime: realCaptureAvailable
+      ? createCaptureRuntime({
+          controlRepository: input.controlRepository,
+          contentRepository: input.contentRepository as MemoryContentRepository,
+          evidenceReader: input.evidenceReader as OrdinaryEvidenceReader,
+        })
+      : createNoopMemoryCaptureRuntime(),
     lifecycle: createControlMemoryLifecycle(input.controlRepository),
   };
 }
