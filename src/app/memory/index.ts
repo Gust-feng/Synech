@@ -51,6 +51,11 @@ export {
   type EffectiveAdmissionInput,
 } from "./policy/effective-admission.js";
 export {
+  POLICY_KEY,
+  conversationExclusionKey,
+  participationKey,
+} from "./policy/policy-snapshot.js";
+export {
   createSqliteMemoryControlRepository,
   MEMORY_MIGRATIONS,
   type EnqueueJobInput,
@@ -72,3 +77,15 @@ export {
   type PersistedJobStatus,
   type PersistedPolicyKind,
 } from "./store/persistence-schema.js";
+export {
+  createMemoryAdminApplication,
+  type CreateMemoryAdminApplicationInput,
+  type MemoryOwnerExistsQuery,
+  type MemoryRuntimeHealthQuery,
+} from "./admin/memory-admin-application.js";
+export {
+  createMemoryFeature,
+  type MemoryFeature,
+  type MemoryFeatureCommands,
+  type MemoryFeatureQueries,
+} from "./memory-feature.js";
