@@ -66,6 +66,8 @@ import {
   type PersonalKnowledgeFeature,
 } from "../personal-knowledge/index.js";
 import { createMemoryRuntime, renderImplicitMemoryBlock, type MemoryRuntime } from "../memory/index.js";
+import { createMemoryCaptureScheduler } from "./memory/capture-scheduler.js";
+import { createConfigCenterConsolidationModel } from "./memory/consolidation-model.js";
 import {
   createSqliteWorkspaceRepository,
   createWorkspaceFeature,
@@ -479,13 +481,25 @@ function assemblePanelHost(input: {
   // Capture 在内容表与证据读取口齐备时装配真实实现（Policy Gate→连续证据窗→durable job）。
   // evidence reader 惰性委托 ordinaryAgentFeature（装配在本函数后段），与上方
   // invalidateSpaceReferenceAccess 引用 workspaceFeature 的模式一致。
+  const memoryEvidenceReader = createOrdinaryEvidenceReader({
+    listStableEvidenceRuns: (conversationId, range) =>
+      ordinaryAgentFeature.queries.listStableEvidenceRuns(conversationId, range),
+  });
   const memoryRuntime: MemoryRuntime = createMemoryRuntime({
     controlRepository: memoryControlRepository,
     contentRepository: memoryContentRepository,
-    evidenceReader: createOrdinaryEvidenceReader({
-      listStableEvidenceRuns: (conversationId, range) =>
-        ordinaryAgentFeature.queries.listStableEvidenceRuns(conversationId, range),
-    }),
+    evidenceReader: memoryEvidenceReader,
+  });
+  // Memory v2 Consolidation 调度（T21）：idle timer 只是触发器，待处理边界的
+  // 唯一事实源是 durable queued job；启动补扫与空闲提炼共用同一条串行路径。
+  const memoryCaptureScheduler = createMemoryCaptureScheduler({
+    controlRepository: memoryControlRepository,
+    contentRepository: memoryContentRepository,
+    evidenceReader: memoryEvidenceReader,
+    model: createConfigCenterConsolidationModel({ configCenter: input.configCenter }),
+  });
+  void memoryCaptureScheduler.recoverQueuedJobs().catch((error) => {
+    console.error("[panel-server] Memory consolidation startup recovery failed", error);
   });
   const initialWorkbenchData = createInitialWorkbenchDataInitializer(async () =>
     await initializeInitialWorkbenchData({
@@ -744,6 +758,8 @@ function assemblePanelHost(input: {
             sourceRevision: facts.sourceRevision,
           },
         });
+        // 稳定 Run 完成重置 Consolidation idle timer（手册 9.2）。
+        memoryCaptureScheduler.noteActivity({ conversationId: facts.turn.conversationId });
       } catch (error) {
         console.error("[panel-server] Could not accept stable memory capture signal", error);
       }
@@ -856,6 +872,8 @@ function assemblePanelHost(input: {
       void memoryRuntime.captureRuntime.noteActivity({ conversationId, owner }).catch((error) => {
         console.error("[panel-server] Memory capture catch-up failed", error);
       });
+      // 会话活动重置 Consolidation idle timer（调度失败只走自身诊断，不抛主链路）。
+      memoryCaptureScheduler.noteActivity({ conversationId });
     },
     dataMaintenance,
     toolOutputStore,
@@ -877,6 +895,7 @@ function assemblePanelHost(input: {
   beforeRestoreStage = () => restorePreparation ??= (async () => {
     host.isQuiescing = true;
     unsubscribeStableTerminalRuns();
+    await memoryCaptureScheduler.release();
     await memoryRuntime.captureRuntime.release();
     await ordinaryAgentFeature.release();
     await pathDependencyFeature.release();

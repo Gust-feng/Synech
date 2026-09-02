@@ -36,6 +36,7 @@ export type OrdinaryModelPurpose =
   | "skill_quality_eval"
   | "context_compaction"
   | "conversation_title"
+  | "memory_consolidation"
   | "ordinary_agent";
 
 /** Model request purposes supported by the current Ordinary product path. */

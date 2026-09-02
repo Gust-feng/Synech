@@ -18,10 +18,12 @@ import type { MemoryControlRepository } from "../store/control-repository.js";
  * - effective=off（未同意/未参与/被排除/被 fence/rollout off）一律 skipped，不读证据、不落 job；
  * - shadow 与 active 在 capture 阶段行为一致（都接单），差别只在注入侧（Provider，T22）；
  * - 只接受连续无洞且达到最小完整轮次门的证据段；证据窗为空或游标不动则 skipped；
- * - accepted 只表示 durable job/checkpoint 已落盘，不保证一定形成长期 Memory（提炼在 T21）。
+ * - accepted 只表示 durable job/checkpoint 已落盘，不保证一定形成长期 Memory（提炼见
+ *   capture/consolidation.ts，T21：模型提炼 + Record/Source/Cursor/job 原子提交）。
  *
- * 本层不调模型、不做 idle 计时（T21 Consolidation）；noteActivity 的重启缺口补扫
- * 也在 T21 接入调度后生效，当前保证不阻塞、不向主链路抛出。
+ * 本层不调模型、不做 idle 计时（T21 起由 panel-server/memory/capture-scheduler.ts
+ * 持有 idle timer 并经 listJobsByStatus('queued') 补扫）；noteActivity 保持 no-op
+ * 且绝不抛出，调度接线在组合根完成。
  */
 
 /** 新增完整问答轮次下限（手册 9.2 首轮实验参数：至少 2 个完整问答）；token 阈值门在 T21 用 tokenizer 补。 */
@@ -113,7 +115,8 @@ export function createCaptureRuntime(deps: CaptureRuntimeDeps): MemoryCaptureRun
   return {
     acceptStableSignal,
     async noteActivity(): Promise<void> {
-      // T21 接入 idle/consolidation 调度后在此补扫重启遗留缺口；当前不动作且绝不抛出。
+      // 重启遗留缺口补扫由 panel-server 的 capture-scheduler（T21）经 durable queued
+      // job 完成；本层保持 no-op 且绝不抛出。
     },
     async release(): Promise<void> {
       // 无后台定时器/资源（T21 起持有 idle scheduler 时在此释放）。
