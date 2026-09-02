@@ -122,6 +122,27 @@ export const MEMORY_MIGRATIONS = [{
     ) STRICT;
     CREATE INDEX memory_index_outbox_status_idx ON memory_index_outbox(status, created_at);
   `,
+}, {
+  // migration v3（T22）：memory_record 的 lexical 检索投影（《手册》8.4 Index
+  // Projection / 16.2）。terms 存 lexicalProjection(model_text)（汉字 bigram +
+  // 拉丁词标准化，见 ../recall/lexical-projection.ts，与 eval 工具链同源）；
+  // record_id/revision/owner_key/status/generation 是 UNINDEXED 元数据列，供
+  // recall 做 scope 过滤（owner_key + status='active' + generation）后回表复核。
+  // 投影是派生数据：由 MemoryContentRepository 在写入/退休事务内同步维护
+  // （SQLite 触发器无法调用 JS 投影算法），任何不与 memory_record 成对的
+  // 投影行在检索时一律丢弃（fail-closed）。
+  version: 3,
+  sql: `
+    CREATE VIRTUAL TABLE memory_record_fts USING fts5(
+      terms,
+      record_id UNINDEXED,
+      revision UNINDEXED,
+      owner_key UNINDEXED,
+      status UNINDEXED,
+      generation UNINDEXED,
+      tokenize = 'unicode61'
+    );
+  `,
 }] as const;
 
 export type SetPolicyInput = {

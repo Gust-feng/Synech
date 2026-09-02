@@ -1,16 +1,23 @@
 import type { SQLInputValue } from "node:sqlite";
 
 import type { SqliteRuntimeDatabase } from "../../../adapters/runtime-storage/index.js";
+import type { MemoryOwner } from "../../../domain/memory/index.js";
 import { createId, type IdFactory } from "../../../kernel/id.js";
 import { MemoryError } from "../contracts.js";
+import { lexicalProjection } from "../recall/lexical-projection.js";
+import { resolveAdmissionFromPolicy } from "../policy/policy-snapshot.js";
 import { MEMORY_MIGRATIONS } from "./control-repository.js";
 import {
   parseCaptureCursorRow,
   parseIndexOutboxRow,
+  parseLifecycleRow,
+  parsePolicyRow,
   parseRecordRow,
   parseRecordSourceRow,
   type MemoryCaptureCursorRow,
   type MemoryIndexOutboxRow,
+  type MemoryLifecycleRow,
+  type MemoryPolicyRow,
   type MemoryRecordRow,
   type MemoryRecordSourceRow,
   type PersistedConfirmation,
@@ -30,7 +37,9 @@ import {
  * - 连续游标只进不退，回退即 memory_store_failure（禁止 newest-first 截断后跳游标）；
  * - owner 处于 fenced/tombstone，或记录携带的 generation 与当前不一致，一律拒写
  *   memory_generation_fenced（提炼期间被删除/清除的结果不得落库）；
- * - 同一逻辑 record 的 revision 只增，同一 record 至多一个 active 版本（partial unique）。
+ * - 同一逻辑 record 的 revision 只增，同一 record 至多一个 active 版本（partial unique）；
+ * - memory_record_fts（memory/3）是 record 的派生检索投影：与 record 同事务写入/
+ *   退休，检索结果必须回表复核 scope/status/generation，跨 scope 泄漏恒为 0。
  */
 
 export type ConsolidationSourceInput = {
@@ -68,18 +77,87 @@ export type CommitConsolidationInput = {
 };
 
 export type CommitConsolidationResult = {
-  readonly recordRefs: readonly { readonly id: string; readonly revision: number }[];
+  readonly recordRefs: readonly { readonly id: string; revision: number }[];
   readonly cursor: MemoryCaptureCursorRow;
 };
+
+/**
+ * T21 组合提交：在同一个 SQLite 事务内完成「锁内 admission 重读 → Record + Source +
+ * Cursor + 退休 + job 置 done」。供 Consolidation 提炼管线在模型调用后调用；
+ * 纯内容提交（无 job/admission）仍走 `commitConsolidation`。
+ */
+export type CommitConsolidationWithAdmissionInput = {
+  readonly conversationId: string;
+  readonly ownerKey: string;
+  /** 本次提炼占用的 durable job；`completeJob` 时同事务内置 done。 */
+  readonly jobId: string;
+  /** job 在 accept 时捕获的权威 revision/generation；提交时锁内重读并比对，不符即废弃本批。 */
+  readonly expectedPolicyRevision: string;
+  readonly expectedGeneration: number;
+  readonly records: readonly ConsolidationRecordInput[];
+  /** retire 操作：把既有逻辑记录的 active 版本置 retired 并退出索引投影。 */
+  readonly retireRecordIds: readonly string[];
+  readonly advanceCursorTo: {
+    readonly coveredThroughOrdinal: number;
+    readonly sourceFingerprint: string;
+  };
+  /** true 表示本批已覆盖 job 边界，job 与内容同事务收敛为 done。 */
+  readonly completeJob: boolean;
+};
+
+export type CommitConsolidationWithAdmissionResult =
+  | { readonly status: "committed"; readonly recordRefs: CommitConsolidationResult["recordRefs"]; readonly cursor: MemoryCaptureCursorRow }
+  | {
+      readonly status: "discarded";
+      /** 结构原因码：admission_off / admission_revision_changed / generation_changed / job_not_running。 */
+      readonly reason: string;
+    };
+
+/** 由持久化 owner_key 还原 MemoryOwner（admission 复核用）；不认识的结构一律拒绝。 */
+export function memoryOwnerFromKey(ownerKey: string): MemoryOwner {
+  if (ownerKey === "global") return { kind: "global" };
+  const separatorIndex = ownerKey.indexOf(":");
+  const kind = separatorIndex === -1 ? "" : ownerKey.slice(0, separatorIndex);
+  const id = separatorIndex === -1 ? "" : ownerKey.slice(separatorIndex + 1);
+  if ((kind === "space" || kind === "workspace") && id.length > 0) return { kind, id };
+  throw new MemoryError("memory_invalid_owner", `Cannot parse memory owner key ${ownerKey}.`);
+}
 
 export interface MemoryContentRepository {
   /** 单事务原子提交一次提炼结果并推进连续游标；失败整体回滚。 */
   commitConsolidation(input: CommitConsolidationInput): Promise<CommitConsolidationResult>;
+  /**
+   * T21 组合原子提交（手册 9.1/9.3、6.1 提交顺序）：同一事务内先锁内重读
+   * policy + lifecycle 并重算有效准入（off / revision 或 generation 与 job 捕获值
+   * 不符 → 整批废弃、不推进游标、不写任何行），再写入 Record + Source + 投影 +
+   * Outbox + 游标，最后按 `completeJob` 把 job 置 done。任何一步失败整体回滚。
+   */
+  commitConsolidationWithAdmission(
+    input: CommitConsolidationWithAdmissionInput,
+  ): Promise<CommitConsolidationWithAdmissionResult>;
   getCursor(conversationId: string): Promise<MemoryCaptureCursorRow | undefined>;
   listActiveByOwner(ownerKey: string): Promise<readonly MemoryRecordRow[]>;
   listSources(recordId: string, revision: number): Promise<readonly MemoryRecordSourceRow[]>;
   claimPendingOutbox(limit: number): Promise<readonly MemoryIndexOutboxRow[]>;
   markOutbox(outboxId: string, status: PersistedOutboxStatus): Promise<MemoryIndexOutboxRow | undefined>;
+  /**
+   * 检索投影查询（memory/3，《手册》8.4/16.2）：FTS5 MATCH + bm25 排序后回表
+   * 复核 scope（owner_key + status='active' + generation），跨 scope 泄漏恒为 0
+   * （《手册》10.2 fail-closed）。投影行是派生数据：不与 memory_record 成对的
+   * 孤儿行一律丢弃。`match` 必须是已构建的 FTS5 MATCH 表达式（recall 侧用
+   * lexicalMatchExpression 生成）；空表达式直接返回空（MATCH '' 不是合法查询）。
+   */
+  searchActiveByProjection(input: {
+    readonly ownerKey: string;
+    readonly match: string;
+    readonly generation: number;
+    readonly limit: number;
+  }): Promise<readonly MemoryRecordRow[]>;
+  /**
+   * Memory store 自身修订（按 owner scope 的 active 内容计数 + 最新 updated_at）；
+   * 只作诊断快照展示，不是权威 revision。
+   */
+  storeRevision(ownerKey: string): Promise<string>;
 }
 
 const RECORD_COLUMNS =
@@ -172,7 +250,13 @@ export function createSqliteMemoryContentRepository(
               UPDATE memory_record SET status = 'retired', updated_at = ?
               WHERE record_id = ? AND status = 'active'
             `).run(now, recordId);
-            // 旧版本退出索引投影。
+            // 旧版本退出索引投影：FTS 状态同事务内翻转，旧文本立即停止召回。
+            database.connection.prepare(`
+              UPDATE memory_record_fts SET status = 'retired'
+              WHERE record_id = ? AND revision = ?
+            `).run(recordId, nextRevision - 1);
+            // outbox remove 入队保留：memory_index_outbox 是通用索引工作队列，
+            // FTS 投影已同事务内直接翻转，后续索引消费端（如向量索引）仍走 outbox。
             database.connection.prepare(`
               INSERT INTO memory_index_outbox(outbox_id, record_id, revision, op, status, attempts, created_at, updated_at)
               VALUES (?, ?, ?, 'remove', 'pending', 0, ?, ?)
@@ -198,6 +282,18 @@ export function createSqliteMemoryContentRepository(
             now,
             now,
             effectiveAt,
+          );
+          // 同事务写入 lexical 检索投影（《手册》8.4）：FTS 行与 record 行同生共死，
+          // 事务回滚时两者一起消失，不存在"有 record 无投影/有投影无 record"的半态。
+          database.connection.prepare(`
+            INSERT INTO memory_record_fts(record_id, revision, owner_key, status, generation, terms)
+            VALUES (?, ?, ?, 'active', ?, ?)
+          `).run(
+            recordId,
+            nextRevision,
+            input.ownerKey,
+            record.generation,
+            lexicalProjection(record.modelText).join(" "),
           );
 
           for (const source of record.sources) {
@@ -287,6 +383,53 @@ export function createSqliteMemoryContentRepository(
         `).run(status, Date.now(), outboxId);
         return readOutbox(outboxId);
       });
+    },
+
+    async searchActiveByProjection(input) {
+      // 空 MATCH 表达式不是合法查询（投影为空 = 查询文本无可用 token）；
+      // 直接返回空候选，语义等同 no-hit 而非 degraded。
+      if (input.match.trim() === "" || input.limit <= 0) return [];
+      // FTS5 行级过滤（UNINDEXED 列）先于回表；多取一截以对冲孤儿/失效投影行，
+      // 避免回表复核后有效候选不足 limit。
+      const ftsLimit = Math.max(input.limit * 4, 16);
+      const hits = database.connection.prepare(`
+        SELECT record_id, revision FROM memory_record_fts
+        WHERE memory_record_fts MATCH ? AND owner_key = ? AND status = 'active' AND generation = ?
+        ORDER BY bm25(memory_record_fts)
+        LIMIT ?
+      `).all(input.match, input.ownerKey, input.generation, ftsLimit) as {
+        readonly record_id: SQLInputValue;
+        readonly revision: SQLInputValue;
+      }[];
+      const results: MemoryRecordRow[] = [];
+      for (const hit of hits) {
+        // 回表复核：scope/状态/generation 以 memory_record 为准，投影行只是加速结构。
+        const row = database.connection
+          .prepare(`SELECT ${RECORD_COLUMNS} FROM memory_record WHERE record_id = ? AND revision = ?`)
+          .get(String(hit.record_id), Number(hit.revision)) as Record<string, SQLInputValue> | undefined;
+        if (row === undefined) continue;
+        const record = parseRecordRow(row);
+        if (
+          record.ownerKey !== input.ownerKey ||
+          record.status !== "active" ||
+          record.generation !== input.generation
+        ) {
+          continue;
+        }
+        results.push(record);
+        if (results.length >= input.limit) break;
+      }
+      return results;
+    },
+
+    async storeRevision(ownerKey) {
+      const row = database.connection
+        .prepare(`
+          SELECT COUNT(*) AS activeCount, COALESCE(MAX(updated_at), 0) AS lastUpdate
+          FROM memory_record WHERE owner_key = ? AND status = 'active'
+        `)
+        .get(ownerKey) as { readonly activeCount: SQLInputValue; readonly lastUpdate: SQLInputValue };
+      return `v${Number(row.activeCount)}:${Number(row.lastUpdate)}`;
     },
   };
 }
