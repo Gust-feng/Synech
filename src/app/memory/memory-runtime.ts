@@ -1,87 +1,85 @@
 import { createControlMemoryLifecycle } from "./lifecycle/control-lifecycle.js";
 import {
+  createNoopMemoryBackgroundPort,
   createNoopMemoryCaptureRuntime,
-  createNoopMemoryContextProvider,
+  createNoopMemoryHistoryQueryPort,
   createUnavailableMemoryLifecycle,
 } from "./noop.js";
-import { createCaptureRuntime } from "./capture/capture-runtime.js";
-import {
-  createInMemoryShadowInjectionLog,
-  createInMemoryMemoryRecallTraceLog,
-  createRealMemoryContextProvider,
-  type MemoryShadowInjectionLog,
-  type MemoryRecallTraceLog,
-} from "./recall/context-provider.js";
-import { createRealMemoryRecallEngine } from "./recall/recall-engine.js";
-import type { MemoryContentRepository } from "./store/content-repository.js";
+import { createMemoryCaptureRuntime } from "./capture/capture-runtime.js";
+import { createMemoryBackgroundPort } from "./background/background-port.js";
+import { createMemoryHistoryQueryPort } from "./history/history-query-port.js";
+import type { MemoryDocumentRepository } from "./store/content-repository.js";
 import type { MemoryControlRepository } from "./store/control-repository.js";
 import type {
+  HistoryConversationLookup,
+} from "./history/history-query-port.js";
+import type {
+  MemoryBackgroundPort,
   MemoryCaptureRuntime,
-  MemoryContextProvider,
+  HistoryQueryPort,
   MemoryLifecycle,
   OrdinaryEvidenceReader,
 } from "./contracts.js";
 
 /**
- * Memory Feature 运行时装配。
- * - ContextProvider：contentRepository 齐备时装配真实实现（Real Recall 引擎 +
- *   injection freeze 边界的 Policy Gate + FTS5 lexical 投影检索）；shadow 恒空
- *   贡献并记录 wouldInject 诊断，active 才真正注入候选（语义见
- *   recall/context-provider.ts）；缺省（无可写内容表）回退 No-op，保留"可缺席组合"；
- * - Lifecycle：内容仓储齐备时为 Durable；control-only 组合注册 unavailable，
+ * Memory Feature 运行时装配（0.6.0 文档产物）。
+ * - BackgroundPort：绑定读取 + 每次 freeze 的供给复核（effective=active + generation
+ *   + validity）；缺省（无文档仓储）回退 Noop，保留"可缺席组合"；
+ * - HistoryQueryPort：search_history / read_history 的查询逻辑（scope 注入、回表复核、
+ *   coverage 如实报告）；
+ * - CaptureRuntime：稳定信号接单（Policy Gate → transcript 索引增量 → 每会话待办）；
+ * - Lifecycle：文档仓储齐备时为 Durable；control-only 组合注册 unavailable，
  *   不把无法清理数据误报成成功；ProvenAbsent 只由明确举证的新安装装配。
- * - CaptureRuntime：当 contentRepository + evidenceReader 齐备时装配真实 Capture
- *   （Policy Gate→连续证据窗→durable job）；缺省回退 No-op。
  */
 export type MemoryRuntime = {
-  readonly contextProvider: MemoryContextProvider;
+  readonly backgroundPort: MemoryBackgroundPort;
+  readonly historyQueryPort: HistoryQueryPort;
   readonly captureRuntime: MemoryCaptureRuntime;
   readonly lifecycle: MemoryLifecycle;
-  /**
-   * Shadow wouldInject 诊断（进程内存有界缓冲）；仅真实 Provider 装配时存在。
-   * trace 同样是有界运行时诊断，不复制正文，不进入 Product schema。
-   */
-  readonly shadowInjectionLog: MemoryShadowInjectionLog | undefined;
-  readonly traceLog: MemoryRecallTraceLog | undefined;
 };
 
 export type CreateMemoryRuntimeInput = {
   readonly controlRepository: MemoryControlRepository;
-  /** 提供则启用真实 Capture 与真实 Recall/注入；缺省回退 No-op capture/provider。 */
-  readonly contentRepository?: MemoryContentRepository;
+  /** 文档仓储 + 证据读取口齐备时装配真实实现；缺省回退 Noop。 */
+  readonly documentRepository?: MemoryDocumentRepository;
   readonly evidenceReader?: OrdinaryEvidenceReader;
+  /** 历史查询的会话身份/标题查找（宿主经 Ordinary 只读 queries 适配）。 */
+  readonly conversationLookup?: HistoryConversationLookup;
 };
 
 export function createMemoryRuntime(input: CreateMemoryRuntimeInput): MemoryRuntime {
-  const contentRepository = input.contentRepository;
+  const documentRepository = input.documentRepository;
   const evidenceReader = input.evidenceReader;
-  const realCaptureAvailable = contentRepository !== undefined && evidenceReader !== undefined;
-  const realRecallAvailable = contentRepository !== undefined;
-  const shadowInjectionLog = realRecallAvailable ? createInMemoryShadowInjectionLog() : undefined;
-  const traceLog = realRecallAvailable ? createInMemoryMemoryRecallTraceLog() : undefined;
+  const realAvailable = documentRepository !== undefined && evidenceReader !== undefined;
+  const conversationLookup: HistoryConversationLookup = input.conversationLookup ?? {
+    async resolveConversationOwner() {
+      return undefined;
+    },
+  };
   return {
-    contextProvider: realRecallAvailable
-      ? createRealMemoryContextProvider({
+    backgroundPort: realAvailable
+      ? createMemoryBackgroundPort({
           controlRepository: input.controlRepository,
-          recallEngine: createRealMemoryRecallEngine({
-            controlRepository: input.controlRepository,
-            contentRepository,
-          }),
-          shadowInjectionLog,
-          traceLog,
+          documentRepository,
         })
-      : createNoopMemoryContextProvider(),
-    captureRuntime: realCaptureAvailable
-      ? createCaptureRuntime({
+      : createNoopMemoryBackgroundPort(),
+    historyQueryPort: realAvailable
+      ? createMemoryHistoryQueryPort({
           controlRepository: input.controlRepository,
-          contentRepository,
+          documentRepository,
+          evidenceReader,
+          conversationLookup,
+        })
+      : createNoopMemoryHistoryQueryPort(),
+    captureRuntime: realAvailable
+      ? createMemoryCaptureRuntime({
+          controlRepository: input.controlRepository,
+          documentRepository,
           evidenceReader,
         })
       : createNoopMemoryCaptureRuntime(),
-    lifecycle: contentRepository === undefined
+    lifecycle: documentRepository === undefined
       ? createUnavailableMemoryLifecycle()
-      : createControlMemoryLifecycle(input.controlRepository, { contentRepository }),
-    shadowInjectionLog,
-    traceLog,
+      : createControlMemoryLifecycle(input.controlRepository, { documentRepository }),
   };
 }

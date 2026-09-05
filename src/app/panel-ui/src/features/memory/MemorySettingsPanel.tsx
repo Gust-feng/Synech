@@ -2,10 +2,12 @@ import { useCallback, useEffect, useState } from "react";
 import {
   clearImplicitMemory,
   fetchMemoryCapability,
+  fetchSpaceMemoryView,
+  writeSpaceMemory,
   setMemoryConsent,
-  setMemoryConversationParticipation,
   setMemorySpaceParticipation,
   type MemoryCapabilityStatus,
+  type SpaceMemoryView,
 } from "@panel-api/memory-admin";
 import "./memory.css";
 
@@ -15,14 +17,9 @@ export type MemorySettingsOwner =
 
 export type MemorySettingsScope = {
   readonly owner?: MemorySettingsOwner;
-  readonly conversationId?: string;
 };
 
-type MemoryScope = { readonly kind: "global" } | MemorySettingsOwner;
-
-function toMemoryScope(scope: MemorySettingsScope | null): MemoryScope {
-  return scope?.owner ?? { kind: "global" };
-}
+type MemoryScope = { readonly kind: "global" } | Extract<MemorySettingsOwner, { readonly kind: "space" }>;
 
 const STATUS_LABEL = {
   off: "未启用",
@@ -36,10 +33,12 @@ const HEALTH_LABEL = {
   unavailable: "暂时不可用",
 } as const;
 
-function statusText(status: MemoryCapabilityStatus): string {
+function statusText(status: MemoryCapabilityStatus, scope: MemorySettingsScope | null): string {
   if (status.health !== "ready") return HEALTH_LABEL[status.health];
   if (status.rollout === "off") return STATUS_LABEL.off;
   if (status.rollout === "shadow") return STATUS_LABEL.shadow;
+  if (scope?.owner?.kind === "workspace") return "仅 Space 可用";
+  if (scope === null && status.globalConsent) return "等待在 Space 中启用";
   if (status.effective === "active") return STATUS_LABEL.active;
   if (status.effective === "off") return STATUS_LABEL.off;
   return STATUS_LABEL.shadow;
@@ -47,10 +46,10 @@ function statusText(status: MemoryCapabilityStatus): string {
 
 function describeHelp(scope: MemorySettingsScope | null): string {
   if (scope === null) {
-    return "开启后，Synech 会在已参与的 Space 对话空闲时于后台提炼少量可能有帮助的内容，并在后续相关对话中自动使用。内部记忆不会逐条展示，后台整理可能产生少量当前模型服务的 API 用量。";
+    return "先启用全局开关，再进入 Space 对话为该 Space 单独开启；后台整理可能产生少量模型服务 API 用量。自动记忆不会修改协作规则和路径依赖。";
   }
-  if (scope.conversationId !== undefined) {
-    return "不读取智能记忆，也不将这段对话用于记忆；原始会话历史仍会保留，协作规则仍然生效。";
+  if (scope.owner?.kind === "workspace") {
+    return "自动记忆只在 Space 中启用；当前工作区的对话不会读取或写入。";
   }
   return "关闭期间的内容不会在重新开启后补记。";
 }
@@ -67,7 +66,7 @@ export function MemorySettingsPanel(props: MemorySettingsPanelProps) {
   const [clearScope, setClearScope] = useState<MemoryScope | null>(null);
   const ownerKind = props.scope?.owner?.kind;
   const ownerId = props.scope?.owner?.id;
-  const conversationId = props.scope?.conversationId;
+  const currentSpaceScope = props.scope?.owner?.kind === "space" ? props.scope.owner : undefined;
 
   const refresh = useCallback(async () => {
     try {
@@ -75,14 +74,13 @@ export function MemorySettingsPanel(props: MemorySettingsPanelProps) {
         ...(ownerKind === undefined || ownerId === undefined ? {} : {
           owner: { kind: ownerKind, id: ownerId },
         }),
-        ...(conversationId === undefined ? {} : { conversationId }),
       });
       setStatus(response.status);
       setError(null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "无法读取记忆状态");
     }
-  }, [conversationId, ownerId, ownerKind]);
+  }, [ownerId, ownerKind]);
 
   useEffect(() => {
     setStatus(null);
@@ -91,15 +89,17 @@ export function MemorySettingsPanel(props: MemorySettingsPanelProps) {
   }, [refresh]);
 
   const onAfterChange = props.onAfterChange;
-  const runMutation = useCallback(async (operation: () => Promise<unknown>) => {
+  const runMutation = useCallback(async (operation: () => Promise<unknown>): Promise<boolean> => {
     setBusy(true);
     setError(null);
     try {
       await operation();
       await refresh();
       onAfterChange?.();
+      return true;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "操作失败");
+      return false;
     } finally {
       setBusy(false);
     }
@@ -108,7 +108,6 @@ export function MemorySettingsPanel(props: MemorySettingsPanelProps) {
   if (status === null) {
     return (
       <section className="memory-settings" aria-busy>
-        <h2>智能关联记忆</h2>
         <p>{error ?? "正在加载..."}</p>
       </section>
     );
@@ -116,10 +115,6 @@ export function MemorySettingsPanel(props: MemorySettingsPanelProps) {
 
   return (
     <section className="memory-settings">
-      <h2>智能关联记忆</h2>
-      <p className="memory-status">状态：{statusText(status)}</p>
-      <p className="memory-help">{describeHelp(props.scope)}</p>
-      {error !== null && <p className="memory-error" role="alert">{error}</p>}
       <fieldset disabled={busy}>
         <label>
           <input
@@ -127,55 +122,59 @@ export function MemorySettingsPanel(props: MemorySettingsPanelProps) {
             checked={status.globalConsent}
             onChange={(event) => runMutation(() => setMemoryConsent({ globalConsent: event.target.checked }))}
           />
-          允许使用智能关联记忆（全局）
+          启用自动记忆（全局）
         </label>
         {props.scope?.owner?.kind === "space" && (
           <SpaceParticipationControl
             spaceId={props.scope.owner.id}
-            enabled={status.scopeParticipation === true}
+            enabled={status.spaceParticipation === true}
             disabled={!status.globalConsent}
             runMutation={runMutation}
           />
         )}
-        {props.scope?.conversationId !== undefined && (
-          <ConversationParticipationControl
-            conversationId={props.scope.conversationId}
-            excluded={status.conversationExcluded === true}
-            runMutation={runMutation}
-          />
+        {props.scope?.owner?.kind === "space" && !status.globalConsent && (
+          <p className="memory-hint">全局关闭；重新开启后，此 Space 会恢复当前参与设置。</p>
+        )}
+        {props.scope?.owner?.kind === "space" && (
+          <SpaceMemoryEditor spaceId={props.scope.owner.id} runMutation={runMutation} />
         )}
         {clearScope !== null ? (
           <ConfirmClear
             scope={clearScope}
             onCancel={() => setClearScope(null)}
             onConfirm={async () => {
-              await runMutation(async () => {
+              const completed = await runMutation(async () => {
                 await clearImplicitMemory({ scope: clearScope });
               });
-              setClearScope(null);
+              if (completed) setClearScope(null);
             }}
           />
         ) : (
           <>
-            <button
-              type="button"
-              className="memory-clear"
-              onClick={() => setClearScope(toMemoryScope(props.scope))}
-            >
-              清除{props.scope?.owner === undefined ? "全部" : props.scope.owner.kind === "space" ? "此 Space" : "此工作区"}的智能记忆
-            </button>
-            {props.scope?.owner !== undefined && (
+            {currentSpaceScope !== undefined && (
+              <button
+                type="button"
+                className="memory-clear"
+                onClick={() => setClearScope(currentSpaceScope)}
+              >
+                清除此 Space 的自动记忆
+              </button>
+            )}
+            {(props.scope === null || currentSpaceScope !== undefined) && (
               <button
                 type="button"
                 className="memory-clear"
                 onClick={() => setClearScope({ kind: "global" })}
               >
-                清除全部智能记忆
+                清除全部自动记忆
               </button>
             )}
           </>
         )}
       </fieldset>
+      {error !== null && <p className="memory-error" role="alert">{error}</p>}
+      <p className="memory-status">状态：{statusText(status, props.scope)}</p>
+      <p className="memory-help">{describeHelp(props.scope)}</p>
     </section>
   );
 }
@@ -184,7 +183,7 @@ function SpaceParticipationControl(props: {
   readonly spaceId: string;
   readonly enabled: boolean;
   readonly disabled: boolean;
-  readonly runMutation: (operation: () => Promise<unknown>) => Promise<void>;
+  readonly runMutation: (operation: () => Promise<unknown>) => Promise<boolean>;
 }) {
   return (
     <label>
@@ -196,27 +195,81 @@ function SpaceParticipationControl(props: {
           await setMemorySpaceParticipation({ spaceId: props.spaceId, enabled: event.target.checked });
         })}
       />
-      在当前 Space 中使用
+      在当前 Space 中启用自动记忆
     </label>
   );
 }
 
-function ConversationParticipationControl(props: {
-  readonly conversationId: string;
-  readonly excluded: boolean;
-  readonly runMutation: (operation: () => Promise<unknown>) => Promise<void>;
+/**
+ * Space 长期记忆只读视图 + 用户直接编辑（正式设计 §11.5/§14）。
+ * 「记住了什么」由正文说明；时间与来源（模型整理/用户编辑）随视图展示。
+ * 直接编辑经 writeSpaceMemory CAS 保存，不调用模型；空正文表示当前记忆为空。
+ */
+function SpaceMemoryEditor(props: {
+  readonly spaceId: string;
+  readonly runMutation: (operation: () => Promise<unknown>) => Promise<boolean>;
 }) {
+  const [view, setView] = useState<SpaceMemoryView | null>(null);
+  const [draft, setDraft] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const reload = useCallback(async () => {
+    try {
+      const response = await fetchSpaceMemoryView(props.spaceId);
+      setView(response.view);
+      setDraft(response.view.document?.markdown ?? "");
+      setLoadError(null);
+    } catch (cause) {
+      setLoadError(cause instanceof Error ? cause.message : "无法读取 Space 记忆");
+    }
+  }, [props.spaceId]);
+
+  useEffect(() => { void reload(); }, [reload]);
+
+  if (loadError !== null) {
+    return <p className="memory-error" role="alert">{loadError}</p>;
+  }
+  if (view === null) {
+    return <p className="memory-hint">正在加载长期记忆…</p>;
+  }
+  const dirty = draft !== (view.document?.markdown ?? "");
   return (
-    <label>
-      <input
-        type="checkbox"
-        checked={props.excluded}
-        onChange={(event) => props.runMutation(async () => {
-          await setMemoryConversationParticipation({ conversationId: props.conversationId, excluded: event.target.checked });
-        })}
+    <div className="memory-space-editor">
+      <div className="memory-space-editor-meta">
+        <span>
+          长期记忆 revision {view.document?.revision ?? "—"}
+          {view.document === undefined ? "" : view.document.origin === "user_edit" ? " · 用户编辑" : " · 模型整理"}
+        </span>
+        <span>整理时间：{view.lastMaintenanceAt === null ? "—" : new Date(view.lastMaintenanceAt).toLocaleString()}</span>
+        <span>会话总结：{view.summaryCount} 份</span>
+      </div>
+      <textarea
+        value={draft ?? ""}
+        rows={10}
+        spellCheck={false}
+        onChange={(event) => setDraft(event.target.value)}
+        aria-label="Space 长期记忆正文"
       />
-      本对话不参与智能记忆
-    </label>
+      <p className="memory-hint">
+        直接编辑会立即保存为新版本并撤销被替换的旧版供给；清空正文表示当前记忆为空，
+        不等于清除自动记忆。会话总结与原始对话可在对话中由模型经 search_history / read_history 查询。
+      </p>
+      <button
+        type="button"
+        disabled={!dirty}
+        onClick={() => void props.runMutation(async () => {
+          await writeSpaceMemory({
+            spaceId: props.spaceId,
+            expectedRevisionId: view.document?.revisionId ?? null,
+            markdown: draft ?? "",
+            requestId: `memory-edit-${Date.now()}`,
+          });
+          await reload();
+        })}
+      >
+        保存长期记忆
+      </button>
+    </div>
   );
 }
 
@@ -227,7 +280,7 @@ function ConfirmClear(props: {
 }) {
   return (
     <div className="memory-clear-confirm" role="alertdialog">
-      <p>这会删除{props.scope.kind === "global" ? "全部" : "此范围"}智能记忆及其检索数据，包括后台提炼的内容以及未来通过"记住"保存的项目事实。对话记录、协作规则和路径依赖不会删除；清除前的对话不会被自动重新整理。此操作不可恢复。</p>
+      <p>这会删除{props.scope.kind === "global" ? "全部" : "此 Space"}自动记忆及其检索数据；对话记录、协作规则和路径依赖不受影响，此操作不可恢复。</p>
       <button type="button" onClick={props.onCancel}>取消</button>
       <button type="button" className="danger" onClick={() => void props.onConfirm()}>确认清除</button>
     </div>

@@ -26,11 +26,14 @@ export type CreatePathDependencyFeatureInput = {
   readonly repository: PathDependencyRepository;
   readonly now?: () => string;
   readonly idFactory?: () => string;
+  /** Shared Product Home lease used to make file snapshots coherent with backups. */
+  readonly runStorageExclusive?: <T>(operation: () => Promise<T>) => Promise<T>;
 };
 
 export function createPathDependencyFeature(input: CreatePathDependencyFeatureInput): PathDependencyFeature {
   const now = input.now ?? nowIso;
   const idFactory = input.idFactory ?? (() => `path-dependency:${randomUUID()}`);
+  const runStorageExclusive = input.runStorageExclusive ?? (async <T>(operation: () => Promise<T>) => await operation());
   const listeners = new Set<(event: PathDependencyEvent) => void>();
   const queues = new Map<string, Promise<void>>();
   const ownerQueues = new Map<string, Promise<void>>();
@@ -139,13 +142,14 @@ export function createPathDependencyFeature(input: CreatePathDependencyFeatureIn
           return result;
         };
         return saveInput.owner.kind === "global"
-          ? enqueue(memoryId, operation)
-          : enqueueOwner(memoryOwnerKey(saveInput.owner), () => enqueue(memoryId, operation));
+          ? await enqueue(memoryId, async () => await runStorageExclusive(operation))
+          : await enqueueOwner(memoryOwnerKey(saveInput.owner), async () =>
+            await enqueue(memoryId, async () => await runStorageExclusive(operation)));
       },
       async delete(command) {
         assertUsable("delete a dependency");
         assertPathDependencyMemoryId(command.memoryId);
-        await enqueue(command.memoryId, async () => {
+        await enqueue(command.memoryId, async () => await runStorageExclusive(async () => {
           const deleted = await input.repository.delete(command);
           if (deleted === undefined) {
             throw new PathDependencyFeatureError("path_dependency_not_found", `Path dependency ${command.memoryId} was not found.`);
@@ -156,7 +160,7 @@ export function createPathDependencyFeature(input: CreatePathDependencyFeatureIn
             owner: deleted.owner,
             revision: deleted.revision,
           });
-        });
+        }));
       },
       async deleteByOwner(owner) {
         assertUsable("delete dependencies for an owner");
@@ -174,10 +178,14 @@ export function createPathDependencyFeature(input: CreatePathDependencyFeatureIn
         // saves already admitted to ownerQueues drain before list() runs.
         deletedOwners.add(ownerKey);
         return await enqueueOwner(ownerKey, async () => {
-          const dependencies = await input.repository.list({ owners: [owner] });
+          // Do not hold the shared storage lock while waiting for a per-record
+          // queue. A direct delete may already be queued there and waiting for
+          // the same storage lock, which would otherwise deadlock owner purge.
+          const dependencies = await runStorageExclusive(async () =>
+            await input.repository.list({ owners: [owner] }));
           let deletedCount = 0;
           for (const dependency of dependencies) {
-            await enqueue(dependency.id, async () => {
+            await enqueue(dependency.id, async () => await runStorageExclusive(async () => {
               const current = await input.repository.get(dependency.id);
               if (current === undefined || !sameOwner(current.owner, owner)) return;
               const deleted = await input.repository.delete({
@@ -192,33 +200,34 @@ export function createPathDependencyFeature(input: CreatePathDependencyFeatureIn
                 owner: deleted.owner,
                 revision: deleted.revision,
               });
-            });
+            }));
           }
           return deletedCount;
         });
       },
     },
     queries: {
-      get(memoryId) {
+      async get(memoryId) {
         assertUsable("read a dependency");
         assertPathDependencyMemoryId(memoryId);
-        return input.repository.get(memoryId);
+        return await runStorageExclusive(async () => await input.repository.get(memoryId));
       },
-      list(query) {
+      async list(query) {
         assertUsable("list dependencies");
-        return input.repository.list(query);
+        return await runStorageExclusive(async () => await input.repository.list(query));
       },
       async search(searchInput) {
         assertUsable("search dependencies");
-        const dependencies = await input.repository.list({ owners: searchInput.owners });
+        const dependencies = await runStorageExclusive(async () =>
+          await input.repository.list({ owners: searchInput.owners }));
         return searchPathDependencies(dependencies, searchInput);
       },
       async directory(directoryInput) {
         assertUsable("build a dependency directory");
-        const dependencies = await input.repository.list({
+        const dependencies = await runStorageExclusive(async () => await input.repository.list({
           owners: directoryInput.owners,
           limit: directoryInput.limit ?? 24,
-        });
+        }));
         const excerptChars = Math.max(0, Math.floor(directoryInput.excerptChars ?? 180));
         return dependencies.map((dependency) => ({
           id: dependency.id,

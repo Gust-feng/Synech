@@ -11,6 +11,7 @@ import {
   type ProcessTerminator,
 } from "../runtime-guard/process-registry.js";
 import type { WorkspaceFeature } from "../workspaces/index.js";
+import type { RemovalTicket } from "../memory/contracts.js";
 import { WorkbenchCoordinationError } from "./contracts.js";
 import {
   newConversationBirthRecord,
@@ -56,8 +57,12 @@ export function createConversationLifecycleCoordinator(input: {
   readonly journal: ConversationLifecycleJournal;
   readonly workspaceAdmission?: <T>(workspaceId: string, operation: () => Promise<T>) => Promise<T>;
   readonly spaceAdmission?: <T>(spaceId: string, operation: () => Promise<T>) => Promise<T>;
-  /** Conversation 原始数据删除后的级联钩子（Memory v2 两阶段 fence 等），在同一恢复阶段内执行。 */
-  readonly onConversationDeleted?: (conversationId: string) => Promise<void>;
+  /**
+   * Memory v2 lifecycle wraps the raw Conversation deletion: prepare fences
+   * capture/recall before Ordinary removal, finalize purges only afterwards.
+   */
+  readonly prepareConversationRemoval?: (conversationId: string) => Promise<RemovalTicket>;
+  readonly finalizeConversationRemoval?: (ticket: RemovalTicket) => Promise<void>;
   readonly runExclusive?: <T>(operation: () => Promise<T>) => Promise<T>;
   readonly now?: () => string;
 }): ConversationLifecycleCoordinator {
@@ -115,6 +120,12 @@ export function createConversationLifecycleCoordinator(input: {
 
   const resumeDelete = async (initial: ConversationDeleteRecord): Promise<void> => {
     let record = initial;
+    // The durable journal is the deletion admission point. Fence Memory before
+    // stopping processes or removing Ordinary data, but do not re-fence a
+    // checkpoint that already completed the physical memory purge.
+    const memoryRemovalTicket = record.phase === "conversation_deleted"
+      ? undefined
+      : await input.prepareConversationRemoval?.(record.conversationId);
     if (record.phase === "prepared") {
       assertProcessCleanupComplete(
         await input.processes.cleanupByConversation(record.conversationId, input.processTerminator),
@@ -124,7 +135,9 @@ export function createConversationLifecycleCoordinator(input: {
     }
     if (record.phase === "processes_stopped") {
       await input.ordinary.commands.deleteConversation(record.conversationId);
-      await input.onConversationDeleted?.(record.conversationId);
+      if (memoryRemovalTicket !== undefined) {
+        await input.finalizeConversationRemoval?.(memoryRemovalTicket);
+      }
       record = await saveDeleteCheckpoint(input.journal, record, "conversation_deleted", now());
     }
     await input.journal.delete(record.operationId);

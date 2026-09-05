@@ -21,9 +21,11 @@ import { renameWithRetry } from "../../../kernel/fs/atomic-write.js";
 import type { ProductPaths } from "../../../platform/storage/index.js";
 import { PRODUCT_DATA_FORMAT_ID, PRODUCT_NAMESPACE } from "../../../platform/product-identity.js";
 
-const BACKUP_MANIFEST_VERSION = 2;
+// v3 adds the durable memory-data root so user rules, agent notes and path
+// dependencies travel with the SQLite state they reference.
+const BACKUP_MANIFEST_VERSION = 3;
 const DATABASE_FILE_SUFFIXES = ["", "-wal", "-shm"] as const;
-const OWNED_STORAGE_NAMES = ["knowledge-assets", "space-files"] as const;
+const OWNED_STORAGE_NAMES = ["knowledge-assets", "space-files", "memory-data"] as const;
 const PENDING_RESTORE_BUNDLE_NAME = "pending-restore";
 const ROLLBACK_BUNDLE_NAME = "restore-rollback";
 const BUNDLE_DATABASE_FILE_NAME = "database.sqlite3";
@@ -405,7 +407,7 @@ const backupManifestSchema = z.object({
   dataFormatId: z.literal(PRODUCT_DATA_FORMAT_ID),
   database: z.string().min(1),
   assets: z.string().min(1),
-  roots: z.tuple([z.literal("knowledge-assets"), z.literal("space-files")]),
+  roots: z.tuple([z.literal("knowledge-assets"), z.literal("space-files"), z.literal("memory-data")]),
   createdAt: z.string().min(1),
   schemaFingerprint: z.string().regex(/^[a-f0-9]{64}$/u),
   migrations: z.array(z.object({
@@ -456,9 +458,11 @@ function databaseFilePath(runtimePaths: ProductPaths, suffix: DatabaseFileSuffix
 }
 
 function storagePath(runtimePaths: ProductPaths, storageName: OwnedStorageName): string {
-  return storageName === "knowledge-assets"
-    ? runtimePaths.data.knowledge.assets
-    : runtimePaths.data.spaces.files;
+  switch (storageName) {
+    case "knowledge-assets": return runtimePaths.data.knowledge.assets;
+    case "space-files": return runtimePaths.data.spaces.files;
+    case "memory-data": return runtimePaths.data.memory.root;
+  }
 }
 
 function pendingRestoreBundlePath(runtimePaths: ProductPaths): string {

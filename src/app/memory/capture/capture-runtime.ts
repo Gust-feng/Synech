@@ -5,131 +5,140 @@ import type {
   MemoryCaptureSignal,
   OrdinaryEvidenceReader,
 } from "../contracts.js";
-import { ADMISSION_REASON, resolveAdmissionFromPolicy } from "../policy/policy-snapshot.js";
-import type { MemoryContentRepository } from "../store/content-repository.js";
+import { resolveAdmissionFromPolicy } from "../policy/policy-snapshot.js";
+import type { MemoryDocumentRepository } from "../store/content-repository.js";
 import type { MemoryControlRepository } from "../store/control-repository.js";
 
 /**
- * 真实 Capture Runtime（M3）。Ordinary Run 稳定终结后：
- *   Policy Gate（当次新鲜、fail-closed）→ 连续证据窗（不跳洞）→ 捕获门
- *   → durable job 落盘（进程随后退出也不丢证据段）。
+ * 稳定信号接单（0.6.0）。Ordinary Run 稳定终结后：
+ *   Policy Gate（当次新鲜、fail-closed）→ transcript 索引增量覆盖 →
+ *   每会话待办登记（eligibleAt = stableAt + 空闲时长）。
  *
- * 边界（《手册》9.1/9.2/12.2）：
- * - effective=off（未同意/未参与/被排除/被 fence/rollout off）一律 skipped，不读证据、不落 job；
- *   非 fence 的关闭区间会通过内容仓储推进 skip cursor，防止重新开启后回填；
- * - shadow 与 active 在 capture 阶段行为一致（都接单），差别只在注入侧（Provider，T22）；
- * - 只接受连续无洞且达到最小完整轮次门的证据段；证据窗为空或游标不动则 skipped；
- * - accepted 只表示 durable job/checkpoint 已落盘，不保证一定形成长期 Memory（提炼见
- *   capture/consolidation.ts：模型提炼 + Record/Source/Cursor/job 原子提交）。
+ * 边界：
+ * - effective=off（未同意/未参与/被 fence/rollout off）一律 skipped；不逐信号推进
+ *   游标——启用/重新启用时由 Admin 按 Ordinary 高水位写 excludedThrough 覆盖关闭区间，
+ *   保证重新开启不回填（正式设计 §11.2）；
+ * - shadow 与 active 在接单阶段行为一致，差别只在注入侧；
+ * - transcript 索引是独立原文查询职责的派生投影：从上次覆盖点起做连续增量索引，
+ *   不触发整理、不推进整理进度；
+ * - 同会话新信号只扩大 requestedThrough 并重算 eligibleAt（durable 边界不丢，
+ *   迟到的旧信号不缩小边界）。
  *
- * 本层不调模型、不做 idle 计时（由 panel-server/memory/capture-scheduler.ts
- * 持有 idle timer 并经 listJobsByStatus('queued') 补扫）；noteActivity 保持 no-op
- * 且绝不抛出，调度接线在组合根完成。
+ * 本层不调模型、不做 idle 等待（panel-server 的维护调度器持有唤醒器并领取任务）。
  */
 
-/** 新增完整问答轮次下限（手册 9.2 首轮实验参数：至少 2 个完整问答）；token 阈值门在 T21 用 tokenizer 补。 */
-const MIN_FULL_TURNS_PER_CAPTURE = 2;
-/** 首个 ordinal（OrdinaryRunTurn.ordinal 为 positive integer，从 1 起）。 */
-const FIRST_ORDINAL = 1;
+/** 稳定 Run 后的会话空闲整理计时（正式设计 §13 首版行为，实验参数）。 */
+export const MAINTENANCE_IDLE_DELAY_MS = 270_000;
 
-export interface CaptureRuntimeDeps {
+export interface MemorySignalAcceptorDeps {
   readonly controlRepository: MemoryControlRepository;
-  readonly contentRepository: MemoryContentRepository;
+  readonly documentRepository: MemoryDocumentRepository;
   readonly evidenceReader: OrdinaryEvidenceReader;
-  /** 测试钩子：覆盖最小完整轮次门。 */
-  readonly minFullTurns?: number;
+  readonly idleDelayMs?: number;
+  readonly now?: () => number;
 }
 
 function skipped(reason: string): MemoryCaptureAcceptance {
   return { status: "skipped", reason };
 }
 
-export function createCaptureRuntime(deps: CaptureRuntimeDeps): MemoryCaptureRuntime {
-  const minFullTurns = deps.minFullTurns ?? MIN_FULL_TURNS_PER_CAPTURE;
+export function createMemoryCaptureRuntime(deps: MemorySignalAcceptorDeps): MemoryCaptureRuntime {
+  const idleDelayMs = deps.idleDelayMs ?? MAINTENANCE_IDLE_DELAY_MS;
+  const now = deps.now ?? Date.now;
 
   async function acceptStableSignal(signal: MemoryCaptureSignal): Promise<MemoryCaptureAcceptance> {
     const ownerKey = memoryOwnerKey(signal.owner);
     const conversationKey = `conversation:${signal.conversationId}`;
+    const at = now();
 
-    const [policyRows, ownerLifecycle, conversationLifecycle, existingCursor] = await Promise.all([
+    // 1. Policy Gate（当次重算，fail-closed）。
+    const [policyRows, ownerLifecycle, conversationLifecycle, progress] = await Promise.all([
       deps.controlRepository.readAllPolicy(),
       deps.controlRepository.getLifecycle(ownerKey),
       deps.controlRepository.getLifecycle(conversationKey),
-      deps.contentRepository.getCursor(signal.conversationId),
+      deps.documentRepository.getProgress(signal.conversationId),
     ]);
-
-    // 1. Policy Gate（当次重算，fail-closed）。
     const admission = resolveAdmissionFromPolicy({
       owner: signal.owner,
       conversationId: signal.conversationId,
-      turnOverrideOff: signal.turnOverrideOff === true,
       policyRows,
       ownerLifecycle,
       conversationLifecycle,
     });
     if (admission.effective === "off") {
-      if (!admission.reasons.includes(ADMISSION_REASON.generationFence)) {
-        await deps.contentRepository.advanceCaptureCursor({
-          conversationId: signal.conversationId,
-          ownerKey,
-          coveredThroughOrdinal: signal.stableThrough.ordinal,
-          sourceFingerprint: `rev:${signal.stableThrough.sourceRevision}`,
-          generation: admission.generation,
-        });
-      }
       return skipped(admission.reasons[0] ?? "effective_off");
     }
 
-    // 2. 从连续游标之后读稳定证据窗（适配器保证不跳洞）。
-    const fromOrdinal = existingCursor === undefined
-      ? FIRST_ORDINAL
-      : existingCursor.coveredThroughOrdinal + 1;
-    const window = await deps.evidenceReader.readTurnWindow({
-      conversationId: signal.conversationId,
-      fromOrdinal,
-      through: signal.stableThrough,
-    });
-    if (window.turns.length === 0 || window.nextCursor === undefined) {
+    // 2. 没有越过处理/排除边界的新证据时不登记待办（无新增合格内容不调模型）。
+    const processedFloor = Math.max(
+      progress?.processedThroughOrdinal ?? 0,
+      progress?.excludedThroughOrdinal ?? 0,
+    );
+    if (signal.stableThrough.ordinal <= processedFloor) {
       return skipped("no_new_stable_evidence");
     }
 
-    // 3. 捕获门：本次连续覆盖到的新增完整轮次达到下限才接单。
-    const previousOrdinal = existingCursor?.coveredThroughOrdinal ?? 0;
-    const newFullTurns = new Set(window.turns.map((turn) => turn.ordinal)).size;
-    if (newFullTurns < minFullTurns) {
-      // 不推进游标、不落 job，等后续稳定轮次凑够门限。
-      return skipped("below_capture_threshold");
+    // 3. transcript 索引增量覆盖（独立于整理进度；连续块止于第一个缺口）。
+    const coverage = await deps.documentRepository.getTranscriptCoverage(signal.conversationId);
+    const indexFromOrdinal = (coverage?.indexedThroughOrdinal ?? 0) + 1;
+    if (indexFromOrdinal <= signal.stableThrough.ordinal) {
+      const window = await deps.evidenceReader.readTurnWindow({
+        conversationId: signal.conversationId,
+        fromOrdinal: indexFromOrdinal,
+        through: signal.stableThrough,
+      });
+      if (window.turns.length > 0) {
+        const entries = collectOrdinalTexts(window.turns);
+        await deps.documentRepository.indexTranscriptRange({
+          conversationId: signal.conversationId,
+          ownerKey,
+          entries,
+          now: at,
+        });
+      }
     }
 
-    // 4. durable job：存在活跃 job 则推进其边界，否则新建 queued（durable 边界不丢）。
-    const job = await deps.controlRepository.enqueueOrAdvanceJob({
+    // 4. 每会话待办：存在活跃 job 则扩大边界并重算 eligibleAt，否则新建。
+    const job = await deps.controlRepository.acceptConversationSignal({
       conversationId: signal.conversationId,
       ownerKey,
-      coveredThroughTurnId: signal.stableThrough.turnId,
-      coveredThroughOrdinal: window.nextCursor.coveredThroughOrdinal,
-      sourceFingerprint: window.nextCursor.sourceFingerprint,
+      stableThroughOrdinal: signal.stableThrough.ordinal,
+      sourceFingerprint: `rev:${signal.stableThrough.sourceRevision}`,
+      eligibleAt: at + idleDelayMs,
+      now: at,
       generation: admission.generation,
       policyRevision: admission.policyRevision,
     });
-
-    return {
-      status: "accepted",
-      checkpoint: {
-        conversationId: signal.conversationId,
-        coveredThroughOrdinal: job.coveredThroughOrdinal,
-        sourceFingerprint: job.sourceFingerprint,
-      },
-    };
+    if (job === undefined) {
+      return skipped("no_new_stable_evidence");
+    }
+    return { status: "accepted", conversationId: signal.conversationId, eligibleAt: job.eligibleAt };
   }
 
   return {
     acceptStableSignal,
-    async noteActivity(): Promise<void> {
-      // 重启遗留缺口补扫由 panel-server 的 capture-scheduler（T21）经 durable queued
-      // job 完成；本层保持 no-op 且绝不抛出。
-    },
     async release(): Promise<void> {
-      // 无后台定时器/资源（T21 起持有 idle scheduler 时在此释放）。
+      // 无后台定时器/资源（唤醒器归维护调度器所有）。
     },
   };
+}
+
+/** 同一 ordinal 的 user/assistant 文本合并为一条索引记录（检索按轮命中）。 */
+function collectOrdinalTexts(
+  turns: readonly { readonly ordinal: number; readonly role: "user" | "assistant"; readonly text: string; readonly sourceRevision: number }[],
+): readonly { readonly ordinal: number; readonly text: string; readonly sourceRevision: number }[] {
+  const byOrdinal = new Map<number, { ordinal: number; text: string; sourceRevision: number }>();
+  for (const turn of turns) {
+    const existing = byOrdinal.get(turn.ordinal);
+    if (existing === undefined) {
+      byOrdinal.set(turn.ordinal, {
+        ordinal: turn.ordinal,
+        text: `[${turn.role}]\n${turn.text}`,
+        sourceRevision: turn.sourceRevision,
+      });
+      continue;
+    }
+    existing.text = `${existing.text}\n[${turn.role}]\n${turn.text}`;
+  }
+  return [...byOrdinal.values()].sort((left, right) => left.ordinal - right.ordinal);
 }

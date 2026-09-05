@@ -622,6 +622,7 @@ export function createOrdinaryAgentFeature(input: {
       renameConversation,
       setConversationPinned,
       rollbackConversation,
+      bindMemoryBackground: (input) => conversationCoordinator.bindMemoryBackground(input.conversationId, input.background),
       deleteConversation,
       createManagedAttachmentDraft,
       discardManagedAttachmentDraft,
@@ -651,6 +652,36 @@ export function createOrdinaryAgentFeature(input: {
         await readyPromise;
         const control = await conversationCoordinator.loadControl(conversationId);
         return control === undefined ? undefined : control.state.owner;
+      },
+      async getMemoryBackground(conversationId) {
+        await readyPromise;
+        return await conversationCoordinator.getMemoryBackground(conversationId);
+      },
+      async listConversationMemoryHighWaters() {
+        await readyPromise;
+        // 高水位只服务于 clear/启用排除边界（低频路径）：逐 run 快照读取已分配
+        // ordinal，含排队与未稳定运行（正式设计 §11.2）。
+        const summaries = await runStore.listSummaries(Number.MAX_SAFE_INTEGER);
+        const maxByConversation = new Map<string, number>();
+        const loadedRunIds: string[] = [];
+        for (const summary of summaries) {
+          if (isHiddenConversation(summary.conversationId)) continue;
+          const document = await runStore.load(summary.runId);
+          if (document === undefined || isHiddenRun(document.state)) continue;
+          loadedRunIds.push(summary.runId);
+          const ordinal = document.state.turn.ordinal;
+          const current = maxByConversation.get(document.state.turn.conversationId) ?? 0;
+          if (ordinal > current) maxByConversation.set(document.state.turn.conversationId, ordinal);
+        }
+        for (const runId of loadedRunIds) runStore.evictCachedTerminal(runId);
+        const result: { conversationId: string; ownerKey: string; allocatedThroughOrdinal: number }[] = [];
+        for (const [conversationId, ordinal] of maxByConversation) {
+          const owner = await conversationCoordinator.loadControl(conversationId)
+            .then((control) => control?.state.owner);
+          if (owner === undefined) continue;
+          result.push({ conversationId, ownerKey: memoryOwnerKey(owner), allocatedThroughOrdinal: ordinal });
+        }
+        return result;
       },
       async listConversationsByOwner(owner) {
         await readyPromise;
@@ -704,7 +735,6 @@ export function createOrdinaryAgentFeature(input: {
             assistantTurnId: document.state.turn.assistantTurnId,
             userMessage: document.state.input.userMessage,
             assistantText: document.state.visibleAssistantText ?? "",
-            turnMemoryOverrideOff: document.state.input.turnMemoryOverrideOff === true,
             sourceRevision: document.revision,
             occurredAt: summary.createdAt,
           });

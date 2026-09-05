@@ -1,16 +1,28 @@
 import { useCallback, useEffect, useState } from "react";
-import { fetchMemoryDiagnostics, type MemoryDiagnosticSnapshot } from "@panel-api/memory-admin";
+import {
+  fetchMemoryCapability,
+  fetchMemoryDiagnostics,
+  setMemoryRollout,
+  type MemoryCapabilityStatus,
+  type MemoryDiagnosticSnapshot,
+  type MemoryRolloutMode,
+} from "@panel-api/memory-admin";
 
 export function MemoryDiagnosticsPanel(): React.ReactElement {
   const [snapshot, setSnapshot] = useState<MemoryDiagnosticSnapshot | null>(null);
+  const [capability, setCapability] = useState<MemoryCapabilityStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const response = await fetchMemoryDiagnostics();
+      const [response, capabilityResponse] = await Promise.all([
+        fetchMemoryDiagnostics(),
+        fetchMemoryCapability(),
+      ]);
       setSnapshot(response.diagnostics);
+      setCapability(capabilityResponse.status);
       setError(null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "无法读取记忆诊断");
@@ -20,6 +32,17 @@ export function MemoryDiagnosticsPanel(): React.ReactElement {
   }, []);
 
   useEffect(() => { void refresh(); }, [refresh]);
+
+  const changeRollout = useCallback(async (rollout: MemoryRolloutMode) => {
+    setLoading(true);
+    try {
+      await setMemoryRollout({ rollout });
+      await refresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "无法更新记忆 rollout");
+      setLoading(false);
+    }
+  }, [refresh]);
 
   return (
     <section className="settings-card memory-diagnostics" aria-busy={loading}>
@@ -39,28 +62,30 @@ export function MemoryDiagnosticsPanel(): React.ReactElement {
             <DiagnosticValue label="运行中" value={snapshot.jobs.running} />
             <DiagnosticValue label="已完成" value={snapshot.jobs.done} />
             <DiagnosticValue label="失败" value={snapshot.jobs.failed} />
-            <DiagnosticValue label="Shadow wouldInject" value={snapshot.shadowWouldInject.length} />
-            <DiagnosticValue label="Recall traces" value={snapshot.traces.length} />
           </div>
+          <label className="memory-rollout-control">
+            <span>开发者 rollout / kill switch</span>
+            <select
+              value={capability?.rollout ?? "off"}
+              disabled={loading || capability === null}
+              onChange={(event) => void changeRollout(event.target.value as MemoryRolloutMode)}
+            >
+              <option value="off">关闭（停止整理 / 注入）</option>
+              <option value="shadow">Shadow（只整理评估，不注入）</option>
+              <option value="active">Active（按用户许可与 Space 参与生效）</option>
+            </select>
+          </label>
           <p className="memory-hint">
-            仅展示结构化诊断；Retrieved、Injected 可观测，模型是否实际采用（Used）不可观测。
+            仅展示结构化诊断；Stored、Injected 可观测，模型是否实际采用（Used）不可观测；
+            工具调用次数只是观察项。
           </p>
-          {snapshot.shadowWouldInject.length > 0 && (
+          {snapshot.recentOutcomes.length > 0 && (
             <ul className="memory-diagnostics-list">
-              {snapshot.shadowWouldInject.slice(-5).reverse().map((entry) => (
-                <li key={`${entry.recallId}-${entry.at}`}>
-                  <code>{entry.ownerKey}</code>
-                  <span>{entry.candidateRefs.length} 个候选</span>
-                </li>
-              ))}
-            </ul>
-          )}
-          {snapshot.traces.length > 0 && (
-            <ul className="memory-diagnostics-list">
-              {snapshot.traces.slice(-5).reverse().map((trace) => (
-                <li key={`${trace.recallId}-${trace.at}`}>
-                  <code>{trace.outcome}</code>
-                  <span>{trace.retrievedRefs.length} retrieved / {trace.injectedRefs.length} injected</span>
+              {snapshot.recentOutcomes.slice(0, 8).map((entry, index) => (
+                <li key={`${entry.at}-${index}`}>
+                  <code>{entry.outcome}</code>
+                  <span>{entry.longTermUpdated ? "含长期修订" : "仅会话总结"}</span>
+                  {entry.reason !== undefined && <span>{entry.reason}</span>}
                 </li>
               ))}
             </ul>

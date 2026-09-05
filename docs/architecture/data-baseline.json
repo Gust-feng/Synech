@@ -1,11 +1,11 @@
 {
   "productNamespace": "synech",
-  "dataFormatId": "synech/v1-baseline-3",
-  "schemaFingerprint": "df0d485da2e7fbe1a02b5741f0977a3c83fc21c21aa98affef3d05c92770316d",
+  "dataFormatId": "synech/v1-baseline-5",
+  "schemaFingerprint": "aa3050174c070d95654c55c7a6ca6da1c51140f35f1e46dbc7ead1ef6894a477",
   "migrationOwners": {
     "conversation-lifecycle": 1,
     "managed-assets": 1,
-    "memory": 3,
+    "memory": 5,
     "personal-knowledge": 1,
     "space-conversation-deletion": 1,
     "spaces": 2,
@@ -17,6 +17,8 @@
     "memory/1": "2dffd4ab92580beea0a6b5cfd9f45db43d8bf1444742253d8704c5be9d2f371f",
     "memory/2": "fc6212e17aad369eb6182ff9d0ade6b204be6cc612c8d1acefe932e3dc06777c",
     "memory/3": "03d27d5ae01b30dcb4c9b84d79d1b613619f3fab71dae5c8eee3237aee00d4b5",
+    "memory/4": "98c02fa0ec5f8077e46ef83eafbe3346ee82ed1d4df9a4d82e06a232b275676c",
+    "memory/5": "4ec2318bb3a29ad5ad1da636a5217c64184be323bb7f1b8f5abec836ed5e54ce",
     "personal-knowledge/1": "765a1c04ff9d0be57bf1e5285f6733f7308ae43fdb8b86b96fd0b03c2415c5a1",
     "space-conversation-deletion/1": "fcc367ac68ae21c2e453a683ee1aa1058338f320fab41348dc3b589491fe4b11",
     "spaces/1": "ec9bca6dc50030789f488591bf130ede75110e41a8b1b348e896f476c581d0b4",

@@ -15,6 +15,7 @@ import {
 import { ordinaryAgentDefinitionFromPromptConfig } from "../agent-prompts/ordinary-agent-configured-definition.js";
 import type { AgentDefinition } from "../agent-prompts/contracts.js";
 import type { AgentNotesFeature } from "../agent-notes/index.js";
+import type { CollaborationRulesFeature } from "../collaboration-rules/index.js";
 import type { CapabilityCenter } from "../capability/capability-center.js";
 import type { ConfigCenter } from "../config-center/index.js";
 import { resolveModelCapabilities } from "../model-runtime/model-capability-registry.js";
@@ -42,6 +43,7 @@ export type OrdinaryRunBirthHost = {
   readonly ordinaryAgentDefinition: AgentDefinition;
   readonly agentDefinitionOverrides: Map<string, AgentDefinition>;
   readonly agentNotesFeature: AgentNotesFeature;
+  readonly collaborationRulesFeature: CollaborationRulesFeature;
   readonly pathDependencyFeature: PathDependencyFeature;
   readonly ordinaryAgentFeature: OrdinaryAgentFeature;
   readonly spaceFeature: SpaceFeature;
@@ -82,7 +84,7 @@ export async function prepareOrdinaryRunBirth(
     runtime.ordinaryAgentDefinition,
     ordinaryAgentPromptConfig,
   );
-  const [ownerBlock, noteSnapshot, pathDependencyDirectory] = await Promise.all([
+  const [ownerBlock, noteSnapshot, pathDependencyDirectory, collaborationRules] = await Promise.all([
     formatOwnerContext(runtime, scope),
     runtime.agentNotesFeature.queries.startupSnapshot(scope.owner),
     runtime.pathDependencyFeature.queries.directory({
@@ -90,6 +92,7 @@ export async function prepareOrdinaryRunBirth(
       limit: PATH_DEPENDENCY_DIRECTORY_MAX_ENTRIES,
       excerptChars: 240,
     }),
+    runtime.collaborationRulesFeature.queries.startupSnapshot(scope.owner),
   ]);
   // 活动钩子：重启遗留的整理缺口在本会话再次活动时异步补做，绝不阻塞 run birth。
   if (conversationId !== undefined) {
@@ -117,6 +120,9 @@ export async function prepareOrdinaryRunBirth(
     agentNoteVersions: noteSnapshot.versions,
     memoryOwner: scope.owner,
     ownerContext: [ownerBlock, formatEnvironmentContext(capabilitySnapshot.commandShell)].join("\n\n"),
+    // Keep user-authored rules out of the owner/environment segment. The model
+    // assembler places them after resources and before implicit advisory data.
+    ...(collaborationRules.injection === undefined ? {} : { collaborationRulesContext: collaborationRules.injection }),
     informationAccess,
     accessPolicy: toolRunAccessPolicyFromPreset(input.toolConfirmationPolicy ?? toolConfirmation.policy),
   };

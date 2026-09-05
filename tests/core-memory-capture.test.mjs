@@ -6,190 +6,123 @@ import test from "node:test";
 
 import { SqliteRuntimeDatabase } from "../dist/adapters/runtime-storage/index.js";
 import {
-  MemoryError,
-  createMemoryRuntime,
-  createSqliteMemoryContentRepository,
+  createSqliteMemoryDocumentRepository,
   createSqliteMemoryControlRepository,
-} from "../dist/app/memory/index.js";
-import {
+  createMemoryCaptureRuntime,
   POLICY_KEY,
-  participationKey,
-} from "../dist/app/memory/policy/policy-snapshot.js";
+  spaceParticipationKey,
+} from "../dist/app/memory/index.js";
+import { lexicalMatchExpression } from "../dist/app/memory/recall/lexical-projection.js";
 
-// 被测不变量（《手册》9.1/9.2）：
-// - 真实 Capture 经 Policy Gate（持久化行 → 当次重算，fail-closed）决定接单与否；
-// - accepted 只在达到最小完整轮次门后出现，且 durable job 落盘（重启可枚举）；
-// - owner fence 与轮次不足都不得落 job。
-
-const OWNER = { kind: "space", id: "s1" };
-const OWNER_KEY = "space:s1";
-const CONVERSATION_ID = "conv-1";
-
-// 证据读取口 stub：模拟 Ordinary 稳定 run 投影的「连续无洞」语义
-// （availableOrdinals 按升序给定，一旦断洞或越过 through 立即停止）。
-function fakeEvidenceReader(availableOrdinals, calls = []) {
-  return {
-    async readTurnWindow({ conversationId, fromOrdinal, through }) {
-      calls.push({ conversationId, fromOrdinal, through });
-      const turns = [];
-      let coveredThrough;
-      let expected = fromOrdinal;
-      for (const ordinal of availableOrdinals) {
-        if (ordinal !== expected || ordinal > through.ordinal) break;
-        turns.push({
-          turnId: `u${ordinal}`,
-          ordinal,
-          role: "user",
-          text: `turn ${ordinal}`,
-          runId: `run-${ordinal}`,
-          occurredAt: "2026-09-02T00:00:00.000Z",
-          sourceRevision: through.sourceRevision,
-        });
-        coveredThrough = ordinal;
-        expected += 1;
-      }
-      const nextCursor = coveredThrough === undefined ? undefined : {
-        conversationId,
-        coveredThroughOrdinal: coveredThrough,
-        sourceFingerprint: `rev:${through.sourceRevision}`,
-      };
-      return { turns, nextCursor };
-    },
-  };
-}
-
-const signalThrough = (ordinal) => ({
-  owner: OWNER,
-  conversationId: CONVERSATION_ID,
-  stableThrough: { turnId: `u${ordinal}`, ordinal, sourceRevision: 10 + ordinal },
-});
-
-async function admitSpaceOwner(controlRepository, { rollout = "active" } = {}) {
-  await controlRepository.setPolicy({
-    key: POLICY_KEY.consent, kind: "global_consent", scopeOwnerKey: null, enabled: true,
-  });
-  if (rollout !== "off") {
-    await controlRepository.setPolicy({
-      key: POLICY_KEY.rollout, kind: "rollout", scopeOwnerKey: rollout, enabled: true,
-    });
-  }
-  await controlRepository.setPolicy({
-    key: participationKey(OWNER_KEY), kind: "scope_participation", scopeOwnerKey: OWNER_KEY, enabled: true,
-  });
-}
-
-async function withRuntime(run, { availableOrdinals = [1, 2, 3], evidenceCalls = [] } = {}) {
+async function withHarness(run, options = {}) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "synech-memory-capture-"));
-  const filePath = path.join(dir, "synech.sqlite3");
-  const database = new SqliteRuntimeDatabase(filePath);
-  const controlRepository = createSqliteMemoryControlRepository(database, {
-    idFactory: (() => { let n = 0; return () => `memjob-${++n}`; })(),
-  });
-  const contentRepository = createSqliteMemoryContentRepository(database);
-  const runtime = createMemoryRuntime({
-    controlRepository,
-    contentRepository,
-    evidenceReader: fakeEvidenceReader(availableOrdinals, evidenceCalls),
+  const database = new SqliteRuntimeDatabase(path.join(dir, "synech.sqlite3"));
+  const control = createSqliteMemoryControlRepository(database);
+  const documents = createSqliteMemoryDocumentRepository(database);
+  const now = options.now ?? (() => 10_000);
+  // 默认 policy：全局同意 + Space 参与 + rollout active。
+  await control.setPolicy({ key: POLICY_KEY.consent, kind: "global_consent", scopeOwnerKey: null, enabled: true });
+  await control.setPolicy({ key: spaceParticipationKey("s1"), kind: "space_participation", scopeOwnerKey: "space:s1", enabled: true });
+  await control.setPolicy({ key: POLICY_KEY.rollout, kind: "rollout", scopeOwnerKey: "active", enabled: true });
+  const runtime = createMemoryCaptureRuntime({
+    controlRepository: control,
+    documentRepository: documents,
+    evidenceReader: options.evidenceReader ?? { async readTurnWindow() { return { turns: [], nextCursor: undefined }; } },
+    idleDelayMs: options.idleDelayMs ?? 270_000,
+    now,
   });
   try {
-    await run({ runtime, controlRepository, contentRepository, database, filePath, evidenceCalls });
+    await run({ control, documents, runtime, database });
   } finally {
     database.close();
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 }
 
-test("absent content/evidence composition keeps capture as noop skip", async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "synech-memory-capture-noop-"));
-  const database = new SqliteRuntimeDatabase(path.join(dir, "synech.sqlite3"));
-  try {
-    const runtime = createMemoryRuntime({
-      controlRepository: createSqliteMemoryControlRepository(database),
-    });
-    const acceptance = await runtime.captureRuntime.acceptStableSignal(signalThrough(2));
-    assert.deepEqual(acceptance, { status: "skipped", reason: "memory_capture_disabled" });
-    await assert.rejects(
-      () => runtime.lifecycle.clearOwnerMemory(OWNER),
-      (error) => error instanceof MemoryError && error.code === "memory_store_failure",
-    );
-  } finally {
-    database.close();
-    await rm(dir, { recursive: true, force: true });
-  }
-});
+const stableThrough = (ordinal) => ({ turnId: `u${ordinal}`, ordinal, sourceRevision: ordinal });
 
-test("capture skips and checkpoints disabled intervals so reopening cannot backfill them", async () => {
-  await withRuntime(async ({ runtime, controlRepository, contentRepository, evidenceCalls }) => {
-    const acceptance = await runtime.captureRuntime.acceptStableSignal(signalThrough(3));
-    assert.equal(acceptance.status, "skipped");
-    assert.equal(acceptance.reason, "global_consent");
-    assert.equal((await controlRepository.listJobsByStatus("queued")).length, 0);
-    assert.equal((await contentRepository.getCursor(CONVERSATION_ID))?.coveredThroughOrdinal, 3);
-    assert.equal((await runtime.captureRuntime.acceptStableSignal(signalThrough(3))).status, "skipped");
-    assert.equal(evidenceCalls.length, 0, "disabled capture must not read evidence");
-    await admitSpaceOwner(controlRepository);
-    const reopened = await runtime.captureRuntime.acceptStableSignal(signalThrough(3));
-    assert.equal(reopened.status, "skipped");
-    assert.equal(reopened.reason, "no_new_stable_evidence");
-    assert.equal(evidenceCalls[0].fromOrdinal, 4, "reopening must start after the disabled interval");
-  });
-});
-
-test("consent with active rollout accepts and the durable job survives reopen", async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "synech-memory-capture-accept-"));
-  const filePath = path.join(dir, "synech.sqlite3");
-  try {
-    const first = new SqliteRuntimeDatabase(filePath);
-    const controlRepository = createSqliteMemoryControlRepository(first, {
-      idFactory: (() => { let n = 0; return () => `memjob-${++n}`; })(),
+test("accepted signal registers a durable per-conversation job with eligibleAt = stableAt + idle", async () => {
+  await withHarness(async ({ control, runtime }) => {
+    const acceptance = await runtime.acceptStableSignal({
+      owner: { kind: "space", id: "s1" },
+      conversationId: "c1",
+      stableThrough: stableThrough(2),
     });
-    const contentRepository = createSqliteMemoryContentRepository(first);
-    const runtime = createMemoryRuntime({
-      controlRepository,
-      contentRepository,
-      evidenceReader: fakeEvidenceReader([1, 2, 3]),
-    });
-    await admitSpaceOwner(controlRepository);
-
-    const acceptance = await runtime.captureRuntime.acceptStableSignal(signalThrough(2));
     assert.equal(acceptance.status, "accepted");
-    assert.equal(acceptance.checkpoint.conversationId, CONVERSATION_ID);
-    assert.equal(acceptance.checkpoint.coveredThroughOrdinal, 2);
-    first.close();
-
-    // durable job 边界落盘：进程随后退出也不丢证据段。
-    const second = new SqliteRuntimeDatabase(filePath);
-    const reopened = createSqliteMemoryControlRepository(second);
-    const queued = await reopened.listJobsByStatus("queued");
+    assert.equal(acceptance.eligibleAt, 10_000 + 270_000);
+    const queued = await control.listJobsByStatus("queued");
     assert.equal(queued.length, 1);
-    assert.equal(queued[0].conversationId, CONVERSATION_ID);
-    assert.equal(queued[0].ownerKey, OWNER_KEY);
-    assert.equal(queued[0].coveredThroughOrdinal, 2);
-    assert.equal(queued[0].coveredThroughTurnId, "u2");
-    second.close();
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
-test("owner fence blocks capture even when all policy gates are open", async () => {
-  await withRuntime(async ({ runtime, controlRepository }) => {
-    await admitSpaceOwner(controlRepository);
-    await controlRepository.setLifecycleFence(OWNER_KEY, "fenced");
-    const acceptance = await runtime.captureRuntime.acceptStableSignal(signalThrough(3));
-    assert.deepEqual(acceptance, { status: "skipped", reason: "generation_fence" });
-    assert.equal((await controlRepository.listJobsByStatus("queued")).length, 0);
+    assert.equal(queued[0].requestedThroughOrdinal, 2);
   });
 });
 
-test("windows below the minimum full-turn gate are skipped without enqueueing a job", async () => {
-  await withRuntime(
-    async ({ runtime, controlRepository }) => {
-      await admitSpaceOwner(controlRepository);
-      const acceptance = await runtime.captureRuntime.acceptStableSignal(signalThrough(1));
-      assert.deepEqual(acceptance, { status: "skipped", reason: "below_capture_threshold" });
-      assert.equal((await controlRepository.listJobsByStatus("queued")).length, 0);
+test("effective off (no consent) skips without creating jobs or advancing progress", async () => {
+  await withHarness(async ({ control, documents, runtime }) => {
+    const acceptance = await runtime.acceptStableSignal({
+      owner: { kind: "space", id: "s2" },
+      conversationId: "c-other",
+      stableThrough: stableThrough(2),
+    });
+    assert.equal(acceptance.status, "skipped");
+    assert.equal((await control.listJobsByStatus("queued")).length, 0);
+    assert.equal(await documents.getProgress("c-other"), undefined);
+  });
+});
+
+test("signals without new evidence beyond processed/excluded floor are skipped", async () => {
+  await withHarness(async ({ control, runtime, documents }) => {
+    await documents.setExcludedThrough({
+      conversationId: "c1", ownerKey: "space:s1", excludedThroughOrdinal: 5, now: 1,
+    });
+    const acceptance = await runtime.acceptStableSignal({
+      owner: { kind: "space", id: "s1" },
+      conversationId: "c1",
+      stableThrough: stableThrough(5),
+    });
+    assert.equal(acceptance.status, "skipped");
+    assert.equal((await control.listJobsByStatus("queued")).length, 0);
+  });
+});
+
+test("transcript index advances incrementally with signals and is independently searchable", async () => {
+  const turnsFor = (from, through) => {
+    const turns = [];
+    for (let ordinal = from; ordinal <= through.ordinal; ordinal += 1) {
+      turns.push({
+        turnId: `u${ordinal}`, ordinal, role: "user", text: `第${ordinal}轮讨论安装器设计`,
+        runId: `r${ordinal}`, occurredAt: "2026-09-05T00:00:00.000Z", sourceRevision: ordinal,
+      });
+      turns.push({
+        turnId: `a${ordinal}`, ordinal, role: "assistant", text: `第${ordinal}轮回复`,
+        runId: `r${ordinal}`, occurredAt: "2026-09-05T00:00:01.000Z", sourceRevision: ordinal,
+      });
+    }
+    return turns;
+  };
+  await withHarness(async ({ documents, runtime }) => {
+    await runtime.acceptStableSignal({
+      owner: { kind: "space", id: "s1" },
+      conversationId: "c1",
+      stableThrough: stableThrough(2),
+    });
+    const coverage = await documents.getTranscriptCoverage("c1");
+    assert.equal(coverage.indexedThroughOrdinal, 2);
+    const hits = await documents.searchTranscript({ ownerKey: "space:s1", match: lexicalMatchExpression("安装器"), limit: 8 });
+    assert.equal(hits.length, 2);
+    assert.ok(hits.every((hit) => hit.conversationId === "c1"));
+  }, {
+    evidenceReader: {
+      async readTurnWindow({ conversationId, fromOrdinal, through }) {
+        const turns = turnsFor(fromOrdinal, through);
+        return {
+          turns,
+          nextCursor: turns.length === 0 ? undefined : {
+            conversationId,
+            coveredThroughOrdinal: through.ordinal,
+            sourceFingerprint: `rev:${through.ordinal}`,
+          },
+        };
+      },
     },
-    { availableOrdinals: [1] },
-  );
+  });
 });

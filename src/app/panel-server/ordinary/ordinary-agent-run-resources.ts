@@ -89,15 +89,17 @@ export type CreateOrdinaryAgentRunResourceAcquirerInput = {
     readonly conversationId: string;
   }) => NonNullable<Parameters<HostFeatureAgentToolContributionResolver>[0]["memoryFacts"]>;
   /**
-   * Resolves the implicit long-term memory advisory block for this turn
-   * (Memory v2 Context Provider). Degrades to undefined when absent/empty.
+   * Resolves the conversation memory background binding for this run
+   * (0.6.0 正式设计 §9.1)：绑定一次（none|revision），返回首个请求可用的背景块与
+   * 每次 freeze 的供给复核闭包。Degrades to undefined when Memory is unavailable.
    */
-  readonly resolveImplicitMemoryBlock?: (input: {
+  readonly resolveMemoryBackground?: (input: {
     readonly owner: import("../../../domain/memory/index.js").MemoryOwner;
-    readonly conversationId?: string;
-    readonly userText: string;
-    readonly turnOverrideOff: boolean;
-  }) => Promise<string | undefined>;
+    readonly conversationId: string;
+  }) => Promise<{
+    readonly initialBlock: string | undefined;
+    readonly resolvePerFreeze?: () => Promise<string | undefined>;
+  } | undefined>;
   readonly resolveSubAgentRoots: (workspaceRoot: string) => readonly SubAgentRootInput[];
   readonly contextAttachmentReadAuthorization?: ContextAttachmentReadAuthorization;
   readonly resolveWorkspacePathAuthorization?: (input: {
@@ -285,11 +287,9 @@ export function createOrdinaryAgentRunResourceAcquirer(
           exposedToolNames: toolBoundary.allowedAgentToolNames,
           dynamicSpawnAvailable: true,
         });
-        const implicitMemoryBlock = await options.resolveImplicitMemoryBlock?.({
+        const memoryBackground = await options.resolveMemoryBackground?.({
           owner: input.birth.memoryOwner,
           conversationId: input.conversationId,
-          userText: input.runInput.userMessage,
-          turnOverrideOff: input.runInput.turnMemoryOverrideOff === true,
         }) ?? undefined;
         const modelInput = buildOrdinaryAgentModelInput({
           agentDefinition: definition,
@@ -297,7 +297,7 @@ export function createOrdinaryAgentRunResourceAcquirer(
           runContext,
           skillContexts,
           ownerContext: input.birth.ownerContext,
-          implicitMemoryBlock,
+          collaborationRulesContext: input.birth.collaborationRulesContext,
         });
         const messagesWithAttachments = await attachOrdinaryFileInputsToModelMessages({
           messages: modelInput.messages,
@@ -322,6 +322,10 @@ export function createOrdinaryAgentRunResourceAcquirer(
             recordProviderToolDefinitionMetrics(toolMetrics, metrics);
           },
           agentSession: sessionLease.session,
+          // 每次冻结前复核背景供给（撤销/清除/关闭后不再注入，不自动换绑）。
+          ...(memoryBackground?.resolvePerFreeze === undefined
+            ? {}
+            : { resolveMemoryBackgroundBlock: memoryBackground.resolvePerFreeze }),
         });
         const ownedLoop = loop;
         const ownedSessionLease = sessionLease;
@@ -343,6 +347,10 @@ export function createOrdinaryAgentRunResourceAcquirer(
           resolvedMessages: messagesWithAttachments,
           tools,
           toolMetrics,
+          // 诊断/测试可观测：per-freeze 背景供给闭包（与 loop options 同源）。
+          ...(memoryBackground?.resolvePerFreeze === undefined
+            ? {}
+            : { resolveMemoryBackgroundBlock: memoryBackground.resolvePerFreeze }),
           revokeSessionTo: (target) => ownedSessionLease.revokeTo(target),
           releaseSession: ownedSessionLease.release,
           ...(toolBoundary.capabilityResolution === undefined

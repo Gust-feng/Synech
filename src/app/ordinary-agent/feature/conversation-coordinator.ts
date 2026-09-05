@@ -713,6 +713,35 @@ function schedulingFacts(runId: string): OrdinaryRunSchedulingFacts {
     return requireConversationView(control);
   }
 
+  async function getMemoryBackground(conversationId: string) {
+    const control = await loadControl(conversationId);
+    return control?.state.memoryBackground;
+  }
+
+  async function bindMemoryBackground(conversationId: string, background: import("../contracts.js").OrdinaryMemoryBackgroundBinding) {
+    assertLive();
+    return await withConversationLock(conversationId, async () => {
+      await settlePendingUncommittedConversationCleanup(conversationId);
+      const current = await loadControl(conversationId);
+      if (current === undefined) {
+        throw new OrdinaryFeatureError("ordinary_conversation_not_found", `Ordinary conversation ${conversationId} was not found`);
+      }
+      assertConversationWritable(current);
+      // 绑定幂等：已初始化（含显式 none）时原样返回，绝不覆盖或"补绑"。
+      if (current.state.memoryBackground !== undefined) {
+        return current.state.memoryBackground;
+      }
+      const changedAt = now();
+      const saved = await options.conversationRepository.save(
+        { ...clone(current.state), memoryBackground: background },
+        current.revision,
+        changedAt,
+      );
+      conversationDocuments.set(conversationId, saved);
+      return saved.state.memoryBackground ?? background;
+    });
+  }
+
   async function setConversationPinned(conversationId: string, pinned: boolean): Promise<OrdinaryConversationReadModel> {
     const control = await mutateConversation(conversationId, (state, changedAt) => ({
       ...state, pinnedAt: pinned ? state.pinnedAt ?? changedAt : undefined,
@@ -1006,6 +1035,8 @@ function schedulingFacts(runId: string): OrdinaryRunSchedulingFacts {
     listConversationsByOwner,
     listConversations,
     loadControl,
+    getMemoryBackground,
+    bindMemoryBackground,
     markUnavailable,
     isHiddenConversation,
     isHiddenRun,

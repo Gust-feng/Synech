@@ -1,91 +1,121 @@
-import {
-  consolidateJob,
-  type ConsolidationDeps,
-  type ConsolidationModelPort,
-} from "../../memory/capture/consolidation.js";
 import type { OrdinaryEvidenceReader } from "../../memory/contracts.js";
-import type { MemoryContentRepository } from "../../memory/store/content-repository.js";
+import {
+  maintainConversationJob,
+  type MaintenanceDeps,
+  type MaintenanceJobOutcome,
+} from "../../memory/capture/consolidation.js";
+import type { MemoryMaintenanceModelPort } from "../../memory/contracts.js";
+import type { MemoryDocumentRepository } from "../../memory/store/content-repository.js";
 import type { MemoryControlRepository } from "../../memory/store/control-repository.js";
 import type { MemoryJobRow } from "../../memory/store/persistence-schema.js";
+import { MAINTENANCE_IDLE_DELAY_MS } from "../../memory/capture/capture-runtime.js";
 
 /**
- * Memory Capture 空闲调度器（T21，《手册》9.1/9.2/13.2）。
+ * Memory 维护调度器（0.6.0 正式设计 §7）：每会话空闲资格 + 全局单 worker。
  *
- * durable 化的空闲调度：进程内只持有 270s idle timer 作为触发器，待处理边界
- * 的唯一事实源是 SQLite 里的 durable queued job（T20 accept 落盘）。每次触发
- * 都经 `listJobsByStatus('queued')` 现读现处理，进程重启后由 `recoverQueuedJobs`
- * 用同一条路径补扫，不维护内存队列，也不在启动时全量补处理历史（补扫只消费
- * 已 accept 的 job，不是 backfill）。
+ * durable 化调度：进程内 timer 只是唤醒器，待处理边界的唯一事实源是 SQLite 里的
+ * memory_job（信号接单落盘：requestedThrough / eligibleAt）。每次唤醒经
+ * `listDueJobs`（eligible_at/next_attempt_at 过滤，按 ready_queued_at 排序）现读
+ * 现处理；恢复活动的会话在领取前由宿主注入的活动端口延后，worker 跳过继续其他
+ * 任务，不在队首等待。
  *
  * 纪律：
- * - 稳定 Run / Run birth 等活动都会重置 idle timer（手册 9.2：稳定完成后重置）；
- * - 单飞串行：同一时刻至多一个 drain 在跑，drain 内逐个 job 串行；consolidateJob
- *   自身还有 queued→running CAS 兜底，并发触发也不会双跑同一 job；
- * - 失败只走诊断，绝不向主链路（stable-run 订阅 / Run birth 钩子）抛出；
- * - release 后停止触发，正在进行的 drain 允许自然收尾（job 状态机保证一致性）。
+ * - 全局同时至多一个 Memory 模型请求在途（drain 串行 + claimJob CAS 兜底）；
+ * - 一个长会话每 claim 只处理一批，剩余范围由提交事务重排到就绪队列尾
+ *   （不重新等 270 秒，也不持续占据队首）；
+ * - 失败只走诊断与 onOutcome，绝不向主链路（stable-run 订阅）抛出；
+ * - release 后停止触发，在途 drain 自然收尾。
  */
 
-/** 稳定 Run 后重置的空闲整理计时（手册 9.2 首轮实验参数，需由评测校准）。 */
-export const IDLE_CONSOLIDATION_DELAY_MS = 270_000;
-
-export type MemoryCaptureScheduler = {
-  /** 活动信号（稳定 Run 终结 / Run birth）：重置 idle timer；不抛出、不阻塞。 */
+export type MemoryMaintenanceScheduler = {
+  /** 活动信号（稳定 Run 终结）：按空闲时长安排下一次唤醒；不抛出、不阻塞。 */
   noteActivity(input: { readonly conversationId: string }): void;
-  /** 启动补扫：立即串行消化当前全部 queued job（重启前遗留的 durable 边界）。 */
+  /** 启动恢复：running 残留回队列后立即消化当前到期任务。 */
   recoverQueuedJobs(): Promise<void>;
   /** 停止触发并等待在途 drain 收尾（进程关闭 / restore 前调用）。 */
   release(): Promise<void>;
 };
 
-export function createMemoryCaptureScheduler(input: {
+export function createMemoryMaintenanceScheduler(input: {
   readonly controlRepository: MemoryControlRepository;
-  readonly contentRepository: MemoryContentRepository;
+  readonly documentRepository: MemoryDocumentRepository;
   readonly evidenceReader: OrdinaryEvidenceReader;
-  readonly model: ConsolidationModelPort;
+  readonly model: MemoryMaintenanceModelPort;
+  /** 宿主注入的会话活动端口：true 表示该会话当前有运行/审批在途，延后整理。 */
+  readonly isConversationActive?: (conversationId: string) => Promise<boolean>;
   readonly idleDelayMs?: number;
+  readonly now?: () => number;
   readonly onDiagnostic?: (topic: string, error: unknown) => void;
-}): MemoryCaptureScheduler {
-  const idleDelayMs = input.idleDelayMs ?? IDLE_CONSOLIDATION_DELAY_MS;
+  readonly onOutcome?: (outcome: MaintenanceJobOutcome) => void;
+}): MemoryMaintenanceScheduler {
+  const idleDelayMs = input.idleDelayMs ?? MAINTENANCE_IDLE_DELAY_MS;
+  const now = input.now ?? Date.now;
   const onDiagnostic = input.onDiagnostic ?? ((topic, error) => console.error(`[panel-server] ${topic}`, error));
+  const isConversationActive = input.isConversationActive ?? (async () => false);
 
   let released = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let drainPromise: Promise<void> | undefined;
   let drainRequestedAgain = false;
 
-  const consolidationDeps: ConsolidationDeps = {
+  const maintenanceDeps: MaintenanceDeps = {
     controlRepository: input.controlRepository,
-    contentRepository: input.contentRepository,
+    documentRepository: input.documentRepository,
     evidenceReader: input.evidenceReader,
     model: input.model,
+    now,
   };
 
-  function scheduleTimer(): void {
+  function scheduleWake(delayMs: number): void {
     if (released) return;
     if (timer !== undefined) clearTimeout(timer);
     timer = setTimeout(() => {
       timer = undefined;
       void runDrain();
-    }, idleDelayMs);
-    // 不阻止进程退出：调度器只是触发器，durable job 重启后仍会被补扫。
+    }, Math.max(delayMs, 250));
+    // 不阻止进程退出：调度器只是唤醒器，durable job 重启后仍会被补扫。
     timer.unref?.();
   }
 
-  async function drainQueuedJobsOnce(): Promise<void> {
+  /** drain 收尾后按最近的到期任务安排下一次唤醒；无到期任务时低频兜底轮询。 */
+  async function scheduleNextWakeFromJobs(): Promise<void> {
+    try {
+      const queued = await input.controlRepository.listJobsByStatus("queued");
+      const nowMs = now();
+      const nextDue = queued
+        .map((job) => Math.max(job.eligibleAt, job.nextAttemptAt ?? 0))
+        .filter((due) => due > nowMs)
+        .sort((left, right) => left - right)[0];
+      if (nextDue !== undefined) {
+        scheduleWake(nextDue - nowMs);
+        return;
+      }
+    } catch (error) {
+      onDiagnostic("Memory scheduler could not schedule next wake", error);
+    }
+    // 没有未来到期任务时不再轮询：下一次活动信号会重新安排唤醒。
+  }
+
+  async function drainDueJobsOnce(): Promise<void> {
     let jobs: readonly MemoryJobRow[];
     try {
-      jobs = await input.controlRepository.listJobsByStatus("queued");
+      jobs = await input.controlRepository.listDueJobs({ now: now(), limit: 16 });
     } catch (error) {
-      onDiagnostic("Memory consolidation drain could not list queued jobs", error);
+      onDiagnostic("Memory maintenance drain could not list due jobs", error);
       return;
     }
     for (const job of jobs) {
       if (released) return;
+      if (await isConversationActive(job.conversationId)) {
+        // 恢复活动的会话延后：worker 继续其他任务，不在队首等待
+        // （其下一次稳定终结会重算 eligibleAt）。
+        continue;
+      }
       try {
-        await consolidateJob(consolidationDeps, job.jobId);
+        const outcome = await maintainConversationJob(maintenanceDeps, job.jobId);
+        input.onOutcome?.(outcome);
       } catch (error) {
-        // consolidateJob 内部已收敛 job 状态；这里只兜底诊断，绝不上抛主链路。
-        onDiagnostic(`Memory consolidation job ${job.jobId} failed`, error);
+        onDiagnostic(`Memory maintenance job ${job.jobId} failed`, error);
       }
     }
   }
@@ -99,7 +129,8 @@ export function createMemoryCaptureScheduler(input: {
       try {
         do {
           drainRequestedAgain = false;
-          await drainQueuedJobsOnce();
+          await drainDueJobsOnce();
+          await scheduleNextWakeFromJobs();
         } while (drainRequestedAgain && !released);
       } finally {
         drainPromise = undefined;
@@ -110,14 +141,18 @@ export function createMemoryCaptureScheduler(input: {
 
   return {
     noteActivity({ conversationId }) {
-      // v1 只用全局单一 idle timer：活动只负责重置计时（手册 9.2）；
-      // conversationId 保留在合同上，供后续按会话精细调度时使用。
       void conversationId;
       if (released) return;
-      scheduleTimer();
+      scheduleWake(idleDelayMs);
     },
 
     async recoverQueuedJobs() {
+      try {
+        await input.controlRepository.recoverInterruptedJobs();
+      } catch (error) {
+        onDiagnostic("Memory maintenance recovery failed", error);
+        return;
+      }
       await runDrain();
     },
 

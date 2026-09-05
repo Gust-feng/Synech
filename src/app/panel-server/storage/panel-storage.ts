@@ -5,7 +5,7 @@ import { SqliteRuntimeDatabase } from "../../../adapters/runtime-storage/index.j
 import type { ProductPaths } from "../../../platform/storage/index.js";
 import { createSqliteManagedAssetRepository } from "../../managed-assets/index.js";
 import {
-  createSqliteMemoryContentRepository,
+  createSqliteMemoryDocumentRepository,
   createSqliteMemoryControlRepository,
 } from "../../memory/index.js";
 import { createSqlitePersonalKnowledgeRepository } from "../../personal-knowledge/index.js";
@@ -87,7 +87,7 @@ export function openPanelStorage(productPaths: ProductPaths) {
       spaceRepository: createSqliteSpaceRepository(database),
       personalKnowledgeRepository: createSqlitePersonalKnowledgeRepository(database),
       memoryControlRepository: createSqliteMemoryControlRepository(database),
-      memoryContentRepository: createSqliteMemoryContentRepository(database),
+      memoryContentRepository: createSqliteMemoryDocumentRepository(database),
     };
   } catch (startupError) {
     try {

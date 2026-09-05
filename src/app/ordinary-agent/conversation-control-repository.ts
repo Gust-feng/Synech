@@ -25,6 +25,17 @@ const ownerSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("workspace"), id: z.string().min(1) }).strict(),
 ]);
 
+const memoryBackgroundSchema: z.ZodType<import("./contracts.js").OrdinaryMemoryBackgroundBinding> = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("none"), boundAt: z.string().min(1) }).strict(),
+  z.object({
+    kind: z.literal("revision"),
+    revisionId: z.string().min(1),
+    revision: z.number().int().positive(),
+    generation: z.number().int().nonnegative(),
+    boundAt: z.string().min(1),
+  }).strict(),
+]);
+
 const stateSchema: z.ZodType<OrdinaryConversationControlState> = z.object({
   conversationId: z.string().min(1),
   createdAt: z.string().min(1),
@@ -41,6 +52,7 @@ const stateSchema: z.ZodType<OrdinaryConversationControlState> = z.object({
   autoTitleAt: z.string().min(1).optional(),
   pinnedAt: z.string().min(1).optional(),
   deletedAt: z.string().min(1).optional(),
+  memoryBackground: memoryBackgroundSchema.optional(),
 }).strict().superRefine((state, context) => {
   if ((state.titleOverride === undefined) !== (state.titleEditedAt === undefined)) {
     context.addIssue({ code: "custom", message: "title override and edit time must appear together" });

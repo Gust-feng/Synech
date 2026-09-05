@@ -7,387 +7,148 @@ import test from "node:test";
 import { SqliteRuntimeDatabase } from "../dist/adapters/runtime-storage/index.js";
 import {
   MemoryError,
-  POLICY_KEY,
   createControlMemoryLifecycle,
   createMemoryAdminApplication,
-  createMemoryFeature,
-  createSqliteMemoryContentRepository,
   createSqliteMemoryControlRepository,
-  conversationExclusionKey,
-  participationKey,
+  createSqliteMemoryDocumentRepository,
 } from "../dist/app/memory/index.js";
 
-let seq = 0;
-function deterministicIds() {
-  return (prefix) => `${prefix}-${++seq}`;
-}
+/**
+ * Memory Admin（正式设计 §11.2/§11.3/§11.5）：
+ * - writeSpaceMemory：CAS + 容量 + admission；发布即撤销被替换版本供给；
+ * - 启用边界：setConsent(true)/setSpaceParticipation(true) 依据 Ordinary 高水位
+ *   写 excludedThrough（关闭区间不回填）；
+ * - clear：高水位排除 → fence/generation → purge（保留排除边界）。
+ */
 
-function memoryRecord(conversationId) {
-  return {
-    kind: "decision",
-    modelText: "A record used by the admin lifecycle test.",
-    evidenceClass: "quoted_user_evidence",
-    confirmation: "unconfirmed",
-    contentHash: `admin-${conversationId}`,
-    generation: 0,
-    sources: [{ conversationId, sourceRevision: 1 }],
-  };
-}
-
-async function withAdmin(run, { existingSpaces = [], conversationMap = new Map() } = {}) {
+async function withHarness(run, options = {}) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "synech-memory-admin-"));
-  const filePath = path.join(dir, "synech.sqlite3");
-  const database = new SqliteRuntimeDatabase(filePath);
-  seq = 0;
-  const ids = deterministicIds();
-  const controlRepository = createSqliteMemoryControlRepository(database, { idFactory: ids });
-  const contentRepository = createSqliteMemoryContentRepository(database, { idFactory: ids });
-  const lifecycle = createControlMemoryLifecycle(controlRepository, {
-    idFactory: ids,
-    contentRepository,
-  });
-  const deleting = new Set();
-  const spaceExists = new Map();
-  for (const space of existingSpaces) {
-    spaceExists.set(space.id, true);
-    if (space.deleting) deleting.add(space.id);
-  }
-  const isLifecycleFenced = async (ownerKey) => {
-    const row = await controlRepository.getLifecycle(ownerKey);
-    if (row === undefined) return false;
-    return row.fenceState === "fenced" || row.fenceState === "tombstone";
-  };
-  const ownerExistsQuery = {
-    isSpaceAvailable: async (spaceId) => {
-      if (deleting.has(spaceId)) return false;
-      if (!(spaceExists.has(spaceId))) return false;
-      return !(await isLifecycleFenced(`space:${spaceId}`));
-    },
-    isWorkspaceAvailable: async () => true,
-    getConversationOwner: async (conversationId) => {
-      const conversation = conversationMap.get(conversationId);
-      if (conversation === undefined) return undefined;
-      const { owner, exists: convExists = true } = conversation;
-      const ownerFenced = owner.kind === "space" && (deleting.has(owner.id) || await isLifecycleFenced(`space:${owner.id}`));
-      if (ownerFenced) return { exists: false, owner };
-      return { exists: convExists, owner };
-    },
-  };
-  let lane = Promise.resolve();
-  const spaceAdmission = {
-    admit: async (_spaceId, operation) => {
-      const next = lane.then(() => operation(), () => operation());
-      lane = next.then(() => undefined, () => undefined);
-      return await next;
-    },
-    assertAvailable: (spaceId) => {
-      if (deleting.has(spaceId)) {
-        throw new MemoryError("memory_owner_deleted", `Space ${spaceId} is being deleted.`);
-      }
-    },
-  };
-  let conversationLane = Promise.resolve();
-  const conversationAdmission = {
-    admit: async (_conversationId, operation) => {
-      const next = conversationLane.then(() => operation(), () => operation());
-      conversationLane = next.then(() => undefined, () => undefined);
-      return await next;
-    },
-  };
-  let workspaceLane = Promise.resolve();
-  const workspaceAdmission = {
-    admit: async (_workspaceId, operation) => {
-      const next = workspaceLane.then(() => operation(), () => operation());
-      workspaceLane = next.then(() => undefined, () => undefined);
-      return await next;
-    },
-  };
+  const database = new SqliteRuntimeDatabase(path.join(dir, "synech.sqlite3"));
+  const control = createSqliteMemoryControlRepository(database);
+  const documents = createSqliteMemoryDocumentRepository(database);
+  const highWaters = options.highWaters ?? [
+    { conversationId: "c1", ownerKey: "space:s1", allocatedThroughOrdinal: 12 },
+    { conversationId: "c2", ownerKey: "space:s2", allocatedThroughOrdinal: 30 },
+  ];
   const admin = createMemoryAdminApplication({
-    controlRepository,
-    lifecycle,
-    contentRepository,
-    spaceAdmission,
-    workspaceAdmission,
-    conversationAdmission,
-    ownerExistsQuery,
+    controlRepository: control,
+    documentRepository: documents,
+    lifecycle: createControlMemoryLifecycle(control, { documentRepository: documents }),
+    spaceAdmission: { admit: async (_spaceId, operation) => await operation() },
+    workspaceAdmission: { admit: async (_spaceId, operation) => await operation() },
+    ownerExistsQuery: {
+      isSpaceAvailable: async (spaceId) => spaceId !== "s-deleted",
+      isWorkspaceAvailable: async () => true,
+    },
+    conversationHighWaterQuery: { listConversationHighWaters: async () => highWaters },
   });
-  const feature = createMemoryFeature({ adminApplication: admin });
   try {
-    await run({
-      admin,
-      feature,
-      controlRepository,
-      contentRepository,
-      lifecycle,
-      database,
-      deleting,
-      spaceExists,
-    });
+    await run({ admin, control, documents, database });
   } finally {
     database.close();
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 }
 
-test("setConsent writes the global consent row and getStatus reflects it", async () => {
-  await withAdmin(async ({ admin }) => {
-    const before = await admin.getCapabilityStatus();
-    assert.equal(before.globalConsent, false);
-    assert.equal(before.rollout, "off");
-    assert.equal(before.effective, "off");
+test("writeSpaceMemory publishes a user_edit revision and a stale expectedRevision is rejected", async () => {
+  await withHarness(async ({ admin, documents }) => {
+    const first = await admin.writeSpaceMemory({
+      spaceId: "s1",
+      expectedRevisionId: null,
+      markdown: "# v1",
+      requestId: "req-1",
+    });
+    assert.ok(first.revisionId.length > 0);
 
-    const result = await admin.setConsent({ globalConsent: true });
-    assert.equal(typeof result.policyRevision, "string");
-    assert.ok(result.policyRevision.startsWith("g1:"));
+    const view = await admin.getSpaceMemoryView({ spaceId: "s1" });
+    assert.equal(view.document.revisionId, first.revisionId);
+    assert.equal(view.document.origin, "user_edit");
 
-    const after = await admin.getCapabilityStatus();
-    assert.equal(after.globalConsent, true);
-    // rollout 仍为 off，effective 必须维持 off（manual 12.2：effective 是更具体
-    // 拒绝的并集，rollout off 不能被 global consent 跳过）。
-    assert.equal(after.effective, "off");
+    // 过期的 CAS（null 或旧 revisionId）都拒绝。
+    await assert.rejects(() => admin.writeSpaceMemory({
+      spaceId: "s1", expectedRevisionId: null, markdown: "# stale", requestId: "req-2",
+    }), (error) => error instanceof MemoryError && error.code === "memory_revision_stale");
+
+    const second = await admin.writeSpaceMemory({
+      spaceId: "s1",
+      expectedRevisionId: first.revisionId,
+      markdown: "# v2",
+      requestId: "req-3",
+    });
+    assert.equal(second.revision, first.revision + 1);
+    // 被替换的 v1 停止供给（validity=invalidated）。
+    assert.equal((await documents.getSpaceMemoryRevision(first.revisionId)).validity, "invalidated");
   });
 });
 
-test("setSpaceParticipation rejects when the space is fenced (fail-closed)", async () => {
-  await withAdmin(
-    async ({ admin, controlRepository }) => {
-      // fenceForRemoval 把 generation+1 并立 fenced；ownerExistsQuery 报告不可用。
-      await controlRepository.fenceForRemoval("space:s1");
-      await assert.rejects(
-        () => admin.setSpaceParticipation({ spaceId: "s1", enabled: true }),
-        (error) => error instanceof MemoryError && error.code === "memory_owner_deleted",
-      );
-      const rows = await controlRepository.readAllPolicy();
-      assert.equal(rows.find((row) => row.key === participationKey("space:s1")), undefined);
-    },
-    { existingSpaces: [{ id: "s1" }] },
-  );
-});
-
-test("setSpaceParticipation rejects when the space does not exist", async () => {
-  await withAdmin(async ({ admin, controlRepository }) => {
-    await assert.rejects(
-      () => admin.setSpaceParticipation({ spaceId: "missing", enabled: true }),
-      (error) => error instanceof MemoryError && error.code === "memory_owner_deleted",
-    );
-    const rows = await controlRepository.readAllPolicy();
-    assert.equal(rows.find((row) => row.key === participationKey("space:missing")), undefined);
+test("writeSpaceMemory enforces the token capacity cap", async () => {
+  await withHarness(async ({ admin }) => {
+    const oversized = "很长的正文。".repeat(6_000 * 2);
+    await assert.rejects(() => admin.writeSpaceMemory({
+      spaceId: "s1", expectedRevisionId: null, markdown: oversized, requestId: "req-cap",
+    }), (error) => error instanceof MemoryError && error.code === "memory_capacity_exceeded");
   });
 });
 
-test("clearImplicitMemory purges derived content and keeps the owner available for new capture", async () => {
-  await withAdmin(
-    async ({ admin, controlRepository, contentRepository, lifecycle }) => {
-      await controlRepository.setPolicy({
-        key: POLICY_KEY.consent, kind: "global_consent", scopeOwnerKey: null, enabled: true,
-      });
-      await controlRepository.setPolicy({
-        key: POLICY_KEY.rollout, kind: "rollout", scopeOwnerKey: "active", enabled: true,
-      });
-      await controlRepository.setPolicy({
-        key: participationKey("space:s1"), kind: "scope_participation", scopeOwnerKey: "space:s1", enabled: true,
-      });
-      // 写一条 active record 作为可清除目标。
-      await contentRepository.commitConsolidation({
-        conversationId: "c-clear",
-        ownerKey: "space:s1",
-        records: [{
-          kind: "decision",
-          modelText: "Initial decision before clear.",
-          evidenceClass: "quoted_user_evidence",
-          confirmation: "unconfirmed",
-          contentHash: "hash-clear-1",
-          generation: 0,
-          sources: [{ conversationId: "c-clear", sourceRevision: 1 }],
-        }],
-        advanceCursorTo: { coveredThroughOrdinal: 2, sourceFingerprint: "fp-clear-1" },
-      });
-      assert.equal((await contentRepository.listActiveByOwner("space:s1")).length, 1);
-
-      const result = await admin.clearImplicitMemory({ scope: { kind: "space", id: "s1" } });
-      assert.equal(result.generation, 1);
-
-      const lifecycleRow = await controlRepository.getLifecycle("space:s1");
-      assert.equal(lifecycleRow.fenceState, "none");
-      assert.equal(lifecycleRow.generation, 1);
-      assert.equal((await contentRepository.listActiveByOwner("space:s1")).length, 0);
-      assert.equal((await contentRepository.getCursor("c-clear"))?.coveredThroughOrdinal, 2);
-
-      // 清除不改变 consent/participation；同一 owner 仍可接收清除后的新稳定轮次。
-      await admin.setSpaceParticipation({ spaceId: "s1", enabled: true });
-
-      // generation 单调 +1：后续真正的 removal 仍生成 generation=2 的新 ticket。
-      const nextTicket = await lifecycle.prepareOwnerRemoval({ kind: "space", id: "s1" });
-      assert.equal(nextTicket.fencedGeneration, 2);
-      assert.equal((await controlRepository.getLifecycle("space:s1")).generation, 2);
-
-      // recall 不会再返回旧 records：FTS5 投影搜索要求 generation 与 lifecycle 一致，
-      // 当前 lifecycle.generation=2，旧 records 带 generation=0 被丢弃。
-      const hits = await contentRepository.searchActiveByProjection({
-        ownerKey: "space:s1",
-        match: "decision",
-        generation: 2,
-        limit: 5,
-      });
-      assert.equal(hits.length, 0);
-    },
-    { existingSpaces: [{ id: "s1" }] },
-  );
+test("writeSpaceMemory on an unavailable (deleted) space is rejected", async () => {
+  await withHarness(async ({ admin }) => {
+    await assert.rejects(() => admin.writeSpaceMemory({
+      spaceId: "s-deleted", expectedRevisionId: null, markdown: "# x", requestId: "req-x",
+    }), (error) => error instanceof MemoryError && error.code === "memory_owner_deleted");
+  });
 });
 
-test("global clear purges every owner while preserving consent and skip cursors", async () => {
-  await withAdmin(
-    async ({ admin, contentRepository, controlRepository }) => {
-      await controlRepository.setPolicy({
-        key: POLICY_KEY.consent, kind: "global_consent", scopeOwnerKey: null, enabled: true,
-      });
-      for (const [ownerKey, conversationId] of [["space:s1", "c-global-1"], ["space:s2", "c-global-2"]]) {
-        await contentRepository.commitConsolidation({
-          conversationId,
-          ownerKey,
-          records: [memoryRecord(conversationId)],
-          advanceCursorTo: { coveredThroughOrdinal: 5, sourceFingerprint: "global-clear-source" },
-        });
-      }
-      assert.equal((await contentRepository.listActiveAll()).length, 2);
+test("enabling consent writes exclusions from Ordinary high-waters (no backfill on re-enable)", async () => {
+  await withHarness(async ({ admin, documents }) => {
+    // 全局启用：全部 Space 会话的已分配高水位都被排除（含 s2 的 c2）。
+    await admin.setConsent({ globalConsent: true });
+    const c1 = await documents.getProgress("c1");
+    assert.equal(c1.excludedThroughOrdinal, 12);
+    const c2 = await documents.getProgress("c2");
+    assert.equal(c2.excludedThroughOrdinal, 30);
 
-      await admin.clearImplicitMemory({ scope: { kind: "global" } });
-
-      assert.equal((await contentRepository.listActiveAll()).length, 0);
-      assert.equal((await contentRepository.getCursor("c-global-1"))?.coveredThroughOrdinal, 5);
-      assert.equal((await contentRepository.getCursor("c-global-2"))?.coveredThroughOrdinal, 5);
-      assert.equal((await controlRepository.readAllPolicy()).find((row) => row.key === POLICY_KEY.consent)?.enabled, true);
-    },
-    { existingSpaces: [{ id: "s1" }, { id: "s2" }] },
-  );
+    // Space 参与启用：s1 的排除边界按高水位再次写入（单调，不回退）。
+    await admin.setSpaceParticipation({ spaceId: "s1", enabled: true });
+    assert.equal((await documents.getProgress("c1")).excludedThroughOrdinal, 12);
+  }, {
+    highWaters: [
+      { conversationId: "c1", ownerKey: "space:s1", allocatedThroughOrdinal: 12 },
+      { conversationId: "c2", ownerKey: "space:s2", allocatedThroughOrdinal: 30 },
+    ],
+  });
 });
 
-test("memory-feature facade forwards setConsent and getCapabilityStatus to the admin application", async () => {
-  await withAdmin(
-    async ({ admin, feature }) => {
-      // facade 转发一致性：facade 应当把 setConsent / getCapabilityStatus 真实地
-      // 转发到 admin（不是写空结果、不是返回 undefined）。policyRevision 每次
-      // 调用都会 bump，所以只验证 facade 写入后的 capability status 与直接
-      // admin 写入后的 capability status 完全一致。
-      const before = await admin.getCapabilityStatus();
-      await feature.commands.setConsent({ globalConsent: true });
-      const facadeStatus = await feature.queries.getCapabilityStatus();
-      const directStatus = await admin.getCapabilityStatus();
-      assert.deepEqual(facadeStatus, directStatus);
-      assert.notEqual(facadeStatus.globalConsent, before.globalConsent);
-      assert.equal(facadeStatus.globalConsent, true);
-    },
-    { existingSpaces: [{ id: "s1" }] },
-  );
+test("clear persists exclusions for the scope, bumps generation, and preserves the exclusion boundary", async () => {
+  await withHarness(async ({ admin, control, documents }) => {
+    await admin.setConsent({ globalConsent: true });
+    await admin.setSpaceParticipation({ spaceId: "s1", enabled: true });
+    await admin.writeSpaceMemory({ spaceId: "s1", expectedRevisionId: null, markdown: "# before clear", requestId: "req-0" });
+
+    const before = await control.getLifecycle("space:s1");
+    const result = await admin.clearImplicitMemory({ scope: { kind: "space", id: "s1" } });
+    assert.ok(result.generation > (before?.generation ?? 0));
+
+    // 派生内容被清除；排除边界保留（c1 高水位 12 不得回填）。
+    assert.equal(await documents.getActiveSpaceMemoryHead("space:s1"), undefined);
+    const progress = await documents.getProgress("c1");
+    assert.equal(progress.excludedThroughOrdinal, 12);
+  }, {
+    highWaters: [
+      { conversationId: "c1", ownerKey: "space:s1", allocatedThroughOrdinal: 12 },
+      { conversationId: "c2", ownerKey: "space:s2", allocatedThroughOrdinal: 30 },
+    ],
+  });
 });
 
-test("capability status reports scoped participation and conversation exclusion facts", async () => {
-  await withAdmin(
-    async ({ admin }) => {
-      const before = await admin.getCapabilityStatus({
-        owner: { kind: "space", id: "s1" },
-        conversationId: "c-status",
-      });
-      assert.equal(before.scopeParticipation, false);
-      assert.equal(before.conversationExcluded, false);
-
-      await admin.setSpaceParticipation({ spaceId: "s1", enabled: true });
-      await admin.setConversationParticipation({ conversationId: "c-status", excluded: true });
-      const after = await admin.getCapabilityStatus({
-        owner: { kind: "space", id: "s1" },
-        conversationId: "c-status",
-      });
-      assert.equal(after.scopeParticipation, true);
-      assert.equal(after.conversationExcluded, true);
-      assert.equal(after.effective, "off");
-    },
-    {
-      existingSpaces: [{ id: "s1" }],
-      conversationMap: new Map([["c-status", { owner: { kind: "space", id: "s1" } }]]),
-    },
-  );
-});
-
-test("setConversationParticipation rejects when conversation is absent", async () => {
-  await withAdmin(
-    async ({ admin }) => {
-      await assert.rejects(
-        () => admin.setConversationParticipation({ conversationId: "missing", excluded: true }),
-        (error) => error instanceof MemoryError && error.code === "memory_owner_deleted",
-      );
-    },
-    { existingSpaces: [{ id: "s1" }] },
-  );
-});
-
-test("setConversationParticipation writes exclusion row when conversation exists", async () => {
-  await withAdmin(
-    async ({ admin, controlRepository }) => {
-      const conversationMap = new Map([
-        ["c-ok", { owner: { kind: "space", id: "s1" } }],
-      ]);
-      const result = await admin.setConversationParticipation({
-        conversationId: "c-ok",
-        excluded: true,
-      });
-      assert.equal(typeof result.policyRevision, "string");
-      const rows = await controlRepository.readAllPolicy();
-      const row = rows.find((candidate) => candidate.key === conversationExclusionKey("c-ok"));
-      assert.equal(row?.enabled, true);
-    },
-    { existingSpaces: [{ id: "s1" }], conversationMap: new Map([
-      ["c-ok", { owner: { kind: "space", id: "s1" } }],
-    ]) },
-  );
-});
-
-test("conversation exclusion purges derived provenance and preserves the post-exclusion cursor", async () => {
-  await withAdmin(
-    async ({ admin, contentRepository, controlRepository }) => {
-      await contentRepository.commitConsolidation({
-        conversationId: "c-exclude",
-        ownerKey: "space:s1",
-        records: [{
-          kind: "decision",
-          modelText: "This record came from the excluded conversation.",
-          evidenceClass: "quoted_user_evidence",
-          confirmation: "unconfirmed",
-          contentHash: "exclude-hash",
-          generation: 0,
-          sources: [{ conversationId: "c-exclude", sourceRevision: 1 }],
-        }],
-        advanceCursorTo: { coveredThroughOrdinal: 4, sourceFingerprint: "exclude-source" },
-      });
-
-      await admin.setConversationParticipation({ conversationId: "c-exclude", excluded: true });
-
-      assert.equal((await contentRepository.listActiveByOwner("space:s1")).length, 0);
-      assert.equal((await contentRepository.getCursor("c-exclude"))?.coveredThroughOrdinal, 4);
-      assert.equal(
-        (await controlRepository.readAllPolicy()).find((row) => row.key === conversationExclusionKey("c-exclude"))?.enabled,
-        true,
-      );
-    },
-    {
-      existingSpaces: [{ id: "s1" }],
-      conversationMap: new Map([["c-exclude", { owner: { kind: "space", id: "s1" } }]]),
-    },
-  );
-});
-
-test("setConversationParticipation rejects when owner is fenced mid-flight", async () => {
-  await withAdmin(
-    async ({ admin }) => {
-      const conversationMap = new Map([
-        ["c-fenced", { owner: { kind: "space", id: "s2" } }],
-      ]);
-      await assert.rejects(
-        () => admin.setConversationParticipation({ conversationId: "c-fenced", excluded: true }),
-        (error) => error instanceof MemoryError && error.code === "memory_owner_deleted",
-      );
-    },
-    { existingSpaces: [{ id: "s1" }, { id: "s2", deleting: true }], conversationMap: new Map([
-      ["c-fenced", { owner: { kind: "space", id: "s2" } }],
-    ]) },
-  );
+test("capability status reflects consent/participation/rollout without caching", async () => {
+  await withHarness(async ({ admin }) => {
+    await admin.setConsent({ globalConsent: true });
+    await admin.setSpaceParticipation({ spaceId: "s1", enabled: true });
+    await admin.setRollout({ rollout: "active" });
+    const status = await admin.getCapabilityStatus({ owner: { kind: "space", id: "s1" } });
+    assert.equal(status.globalConsent, true);
+    assert.equal(status.spaceParticipation, true);
+    assert.equal(status.rollout, "active");
+    assert.equal(status.effective, "active");
+  });
 });

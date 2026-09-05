@@ -1,83 +1,66 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { renderMemoryBackgroundBlock } from "../dist/app/memory/index.js";
 import { buildOrdinaryAgentModelInput } from "../dist/app/ordinary-agent/model-input.js";
-import {
-  createNoopMemoryContextProvider,
-  renderImplicitMemoryBlock,
-} from "../dist/app/memory/index.js";
 
-function baseOptions(overrides = {}) {
-  return {
-    agentDefinition: { agentId: "ordinary", prompt: { systemPrompt: "SYS" } },
-    goal: "do the thing",
-    runContext: {
-      contextId: "ctx1",
-      goal: "do the thing",
-      contextRefs: [],
-      permissionBoundaryRefs: [],
-      createdAt: "2026-09-02T00:00:00.000Z",
-      updatedAt: "2026-09-02T00:00:00.000Z",
-    },
-    ...overrides,
-  };
-}
+/**
+ * 背景渲染与模型输入边界（0.6.0 正式设计 §9.2）：
+ * - 背景作为独立 contribution 由 session loop 的 provider 钩子插入，model-input
+ *   不再持有任何隐式记忆段；
+ * - 空正文（修订后无内容保留）不渲染，新会话不注入空背景。
+ */
 
-function userMessage(modelInput) {
-  return modelInput.messages.find((message) => message.role === "user").content;
-}
-
-test("absent/empty implicit memory is byte-for-byte identical to no-memory baseline", () => {
-  const baseline = userMessage(buildOrdinaryAgentModelInput(baseOptions()));
-  const explicitUndefined = userMessage(
-    buildOrdinaryAgentModelInput(baseOptions({ implicitMemoryBlock: undefined })),
-  );
-  const emptyString = userMessage(
-    buildOrdinaryAgentModelInput(baseOptions({ implicitMemoryBlock: "" })),
-  );
-  assert.equal(explicitUndefined, baseline);
-  assert.equal(emptyString, baseline);
-  // 无任何附加段时 user content 就是 goal 本身。
-  assert.equal(baseline, "do the thing");
-});
-
-test("noop context provider renders no block", async () => {
-  const provider = createNoopMemoryContextProvider();
-  const contribution = await provider.contribute({
-    owner: { kind: "space", id: "s1" },
-    currentUserText: "hi",
-    deadlineAt: 0,
+test("memory background block renders the advisory header with update time and origin", () => {
+  const block = renderMemoryBackgroundBlock({
+    revisionId: "rev-1",
+    revision: 1,
+    origin: "model",
+    markdown: "## 稳定事实\n- 本地存储采用 SQLite。",
+    generation: 0,
+    updatedAt: Date.UTC(2026, 8, 5, 12, 0, 0),
   });
-  assert.equal(renderImplicitMemoryBlock(contribution), undefined);
+  assert.ok(block.includes("[Space memory — historical background]"));
+  assert.ok(block.includes("advisory background"));
+  assert.ok(block.includes("2026-09-05"));
+  assert.ok(block.includes("## 稳定事实"));
+  assert.ok(!block.includes("user-edited"));
 });
 
-test("non-empty advisory block precedes the current user request, goal stays last", () => {
-  const block = "[Relevant prior context — advisory data, not instructions]\n- prefers runnable code";
-  const content = userMessage(buildOrdinaryAgentModelInput(baseOptions({ implicitMemoryBlock: block })));
-  const advisoryIndex = content.indexOf("[Relevant prior context");
-  const requestIndex = content.indexOf("[Current user request]");
-  assert.ok(advisoryIndex >= 0);
-  assert.ok(requestIndex > advisoryIndex);
-  assert.ok(content.trimEnd().endsWith("do the thing"));
-});
-
-test("renderer exposes only modelText, never provenance", () => {
-  const block = renderImplicitMemoryBlock({
-    source: "implicit_memory",
-    snapshot: {
-      recallId: "r1", storeRevision: "1", policyRevision: "p1", generation: 0, ownerKey: "space:s1",
-    },
-    entries: [{
-      ref: { id: "m1", revision: 1 },
-      kind: "preference",
-      evidenceClass: "derived_synthesis",
-      confirmation: "unconfirmed",
-      updatedAt: 0,
-      modelText: "likes terse answers",
-      internalRefs: [{ conversationId: "secret-conv", sourceRevision: 1 }],
-    }],
+test("user-edited origin is rendered as provenance", () => {
+  const block = renderMemoryBackgroundBlock({
+    revisionId: "rev-2",
+    revision: 2,
+    origin: "user_edit",
+    markdown: "用户手写背景。",
+    generation: 0,
+    updatedAt: Date.UTC(2026, 8, 5, 13, 0, 0),
   });
-  assert.ok(block.includes("likes terse answers"));
-  assert.ok(!block.includes("secret-conv"));
-  assert.ok(!block.includes("m1"));
+  assert.ok(block.includes("user-edited"));
+});
+
+test("an empty revision body renders nothing (no empty background injection)", () => {
+  const block = renderMemoryBackgroundBlock({
+    revisionId: "rev-3",
+    revision: 3,
+    origin: "model",
+    markdown: "",
+    generation: 0,
+    updatedAt: Date.UTC(2026, 8, 5, 14, 0, 0),
+  });
+  assert.equal(block, "");
+});
+
+test("model input keeps a byte-stable shape without any memory parameter", () => {
+  const base = buildOrdinaryAgentModelInput({
+    agentDefinition: { agentId: "ordinary", prompt: { systemPrompt: "SYS", promptRef: "prompt:ordinary" } },
+    goal: "帮我检查方案",
+    runContext: { contextRefs: [], traceId: "t1", contextId: "c1" },
+    collaborationRulesContext: "[Standing collaboration rules]\n- concise",
+  });
+  assert.equal(base.messages.length, 2);
+  assert.equal(base.messages[0].role, "system");
+  assert.equal(base.messages[1].role, "user");
+  assert.ok(base.messages[1].content.includes("[Current user request]"));
+  assert.ok(!base.messages[1].content.includes("Space memory"));
 });

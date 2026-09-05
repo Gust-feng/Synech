@@ -73,3 +73,91 @@ export type PathDependencyResponse = {
   readonly ok: true;
   readonly dependency: PathDependency;
 };
+
+export type MemoryPathDependencyScope =
+  | { readonly kind: "global" }
+  | { readonly kind: "space"; readonly id: string }
+  | { readonly kind: "workspace"; readonly id: string };
+
+export async function fetchMemoryPathDependencies(scope: MemoryPathDependencyScope): Promise<{
+  readonly owner: MemoryOwner | null;
+  readonly pathDependencies: readonly PathDependency[];
+}> {
+  const query = new URLSearchParams();
+  if (scope.kind !== "global") {
+    query.set("ownerKind", scope.kind);
+    query.set("ownerId", scope.id);
+  }
+  const suffix = query.size === 0 ? "" : `?${query}`;
+  const response = await fetch(`/api/memory/path-dependencies${suffix}`, { method: "GET" });
+  await assertMemoryResponse(response, "无法读取路径依赖");
+  return await response.json() as {
+    readonly owner: MemoryOwner | null;
+    readonly pathDependencies: readonly PathDependency[];
+  };
+}
+
+export async function deleteMemoryPathDependency(input: {
+  readonly memoryId: string;
+  readonly scope: MemoryPathDependencyScope;
+  readonly expectedRevision: number;
+}): Promise<void> {
+  const body = input.scope.kind === "global"
+    ? { expectedRevision: input.expectedRevision }
+    : {
+        ownerKind: input.scope.kind,
+        ownerId: input.scope.id,
+        expectedRevision: input.expectedRevision,
+      };
+  const response = await fetch(`/api/memory/path-dependencies/${encodeURIComponent(input.memoryId)}`, {
+    method: "DELETE",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  await assertMemoryResponse(response, "无法删除路径依赖");
+}
+
+export async function saveMemoryPathDependency(input: {
+  readonly scope: MemoryPathDependencyScope;
+  readonly title: string;
+  readonly methodology: string;
+  readonly tags: readonly string[];
+  readonly memoryId?: string;
+  readonly expectedRevision?: number;
+}): Promise<PathDependency> {
+  const body = {
+    scope: input.scope.kind === "global" ? "global" : "owner",
+    ...(input.scope.kind === "global" ? {} : {
+      ownerKind: input.scope.kind,
+      ownerId: input.scope.id,
+    }),
+    title: input.title,
+    methodology: input.methodology,
+    tags: input.tags,
+    ...(input.memoryId === undefined ? {} : { memoryId: input.memoryId }),
+    ...(input.expectedRevision === undefined ? {} : { expectedRevision: input.expectedRevision }),
+  };
+  const endpoint = input.memoryId === undefined
+    ? "/api/memory/path-dependencies"
+    : `/api/memory/path-dependencies/${encodeURIComponent(input.memoryId)}`;
+  const response = await fetch(endpoint, {
+    method: input.memoryId === undefined ? "POST" : "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  await assertMemoryResponse(response, "无法保存路径依赖");
+  const payload = await response.json() as { readonly result: { readonly dependency: PathDependency } };
+  return payload.result.dependency;
+}
+
+async function assertMemoryResponse(response: Response, fallback: string): Promise<void> {
+  if (response.ok) return;
+  let message = fallback;
+  try {
+    const payload = await response.json() as { readonly error?: { readonly message?: unknown } };
+    if (typeof payload.error?.message === "string" && payload.error.message.length > 0) message = payload.error.message;
+  } catch {
+    // Keep a stable panel-facing fallback when an upstream failure is not JSON.
+  }
+  throw new Error(`${message}（${response.status}）`);
+}

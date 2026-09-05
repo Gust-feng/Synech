@@ -38,7 +38,8 @@ import { SubAgentSettings } from "./sub-agents";
 import { DeveloperToolStatistics, UsageStatisticsSettings, preloadUsageStatistics } from "./usage-statistics";
 import { ResponsivenessDiagnostics } from "../../../components/responsiveness-diagnostics";
 import { RuntimeSettings } from "./runtime";
-import { MemorySettingsPanel, type MemorySettingsScope } from "../../memory/MemorySettingsPanel";
+import { MemoryCenterPanel } from "../../memory/MemoryCenterPanel";
+import type { MemorySettingsScope } from "../../memory/MemorySettingsPanel";
 import { MemoryDiagnosticsPanel } from "../../memory/MemoryDiagnosticsPanel";
 import "./capability.css";
 
@@ -265,7 +266,7 @@ export function SettingsDialog(props: {
                 onSaveCommandShell={props.onSaveCommandShell}
               />
             )}
-            {visibleActiveGroup === "memory" && <MemorySettingsPanel scope={props.memoryScope} />}
+            {visibleActiveGroup === "memory" && <MemoryCenterPanel scope={props.memoryScope} />}
             {visibleActiveGroup === "appearance" && <AppearanceSettings />}
             {visibleActiveGroup === "statistics" && <UsageStatisticsSettings />}
             {visibleActiveGroup === "developer" && (
@@ -302,9 +303,9 @@ export function SettingsDialog(props: {
 const SETTINGS_GROUPS: readonly { readonly id: SettingsGroup; readonly label: string; readonly icon: React.ReactNode }[] = [
   { id: "models", label: "模型服务", icon: <CloudCog size={15} /> },
   { id: "basicCapabilities", label: "基础能力", icon: <SlidersHorizontal size={15} /> },
-  { id: "memory", label: "智能记忆", icon: <Brain size={15} /> },
   { id: "mcp", label: "MCP 服务", icon: <Server size={15} /> },
   { id: "skills", label: "技能", icon: <FileText size={15} /> },
+  { id: "memory", label: "记忆", icon: <Brain size={15} /> },
   { id: "subAgents", label: "Sub Agent", icon: <Bot size={15} /> },
   { id: "workspace", label: "运行环境", icon: <Database size={15} /> },
   { id: "appearance", label: "外观", icon: <Palette size={15} /> },

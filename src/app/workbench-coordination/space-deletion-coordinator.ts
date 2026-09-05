@@ -3,6 +3,7 @@ import type { PersonalKnowledgeFeature } from "../personal-knowledge/index.js";
 import type { OrdinaryAgentFeature } from "../ordinary-agent/index.js";
 import type { SpaceFeature } from "../spaces/index.js";
 import type { AgentNotesFeature } from "../agent-notes/index.js";
+import type { CollaborationRulesFeature } from "../collaboration-rules/index.js";
 import type { PathDependencyFeature } from "../path-dependencies/index.js";
 import type { MemoryLifecycle } from "../memory/contracts.js";
 import {
@@ -43,6 +44,7 @@ export function createSpaceConversationDeletionCoordinator(input: {
     readonly commands: Pick<PersonalKnowledgeFeature["commands"], "cleanupSpace">;
   };
   readonly agentNotes: Pick<AgentNotesFeature["commands"], "deleteByOwner">;
+  readonly collaborationRules: Pick<CollaborationRulesFeature["commands"], "deleteByOwner">;
   readonly memory: Pick<PathDependencyFeature["commands"], "deleteByOwner">;
   readonly memoryLifecycle: Pick<MemoryLifecycle, "prepareOwnerRemoval" | "finalizeOwnerRemoval">;
   readonly processes: Pick<InMemoryProcessRegistry, "cleanupBySpace">;
@@ -88,6 +90,13 @@ export function createSpaceConversationDeletionCoordinator(input: {
     let checkpoint = record.phase === "failed" ? record.resumeFrom : record.phase;
     if (checkpoint === undefined) throw new Error(`Space deletion ${record.deletionId} has no resumable checkpoint.`);
     try {
+      // The durable Space-deletion journal is the owner admission point. Fence
+      // Memory before process cleanup or Conversation deletion; later failure
+      // keeps the fence in place until this same workflow is retried.
+      const memoryRemovalTicket = await input.memoryLifecycle.prepareOwnerRemoval({
+        kind: "space",
+        id: record.spaceId,
+      });
       if (checkpoint === "prepared") {
         assertProcessCleanupComplete(
           await input.processes.cleanupBySpace(record.spaceId, input.processTerminator),
@@ -104,9 +113,7 @@ export function createSpaceConversationDeletionCoordinator(input: {
       if (checkpoint === "conversations_deleted") {
         await input.memory.deleteByOwner({ kind: "space", id: record.spaceId });
         await input.agentNotes.deleteByOwner({ kind: "space", id: record.spaceId });
-        // Memory v2：两阶段 durable fence（generation bump → tombstone），紧邻执行且对 resume 幂等。
-        const memoryRemovalTicket = await input.memoryLifecycle.prepareOwnerRemoval({ kind: "space", id: record.spaceId });
-        await input.memoryLifecycle.finalizeOwnerRemoval(memoryRemovalTicket);
+        await input.collaborationRules.deleteByOwner({ kind: "space", id: record.spaceId });
         const tree = await input.spaces.queries.getTree(record.spaceId);
         const referenceIds = record.referenceIds === undefined || record.referenceIds.length === 0
           ? (tree?.entries.map((entry) => entry.item.id) ?? [])
@@ -120,6 +127,10 @@ export function createSpaceConversationDeletionCoordinator(input: {
           await input.spaces.commands.deleteSpace(record.spaceId);
         }
         record = await saveCheckpoint(input.journal, record, "space_deleted", now());
+        checkpoint = "space_deleted";
+      }
+      if (checkpoint === "space_deleted") {
+        await input.memoryLifecycle.finalizeOwnerRemoval(memoryRemovalTicket);
       }
     } catch (error) {
       try {

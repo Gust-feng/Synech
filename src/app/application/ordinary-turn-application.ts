@@ -12,7 +12,6 @@ import type {
 
 export type OrdinaryTurnInput = {
   readonly goal: string;
-  readonly turnMemoryOverrideOff?: boolean;
   readonly submissionId?: string;
   readonly owner?: ConversationOwner;
   readonly aiMode?: ModelRuntimeMode;
@@ -151,7 +150,6 @@ export function createOrdinaryTurnApplication(
             submissionId: submissionId!,
             runInput: {
               userMessage: effectiveRunInput.goal,
-              turnMemoryOverrideOff: effectiveRunInput.turnMemoryOverrideOff,
               context: effectiveRunInput.contextInput,
             },
             birth,
@@ -178,7 +176,6 @@ async function submitExistingConversationTurn(
     submissionId: input.submissionId,
     input: {
       userMessage: input.goal,
-      turnMemoryOverrideOff: input.turnMemoryOverrideOff,
       context: input.contextInput,
     },
     birth,

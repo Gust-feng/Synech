@@ -1,6 +1,7 @@
 import type { OrdinaryAgentFeature } from "../ordinary-agent/index.js";
 import type { SpaceFeature } from "../spaces/index.js";
 import type { AgentNotesFeature } from "../agent-notes/index.js";
+import type { CollaborationRulesFeature } from "../collaboration-rules/index.js";
 import type { PathDependencyFeature } from "../path-dependencies/index.js";
 import type { MemoryLifecycle } from "../memory/contracts.js";
 import type { WorkspaceFeature } from "../workspaces/index.js";
@@ -43,6 +44,7 @@ export function createWorkspaceDeletionCoordinator(input: {
     readonly queries: Pick<OrdinaryAgentFeature["queries"], "listConversationsByOwner">;
   };
   readonly agentNotes: Pick<AgentNotesFeature["commands"], "deleteByOwner">;
+  readonly collaborationRules: Pick<CollaborationRulesFeature["commands"], "deleteByOwner">;
   readonly memory?: Pick<PathDependencyFeature["commands"], "deleteByOwner">;
   readonly memoryLifecycle: Pick<MemoryLifecycle, "prepareOwnerRemoval" | "finalizeOwnerRemoval">;
   readonly processes: Pick<InMemoryProcessRegistry, "cleanupByConversation">;
@@ -118,10 +120,25 @@ export function createWorkspaceDeletionCoordinator(input: {
           try {
             const workspace = await input.workspaces.queries.get(workspaceId);
             if (workspace === undefined) {
+              // A previous attempt may have purged Workspace metadata after
+              // fencing Memory but before its final physical purge. Rebuild a
+              // ticket from the durable lifecycle state so retry converges.
+              const memoryRemovalTicket = await input.memoryLifecycle.prepareOwnerRemoval({
+                kind: "workspace",
+                id: workspaceId,
+              });
+              await input.memoryLifecycle.finalizeOwnerRemoval(memoryRemovalTicket);
               completed = true;
               return;
             }
             await input.workspaces.commands.deleteWorkspace(workspaceId);
+            // The Workspace now has durable deletion status. Fence implicit
+            // Memory before removing its Ordinary conversations; finalization
+            // waits until the owner record itself is purged below.
+            const memoryRemovalTicket = await input.memoryLifecycle.prepareOwnerRemoval({
+              kind: "workspace",
+              id: workspaceId,
+            });
             const conversations = await input.ordinary.queries.listConversationsByOwner({ kind: "workspace", id: workspaceId });
             for (const conversation of conversations) {
               assertProcessCleanupComplete(
@@ -132,9 +149,7 @@ export function createWorkspaceDeletionCoordinator(input: {
             }
             await input.memory?.deleteByOwner({ kind: "workspace", id: workspaceId });
             await input.agentNotes.deleteByOwner({ kind: "workspace", id: workspaceId });
-            // Memory v2：两阶段 durable fence（generation bump → tombstone）。
-            const memoryRemovalTicket = await input.memoryLifecycle.prepareOwnerRemoval({ kind: "workspace", id: workspaceId });
-            await input.memoryLifecycle.finalizeOwnerRemoval(memoryRemovalTicket);
+            await input.collaborationRules.deleteByOwner({ kind: "workspace", id: workspaceId });
             const references = await input.spaces.queries.listReferencesByWorkspace(workspaceId);
             for (const reference of references) {
               if (!spaceIds.includes(reference.spaceId)) {
@@ -154,6 +169,7 @@ export function createWorkspaceDeletionCoordinator(input: {
               await input.spaces.commands.unlinkReference(current.id);
             }
             await input.workspaces.commands.purgeWorkspace(workspaceId);
+            await input.memoryLifecycle.finalizeOwnerRemoval(memoryRemovalTicket);
             completed = true;
           } finally {
             if (completed) {

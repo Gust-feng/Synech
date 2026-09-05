@@ -1,777 +1,867 @@
 import type { SQLInputValue } from "node:sqlite";
 
+import { createHash } from "node:crypto";
+
 import type { SqliteRuntimeDatabase } from "../../../adapters/runtime-storage/index.js";
-import type { MemoryOwner } from "../../../domain/memory/index.js";
 import { createId, type IdFactory } from "../../../kernel/id.js";
 import { MemoryError } from "../contracts.js";
 import { lexicalProjection } from "../recall/lexical-projection.js";
 import { resolveAdmissionFromPolicy } from "../policy/policy-snapshot.js";
 import { MEMORY_MIGRATIONS } from "./control-repository.js";
+import { memoryOwnerFromKey } from "./owner-keys.js";
 import {
-  parseCaptureCursorRow,
-  parseIndexOutboxRow,
+  parseCaptureProgressRow,
+  parseDocSourceRow,
   parseLifecycleRow,
   parsePolicyRow,
-  parseRecordRow,
-  parseRecordSourceRow,
-  type MemoryCaptureCursorRow,
-  type MemoryIndexOutboxRow,
+  parseSpaceDocRow,
+  parseSummaryRow,
+  parseTranscriptCoverageRow,
+  type MemoryCaptureProgressRow,
+  type MemoryDocSourceRow,
   type MemoryLifecycleRow,
-  type MemoryRecordRow,
-  type MemoryRecordSourceRow,
-  type PersistedConfirmation,
-  type PersistedEvidenceClass,
-  type PersistedOutboxStatus,
-  type PersistedRecordKind,
+  type MemoryPolicyRow,
+  type MemorySpaceDocRow,
+  type MemorySummaryRow,
+  type MemoryTranscriptCoverageRow,
 } from "./persistence-schema.js";
 
 /**
- * Memory 内容仓储（M3）：拥有 MemoryRecord / Source / 连续游标 / 索引 outbox
- * 四类内容状态（《手册》8.2–8.5）。控制状态（policy/lifecycle/job）归
- * MemoryControlRepository，本仓储只在提交边界内读取 lifecycle 做 fence/generation 复核。
+ * Memory 文档产物仓储（0.6.0）：拥有 Space 长期文档 revision、会话累计总结
+ * revision、文档级来源依赖、processed/excluded 进度、transcript 索引投影与
+ * 摘要 FTS 投影。控制状态（policy/lifecycle/job）归 MemoryControlRepository。
  *
- * 不变量（受测试保护）：
- * - 一次提炼的 Record + Source + 游标推进 + Outbox 入队共享同一 SQLite 事务，
- *   任一步失败整体回滚，不留"有 record 无游标/有游标无 outbox"的半态（手册 9.3）；
- * - 连续游标只进不退，回退即 memory_store_failure（禁止 newest-first 截断后跳游标）；
- * - owner 处于 fenced/tombstone，或记录携带的 generation 与当前不一致，一律拒写
- *   memory_generation_fenced（提炼期间被删除/清除的结果不得落库）；
- * - 同一逻辑 record 的 revision 只增，同一 record 至多一个 active 版本（partial unique）；
- * - memory_record_fts（memory/3）是 record 的派生检索投影：与 record 同事务写入/
- *   退休，检索结果必须回表复核 scope/status/generation，跨 scope 泄漏恒为 0。
+ * 不变量（受核心测试保护）：
+ * - 一次整理批次的「总结 revision + 可选 memory revision + 来源复制 + 进度推进 +
+ *   job 收敛」共享同一 SQLite 事务；policy/generation/claim/expected revision 任一
+ *   不符即整批废弃，不留半态（正式设计 §8.1）；
+ * - expectedSummaryRevisionId / expectedMemoryHeadRevisionId 是发布 CAS：后台整理
+ *   与用户直接编辑（writeSpaceMemory）互相使在途结果失效；
+ * - 来源依赖保守继承：新 revision 复制前一 revision 的全部来源行并追加本批范围；
+ *   删除失效按 conversation_id 直查，引用被删来源的版本（含已绑定版本）整体失效；
+ * - processed 游标只进不退；excluded 高水位只进不退，提炼范围不得与排除区间重叠；
+ * - transcript/summary FTS 是派生投影：检索结果一律回表复核 owner/validity，
+ *   跨 scope 泄漏恒为 0。
  */
 
-export type ConsolidationSourceInput = {
-  readonly conversationId: string;
-  readonly runId?: string | null;
-  readonly turnId?: string | null;
-  readonly fromOrdinal?: number | null;
-  readonly toOrdinal?: number | null;
+export type TranscriptIndexEntry = {
+  readonly ordinal: number;
+  readonly text: string;
   readonly sourceRevision: number;
 };
 
-export type ConsolidationRecordInput = {
-  /** 缺省表示新建逻辑记录，由工厂生成 id；传入表示给既有逻辑记录出新 revision。 */
-  readonly recordId?: string;
-  readonly kind: PersistedRecordKind;
-  readonly modelText: string;
-  readonly evidenceClass: PersistedEvidenceClass;
-  readonly confirmation: PersistedConfirmation;
-  readonly contentHash: string;
-  /** Host 在提炼前读到的 owner generation；提交时必须仍与当前一致。 */
-  readonly generation: number;
-  readonly effectiveAt?: number;
-  readonly sources: readonly ConsolidationSourceInput[];
-};
-
-export type CommitConsolidationInput = {
-  readonly conversationId: string;
-  readonly ownerKey: string;
-  /** 可为空：本次送入模型但判定无值得沉淀时，仍需推进游标避免重复处理。 */
-  readonly records: readonly ConsolidationRecordInput[];
-  readonly advanceCursorTo: {
-    readonly coveredThroughOrdinal: number;
-    readonly sourceFingerprint: string;
-  };
-};
-
-export type CommitConsolidationResult = {
-  readonly recordRefs: readonly { readonly id: string; revision: number }[];
-  readonly cursor: MemoryCaptureCursorRow;
-};
-
-/**
- * T21 组合提交：在同一个 SQLite 事务内完成「锁内 admission 重读 → Record + Source +
- * Cursor + 退休 + job 置 done」。供 Consolidation 提炼管线在模型调用后调用；
- * 纯内容提交（无 job/admission）仍走 `commitConsolidation`。
- */
-export type CommitConsolidationWithAdmissionInput = {
-  readonly conversationId: string;
-  readonly ownerKey: string;
-  /** 本次提炼占用的 durable job；`completeJob` 时同事务内置 done。 */
+export type CommitMaintenanceBatchInput = {
   readonly jobId: string;
-  /** job 在 accept 时捕获的权威 revision/generation；提交时锁内重读并比对，不符即废弃本批。 */
+  readonly claimToken: string;
+  readonly conversationId: string;
+  readonly ownerKey: string;
+  /** job 领取时捕获的权威 admission；提交时锁内重读并比对。 */
   readonly expectedPolicyRevision: string;
   readonly expectedGeneration: number;
-  readonly records: readonly ConsolidationRecordInput[];
-  /** retire 操作：把既有逻辑记录的 active 版本置 retired 并退出索引投影。 */
-  readonly retireRecordIds: readonly string[];
-  readonly advanceCursorTo: {
+  /** 批次读取的会话总结 revision（null = 该会话尚无有效总结）；发布 CAS。 */
+  readonly expectedSummaryRevisionId: string | null;
+  /** 批次读取的 Space 记忆 head revision（null = 尚无有效文档）；发布 CAS。 */
+  readonly expectedMemoryHeadRevisionId: string | null;
+  readonly summary: {
+    readonly markdown: string;
     readonly coveredThroughOrdinal: number;
+  };
+  readonly longTermUpdate: { readonly markdown: string } | null;
+  /** 本批实际送入模型的连续证据范围（来源依赖与 transcript 索引的依据）。 */
+  readonly batchRange: {
+    readonly fromOrdinal: number;
+    readonly toOrdinal: number;
+    readonly sourceRevision: number;
+  };
+  readonly advanceProgressTo: {
+    readonly ordinal: number;
     readonly sourceFingerprint: string;
   };
-  /** true 表示本批已覆盖 job 边界，job 与内容同事务收敛为 done。 */
-  readonly completeJob: boolean;
 };
 
-export type CommitConsolidationWithAdmissionResult =
-  | { readonly status: "committed"; readonly recordRefs: CommitConsolidationResult["recordRefs"]; readonly cursor: MemoryCaptureCursorRow }
+export type CommitMaintenanceBatchResult =
+  | {
+      readonly status: "committed";
+      readonly summaryRevisionId: string;
+      readonly memoryRevisionId: string | null;
+      /** done：目标边界已收敛；queued：存在剩余范围或运行期间边界被扩大。 */
+      readonly jobStatus: "done" | "queued";
+    }
   | {
       readonly status: "discarded";
-      /** 结构原因码：admission_off / admission_revision_changed / generation_changed / job_not_running。 */
+      /** 结构原因码：admission_off / admission_changed / claim_stale / summary_superseded / memory_head_superseded / range_excluded / progress_regressed。 */
       readonly reason: string;
     };
 
-/** 由持久化 owner_key 还原 MemoryOwner（admission 复核用）；不认识的结构一律拒绝。 */
-export function memoryOwnerFromKey(ownerKey: string): MemoryOwner {
-  if (ownerKey === "global") return { kind: "global" };
-  const separatorIndex = ownerKey.indexOf(":");
-  const kind = separatorIndex === -1 ? "" : ownerKey.slice(0, separatorIndex);
-  const id = separatorIndex === -1 ? "" : ownerKey.slice(separatorIndex + 1);
-  if ((kind === "space" || kind === "workspace") && id.length > 0) return { kind, id };
-  throw new MemoryError("memory_invalid_owner", `Cannot parse memory owner key ${ownerKey}.`);
-}
+export type RecordUserEditInput = {
+  readonly ownerKey: string;
+  readonly markdown: string;
+  readonly requestId: string;
+  /** 用户编辑所基于的当前 head revision（null = 期望当前没有有效文档）；发布 CAS。 */
+  readonly expectedRevisionId: string | null;
+  readonly now: number;
+};
 
-export interface MemoryContentRepository {
-  /** 单事务原子提交一次提炼结果并推进连续游标；失败整体回滚。 */
-  commitConsolidation(input: CommitConsolidationInput): Promise<CommitConsolidationResult>;
-  /**
-   * T21 组合原子提交（手册 9.1/9.3、6.1 提交顺序）：同一事务内先锁内重读
-   * policy + lifecycle 并重算有效准入（off / revision 或 generation 与 job 捕获值
-   * 不符 → 整批废弃、不推进游标、不写任何行），再写入 Record + Source + 投影 +
-   * Outbox + 游标，最后按 `completeJob` 把 job 置 done。任何一步失败整体回滚。
-   */
-  commitConsolidationWithAdmission(
-    input: CommitConsolidationWithAdmissionInput,
-  ): Promise<CommitConsolidationWithAdmissionResult>;
-  getCursor(conversationId: string): Promise<MemoryCaptureCursorRow | undefined>;
-  /** 在不产生 Record 的情况下越过不参与区间，防止未来重新开启时回填。 */
-  advanceCaptureCursor(input: {
+export interface MemoryDocumentRepository {
+  // -- 读取（绑定 / 注入复核 / 工具 / UI） -----------------------------------
+  /** Space 长期文档当前 head（validity=valid 的最大 revision）。 */
+  getActiveSpaceMemoryHead(ownerKey: string): Promise<MemorySpaceDocRow | undefined>;
+  getSpaceMemoryRevision(revisionId: string): Promise<MemorySpaceDocRow | undefined>;
+  /** 会话最近有效总结（默认查询形态）。 */
+  getLatestValidSummary(conversationId: string): Promise<MemorySummaryRow | undefined>;
+  getSummaryRevision(revisionId: string): Promise<MemorySummaryRow | undefined>;
+  listSummarySources(revisionId: string): Promise<readonly MemoryDocSourceRow[]>;
+  listSpaceDocSources(revisionId: string): Promise<readonly MemoryDocSourceRow[]>;
+  getProgress(conversationId: string): Promise<MemoryCaptureProgressRow | undefined>;
+  getTranscriptCoverage(conversationId: string): Promise<MemoryTranscriptCoverageRow | undefined>;
+  /** Memory Center 只读视图统计（有效总结数与最近整理时间）。 */
+  getSpaceViewStats(ownerKey: string): Promise<{
+    readonly summaryCount: number;
+    readonly lastMaintenanceAt: number | null;
+  }>;
+
+  // -- 单一发布事务（后台整理批次） ------------------------------------------
+  commitMaintenanceBatch(input: CommitMaintenanceBatchInput): Promise<CommitMaintenanceBatchResult>;
+
+  // -- 用户直接编辑（writeSpaceMemory 的仓储边界） ----------------------------
+  recordUserSpaceMemoryEdit(input: RecordUserEditInput): Promise<MemorySpaceDocRow>;
+
+  // -- 排除高水位（clear / 重新启用） ----------------------------------------
+  /** excluded 只进不退；提炼起点 = max(processed, excluded) + 1。 */
+  setExcludedThrough(input: {
     readonly conversationId: string;
     readonly ownerKey: string;
-    readonly coveredThroughOrdinal: number;
-    readonly sourceFingerprint: string;
-    readonly generation: number;
-  }): Promise<MemoryCaptureCursorRow>;
-  /** 丢弃策略已失效的 running job，并把其区间标记为已跳过，防止重新开启后回填。 */
-  skipStaleConsolidationJob(jobId: string): Promise<boolean>;
-  listActiveByOwner(ownerKey: string): Promise<readonly MemoryRecordRow[]>;
-  listActiveAll(): Promise<readonly MemoryRecordRow[]>;
-  listSources(recordId: string, revision: number): Promise<readonly MemoryRecordSourceRow[]>;
-  claimPendingOutbox(limit: number): Promise<readonly MemoryIndexOutboxRow[]>;
-  markOutbox(outboxId: string, status: PersistedOutboxStatus): Promise<MemoryIndexOutboxRow | undefined>;
-  /** 清除 owner 派生内容；必须在 durable fence 之后调用，重复执行幂等。 */
-  purgeOwner(ownerKey: string, options?: { readonly preserveCursors?: boolean }): Promise<void>;
-  /** 清除全部 owner 的派生内容；重复执行幂等。 */
-  purgeAll(options?: { readonly preserveCursors?: boolean }): Promise<void>;
-  /** 删除 Conversation 派生内容；MVP 按来源命中记录整体清除，重复执行幂等。 */
-  purgeConversation(conversationId: string, options?: { readonly preserveCursor?: boolean }): Promise<void>;
-  /**
-   * 检索投影查询（memory/3，《手册》8.4/16.2）：FTS5 MATCH + bm25 排序后回表
-   * 复核 scope（owner_key + status='active' + generation），跨 scope 泄漏恒为 0
-   * （《手册》10.2 fail-closed）。投影行是派生数据：不与 memory_record 成对的
-   * 孤儿行一律丢弃。`match` 必须是已构建的 FTS5 MATCH 表达式（recall 侧用
-   * lexicalMatchExpression 生成）；空表达式直接返回空（MATCH '' 不是合法查询）。
-   */
-  searchActiveByProjection(input: {
+    readonly excludedThroughOrdinal: number;
+    readonly now: number;
+  }): Promise<MemoryCaptureProgressRow>;
+
+  // -- transcript 索引维护 -----------------------------------------------------
+  indexTranscriptRange(input: {
+    readonly conversationId: string;
+    readonly ownerKey: string;
+    readonly entries: readonly TranscriptIndexEntry[];
+    readonly now: number;
+  }): Promise<MemoryTranscriptCoverageRow | undefined>;
+
+  // -- 检索（FTS 投影 + 回表复核） ---------------------------------------------
+  searchSummaries(input: {
     readonly ownerKey: string;
     readonly match: string;
-    readonly generation: number;
     readonly limit: number;
-  }): Promise<readonly MemoryRecordRow[]>;
+  }): Promise<readonly { readonly summary: MemorySummaryRow; readonly bm25: number }[]>;
+  searchTranscript(input: {
+    readonly ownerKey: string;
+    readonly match: string;
+    readonly limit: number;
+  }): Promise<readonly { readonly conversationId: string; readonly ordinal: number; readonly bm25: number }[]>;
+
+  // -- 生命周期清理 -------------------------------------------------------------
   /**
-   * Memory store 自身修订（按 owner scope 的 active 内容计数 + 最新 updated_at）；
-   * 只作诊断快照展示，不是权威 revision。
+   * 删除准备（fence 后调用）：引用该会话来源的全部文档/总结 revision 立即失效并
+   * 退出摘要投影（含已被会话绑定的版本，不只检查 head）；幂等。
    */
-  storeRevision(ownerKey: string): Promise<string>;
+  invalidateDependentRevisions(conversationId: string): Promise<void>;
+  /** 删除收敛：物理清理该会话的总结、依赖它的文档 revision、进度、transcript 索引与任务。 */
+  purgeConversation(conversationId: string): Promise<void>;
+  purgeOwner(ownerKey: string, options?: { readonly preserveExclusions?: boolean }): Promise<void>;
+  purgeAll(options?: { readonly preserveExclusions?: boolean }): Promise<void>;
 }
 
-const RECORD_COLUMNS =
-  "record_id, revision, owner_key, owner_kind, kind, model_text, status, evidence_class, confirmation, content_hash, generation, created_at, updated_at, effective_at";
+const SPACE_DOC_COLUMNS =
+  "revision_id, owner_key, revision, origin, markdown, validity, generation, content_hash, updated_at";
+const SUMMARY_COLUMNS =
+  "revision_id, conversation_id, owner_key, revision, markdown, validity, generation, content_hash, covered_through_ordinal, updated_at";
 const SOURCE_COLUMNS =
-  "source_id, record_id, revision, conversation_id, run_id, turn_id, from_ordinal, to_ordinal, source_revision";
-const CURSOR_COLUMNS =
-  "conversation_id, owner_key, covered_through_ordinal, source_fingerprint, updated_at";
-const OUTBOX_COLUMNS = "outbox_id, record_id, revision, op, status, attempts, created_at, updated_at";
+  "source_id, revision_id, dep_kind, conversation_id, from_ordinal, to_ordinal, source_revision, request_id, created_at";
+const PROGRESS_COLUMNS =
+  "conversation_id, owner_key, processed_through_ordinal, excluded_through_ordinal, source_fingerprint, updated_at";
 
-function ownerKindOf(ownerKey: string): "global" | "space" | "workspace" {
-  if (ownerKey === "global") return "global";
-  if (ownerKey.startsWith("space:")) return "space";
-  if (ownerKey.startsWith("workspace:")) return "workspace";
-  throw new MemoryError("memory_invalid_owner", `Cannot derive owner kind from key ${ownerKey}.`);
+export type FtsSummaryHit = { readonly summary: MemorySummaryRow; readonly bm25: number };
+export type FtsTranscriptHit = { readonly conversationId: string; readonly ordinal: number; readonly bm25: number };
+
+export function contentHashOf(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex");
 }
 
-export function createSqliteMemoryContentRepository(
+export function createSqliteMemoryDocumentRepository(
   database: SqliteRuntimeDatabase,
   options: { readonly idFactory?: IdFactory } = {},
-): MemoryContentRepository {
+): MemoryDocumentRepository {
   database.migrate("memory", MEMORY_MIGRATIONS);
   const idFactory = options.idFactory ?? createId;
 
-  const readCursor = (conversationId: string): MemoryCaptureCursorRow | undefined => {
+  const readSpaceDoc = (revisionId: string): MemorySpaceDocRow | undefined => {
     const row = database.connection
-      .prepare(`SELECT ${CURSOR_COLUMNS} FROM memory_capture_cursor WHERE conversation_id = ?`)
+      .prepare(`SELECT ${SPACE_DOC_COLUMNS} FROM memory_space_doc WHERE revision_id = ?`)
+      .get(revisionId) as Record<string, SQLInputValue> | undefined;
+    return row === undefined ? undefined : parseSpaceDocRow(row);
+  };
+
+  const readSummary = (revisionId: string): MemorySummaryRow | undefined => {
+    const row = database.connection
+      .prepare(`SELECT ${SUMMARY_COLUMNS} FROM memory_conversation_summary WHERE revision_id = ?`)
+      .get(revisionId) as Record<string, SQLInputValue> | undefined;
+    return row === undefined ? undefined : parseSummaryRow(row);
+  };
+
+  const latestValidSpaceDoc = (ownerKey: string): MemorySpaceDocRow | undefined => {
+    const row = database.connection.prepare(`
+      SELECT ${SPACE_DOC_COLUMNS} FROM memory_space_doc
+      WHERE owner_key = ? AND validity = 'valid'
+      ORDER BY revision DESC LIMIT 1
+    `).get(ownerKey) as Record<string, SQLInputValue> | undefined;
+    return row === undefined ? undefined : parseSpaceDocRow(row);
+  };
+
+  const latestValidSummary = (conversationId: string): MemorySummaryRow | undefined => {
+    const row = database.connection.prepare(`
+      SELECT ${SUMMARY_COLUMNS} FROM memory_conversation_summary
+      WHERE conversation_id = ? AND validity = 'valid'
+      ORDER BY revision DESC LIMIT 1
+    `).get(conversationId) as Record<string, SQLInputValue> | undefined;
+    return row === undefined ? undefined : parseSummaryRow(row);
+  };
+
+  const readProgress = (conversationId: string): MemoryCaptureProgressRow | undefined => {
+    const row = database.connection
+      .prepare(`SELECT ${PROGRESS_COLUMNS} FROM memory_capture_progress WHERE conversation_id = ?`)
       .get(conversationId) as Record<string, SQLInputValue> | undefined;
-    return row === undefined ? undefined : parseCaptureCursorRow(row);
+    return row === undefined ? undefined : parseCaptureProgressRow(row);
   };
 
-  const readOutbox = (outboxId: string): MemoryIndexOutboxRow | undefined => {
+  const readLifecycleRow = (ownerKey: string): MemoryLifecycleRow | undefined => {
     const row = database.connection
-      .prepare(`SELECT ${OUTBOX_COLUMNS} FROM memory_index_outbox WHERE outbox_id = ?`)
-      .get(outboxId) as Record<string, SQLInputValue> | undefined;
-    return row === undefined ? undefined : parseIndexOutboxRow(row);
+      .prepare("SELECT owner_key, generation, capture_after, fence_state, updated_at FROM memory_lifecycle WHERE owner_key = ?")
+      .get(ownerKey) as Record<string, SQLInputValue> | undefined;
+    return row === undefined ? undefined : parseLifecycleRow(row);
   };
 
-  // 提炼内容的唯一写入路径：fence/generation 复核 → 游标单调校验 → record/source/
-  // 检索投影/outbox/retire → 游标推进。commitConsolidation 与 commitConsolidationWithAdmission
-  // 共享同一段实现，保证两条提交边界的写入不变量完全一致（事务由调用方开启）。
-  const writeConsolidationContentLocked = (write: {
+  const readPolicyRows = (): readonly MemoryPolicyRow[] => (
+    database.connection
+      .prepare("SELECT policy_key, policy_kind, scope_owner_key, enabled, revision, updated_at FROM memory_policy ORDER BY policy_key")
+      .all() as Record<string, SQLInputValue>[]
+  ).map(parsePolicyRow);
+
+  /** 复制一个 revision 的全部来源行到新 revision（文档级保守继承）。 */
+  const copySources = (fromRevisionId: string, toRevisionId: string, now: number): void => {
+    const rows = database.connection
+      .prepare(`SELECT ${SOURCE_COLUMNS} FROM memory_doc_source WHERE revision_id = ?`)
+      .all(fromRevisionId) as Record<string, SQLInputValue>[];
+    for (const row of rows) {
+      const source = parseDocSourceRow(row);
+      database.connection.prepare(`
+        INSERT INTO memory_doc_source(
+          source_id, revision_id, dep_kind, conversation_id, from_ordinal, to_ordinal,
+          source_revision, request_id, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        idFactory("memsrc"),
+        toRevisionId,
+        source.depKind,
+        source.conversationId,
+        source.fromOrdinal,
+        source.toOrdinal,
+        source.sourceRevision,
+        source.requestId,
+        now,
+      );
+    }
+  };
+
+  const insertConversationRangeSource = (input: {
+    readonly revisionId: string;
     readonly conversationId: string;
-    readonly ownerKey: string;
-    readonly records: readonly ConsolidationRecordInput[];
-    readonly retireRecordIds: readonly string[];
-    readonly advanceCursorTo: {
-      readonly coveredThroughOrdinal: number;
-      readonly sourceFingerprint: string;
-    };
-  }): CommitConsolidationResult => {
-    const now = Date.now();
-    // 1. fence / generation 复核（锁内重读，不信任提炼时的旧读）。
-    const lifecycleRow = database.connection
-      .prepare("SELECT generation, fence_state FROM memory_lifecycle WHERE owner_key = ?")
-      .get(write.ownerKey) as { generation: number; fence_state: string } | undefined;
-    const currentGeneration = lifecycleRow?.generation ?? 0;
-    if (lifecycleRow !== undefined && (lifecycleRow.fence_state === "fenced" || lifecycleRow.fence_state === "tombstone")) {
-      throw new MemoryError(
-        "memory_generation_fenced",
-        `Owner ${write.ownerKey} is ${lifecycleRow.fence_state}; consolidation must not write.`,
-      );
-    }
-    for (const record of write.records) {
-      if (record.generation !== currentGeneration) {
-        throw new MemoryError(
-          "memory_generation_fenced",
-          `Record generation ${record.generation} != current ${currentGeneration} for ${write.ownerKey}.`,
-        );
-      }
-    }
-
-    // 2. 连续游标只进不退。
-    const existingCursor = readCursor(write.conversationId);
-    if (existingCursor !== undefined && existingCursor.ownerKey !== write.ownerKey) {
-      throw new MemoryError(
-        "memory_invalid_owner",
-        `Capture cursor for ${write.conversationId} belongs to ${existingCursor.ownerKey}, not ${write.ownerKey}.`,
-      );
-    }
-    if (
-      existingCursor !== undefined &&
-      existingCursor.coveredThroughOrdinal > write.advanceCursorTo.coveredThroughOrdinal
-    ) {
-      throw new MemoryError(
-        "memory_store_failure",
-        `Capture cursor for ${write.conversationId} would regress ` +
-          `${existingCursor.coveredThroughOrdinal} -> ${write.advanceCursorTo.coveredThroughOrdinal}.`,
-      );
-    }
-
-    // 3. 写 record（revision 只增）+ sources + outbox，全部在本事务内。
-    const ownerKind = ownerKindOf(write.ownerKey);
-    const recordRefs: { id: string; revision: number }[] = [];
-    for (const record of write.records) {
-      const recordId = record.recordId ?? idFactory("memrec");
-      const existingOwnerRow = database.connection
-        .prepare("SELECT owner_key FROM memory_record WHERE record_id = ? ORDER BY revision DESC LIMIT 1")
-        .get(recordId) as { readonly owner_key: SQLInputValue } | undefined;
-      if (existingOwnerRow !== undefined && String(existingOwnerRow.owner_key) !== write.ownerKey) {
-        throw new MemoryError(
-          "memory_invalid_owner",
-          `Memory record ${recordId} belongs to ${String(existingOwnerRow.owner_key)}, not ${write.ownerKey}.`,
-        );
-      }
-      const maxRevisionRow = database.connection
-        .prepare("SELECT MAX(revision) AS max_revision FROM memory_record WHERE record_id = ?")
-        .get(recordId) as { max_revision: number | null };
-      const nextRevision = (maxRevisionRow.max_revision ?? 0) + 1;
-      const effectiveAt = record.effectiveAt ?? now;
-      // 同一逻辑记录出新版本：先在本事务内 retire 旧 active 版本，
-      // 保证 partial unique index（每 record 至多一个 active）成立。
-      if (nextRevision > 1) {
-        database.connection.prepare(`
-          UPDATE memory_record SET status = 'retired', updated_at = ?
-          WHERE record_id = ? AND status = 'active'
-        `).run(now, recordId);
-        // 旧版本退出索引投影：FTS 状态同事务内翻转，旧文本立即停止召回。
-        database.connection.prepare(`
-          UPDATE memory_record_fts SET status = 'retired'
-          WHERE record_id = ? AND revision = ?
-        `).run(recordId, nextRevision - 1);
-        // outbox remove 入队保留：memory_index_outbox 是通用索引工作队列，
-        // FTS 投影已同事务内直接翻转，后续索引消费端（如向量索引）仍走 outbox。
-        database.connection.prepare(`
-          INSERT INTO memory_index_outbox(outbox_id, record_id, revision, op, status, attempts, created_at, updated_at)
-          VALUES (?, ?, ?, 'remove', 'pending', 0, ?, ?)
-        `).run(idFactory("memout"), recordId, nextRevision - 1, now, now);
-      }
-      database.connection.prepare(`
-        INSERT INTO memory_record(
-          record_id, revision, owner_key, owner_kind, kind, model_text, status,
-          evidence_class, confirmation, content_hash, generation,
-          created_at, updated_at, effective_at
-        ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        recordId,
-        nextRevision,
-        write.ownerKey,
-        ownerKind,
-        record.kind,
-        record.modelText,
-        record.evidenceClass,
-        record.confirmation,
-        record.contentHash,
-        record.generation,
-        now,
-        now,
-        effectiveAt,
-      );
-      // 同事务写入 lexical 检索投影（《手册》8.4）：FTS 行与 record 行同生共死，
-      // 事务回滚时两者一起消失，不存在"有 record 无投影/有投影无 record"的半态。
-      database.connection.prepare(`
-        INSERT INTO memory_record_fts(record_id, revision, owner_key, status, generation, terms)
-        VALUES (?, ?, ?, 'active', ?, ?)
-      `).run(
-        recordId,
-        nextRevision,
-        write.ownerKey,
-        record.generation,
-        lexicalProjection(record.modelText).join(" "),
-      );
-
-      for (const source of record.sources) {
-        database.connection.prepare(`
-          INSERT INTO memory_record_source(
-            source_id, record_id, revision, conversation_id, run_id, turn_id,
-            from_ordinal, to_ordinal, source_revision
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(
-          idFactory("memsrc"),
-          recordId,
-          nextRevision,
-          source.conversationId,
-          source.runId ?? null,
-          source.turnId ?? null,
-          source.fromOrdinal ?? null,
-          source.toOrdinal ?? null,
-          source.sourceRevision,
-        );
-      }
-
-      database.connection.prepare(`
-        INSERT INTO memory_index_outbox(outbox_id, record_id, revision, op, status, attempts, created_at, updated_at)
-        VALUES (?, ?, ?, 'index', 'pending', 0, ?, ?)
-      `).run(idFactory("memout"), recordId, nextRevision, now, now);
-
-      recordRefs.push({ id: recordId, revision: nextRevision });
-    }
-
-    // 3b. retire 操作：active 版本置 retired 并同事务退出索引投影；
-    // 记录已不活跃（并发 retire / 重复 op）时幂等跳过。
-    for (const recordId of write.retireRecordIds) {
-      const ownerRow = database.connection
-        .prepare("SELECT owner_key FROM memory_record WHERE record_id = ? ORDER BY revision DESC LIMIT 1")
-        .get(recordId) as { readonly owner_key: SQLInputValue } | undefined;
-      if (ownerRow !== undefined && String(ownerRow.owner_key) !== write.ownerKey) {
-        throw new MemoryError(
-          "memory_invalid_owner",
-          `Memory record ${recordId} belongs to ${String(ownerRow.owner_key)}, not ${write.ownerKey}.`,
-        );
-      }
-      const activeRow = database.connection
-        .prepare("SELECT revision FROM memory_record WHERE record_id = ? AND status = 'active'")
-        .get(recordId) as { revision: number } | undefined;
-      if (activeRow === undefined) continue;
-      database.connection.prepare(`
-        UPDATE memory_record SET status = 'retired', updated_at = ?
-        WHERE record_id = ? AND revision = ? AND status = 'active'
-      `).run(now, recordId, Number(activeRow.revision));
-      database.connection.prepare(`
-        INSERT INTO memory_index_outbox(outbox_id, record_id, revision, op, status, attempts, created_at, updated_at)
-        VALUES (?, ?, ?, 'remove', 'pending', 0, ?, ?)
-      `).run(idFactory("memout"), recordId, Number(activeRow.revision), now, now);
-      database.connection.prepare(`
-        UPDATE memory_record_fts SET status = 'retired'
-        WHERE record_id = ? AND revision = ?
-      `).run(recordId, Number(activeRow.revision));
-    }
-
-    // 4. 推进连续游标（即使无新 record 也推进，避免重复送入模型）。
+    readonly fromOrdinal: number;
+    readonly toOrdinal: number;
+    readonly sourceRevision: number;
+    readonly now: number;
+  }): void => {
     database.connection.prepare(`
-      INSERT INTO memory_capture_cursor(
-        conversation_id, owner_key, covered_through_ordinal, source_fingerprint, updated_at
-      ) VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(conversation_id) DO UPDATE SET
-        owner_key = excluded.owner_key,
-        covered_through_ordinal = excluded.covered_through_ordinal,
-        source_fingerprint = excluded.source_fingerprint,
-        updated_at = excluded.updated_at
+      INSERT INTO memory_doc_source(
+        source_id, revision_id, dep_kind, conversation_id, from_ordinal, to_ordinal,
+        source_revision, request_id, created_at
+      ) VALUES (?, ?, 'conversation_range', ?, ?, ?, ?, NULL, ?)
     `).run(
-      write.conversationId,
-      write.ownerKey,
-      write.advanceCursorTo.coveredThroughOrdinal,
-      write.advanceCursorTo.sourceFingerprint,
-      now,
+      idFactory("memsrc"),
+      input.revisionId,
+      input.conversationId,
+      input.fromOrdinal,
+      input.toOrdinal,
+      input.sourceRevision,
+      input.now,
     );
+  };
 
-    const cursor = readCursor(write.conversationId);
-    if (cursor === undefined) {
-      throw new MemoryError("memory_store_failure", "Capture cursor vanished after commit.");
-    }
-    return { recordRefs, cursor };
+  const nextSpaceDocRevision = (ownerKey: string): number => {
+    const row = database.connection
+      .prepare("SELECT MAX(revision) AS max_revision FROM memory_space_doc WHERE owner_key = ?")
+      .get(ownerKey) as { max_revision: number | null };
+    return (row.max_revision ?? 0) + 1;
+  };
+
+  const nextSummaryRevision = (conversationId: string): number => {
+    const row = database.connection
+      .prepare("SELECT MAX(revision) AS max_revision FROM memory_conversation_summary WHERE conversation_id = ?")
+      .get(conversationId) as { max_revision: number | null };
+    return (row.max_revision ?? 0) + 1;
+  };
+
+  /** 摘要 FTS 投影行与摘要行同生共死（事务内成对维护）。 */
+  const insertSummaryFts = (summary: MemorySummaryRow): void => {
+    database.connection.prepare(`
+      INSERT INTO memory_summary_fts(revision_id, conversation_id, owner_key, validity, terms)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(
+      summary.revisionId,
+      summary.conversationId,
+      summary.ownerKey,
+      summary.validity,
+      lexicalProjection(summary.markdown).join(" "),
+    );
   };
 
   return {
-    async commitConsolidation(input) {
-      return database.transaction(() =>
-        writeConsolidationContentLocked({ ...input, retireRecordIds: [] })
-      );
+    async getActiveSpaceMemoryHead(ownerKey) {
+      return latestValidSpaceDoc(ownerKey);
     },
 
-    async commitConsolidationWithAdmission(input) {
+    async getSpaceMemoryRevision(revisionId) {
+      return readSpaceDoc(revisionId);
+    },
+
+    async getLatestValidSummary(conversationId) {
+      return latestValidSummary(conversationId);
+    },
+
+    async getSummaryRevision(revisionId) {
+      return readSummary(revisionId);
+    },
+
+    async listSummarySources(revisionId) {
+      const rows = database.connection
+        .prepare(`SELECT ${SOURCE_COLUMNS} FROM memory_doc_source WHERE revision_id = ? AND dep_kind = 'conversation_range'`)
+        .all(revisionId) as Record<string, SQLInputValue>[];
+      return rows.map(parseDocSourceRow);
+    },
+
+    async listSpaceDocSources(revisionId) {
+      const rows = database.connection
+        .prepare(`SELECT ${SOURCE_COLUMNS} FROM memory_doc_source WHERE revision_id = ?`)
+        .all(revisionId) as Record<string, SQLInputValue>[];
+      return rows.map(parseDocSourceRow);
+    },
+
+    async getProgress(conversationId) {
+      return readProgress(conversationId);
+    },
+
+    async getTranscriptCoverage(conversationId) {
+      const row = database.connection
+        .prepare("SELECT conversation_id, owner_key, indexed_through_ordinal, source_revision, updated_at FROM memory_transcript_coverage WHERE conversation_id = ?")
+        .get(conversationId) as Record<string, SQLInputValue> | undefined;
+      return row === undefined ? undefined : parseTranscriptCoverageRow(row);
+    },
+
+    async getSpaceViewStats(ownerKey) {
+      const row = database.connection
+        .prepare(`
+          SELECT COUNT(*) AS summaryCount, MAX(updated_at) AS lastMaintenanceAt
+          FROM memory_conversation_summary WHERE owner_key = ? AND validity = 'valid'
+        `)
+        .get(ownerKey) as { readonly summaryCount: SQLInputValue; readonly lastMaintenanceAt: SQLInputValue };
+      return {
+        summaryCount: Number(row.summaryCount),
+        lastMaintenanceAt: row.lastMaintenanceAt === null || row.lastMaintenanceAt === undefined
+          ? null
+          : Number(row.lastMaintenanceAt),
+      };
+    },
+
+    async commitMaintenanceBatch(input) {
       return database.transaction(() => {
-        // 1. 锁内重读 policy + lifecycle 并重算有效准入（《手册》7.1：提交边界当次
-        // 重算，不信任 accept/提炼时的旧结论）。off 一律废弃本批。
-        const policyRows = (
-          database.connection
-            .prepare(`
-              SELECT policy_key, policy_kind, scope_owner_key, enabled, revision, updated_at
-              FROM memory_policy ORDER BY policy_key
-            `)
-            .all() as Record<string, SQLInputValue>[]
-        ).map(parsePolicyRow);
-        const readLifecycleRow = (ownerKey: string): MemoryLifecycleRow | undefined => {
-          const row = database.connection
-            .prepare(`
-              SELECT owner_key, generation, capture_after, fence_state, updated_at
-              FROM memory_lifecycle WHERE owner_key = ?
-            `)
-            .get(ownerKey) as Record<string, SQLInputValue> | undefined;
-          return row === undefined ? undefined : parseLifecycleRow(row);
-        };
+        // 1. job 必须仍处于本批占用的 running 且 claim_token 自洽（BEGIN IMMEDIATE 下无并发写）。
+        const jobRow = database.connection
+          .prepare("SELECT job_id, conversation_id, owner_key, status, requested_through_ordinal, target_through_ordinal, claim_token, generation, policy_revision FROM memory_job WHERE job_id = ?")
+          .get(input.jobId) as
+            | {
+                conversation_id: SQLInputValue;
+                owner_key: SQLInputValue;
+                status: SQLInputValue;
+                requested_through_ordinal: SQLInputValue;
+                target_through_ordinal: SQLInputValue;
+                claim_token: SQLInputValue;
+                generation: SQLInputValue;
+                policy_revision: SQLInputValue;
+              }
+            | undefined;
+        if (
+          jobRow === undefined ||
+          String(jobRow.status) !== "running" ||
+          String(jobRow.conversation_id) !== input.conversationId ||
+          String(jobRow.owner_key) !== input.ownerKey ||
+          String(jobRow.claim_token) !== input.claimToken
+        ) {
+          return { status: "discarded" as const, reason: "claim_stale" };
+        }
+
+        // 2. 锁内重读 policy + lifecycle 并重算有效准入（提交边界当次重算）。
         const admission = resolveAdmissionFromPolicy({
           owner: memoryOwnerFromKey(input.ownerKey),
           conversationId: input.conversationId,
-          turnOverrideOff: false,
-          policyRows,
+          policyRows: readPolicyRows(),
           ownerLifecycle: readLifecycleRow(input.ownerKey),
           conversationLifecycle: readLifecycleRow(`conversation:${input.conversationId}`),
         });
         if (admission.effective === "off") {
           return { status: "discarded" as const, reason: "admission_off" };
         }
-        // 2. 权威 revision/generation 与 job 捕获值不符（含模型调用期间发生的变化）
-        // 即废弃本批（《手册》12.3：在途旧任务提交时因 revision 不匹配失效）。
-        if (admission.policyRevision !== input.expectedPolicyRevision) {
-          return { status: "discarded" as const, reason: "admission_revision_changed" };
-        }
-        if (admission.generation !== input.expectedGeneration) {
-          return { status: "discarded" as const, reason: "generation_changed" };
-        }
-        // 3. job 必须仍处于本批占用的 running 且捕获值自洽（BEGIN IMMEDIATE 下无并发写）。
-        const jobRow = database.connection
-          .prepare("SELECT status, conversation_id, policy_revision, generation FROM memory_job WHERE job_id = ?")
-          .get(input.jobId) as
-            | { status: SQLInputValue; conversation_id: SQLInputValue; policy_revision: SQLInputValue; generation: SQLInputValue }
-            | undefined;
-        if (
-          jobRow === undefined ||
-          String(jobRow.status) !== "running" ||
-          String(jobRow.conversation_id) !== input.conversationId ||
-          String(jobRow.policy_revision) !== input.expectedPolicyRevision ||
-          Number(jobRow.generation) !== input.expectedGeneration
-        ) {
-          return { status: "discarded" as const, reason: "job_not_running" };
+        if (admission.policyRevision !== input.expectedPolicyRevision || admission.generation !== input.expectedGeneration) {
+          return { status: "discarded" as const, reason: "admission_changed" };
         }
 
-        // 4. 共享写入路径（fence/generation/游标单调在此再次成立）。
-        const written = writeConsolidationContentLocked({
-          conversationId: input.conversationId,
-          ownerKey: input.ownerKey,
-          records: input.records,
-          retireRecordIds: input.retireRecordIds,
-          advanceCursorTo: input.advanceCursorTo,
-        });
-
-        // 5. Record+Source+Cursor+job 状态在同一事务原子提交（《手册》9.1）。
-        if (input.completeJob) {
-          const updated = database.connection
-            .prepare(`
-              UPDATE memory_job SET status = 'done', updated_at = ?
-              WHERE job_id = ? AND status = 'running'
-            `)
-            .run(Date.now(), input.jobId);
-          if (Number(updated.changes) !== 1) {
+        // 3. 排除高水位不得与批次范围重叠（整理中途发生 clear/关闭）。
+        const existingProgress = readProgress(input.conversationId);
+        if (existingProgress !== undefined) {
+          if (existingProgress.ownerKey !== input.ownerKey) {
             throw new MemoryError(
-              "memory_store_failure",
-              `Memory job ${input.jobId} was not running when completing consolidation.`,
+              "memory_invalid_owner",
+              `Capture progress for ${input.conversationId} belongs to ${existingProgress.ownerKey}, not ${input.ownerKey}.`,
             );
           }
+          if (existingProgress.excludedThroughOrdinal >= input.batchRange.fromOrdinal) {
+            return { status: "discarded" as const, reason: "range_excluded" };
+          }
+          if (existingProgress.processedThroughOrdinal > input.advanceProgressTo.ordinal) {
+            return { status: "discarded" as const, reason: "progress_regressed" };
+          }
         }
-        return { status: "committed" as const, recordRefs: written.recordRefs, cursor: written.cursor };
-      });
-    },
 
-    async getCursor(conversationId) {
-      return readCursor(conversationId);
-    },
+        // 4. 发布 CAS：批次读取的总结/记忆 head 必须仍是当前有效版本（用户编辑或
+        //    并发整理使 head 变化即废弃本批，绝不在被替换的理解之上继续改写）。
+        const currentSummary = latestValidSummary(input.conversationId);
+        if ((currentSummary?.revisionId ?? null) !== input.expectedSummaryRevisionId) {
+          return { status: "discarded" as const, reason: "summary_superseded" };
+        }
+        const currentHead = latestValidSpaceDoc(input.ownerKey);
+        if ((currentHead?.revisionId ?? null) !== input.expectedMemoryHeadRevisionId) {
+          return { status: "discarded" as const, reason: "memory_head_superseded" };
+        }
 
-    async advanceCaptureCursor(input) {
-      return database.transaction(() => {
-        const lifecycleRow = database.connection
-          .prepare("SELECT generation, fence_state FROM memory_lifecycle WHERE owner_key = ?")
-          .get(input.ownerKey) as { readonly generation: number; readonly fence_state: string } | undefined;
-        if (lifecycleRow !== undefined &&
-          (lifecycleRow.fence_state === "fenced" || lifecycleRow.fence_state === "tombstone")) {
-          throw new MemoryError(
-            "memory_generation_fenced",
-            `Owner ${input.ownerKey} is ${lifecycleRow.fence_state}; capture cursor cannot advance.`,
-          );
-        }
-        if (lifecycleRow !== undefined && lifecycleRow.generation !== input.generation) {
-          throw new MemoryError(
-            "memory_generation_fenced",
-            `Capture cursor generation ${input.generation} != current ${lifecycleRow.generation}.`,
-          );
-        }
-        const existing = readCursor(input.conversationId);
-        if (existing !== undefined && existing.ownerKey !== input.ownerKey) {
-          throw new MemoryError(
-            "memory_invalid_owner",
-            `Capture cursor for ${input.conversationId} belongs to ${existing.ownerKey}, not ${input.ownerKey}.`,
-          );
-        }
-        if (existing !== undefined && existing.coveredThroughOrdinal >= input.coveredThroughOrdinal) return existing;
         const now = Date.now();
+
+        // 5. 会话总结 revision（必需产物）。
+        const summaryRevisionId = idFactory("memsum");
+        const summaryRow: MemorySummaryRow = {
+          revisionId: summaryRevisionId,
+          conversationId: input.conversationId,
+          ownerKey: input.ownerKey,
+          revision: nextSummaryRevision(input.conversationId),
+          markdown: input.summary.markdown,
+          validity: "valid",
+          generation: admission.generation,
+          contentHash: contentHashOf(input.summary.markdown),
+          coveredThroughOrdinal: input.summary.coveredThroughOrdinal,
+          updatedAt: now,
+        };
         database.connection.prepare(`
-          INSERT INTO memory_capture_cursor(
-            conversation_id, owner_key, covered_through_ordinal, source_fingerprint, updated_at
-          ) VALUES (?, ?, ?, ?, ?)
+          INSERT INTO memory_conversation_summary(
+            revision_id, conversation_id, owner_key, revision, markdown, validity,
+            generation, content_hash, covered_through_ordinal, updated_at
+          ) VALUES (?, ?, ?, ?, ?, 'valid', ?, ?, ?, ?)
+        `).run(
+          summaryRow.revisionId,
+          summaryRow.conversationId,
+          summaryRow.ownerKey,
+          summaryRow.revision,
+          summaryRow.markdown,
+          summaryRow.generation,
+          summaryRow.contentHash,
+          summaryRow.coveredThroughOrdinal,
+          summaryRow.updatedAt,
+        );
+        insertSummaryFts(summaryRow);
+        // 来源保守继承：前版总结的全部来源 + 本批范围。
+        if (currentSummary !== undefined) {
+          copySources(currentSummary.revisionId, summaryRevisionId, now);
+        }
+        insertConversationRangeSource({
+          revisionId: summaryRevisionId,
+          conversationId: input.conversationId,
+          fromOrdinal: input.batchRange.fromOrdinal,
+          toOrdinal: input.batchRange.toOrdinal,
+          sourceRevision: input.batchRange.sourceRevision,
+          now,
+        });
+
+        // 6. 可选 Space 记忆修订（整文替换）。
+        let memoryRevisionId: string | null = null;
+        if (input.longTermUpdate !== null) {
+          memoryRevisionId = idFactory("memdoc");
+          const docRow: MemorySpaceDocRow = {
+            revisionId: memoryRevisionId,
+            ownerKey: input.ownerKey,
+            revision: nextSpaceDocRevision(input.ownerKey),
+            origin: "model",
+            markdown: input.longTermUpdate.markdown,
+            validity: "valid",
+            generation: admission.generation,
+            contentHash: contentHashOf(input.longTermUpdate.markdown),
+            updatedAt: now,
+          };
+          database.connection.prepare(`
+            INSERT INTO memory_space_doc(
+              revision_id, owner_key, revision, origin, markdown, validity,
+              generation, content_hash, updated_at
+            ) VALUES (?, ?, ?, 'model', ?, 'valid', ?, ?, ?)
+          `).run(
+            docRow.revisionId,
+            docRow.ownerKey,
+            docRow.revision,
+            docRow.markdown,
+            docRow.generation,
+            docRow.contentHash,
+            docRow.updatedAt,
+          );
+          // 保守继承当前 head 的全部来源 + 本批范围（普通发布不撤销旧版供给）。
+          if (currentHead !== undefined) {
+            copySources(currentHead.revisionId, memoryRevisionId, now);
+          }
+          insertConversationRangeSource({
+            revisionId: memoryRevisionId,
+            conversationId: input.conversationId,
+            fromOrdinal: input.batchRange.fromOrdinal,
+            toOrdinal: input.batchRange.toOrdinal,
+            sourceRevision: input.batchRange.sourceRevision,
+            now,
+          });
+        }
+
+        // 7. 推进 processed 游标（只进不退）。
+        database.connection.prepare(`
+          INSERT INTO memory_capture_progress(
+            conversation_id, owner_key, processed_through_ordinal, excluded_through_ordinal,
+            source_fingerprint, updated_at
+          ) VALUES (?, ?, ?, 0, ?, ?)
           ON CONFLICT(conversation_id) DO UPDATE SET
-            owner_key = excluded.owner_key,
-            covered_through_ordinal = excluded.covered_through_ordinal,
+            processed_through_ordinal = excluded.processed_through_ordinal,
             source_fingerprint = excluded.source_fingerprint,
             updated_at = excluded.updated_at
         `).run(
           input.conversationId,
           input.ownerKey,
-          input.coveredThroughOrdinal,
-          input.sourceFingerprint,
+          input.advanceProgressTo.ordinal,
+          input.advanceProgressTo.sourceFingerprint,
           now,
         );
-        const saved = readCursor(input.conversationId);
-        if (saved === undefined) throw new MemoryError("memory_store_failure", "Capture cursor vanished after skip.");
+
+        // 8. job 收敛：目标边界到达且无扩展 → done；否则 queued 排到就绪队列尾。
+        const requested = Number(jobRow.requested_through_ordinal);
+        const target = Number(jobRow.target_through_ordinal);
+        const jobStatus: "done" | "queued" =
+          input.advanceProgressTo.ordinal >= target && requested <= target ? "done" : "queued";
+        const updated = database.connection.prepare(`
+          UPDATE memory_job SET
+            status = ?,
+            claim_token = NULL,
+            ready_queued_at = ?,
+            updated_at = ?
+          WHERE job_id = ? AND status = 'running' AND claim_token = ?
+        `).run(jobStatus, now, now, input.jobId, input.claimToken);
+        if (Number(updated.changes) !== 1) {
+          throw new MemoryError("memory_store_failure", `Memory job ${input.jobId} did not converge after commit.`);
+        }
+
+        return { status: "committed" as const, summaryRevisionId, memoryRevisionId, jobStatus };
+      });
+    },
+
+    async recordUserSpaceMemoryEdit(input) {
+      return database.transaction(() => {
+        const lifecycleRow = readLifecycleRow(input.ownerKey);
+        if (lifecycleRow !== undefined && (lifecycleRow.fenceState === "fenced" || lifecycleRow.fenceState === "tombstone")) {
+          throw new MemoryError(
+            "memory_generation_fenced",
+            `Owner ${input.ownerKey} is ${lifecycleRow.fenceState}; user memory edit is rejected.`,
+          );
+        }
+        const currentHead = latestValidSpaceDoc(input.ownerKey);
+        if ((currentHead?.revisionId ?? null) !== input.expectedRevisionId) {
+          throw new MemoryError(
+            "memory_revision_stale",
+            `Space memory head for ${input.ownerKey} is ${currentHead?.revisionId ?? "absent"}, expected ${input.expectedRevisionId ?? "absent"}.`,
+          );
+        }
+        const now = input.now;
+        const revisionId = idFactory("memdoc");
+        const docRow: MemorySpaceDocRow = {
+          revisionId,
+          ownerKey: input.ownerKey,
+          revision: nextSpaceDocRevision(input.ownerKey),
+          origin: "user_edit",
+          markdown: input.markdown,
+          validity: "valid",
+          generation: lifecycleRow?.generation ?? 0,
+          contentHash: contentHashOf(input.markdown),
+          updatedAt: now,
+        };
+        database.connection.prepare(`
+          INSERT INTO memory_space_doc(
+            revision_id, owner_key, revision, origin, markdown, validity,
+            generation, content_hash, updated_at
+          ) VALUES (?, ?, ?, 'user_edit', ?, 'valid', ?, ?, ?)
+        `).run(
+          docRow.revisionId,
+          docRow.ownerKey,
+          docRow.revision,
+          docRow.markdown,
+          docRow.generation,
+          docRow.contentHash,
+          docRow.updatedAt,
+        );
+        // 用户编辑撤销被明确替换的旧 head 供给；更早的有效版本（被其他会话绑定）
+        // 按设计继续有效，不做自动失效。
+        if (currentHead !== undefined) {
+          database.connection.prepare(
+            "UPDATE memory_space_doc SET validity = 'invalidated' WHERE revision_id = ?",
+          ).run(currentHead.revisionId);
+          copySources(currentHead.revisionId, revisionId, now);
+        }
+        database.connection.prepare(`
+          INSERT INTO memory_doc_source(
+            source_id, revision_id, dep_kind, conversation_id, from_ordinal, to_ordinal,
+            source_revision, request_id, created_at
+          ) VALUES (?, ?, 'user_edit', NULL, NULL, NULL, 0, ?, ?)
+        `).run(idFactory("memsrc"), revisionId, input.requestId, now);
+        return docRow;
+      });
+    },
+
+    async setExcludedThrough(input) {
+      return database.transaction(() => {
+        const existing = readProgress(input.conversationId);
+        if (existing !== undefined && existing.ownerKey !== input.ownerKey) {
+          throw new MemoryError(
+            "memory_invalid_owner",
+            `Capture progress for ${input.conversationId} belongs to ${existing.ownerKey}, not ${input.ownerKey}.`,
+          );
+        }
+        const nextExcluded = Math.max(existing?.excludedThroughOrdinal ?? 0, input.excludedThroughOrdinal);
+        const now = input.now;
+        database.connection.prepare(`
+          INSERT INTO memory_capture_progress(
+            conversation_id, owner_key, processed_through_ordinal, excluded_through_ordinal,
+            source_fingerprint, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?)
+          ON CONFLICT(conversation_id) DO UPDATE SET
+            excluded_through_ordinal = excluded.excluded_through_ordinal,
+            updated_at = excluded.updated_at
+        `).run(
+          input.conversationId,
+          input.ownerKey,
+          existing?.processedThroughOrdinal ?? 0,
+          nextExcluded,
+          existing?.sourceFingerprint ?? `excluded:${nextExcluded}`,
+          now,
+        );
+        const saved = readProgress(input.conversationId);
+        if (saved === undefined) throw new MemoryError("memory_store_failure", "Capture progress vanished after exclusion write.");
         return saved;
       });
     },
 
-    async skipStaleConsolidationJob(jobId) {
+    async indexTranscriptRange(input) {
       return database.transaction(() => {
-        const job = database.connection.prepare(`
-          SELECT job_id, conversation_id, owner_key, covered_through_ordinal,
-                 source_fingerprint, status, generation
-          FROM memory_job WHERE job_id = ?
-        `).get(jobId) as {
-          readonly job_id: SQLInputValue;
-          readonly conversation_id: SQLInputValue;
-          readonly owner_key: SQLInputValue;
-          readonly covered_through_ordinal: SQLInputValue;
-          readonly source_fingerprint: SQLInputValue;
-          readonly status: SQLInputValue;
-          readonly generation: SQLInputValue;
-        } | undefined;
-        if (job === undefined || String(job.status) !== "running") return false;
-        const ownerKey = String(job.owner_key);
-        const lifecycleRow = database.connection
-          .prepare("SELECT generation, fence_state FROM memory_lifecycle WHERE owner_key = ?")
-          .get(ownerKey) as { readonly generation: number; readonly fence_state: string } | undefined;
-        if (lifecycleRow !== undefined &&
-          (lifecycleRow.fence_state === "fenced" || lifecycleRow.fence_state === "tombstone" ||
-            lifecycleRow.generation !== Number(job.generation))) {
-          database.connection.prepare("DELETE FROM memory_job WHERE job_id = ?").run(jobId);
-          return true;
-        }
-        const conversationId = String(job.conversation_id);
-        const existing = readCursor(conversationId);
-        if (existing !== undefined && existing.ownerKey !== ownerKey) {
-          throw new MemoryError(
-            "memory_invalid_owner",
-            `Capture cursor for ${conversationId} belongs to ${existing.ownerKey}, not ${ownerKey}.`,
-          );
-        }
-        if (existing === undefined || existing.coveredThroughOrdinal < Number(job.covered_through_ordinal)) {
+        let maxOrdinal = -1;
+        let lastRevision = 0;
+        for (const entry of input.entries) {
+          database.connection.prepare(
+            "DELETE FROM memory_transcript_fts WHERE conversation_id = ? AND ordinal = ?",
+          ).run(input.conversationId, entry.ordinal);
           database.connection.prepare(`
-            INSERT INTO memory_capture_cursor(
-              conversation_id, owner_key, covered_through_ordinal, source_fingerprint, updated_at
-            ) VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(conversation_id) DO UPDATE SET
-              owner_key = excluded.owner_key,
-              covered_through_ordinal = excluded.covered_through_ordinal,
-              source_fingerprint = excluded.source_fingerprint,
-              updated_at = excluded.updated_at
+            INSERT INTO memory_transcript_fts(conversation_id, ordinal, owner_key, terms)
+            VALUES (?, ?, ?, ?)
           `).run(
-            conversationId,
-            ownerKey,
-            Number(job.covered_through_ordinal),
-            String(job.source_fingerprint),
-            Date.now(),
+            input.conversationId,
+            entry.ordinal,
+            input.ownerKey,
+            lexicalProjection(entry.text).join(" "),
           );
+          if (entry.ordinal > maxOrdinal) {
+            maxOrdinal = entry.ordinal;
+            lastRevision = entry.sourceRevision;
+          }
         }
-        database.connection.prepare(
-          "UPDATE memory_job SET status = 'done', updated_at = ? WHERE job_id = ? AND status = 'running'",
-        ).run(Date.now(), jobId);
-        return true;
-      });
-    },
-
-    async listActiveByOwner(ownerKey) {
-      const rows = database.connection
-        .prepare(`SELECT ${RECORD_COLUMNS} FROM memory_record WHERE owner_key = ? AND status = 'active' ORDER BY updated_at`)
-        .all(ownerKey) as Record<string, SQLInputValue>[];
-      return rows.map(parseRecordRow);
-    },
-
-    async listActiveAll() {
-      const rows = database.connection
-        .prepare(`SELECT ${RECORD_COLUMNS} FROM memory_record WHERE status = 'active' ORDER BY updated_at, record_id`)
-        .all() as Record<string, SQLInputValue>[];
-      return rows.map(parseRecordRow);
-    },
-
-    async listSources(recordId, revision) {
-      const rows = database.connection
-        .prepare(`SELECT ${SOURCE_COLUMNS} FROM memory_record_source WHERE record_id = ? AND revision = ?`)
-        .all(recordId, revision) as Record<string, SQLInputValue>[];
-      return rows.map(parseRecordSourceRow);
-    },
-
-    async claimPendingOutbox(limit) {
-      const rows = database.connection
-        .prepare(`SELECT ${OUTBOX_COLUMNS} FROM memory_index_outbox WHERE status = 'pending' ORDER BY created_at LIMIT ?`)
-        .all(limit) as Record<string, SQLInputValue>[];
-      return rows.map(parseIndexOutboxRow);
-    },
-
-    async markOutbox(outboxId, status) {
-      return database.transaction(() => {
-        const existing = readOutbox(outboxId);
-        if (existing === undefined) return undefined;
+        if (maxOrdinal < 0) return undefined;
+        const existing = database.connection
+          .prepare("SELECT conversation_id, owner_key, indexed_through_ordinal, source_revision, updated_at FROM memory_transcript_coverage WHERE conversation_id = ?")
+          .get(input.conversationId) as Record<string, SQLInputValue> | undefined;
+        const current = existing === undefined ? undefined : parseTranscriptCoverageRow(existing);
+        const nextThrough = Math.max(current?.indexedThroughOrdinal ?? 0, maxOrdinal);
+        const now = input.now;
         database.connection.prepare(`
-          UPDATE memory_index_outbox SET status = ?, attempts = attempts + 1, updated_at = ? WHERE outbox_id = ?
-        `).run(status, Date.now(), outboxId);
-        return readOutbox(outboxId);
+          INSERT INTO memory_transcript_coverage(
+            conversation_id, owner_key, indexed_through_ordinal, source_revision, updated_at
+          ) VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT(conversation_id) DO UPDATE SET
+            indexed_through_ordinal = excluded.indexed_through_ordinal,
+            source_revision = excluded.source_revision,
+            updated_at = excluded.updated_at
+        `).run(input.conversationId, input.ownerKey, nextThrough, lastRevision, now);
+        const saved = database.connection
+          .prepare("SELECT conversation_id, owner_key, indexed_through_ordinal, source_revision, updated_at FROM memory_transcript_coverage WHERE conversation_id = ?")
+          .get(input.conversationId) as Record<string, SQLInputValue>;
+        return parseTranscriptCoverageRow(saved);
       });
     },
 
-    async purgeOwner(ownerKey, options = {}) {
-      await database.transaction(() => {
-        const rows = database.connection
-          .prepare("SELECT record_id FROM memory_record WHERE owner_key = ?")
-          .all(ownerKey) as { readonly record_id: SQLInputValue }[];
-        const deleteProjection = database.connection.prepare(
-          "DELETE FROM memory_record_fts WHERE record_id = ?",
-        );
-        const deleteOutbox = database.connection.prepare(
-          "DELETE FROM memory_index_outbox WHERE record_id = ?",
-        );
-        for (const row of rows) {
-          deleteProjection.run(String(row.record_id));
-          deleteOutbox.run(String(row.record_id));
-        }
-        database.connection.prepare("DELETE FROM memory_record WHERE owner_key = ?").run(ownerKey);
-        if (options.preserveCursors !== true) {
-          database.connection.prepare("DELETE FROM memory_capture_cursor WHERE owner_key = ?").run(ownerKey);
-        }
-        database.connection.prepare("DELETE FROM memory_job WHERE owner_key = ?").run(ownerKey);
-      });
-    },
-
-    async purgeAll(options = {}) {
-      await database.transaction(() => {
-        database.connection.prepare("DELETE FROM memory_record_fts").run();
-        database.connection.prepare("DELETE FROM memory_index_outbox").run();
-        database.connection.prepare("DELETE FROM memory_record").run();
-        database.connection.prepare("DELETE FROM memory_job").run();
-        if (options.preserveCursors !== true) {
-          database.connection.prepare("DELETE FROM memory_capture_cursor").run();
-        }
-      });
-    },
-
-    async purgeConversation(conversationId, options = {}) {
-      await database.transaction(() => {
-        const rows = database.connection
-          .prepare(`
-            SELECT DISTINCT record_id
-            FROM memory_record_source
-            WHERE conversation_id = ?
-          `)
-          .all(conversationId) as { readonly record_id: SQLInputValue }[];
-        const deleteProjection = database.connection.prepare(
-          "DELETE FROM memory_record_fts WHERE record_id = ?",
-        );
-        const deleteOutbox = database.connection.prepare(
-          "DELETE FROM memory_index_outbox WHERE record_id = ?",
-        );
-        const deleteRecord = database.connection.prepare(
-          "DELETE FROM memory_record WHERE record_id = ?",
-        );
-        for (const row of rows) {
-          const recordId = String(row.record_id);
-          deleteProjection.run(recordId);
-          deleteOutbox.run(recordId);
-          deleteRecord.run(recordId);
-        }
-        if (options.preserveCursor !== true) {
-          database.connection.prepare("DELETE FROM memory_capture_cursor WHERE conversation_id = ?").run(conversationId);
-        }
-        database.connection.prepare("DELETE FROM memory_job WHERE conversation_id = ?").run(conversationId);
-      });
-    },
-
-    async searchActiveByProjection(input) {
-      // 空 MATCH 表达式不是合法查询（投影为空 = 查询文本无可用 token）；
-      // 直接返回空候选，语义等同 no-hit 而非 degraded。
+    async searchSummaries(input) {
       if (input.match.trim() === "" || input.limit <= 0) return [];
-      // FTS5 行级过滤（UNINDEXED 列）先于回表；多取一截以对冲孤儿/失效投影行，
-      // 避免回表复核后有效候选不足 limit。
       const ftsLimit = Math.max(input.limit * 4, 16);
       const hits = database.connection.prepare(`
-        SELECT record_id, revision FROM memory_record_fts
-        WHERE memory_record_fts MATCH ? AND owner_key = ? AND status = 'active' AND generation = ?
-        ORDER BY bm25(memory_record_fts)
+        SELECT revision_id, bm25(memory_summary_fts) AS bm25_score
+        FROM memory_summary_fts
+        WHERE memory_summary_fts MATCH ? AND owner_key = ? AND validity = 'valid'
+        ORDER BY bm25(memory_summary_fts)
         LIMIT ?
-      `).all(input.match, input.ownerKey, input.generation, ftsLimit) as {
-        readonly record_id: SQLInputValue;
-        readonly revision: SQLInputValue;
+      `).all(input.match, input.ownerKey, ftsLimit) as {
+        readonly revision_id: SQLInputValue;
+        readonly bm25_score: SQLInputValue;
       }[];
-      const results: MemoryRecordRow[] = [];
+      const results: FtsSummaryHit[] = [];
       for (const hit of hits) {
-        // 回表复核：scope/状态/generation 以 memory_record 为准，投影行只是加速结构。
-        const row = database.connection
-          .prepare(`SELECT ${RECORD_COLUMNS} FROM memory_record WHERE record_id = ? AND revision = ?`)
-          .get(String(hit.record_id), Number(hit.revision)) as Record<string, SQLInputValue> | undefined;
-        if (row === undefined) continue;
-        const record = parseRecordRow(row);
-        if (
-          record.ownerKey !== input.ownerKey ||
-          record.status !== "active" ||
-          record.generation !== input.generation
-        ) {
-          continue;
-        }
-        results.push(record);
+        const row = readSummary(String(hit.revision_id));
+        if (row === undefined || row.validity !== "valid" || row.ownerKey !== input.ownerKey) continue;
+        results.push({ summary: row, bm25: Number(hit.bm25_score) });
         if (results.length >= input.limit) break;
       }
       return results;
     },
 
-    async storeRevision(ownerKey) {
-      const row = database.connection
-        .prepare(`
-          SELECT COUNT(*) AS activeCount, COALESCE(MAX(updated_at), 0) AS lastUpdate
-          FROM memory_record WHERE owner_key = ? AND status = 'active'
-        `)
-        .get(ownerKey) as { readonly activeCount: SQLInputValue; readonly lastUpdate: SQLInputValue };
-      return `v${Number(row.activeCount)}:${Number(row.lastUpdate)}`;
+    async searchTranscript(input) {
+      if (input.match.trim() === "" || input.limit <= 0) return [];
+      const hits = database.connection.prepare(`
+        SELECT conversation_id, ordinal, bm25(memory_transcript_fts) AS bm25_score
+        FROM memory_transcript_fts
+        WHERE memory_transcript_fts MATCH ? AND owner_key = ?
+        ORDER BY bm25(memory_transcript_fts)
+        LIMIT ?
+      `).all(input.match, input.ownerKey, input.limit) as {
+        readonly conversation_id: SQLInputValue;
+        readonly ordinal: SQLInputValue;
+        readonly bm25_score: SQLInputValue;
+      }[];
+      return hits.map((hit) => ({
+        conversationId: String(hit.conversation_id),
+        ordinal: Number(hit.ordinal),
+        bm25: Number(hit.bm25_score),
+      }));
+    },
+
+    async invalidateDependentRevisions(conversationId) {
+      return database.transaction(() => {
+        // 该会话自己的总结全部失效（总结只依赖本会话）。
+        const ownSummaries = database.connection
+          .prepare("SELECT revision_id FROM memory_conversation_summary WHERE conversation_id = ? AND validity = 'valid'")
+          .all(conversationId) as { readonly revision_id: string }[];
+        // 引用该会话来源的其他产物（Space 文档 revision）失效：文档级保守依赖
+        // 包含被删会话自身的范围，删除即整份失效（正式设计 §11.4）。
+        const dependent = database.connection
+          .prepare(`
+            SELECT s.revision_id AS revision_id, d.revision_id AS doc_id
+            FROM memory_doc_source s
+            LEFT JOIN memory_space_doc d ON d.revision_id = s.revision_id
+            WHERE s.conversation_id = ? AND s.dep_kind = 'conversation_range'
+              AND d.revision_id IS NOT NULL
+          `)
+          .all(conversationId) as { readonly revision_id: string; readonly doc_id: SQLInputValue }[];
+        const invalidateSummary = database.connection.prepare(
+          "UPDATE memory_conversation_summary SET validity = 'invalidated' WHERE revision_id = ? AND validity = 'valid'",
+        );
+        const invalidateDoc = database.connection.prepare(
+          "UPDATE memory_space_doc SET validity = 'invalidated' WHERE revision_id = ? AND validity = 'valid'",
+        );
+        const removeSummaryFts = database.connection.prepare(
+          "DELETE FROM memory_summary_fts WHERE revision_id = ?",
+        );
+        for (const row of ownSummaries) {
+          invalidateSummary.run(row.revision_id);
+          removeSummaryFts.run(row.revision_id);
+        }
+        for (const row of dependent) {
+          invalidateDoc.run(String(row.doc_id));
+        }
+      });
+    },
+
+    async purgeConversation(conversationId) {
+      return database.transaction(() => {
+        // 总结：全部 revision 物理删除（含 FTS 行）。
+        const summaries = database.connection
+          .prepare("SELECT revision_id FROM memory_conversation_summary WHERE conversation_id = ?")
+          .all(conversationId) as { readonly revision_id: string }[];
+        for (const row of summaries) {
+          database.connection.prepare("DELETE FROM memory_summary_fts WHERE revision_id = ?").run(row.revision_id);
+          database.connection.prepare("DELETE FROM memory_doc_source WHERE revision_id = ?").run(row.revision_id);
+        }
+        database.connection.prepare("DELETE FROM memory_conversation_summary WHERE conversation_id = ?").run(conversationId);
+        // 依赖该会话来源的 Space 文档 revision（已在 prepare 失效）物理删除。
+        const dependentDocs = database.connection
+          .prepare(`
+            SELECT DISTINCT s.revision_id AS revision_id FROM memory_doc_source s
+            JOIN memory_space_doc d ON d.revision_id = s.revision_id
+            WHERE s.conversation_id = ? AND s.dep_kind = 'conversation_range'
+          `)
+          .all(conversationId) as { readonly revision_id: string }[];
+        for (const row of dependentDocs) {
+          database.connection.prepare("DELETE FROM memory_space_doc WHERE revision_id = ?").run(row.revision_id);
+          database.connection.prepare("DELETE FROM memory_doc_source WHERE revision_id = ?").run(row.revision_id);
+        }
+        // transcript 索引与进度、任务。
+        database.connection.prepare("DELETE FROM memory_transcript_fts WHERE conversation_id = ?").run(conversationId);
+        database.connection.prepare("DELETE FROM memory_transcript_coverage WHERE conversation_id = ?").run(conversationId);
+        database.connection.prepare("DELETE FROM memory_capture_progress WHERE conversation_id = ?").run(conversationId);
+        database.connection.prepare("DELETE FROM memory_job WHERE conversation_id = ?").run(conversationId);
+      });
+    },
+
+    async purgeOwner(ownerKey, options = {}) {
+      return database.transaction(() => {
+        const docs = database.connection
+          .prepare("SELECT revision_id FROM memory_space_doc WHERE owner_key = ?")
+          .all(ownerKey) as { readonly revision_id: string }[];
+        for (const row of docs) {
+          database.connection.prepare("DELETE FROM memory_doc_source WHERE revision_id = ?").run(row.revision_id);
+        }
+        database.connection.prepare("DELETE FROM memory_space_doc WHERE owner_key = ?").run(ownerKey);
+        const summaries = database.connection
+          .prepare("SELECT revision_id FROM memory_conversation_summary WHERE owner_key = ?")
+          .all(ownerKey) as { readonly revision_id: string }[];
+        for (const row of summaries) {
+          database.connection.prepare("DELETE FROM memory_summary_fts WHERE revision_id = ?").run(row.revision_id);
+        }
+        database.connection.prepare("DELETE FROM memory_conversation_summary WHERE owner_key = ?").run(ownerKey);
+        database.connection.prepare("DELETE FROM memory_transcript_fts WHERE owner_key = ?").run(ownerKey);
+        database.connection.prepare("DELETE FROM memory_transcript_coverage WHERE owner_key = ?").run(ownerKey);
+        database.connection.prepare("DELETE FROM memory_job WHERE owner_key = ?").run(ownerKey);
+        if (options.preserveExclusions !== true) {
+          database.connection.prepare("DELETE FROM memory_capture_progress WHERE owner_key = ?").run(ownerKey);
+        }
+      });
+    },
+
+    async purgeAll(options = {}) {
+      return database.transaction(() => {
+        database.connection.prepare("DELETE FROM memory_summary_fts").run();
+        database.connection.prepare("DELETE FROM memory_transcript_fts").run();
+        database.connection.prepare("DELETE FROM memory_transcript_coverage").run();
+        database.connection.prepare("DELETE FROM memory_doc_source").run();
+        database.connection.prepare("DELETE FROM memory_conversation_summary").run();
+        database.connection.prepare("DELETE FROM memory_space_doc").run();
+        database.connection.prepare("DELETE FROM memory_job").run();
+        if (options.preserveExclusions !== true) {
+          database.connection.prepare("DELETE FROM memory_capture_progress").run();
+        }
+      });
     },
   };
 }

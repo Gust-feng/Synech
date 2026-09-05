@@ -34,7 +34,6 @@ import { PanelHttpError } from "./http-utils.js";
 
 export type PanelRunInput = {
   readonly goal: string;
-  readonly turnMemoryOverrideOff?: boolean;
   readonly submissionId?: string;
   /** Canonical owner for a new Conversation. */
   readonly owner?: { readonly kind: "space" | "workspace"; readonly id: string };
@@ -135,7 +134,6 @@ const ordinaryRunRequestSchema = z.preprocess(normalizeRequestObject, z.object({
   toolConfirmationPolicy: z.unknown().optional(),
   modelOverride: z.unknown().optional(),
   contextInput: z.unknown().optional(),
-  turnMemoryOverrideOff: optionalBooleanSchema,
 }));
 
 const conversationRollbackRequestSchema = z.preprocess(normalizeRequestObject, z.object({
@@ -476,7 +474,6 @@ export function parseRunInput(raw: unknown): PanelRunInput {
     : { kind: request.owner.kind, id: request.owner.id! };
   return {
     goal,
-    turnMemoryOverrideOff: request.turnMemoryOverrideOff,
     submissionId: request.submissionId,
     owner,
     aiMode: parseOptionalAiMode(request.aiMode, "AI 模式无效。"),

@@ -6,7 +6,6 @@ import test from "node:test";
 
 import { SqliteRuntimeDatabase } from "../dist/adapters/runtime-storage/index.js";
 import {
-  MemoryError,
   createSqliteMemoryControlRepository,
 } from "../dist/app/memory/index.js";
 
@@ -25,12 +24,13 @@ async function withStore(run) {
   }
 }
 
-const jobInput = (overrides = {}) => ({
+const signal = (overrides = {}) => ({
   conversationId: "c1",
   ownerKey: "space:s1",
-  coveredThroughTurnId: "u1",
-  coveredThroughOrdinal: 1,
+  stableThroughOrdinal: 2,
   sourceFingerprint: "fp1",
+  eligibleAt: 1_000,
+  now: 900,
   generation: 0,
   policyRevision: "p1",
   ...overrides,
@@ -42,7 +42,7 @@ test("durable job boundary survives repository/database recreation", async () =>
   try {
     const first = new SqliteRuntimeDatabase(filePath);
     const repo1 = createSqliteMemoryControlRepository(first);
-    await repo1.enqueueOrAdvanceJob(jobInput());
+    await repo1.acceptConversationSignal(signal());
     first.close();
 
     const second = new SqliteRuntimeDatabase(filePath);
@@ -50,7 +50,7 @@ test("durable job boundary survives repository/database recreation", async () =>
     const queued = await repo2.listJobsByStatus("queued");
     assert.equal(queued.length, 1);
     assert.equal(queued[0].conversationId, "c1");
-    assert.equal(queued[0].coveredThroughOrdinal, 1);
+    assert.equal(queued[0].requestedThroughOrdinal, 2);
     second.close();
   } finally {
     await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
@@ -59,49 +59,72 @@ test("durable job boundary survives repository/database recreation", async () =>
 
 test("interrupted running jobs return to queued with attempt increment on recovery", async () => {
   await withStore(async ({ repository }) => {
-    const job = await repository.enqueueOrAdvanceJob(jobInput());
-    const running = await repository.transitionJob(job.jobId, "queued", "running");
-    assert.equal(running.status, "running");
+    const job = await repository.acceptConversationSignal(signal());
+    const claimed = await repository.claimJob({ jobId: job.jobId, claimToken: "claim-1", now: 1_100 });
+    assert.equal(claimed.status, "running");
+    assert.equal(claimed.targetThroughOrdinal, 2);
+    assert.equal(claimed.attempt, 1);
+
     const recovered = await repository.recoverInterruptedJobs();
     assert.equal(recovered, 1);
     const queued = await repository.listJobsByStatus("queued");
     assert.equal(queued.length, 1);
-    assert.equal(queued[0].attempt, 1);
+    assert.equal(queued[0].attempt, 2);
+    assert.equal(queued[0].claimToken, null);
   });
 });
 
-test("lifecycle generation is strictly monotonic", async () => {
+test("a newer signal extends the active job and resets the attempt budget; an older signal cannot regress it", async () => {
   await withStore(async ({ repository }) => {
-    const first = await repository.advanceGeneration("space:s1");
-    const second = await repository.advanceGeneration("space:s1");
-    assert.equal(first.generation, 1);
-    assert.equal(second.generation, 2);
+    await repository.acceptConversationSignal(signal({ stableThroughOrdinal: 3 }));
+    const extended = await repository.acceptConversationSignal(signal({ stableThroughOrdinal: 6, now: 950, eligibleAt: 1_050 }));
+    assert.equal(extended.requestedThroughOrdinal, 6);
+    assert.equal(extended.eligibleAt, 1_050);
+    assert.equal(extended.attempt, 0);
+
+    // 迟到的旧信号：不缩小边界、不重置空闲计时。
+    const stale = await repository.acceptConversationSignal(signal({ stableThroughOrdinal: 4, eligibleAt: 9_000 }));
+    assert.equal(stale.requestedThroughOrdinal, 6);
+    assert.equal(stale.eligibleAt, 1_050);
   });
 });
 
-test("policy write rejects stale expectedRevision (CAS)", async () => {
+test("claim is CAS: only one claimer wins and finishing requires the same claim token", async () => {
   await withStore(async ({ repository }) => {
-    await repository.setPolicy({
-      key: "global_consent", kind: "global_consent", scopeOwnerKey: null, enabled: true,
+    const job = await repository.acceptConversationSignal(signal());
+    const first = await repository.claimJob({ jobId: job.jobId, claimToken: "claim-a", now: 1_000 });
+    assert.equal(first.status, "running");
+    const loser = await repository.claimJob({ jobId: job.jobId, claimToken: "claim-b", now: 1_000 });
+    assert.equal(loser, undefined);
+
+    const wrongToken = await repository.finishJob({
+      jobId: job.jobId, claimToken: "claim-b", status: "done", now: 1_050,
     });
-    await assert.rejects(
-      repository.setPolicy({
-        key: "global_consent", kind: "global_consent", scopeOwnerKey: null,
-        enabled: false, expectedRevision: 0,
-      }),
-      (error) => error instanceof MemoryError && error.code === "memory_policy_revision_stale",
-    );
+    assert.equal(wrongToken, undefined);
+
+    const requeued = await repository.finishJob({
+      jobId: job.jobId, claimToken: "claim-a", status: "queued", now: 1_050, nextAttemptAt: 2_000,
+    });
+    assert.equal(requeued.status, "queued");
+    assert.equal(requeued.nextAttemptAt, 2_000);
+
+    // 未到期（next_attempt_at 在未来）的任务不进入就绪队列。
+    const due = await repository.listDueJobs({ now: 1_500, limit: 8 });
+    assert.equal(due.length, 0);
+    const dueLater = await repository.listDueJobs({ now: 2_000, limit: 8 });
+    assert.equal(dueLater.length, 1);
   });
 });
 
-test("repeated signals advance the single active job instead of duplicating", async () => {
+test("due jobs are ordered by eligibility and only include due tasks", async () => {
   await withStore(async ({ repository }) => {
-    await repository.enqueueOrAdvanceJob(jobInput());
-    const advanced = await repository.enqueueOrAdvanceJob(
-      jobInput({ coveredThroughTurnId: "u3", coveredThroughOrdinal: 3, sourceFingerprint: "fp3" }),
-    );
-    assert.equal(advanced.coveredThroughOrdinal, 3);
-    assert.equal((await repository.listJobsByStatus("queued")).length, 1);
-    assert.equal((await repository.listJobsByStatus("running")).length, 0);
+    await repository.acceptConversationSignal(signal({
+      conversationId: "c-late", eligibleAt: 5_000, now: 4_000,
+    }));
+    await repository.acceptConversationSignal(signal({
+      conversationId: "c-early", eligibleAt: 1_000, now: 900,
+    }));
+    const due = await repository.listDueJobs({ now: 1_500, limit: 8 });
+    assert.deepEqual(due.map((job) => job.conversationId), ["c-early"]);
   });
 });

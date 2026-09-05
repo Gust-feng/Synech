@@ -11,10 +11,24 @@ const memoryOwnerSchema = z.discriminatedUnion("kind", [
 ]);
 
 const setConsentSchema = z.object({ op: z.literal("setConsent"), globalConsent: z.boolean() }).strict();
+const setRolloutSchema = z.object({ op: z.literal("setRollout"), rollout: z.enum(["off", "shadow", "active"]) }).strict();
 const setSpaceSchema = z.object({ op: z.literal("setSpaceParticipation"), spaceId: z.string().min(1), enabled: z.boolean() }).strict();
-const setConversationSchema = z.object({ op: z.literal("setConversationParticipation"), conversationId: z.string().min(1), excluded: z.boolean() }).strict();
 const clearSchema = z.object({ op: z.literal("clearImplicitMemory"), scope: memoryOwnerSchema }).strict();
-const mutationBodySchema = z.discriminatedUnion("op", [setConsentSchema, setSpaceSchema, setConversationSchema, clearSchema]);
+const writeMemorySchema = z.object({
+  op: z.literal("writeSpaceMemory"),
+  spaceId: z.string().min(1),
+  // expectedRevisionId 为 null 表示当前没有有效文档（首次由用户创建正文）。
+  expectedRevisionId: z.string().min(1).nullable(),
+  markdown: z.string().max(65_536),
+  requestId: z.string().min(1),
+}).strict();
+const mutationBodySchema = z.discriminatedUnion("op", [
+  setConsentSchema,
+  setRolloutSchema,
+  setSpaceSchema,
+  clearSchema,
+  writeMemorySchema,
+]);
 
 export async function handleMemoryCapabilityRoute(
   feature: Pick<MemoryFeature, "queries">,
@@ -40,6 +54,22 @@ export async function handleMemoryDiagnosticsRoute(
   return true;
 }
 
+export async function handleMemorySpaceViewRoute(
+  feature: Pick<MemoryFeature, "queries">,
+  request: IncomingMessage,
+  response: ServerResponse,
+  url: URL,
+): Promise<boolean> {
+  if (request.method !== "GET" || url.pathname !== "/api/memory/space") return false;
+  const spaceId = url.searchParams.get("spaceId");
+  if (spaceId === null || spaceId.length === 0) {
+    throw new PanelHttpError(400, "memory_space_view_invalid", "缺少 spaceId。");
+  }
+  const view = await feature.queries.getSpaceMemoryView({ spaceId });
+  writeJson(response, 200, { ok: true, view });
+  return true;
+}
+
 export async function handleMemoryMutationRoute(
   feature: Pick<MemoryFeature, "commands">,
   request: IncomingMessage,
@@ -50,6 +80,11 @@ export async function handleMemoryMutationRoute(
   if (!parsed.success) throw new PanelHttpError(400, "memory_mutation_invalid", parsed.error.message);
   const input = parsed.data;
   switch (input.op) {
+    case "setRollout": {
+      const result = await feature.commands.setRollout({ rollout: input.rollout });
+      writeJson(response, 200, { ok: true, policyRevision: result.policyRevision });
+      return;
+    }
     case "setConsent": {
       const result = await feature.commands.setConsent({ globalConsent: input.globalConsent });
       writeJson(response, 200, { ok: true, policyRevision: result.policyRevision });
@@ -60,14 +95,19 @@ export async function handleMemoryMutationRoute(
       writeJson(response, 200, { ok: true, policyRevision: result.policyRevision });
       return;
     }
-    case "setConversationParticipation": {
-      const result = await feature.commands.setConversationParticipation({ conversationId: input.conversationId, excluded: input.excluded });
-      writeJson(response, 200, { ok: true, policyRevision: result.policyRevision });
-      return;
-    }
     case "clearImplicitMemory": {
       const result = await feature.commands.clearImplicitMemory({ scope: input.scope as MemoryOwner });
       writeJson(response, 200, { ok: true, generation: result.generation });
+      return;
+    }
+    case "writeSpaceMemory": {
+      const result = await feature.commands.writeSpaceMemory({
+        spaceId: input.spaceId,
+        expectedRevisionId: input.expectedRevisionId,
+        markdown: input.markdown,
+        requestId: input.requestId,
+      });
+      writeJson(response, 200, { ok: true, revisionId: result.revisionId, revision: result.revision });
       return;
     }
   }
@@ -75,20 +115,16 @@ export async function handleMemoryMutationRoute(
 
 function capabilityQueryFromUrl(url: URL): {
   readonly owner?: MemoryOwner;
-  readonly conversationId?: string;
 } {
   const ownerKind = url.searchParams.get("ownerKind");
   const ownerId = url.searchParams.get("ownerId");
   if (ownerKind === null && ownerId === null) {
-    const conversationId = url.searchParams.get("conversationId");
-    return conversationId === null ? {} : { conversationId };
+    return {};
   }
   if ((ownerKind !== "space" && ownerKind !== "workspace") || ownerId === null || ownerId.length === 0) {
     throw new PanelHttpError(400, "memory_capability_query_invalid", "记忆状态查询范围无效。");
   }
-  const conversationId = url.searchParams.get("conversationId");
   return {
     owner: { kind: ownerKind, id: ownerId },
-    ...(conversationId === null ? {} : { conversationId }),
   };
 }

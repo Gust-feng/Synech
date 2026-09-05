@@ -7,6 +7,7 @@ import {
 import type { ManagedSpaceFolderApplication } from "../../../domain/managed-space-folder.js";
 import type { ProductPaths } from "../../../platform/storage/index.js";
 import type { AgentNotesFeature } from "../../agent-notes/index.js";
+import type { CollaborationRulesFeature } from "../../collaboration-rules/index.js";
 import type { OrdinaryAgentFeature } from "../../ordinary-agent/index.js";
 import {
   createSpaceConversationDeletionCoordinator,
@@ -54,6 +55,7 @@ export function createApplicationRuntime(input: {
   readonly ordinaryAgentFeature: Pick<OrdinaryAgentFeature, "commands" | "queries">;
   readonly personalKnowledgeFeature: Pick<PersonalKnowledgeFeature, "commands">;
   readonly agentNotesFeature: Pick<AgentNotesFeature, "commands">;
+  readonly collaborationRulesFeature: Pick<CollaborationRulesFeature, "commands">;
   readonly pathDependencyFeature: Pick<PathDependencyFeature, "commands">;
   readonly memoryLifecycle: Pick<
     MemoryLifecycle,
@@ -77,6 +79,7 @@ export function createApplicationRuntime(input: {
     ordinary: input.ordinaryAgentFeature,
     personalKnowledge: input.personalKnowledgeFeature,
     agentNotes: input.agentNotesFeature.commands,
+    collaborationRules: input.collaborationRulesFeature.commands,
     memory: input.pathDependencyFeature.commands,
     memoryLifecycle: input.memoryLifecycle,
     processes: input.processRegistry,
@@ -109,6 +112,7 @@ export function createApplicationRuntime(input: {
       queries: { listConversationsByOwner: input.ordinaryAgentFeature.queries.listConversationsByOwner },
     },
     agentNotes: input.agentNotesFeature.commands,
+    collaborationRules: input.collaborationRulesFeature.commands,
     memory: input.pathDependencyFeature.commands,
     memoryLifecycle: input.memoryLifecycle,
     processes: input.processRegistry,
@@ -131,11 +135,10 @@ export function createApplicationRuntime(input: {
     processes: input.processRegistry,
     processTerminator: input.processTerminator,
     journal: input.conversationLifecycleJournal,
-    onConversationDeleted: async (conversationId) => {
-      // Memory v2：会话删除走两阶段 durable fence（generation bump → tombstone）。
-      const ticket = await input.memoryLifecycle.prepareConversationRemoval(conversationId);
-      await input.memoryLifecycle.finalizeConversationRemoval(ticket);
-    },
+    prepareConversationRemoval: async (conversationId) =>
+      await input.memoryLifecycle.prepareConversationRemoval(conversationId),
+    finalizeConversationRemoval: async (ticket) =>
+      await input.memoryLifecycle.finalizeConversationRemoval(ticket),
     runExclusive: runDeletionExclusive,
   });
 

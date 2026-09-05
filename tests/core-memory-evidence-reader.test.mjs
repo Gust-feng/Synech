@@ -82,7 +82,7 @@ test("a run with empty assistant text contributes only the user turn", async () 
   assert.deepEqual(window.nextCursor?.coveredThroughOrdinal, 1);
 });
 
-test("a per-turn memory override excludes that run while keeping later ordinals continuous", async () => {
+test("every stable turn in an enabled Space remains evidence even when legacy fields are present", async () => {
   const reader = createOrdinaryEvidenceReader(fakeQueries([
     run(1),
     run(2, { turnMemoryOverrideOff: true }),
@@ -93,6 +93,6 @@ test("a per-turn memory override excludes that run while keeping later ordinals 
     fromOrdinal: 1,
     through: { turnId: "t3", ordinal: 3, sourceRevision: 1 },
   });
-  assert.deepEqual([...new Set(window.turns.map((turn) => turn.ordinal))], [1, 3]);
+  assert.deepEqual([...new Set(window.turns.map((turn) => turn.ordinal))], [1, 2, 3]);
   assert.equal(window.nextCursor.coveredThroughOrdinal, 3);
 });

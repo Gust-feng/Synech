@@ -27,8 +27,6 @@ export type WorkbenchInputPropsOptions = {
   readonly closeSignal: number;
   readonly onModelSelect: (modelId: string) => void | Promise<void>;
   readonly onOpenSettings: () => void;
-  readonly turnMemoryOverrideOff: boolean;
-  readonly onTurnMemoryOverrideChange: (disabled: boolean) => void;
   readonly enqueueMessage: (content: string) => void;
   readonly startTask: (explicitGoal?: string) => void | Promise<boolean>;
   readonly clearQueuedMessages: () => void;
@@ -65,8 +63,6 @@ export function workbenchInputPropsFrom(
     closeSignal: options.closeSignal,
     onModelSelect: options.onModelSelect,
     onOpenSettings: options.onOpenSettings,
-    turnMemoryOverrideOff: options.turnMemoryOverrideOff,
-    onTurnMemoryOverrideChange: options.onTurnMemoryOverrideChange,
     onSubmit: () => {
       if (options.modelResponding && options.followUpMode === "guide") {
         options.setGoal("");

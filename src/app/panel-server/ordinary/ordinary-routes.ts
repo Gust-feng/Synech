@@ -201,7 +201,6 @@ async function submitTurn(
 function toOrdinaryTurnInput(input: PanelRunInput): OrdinaryTurnInput {
   return {
     goal: input.goal,
-    turnMemoryOverrideOff: input.turnMemoryOverrideOff,
     ...(input.submissionId === undefined ? {} : { submissionId: input.submissionId }),
     ...(input.owner === undefined ? {} : { owner: input.owner }),
     ...(input.aiMode === undefined ? {} : { aiMode: input.aiMode }),

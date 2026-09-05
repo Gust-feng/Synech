@@ -158,14 +158,14 @@ export type OrdinaryRunBirth = {
   readonly memoryOwner: ConversationOwner;
   /** 模型可见的 Owner 与环境上下文，随 Run 出生事实冻结。 */
   readonly ownerContext?: string;
+  /** User-authored standing rules, frozen separately from owner/environment facts. */
+  readonly collaborationRulesContext?: string;
   readonly informationAccess: SanitizedInformationAccessConfig;
   readonly accessPolicy: ToolRunAccessPolicy;
 };
 
 export type OrdinaryRunInput = {
   readonly userMessage: string;
-  /** Ordinary-owned one-turn override; the Memory feature only consumes it. */
-  readonly turnMemoryOverrideOff?: boolean;
   /**
    * Canonical Ordinary context input persisted by the first run format.
    */
@@ -179,6 +179,21 @@ export type OrdinaryRunTurn = {
   readonly assistantTurnId: string;
   readonly predecessorRunId?: string;
 };
+
+/**
+ * 会话背景绑定（0.6.0 正式设计 §9.1，Ordinary 拥有的会话事实）：
+ * 会话第一次模型请求前持久化一次，之后不因普通 head 更新而改变；undefined 表示
+ * 尚未初始化（后台不得暗中补绑）。仅引用 Memory revision，不复制正文。
+ */
+export type OrdinaryMemoryBackgroundBinding =
+  | { readonly kind: "none"; readonly boundAt: string }
+  | {
+      readonly kind: "revision";
+      readonly revisionId: string;
+      readonly revision: number;
+      readonly generation: number;
+      readonly boundAt: string;
+    };
 
 export type OrdinaryConversationControlState = {
   readonly conversationId: string;
@@ -197,6 +212,7 @@ export type OrdinaryConversationControlState = {
   readonly autoTitleAt?: string;
   readonly pinnedAt?: string;
   readonly deletedAt?: string;
+  readonly memoryBackground?: OrdinaryMemoryBackgroundBinding;
 };
 
 export type OrdinaryConversationControlDocument = {
@@ -642,7 +658,6 @@ export type OrdinaryStableTerminalRunFacts = {
   readonly sourceRevision: number;
   readonly turn: OrdinaryRunTurn;
   readonly userMessage: string;
-  readonly turnMemoryOverrideOff: boolean;
   readonly taskContextRefs: readonly string[];
   readonly workspaceRoot: string;
   readonly executionStarted: boolean;
@@ -678,8 +693,6 @@ export type OrdinaryStableEvidenceRun = {
   readonly userMessage: string;
   /** 稳定终态可见的 assistant 文本；可能为空串（无文本产出时）。 */
   readonly assistantText: string;
-  /** True when this user turn explicitly opted out of Memory. */
-  readonly turnMemoryOverrideOff: boolean;
   readonly sourceRevision: number;
   readonly occurredAt: string;
 };
@@ -692,6 +705,13 @@ export interface OrdinaryAgentFeature {
     setConversationPinned(conversationId: string, pinned: boolean): Promise<OrdinaryConversationReadModel>;
     rollbackConversation(input: { readonly conversationId: string; readonly targetRunId?: string; readonly stepsBack?: number }): Promise<OrdinaryConversationReadModel>;
     deleteConversation(conversationId: string): Promise<void>;
+    /**
+     * 会话背景绑定（幂等）：已绑定时原样返回既有绑定，不覆盖；仅未初始化时写入。
+     */
+    bindMemoryBackground(input: {
+      readonly conversationId: string;
+      readonly background: OrdinaryMemoryBackgroundBinding;
+    }): Promise<OrdinaryMemoryBackgroundBinding>;
     createManagedAttachmentDraft(input: {
       readonly originalName: string;
       readonly mimeType?: string;
@@ -712,6 +732,15 @@ export interface OrdinaryAgentFeature {
     listConversations(limit?: number): Promise<readonly OrdinaryConversationReadModel[]>;
     /** Canonical owner captured by the conversation workflow. */
     getConversationOwner(conversationId: string): Promise<ConversationOwner | undefined>;
+    /** 会话背景绑定读取；undefined 表示尚未初始化（区别于显式 none）。 */
+    getMemoryBackground(conversationId: string): Promise<OrdinaryMemoryBackgroundBinding | undefined>;
+    /**
+     * 每会话已分配 ordinal 高水位（含排队与未稳定运行）；Memory 的 clear 与启用
+     * 边界据此写 excludedThrough，防止回填（正式设计 §11.2/§11.3）。
+     */
+    listConversationMemoryHighWaters(): Promise<
+      readonly { readonly conversationId: string; readonly ownerKey: string; readonly allocatedThroughOrdinal: number }[]
+    >;
     /** Owner 视角的对话列表，供删除协调与资源页 read-model 使用。 */
     listConversationsByOwner(owner: ConversationOwner): Promise<readonly OrdinaryConversationReadModel[]>;
     getManagedAttachment(attachmentId: string): Promise<OrdinaryManagedAttachmentRecord | undefined>;

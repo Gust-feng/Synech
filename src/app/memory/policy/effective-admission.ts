@@ -6,10 +6,8 @@
  *
  * 有效策略优先级（任一更具体范围拒绝即 effective off）：
  *   lifecycle fence（删除/清除进行中，最高）
- *   > 本轮 override（不用）
- *   > Conversation exclusion
  *   > global consent
- *   > Space/Workspace participation（global scope 无此项）
+ *   > Space participation（Workspace scope 不参与自动记忆）
  *   > rollout 总开关
  * Developer Shadow 不得越过任何用户选择；rollout 只在用户选择全部允许时才生效。
  */
@@ -23,12 +21,8 @@ import type {
 export type EffectiveAdmissionInput = {
   readonly scopeKind: "global" | "space" | "workspace";
   readonly globalConsent: boolean;
-  /** Space/Workspace 是否 opt-in；global scope 下忽略。 */
-  readonly scopeParticipation: boolean;
-  /** 该 Conversation 是否被用户排除。 */
-  readonly conversationExcluded: boolean;
-  /** 本轮"不用记忆"（Ordinary 冻结 Run 输入携带）。 */
-  readonly turnOverrideOff: boolean;
+  /** 当前 Space 是否 opt-in；global scope 下忽略，Workspace scope 恒为 false。 */
+  readonly spaceParticipation: boolean;
   readonly rollout: MemoryRolloutMode;
   /** lifecycle fence 已立（owner/conversation 删除或清除进行中）。 */
   readonly fenced: boolean;
@@ -40,10 +34,8 @@ export type EffectiveAdmissionInput = {
 /** 结构原因码（程序分支用，非展示文案）。 */
 export const ADMISSION_REASON = {
   generationFence: "generation_fence",
-  turnOverride: "turn_override",
-  conversationExclusion: "conversation_exclusion",
   globalConsent: "global_consent",
-  scopeParticipation: "scope_participation",
+  spaceParticipation: "space_participation",
   rolloutOff: "rollout_off",
 } as const;
 
@@ -53,11 +45,9 @@ export function resolveEffectiveMemoryAdmission(
   const reasons: string[] = [];
   // 收集全部命中原因（不短路），便于 Developer Diagnostics 解释；任一命中即 off。
   if (input.fenced) reasons.push(ADMISSION_REASON.generationFence);
-  if (input.turnOverrideOff) reasons.push(ADMISSION_REASON.turnOverride);
-  if (input.conversationExcluded) reasons.push(ADMISSION_REASON.conversationExclusion);
   if (!input.globalConsent) reasons.push(ADMISSION_REASON.globalConsent);
-  if (input.scopeKind !== "global" && !input.scopeParticipation) {
-    reasons.push(ADMISSION_REASON.scopeParticipation);
+  if (input.scopeKind === "workspace" || (input.scopeKind === "space" && !input.spaceParticipation)) {
+    reasons.push(ADMISSION_REASON.spaceParticipation);
   }
   if (input.rollout === "off") reasons.push(ADMISSION_REASON.rolloutOff);
 

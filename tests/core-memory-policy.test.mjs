@@ -10,9 +10,7 @@ function baseInput(overrides = {}) {
   return {
     scopeKind: "space",
     globalConsent: true,
-    scopeParticipation: true,
-    conversationExcluded: false,
-    turnOverrideOff: false,
+    spaceParticipation: true,
     rollout: "active",
     fenced: false,
     generation: 1,
@@ -30,12 +28,10 @@ test("all gates open: active/shadow pass through rollout", () => {
   );
 });
 
-test("conversation exclusion wins even when consent and rollout are active", () => {
-  const admission = resolveEffectiveMemoryAdmission(
-    baseInput({ conversationExcluded: true }),
-  );
+test("Space participation is the smallest automatic-memory scope", () => {
+  const admission = resolveEffectiveMemoryAdmission(baseInput({ spaceParticipation: false }));
   assert.equal(admission.effective, "off");
-  assert.deepEqual(admission.reasons, [ADMISSION_REASON.conversationExclusion]);
+  assert.deepEqual(admission.reasons, [ADMISSION_REASON.spaceParticipation]);
 });
 
 test("developer shadow cannot bypass missing global consent", () => {
@@ -46,36 +42,31 @@ test("developer shadow cannot bypass missing global consent", () => {
   assert.ok(admission.reasons.includes(ADMISSION_REASON.globalConsent));
 });
 
-test("space participation gates non-global scope but is ignored for global scope", () => {
-  const scopedOff = resolveEffectiveMemoryAdmission(
-    baseInput({ scopeParticipation: false }),
-  );
-  assert.equal(scopedOff.effective, "off");
-  assert.ok(scopedOff.reasons.includes(ADMISSION_REASON.scopeParticipation));
+test("global view ignores participation and Workspace can never enter automatic memory", () => {
   const globalIgnored = resolveEffectiveMemoryAdmission(
-    baseInput({ scopeKind: "global", scopeParticipation: false }),
+    baseInput({ scopeKind: "global", spaceParticipation: false }),
   );
   assert.equal(globalIgnored.effective, "active");
+  const workspace = resolveEffectiveMemoryAdmission(
+    baseInput({ scopeKind: "workspace", spaceParticipation: true }),
+  );
+  assert.equal(workspace.effective, "off");
+  assert.deepEqual(workspace.reasons, [ADMISSION_REASON.spaceParticipation]);
 });
 
 test("lifecycle fence is collected alongside other denials and forces off", () => {
   const admission = resolveEffectiveMemoryAdmission(
-    baseInput({ fenced: true, conversationExcluded: true, rollout: "off" }),
+    baseInput({ fenced: true, rollout: "off" }),
   );
   assert.equal(admission.effective, "off");
   assert.deepEqual(admission.reasons, [
     ADMISSION_REASON.generationFence,
-    ADMISSION_REASON.conversationExclusion,
     ADMISSION_REASON.rolloutOff,
   ]);
   assert.equal(admission.generation, 1);
 });
 
-test("turn override forces off and rollout off forces off", () => {
-  assert.equal(
-    resolveEffectiveMemoryAdmission(baseInput({ turnOverrideOff: true })).effective,
-    "off",
-  );
+test("rollout off forces automatic memory off", () => {
   assert.equal(
     resolveEffectiveMemoryAdmission(baseInput({ rollout: "off" })).effective,
     "off",

@@ -1,112 +1,118 @@
-/**
- * 可缺席组合的 No-op 实现（ADR：Memory 是可选 Context Provider，不是 Core 前提）。
- *
- * 三对装配中的缺席侧：
- * - NoopMemoryContextProvider：Recall 恒为空贡献，不产生任何模型可见文本。
- * - NoopMemoryCaptureRuntime：稳定信号一律 skipped，不调度提炼、不写数据。
- * - ProvenAbsentMemoryLifecycle：仅当能证明从未创建 Memory schema/data 时才允许装配；
- *   此时"删除/清除"本就无对象，prepare/finalize 是幂等空操作。
- *
- * 反例边界：关闭功能、Recall 失败、索引损坏都不是"数据不存在"，那些场景必须装配
- * Durable lifecycle 真实执行 fence/清理或明确失败，绝不能用本文件的 ProvenAbsent
- * 假装成功（ADR 可缺席组合段、《手册》5.2）。
- */
-
-import { nowIso } from "../../kernel/id.js";
-import { memoryOwnerKey, type MemoryOwner } from "../../domain/memory/index.js";
-import {
-  MemoryError,
-  type MemoryCaptureAcceptance,
-  type MemoryCaptureRuntime,
-  type MemoryCaptureSignal,
-  type MemoryContextContribution,
-  type MemoryContextProvider,
-  type MemoryContributeInput,
-  type MemoryLifecycle,
-  type RemovalTicket,
+import { type MemoryOwner } from "../../domain/memory/index.js";
+import type {
+  HistoryQueryPort,
+  HistoryReadInput,
+  HistoryReadResult,
+  HistorySearchInput,
+  HistorySearchResult,
+  MemoryBackgroundPort,
+  MemoryCaptureAcceptance,
+  MemoryCaptureRuntime,
+  MemoryCaptureSignal,
+  MemoryLifecycle,
+  SpaceMemoryBackground,
 } from "./contracts.js";
-const NOOP_POLICY_REVISION = "noop:0" as const;
 
-function emptyContribution(owner: MemoryOwner): MemoryContextContribution {
-  return {
-    source: "implicit_memory",
-    snapshot: {
-      recallId: "noop",
-      storeRevision: "0",
-      policyRevision: NOOP_POLICY_REVISION,
-      generation: 0,
-      ownerKey: memoryOwnerKey(owner),
-    },
-    entries: [],
-  };
-}
-
-export function createNoopMemoryContextProvider(): MemoryContextProvider {
-  return {
-    async contribute(input: MemoryContributeInput): Promise<MemoryContextContribution> {
-      return emptyContribution(input.owner);
-    },
-  };
-}
+/**
+ * 可缺席组合的 No-op 实现（ADR：Memory 是可选背景供给方，不是 Core 前提）。
+ *
+ * - NoopMemoryCaptureRuntime：稳定信号一律 skipped，不调度整理、不写数据。
+ * - NoopMemoryBackgroundPort：背景供给恒为 absent，不产生任何模型可见文本。
+ * - NoopMemoryHistoryQueryPort：查询如实报告 unavailable，不伪装 no-hit。
+ * - ProvenAbsentMemoryLifecycle：仅当能证明从未创建 Memory schema/data 时才允许装配；
+ *   此时"删除/清除"本就无对象。
+ *
+ * 反例边界：关闭功能、查询失败、索引损坏都不是"数据不存在"，那些场景必须装配
+ * Durable lifecycle 真实执行 fence/清理或明确失败，绝不能用 ProvenAbsent 假装成功。
+ */
 
 export function createNoopMemoryCaptureRuntime(): MemoryCaptureRuntime {
   return {
     async acceptStableSignal(_signal: MemoryCaptureSignal): Promise<MemoryCaptureAcceptance> {
-      return { status: "skipped", reason: "memory_capture_disabled" };
+      return { status: "skipped", reason: "memory_unavailable" };
     },
-    async noteActivity(): Promise<void> {
-      // No-op：缺席装配下没有积压缺口需要补扫，且永不向主链路抛出。
+    async release(): Promise<void> {},
+  };
+}
+
+export function createNoopMemoryBackgroundPort(): MemoryBackgroundPort {
+  return {
+    async getActiveSpaceMemoryHead(_owner: MemoryOwner): Promise<SpaceMemoryBackground | undefined> {
+      return undefined;
     },
-    async release(): Promise<void> {
-      // No-op：没有后台资源。
+    async resolveSupplyableBackground(_input: {
+      readonly owner: MemoryOwner;
+      readonly revisionId: string;
+      readonly generation: number;
+    }): Promise<SpaceMemoryBackground | undefined> {
+      return undefined;
+    },
+  };
+}
+
+export function createNoopMemoryHistoryQueryPort(): HistoryQueryPort {
+  return {
+    async search(_input: HistorySearchInput): Promise<HistorySearchResult> {
+      return {
+        outcome: "degraded",
+        coverage: { summary: "unavailable", transcript: "unavailable" },
+        items: [],
+      };
+    },
+    async read(_input: HistoryReadInput): Promise<HistoryReadResult> {
+      return { outcome: "unavailable", reason: "memory_unavailable" };
+    },
+  };
+}
+
+export function createUnavailableMemoryLifecycle(): MemoryLifecycle {
+  const unavailable = (): never => {
+    throw new Error("Memory lifecycle is unavailable because the memory store is not configured.");
+  };
+  return {
+    async prepareOwnerRemoval() {
+      return unavailable();
+    },
+    async finalizeOwnerRemoval() {
+      return unavailable();
+    },
+    async clearOwnerMemory() {
+      return unavailable();
+    },
+    async prepareConversationRemoval() {
+      return unavailable();
+    },
+    async finalizeConversationRemoval() {
+      return unavailable();
     },
   };
 }
 
 /**
- * 仅用于"从未存在 Memory 数据"的新安装。装配方必须先独立证明该前提；
- * 本实现不自行检查数据库（它不持有任何连接）。
+ * ProvenAbsent：只有组合根能证明全新安装（从未创建 Memory schema/data）时装配。
+ * 删除协调调用本实现表示"确认无数据可清理"，不是把失败伪装成成功。
  */
 export function createProvenAbsentMemoryLifecycle(): MemoryLifecycle {
-  const absentTicket = (scope: RemovalTicket["scope"]): RemovalTicket => ({
-    ticketId: `absent:${scope.kind}:${nowIso()}`,
-    scope,
-    fencedGeneration: 0,
-    preparedAt: nowIso(),
-  });
-  return {
-    async prepareOwnerRemoval(owner: MemoryOwner): Promise<RemovalTicket> {
-      return absentTicket({ kind: "owner", owner });
-    },
-    async finalizeOwnerRemoval(_ticket: RemovalTicket): Promise<void> {
-      // 从未有数据：无对象可清理。
-    },
-    async clearOwnerMemory(_owner: MemoryOwner): Promise<{ readonly generation: number }> {
-      // 从未有数据：清除是幂等空操作。
-      return { generation: 0 };
-    },
-    async prepareConversationRemoval(conversationId: string): Promise<RemovalTicket> {
-      return absentTicket({ kind: "conversation", conversationId });
-    },
-    async finalizeConversationRemoval(_ticket: RemovalTicket): Promise<void> {
-      // 从未有数据：无对象可清理。
-    },
-  };
-}
-
-/** Control-only composition keeps Core alive but cannot claim a data purge. */
-export function createUnavailableMemoryLifecycle(): MemoryLifecycle {
-  const unavailable = async (): Promise<never> => {
-    throw new MemoryError(
-      "memory_store_failure",
-      "Memory content storage is unavailable; lifecycle operation was not applied.",
+  const provenAbsent = (): never => {
+    throw new Error(
+      "Memory lifecycle is proven absent: this product home never created memory data.",
     );
   };
   return {
-    prepareOwnerRemoval: unavailable,
-    finalizeOwnerRemoval: unavailable,
-    clearOwnerMemory: unavailable,
-    prepareConversationRemoval: unavailable,
-    finalizeConversationRemoval: unavailable,
+    async prepareOwnerRemoval() {
+      return provenAbsent();
+    },
+    async finalizeOwnerRemoval() {
+      return provenAbsent();
+    },
+    async clearOwnerMemory() {
+      return provenAbsent();
+    },
+    async prepareConversationRemoval() {
+      return provenAbsent();
+    },
+    async finalizeConversationRemoval() {
+      return provenAbsent();
+    },
   };
 }

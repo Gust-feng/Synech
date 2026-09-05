@@ -226,6 +226,7 @@ const birthSchema = z.object({
   agentNoteVersions: agentNoteVersionsSchema.optional(),
   memoryOwner: memoryOwnerSchema,
   ownerContext: z.string().max(16_000).optional(),
+  collaborationRulesContext: z.string().max(4_256).optional(),
   informationAccess: z.object({
     web: z.object({
       provider: z.enum(["tavily", "exa", "zai", "metaso", "google", "bing", "model_builtin", "none"]),
@@ -369,7 +370,6 @@ const rawStateSchema = z.object({
   }).strict(),
   input: z.object({
     userMessage: z.string(),
-    turnMemoryOverrideOff: z.boolean().optional(),
     context: z.object({
       contextRefs: z.array(z.object({
         attachmentId: z.string().optional(),

@@ -46,6 +46,11 @@ import {
   type AgentNotesFeature,
 } from "../agent-notes/index.js";
 import {
+  createCollaborationRulesFeature,
+  createFileSystemCollaborationRulesRepository,
+  type CollaborationRulesFeature,
+} from "../collaboration-rules/index.js";
+import {
   createFileSystemPathDependencyRepository,
   createPathDependencyFeature,
   type PathDependencyFeature,
@@ -69,15 +74,15 @@ import {
   createMemoryAdminApplication,
   createMemoryFeature,
   createMemoryRuntime,
-  MemoryError,
+  createMemoryRuntimeHealthTracker,
   POLICY_KEY,
-  renderImplicitMemoryBlock,
   type MemoryControlRepository,
   type MemoryFeature,
   type MemoryRuntime,
 } from "../memory/index.js";
-import { createMemoryCaptureScheduler } from "./memory/capture-scheduler.js";
+import { createMemoryMaintenanceScheduler } from "./memory/capture-scheduler.js";
 import { createConfigCenterConsolidationModel } from "./memory/consolidation-model.js";
+import { createMemoryBackgroundResolver } from "./memory/memory-background-resolver.js";
 import {
   createSqliteWorkspaceRepository,
   createWorkspaceFeature,
@@ -168,6 +173,10 @@ import {
   createMemoryCaptureApplication,
   type MemoryCaptureApplication,
 } from "../application/memory-capture-application.js";
+import {
+  createCollaborationRulesApplication,
+  type CollaborationRulesApplication,
+} from "../application/collaboration-rules-application.js";
 import { createWebReferenceMetadataWorker, type WebReferenceMetadataWorker } from "./spaces/web-reference-metadata-worker.js";
 import { createWebReferenceMetadataDiagnostics, type WebReferenceMetadataDiagnostics } from "./spaces/web-reference-metadata-diagnostics.js";
 
@@ -202,6 +211,8 @@ export type PanelHost = {
   readonly resolveManagedAttachmentPath: (attachmentId: string) => Promise<string | undefined>;
   readonly contextAttachmentUploadApplication: ContextAttachmentUploadApplication;
   readonly agentNotesFeature: AgentNotesFeature;
+  readonly collaborationRulesFeature: CollaborationRulesFeature;
+  readonly collaborationRulesApplication: CollaborationRulesApplication;
   readonly pathDependencyFeature: PathDependencyFeature;
   readonly spaceFeature: SpaceFeature;
   readonly webReferenceMetadataWorker: WebReferenceMetadataWorker;
@@ -329,6 +340,7 @@ function assemblePanelHost(input: {
   const toolOutputStore = new FileSystemToolOutputStore(productPaths.data.agent.evidence);
   const processTerminator = input.processTerminator ?? createPlatformProcessTerminator();
   const productHome = productPaths.productHome;
+  const memoryDataRoot = productPaths.data.memory.root;
   const knowledgeAssetRoot = productPaths.data.knowledge.assets;
   const managedSpaceFolderRoot = path.join(productPaths.data.spaces.files, "folders");
   const managedSpaceRoot = productPaths.data.spaces.files;
@@ -394,6 +406,11 @@ function assemblePanelHost(input: {
   };
   const agentNotesFeature = createAgentNotesFeature({
     repository: createFileSystemAgentNoteRepository(productPaths.data.memory.agentNotes),
+    runStorageExclusive: async (operation) => await fileMutationCoordinator.runExclusive(memoryDataRoot, operation),
+  });
+  const collaborationRulesFeature = createCollaborationRulesFeature({
+    repository: createFileSystemCollaborationRulesRepository(productPaths.data.memory.collaborationRules),
+    runStorageExclusive: async (operation) => await fileMutationCoordinator.runExclusive(memoryDataRoot, operation),
   });
   // Path dependencies are durable methodology memories. They deliberately
   // live beside, rather than inside, Ordinary run snapshots: Ordinary owns
@@ -401,6 +418,7 @@ function assemblePanelHost(input: {
   // content and its revision history.
   const pathDependencyFeature = createPathDependencyFeature({
     repository: createFileSystemPathDependencyRepository(productPaths.data.memory.methods),
+    runStorageExclusive: async (operation) => await fileMutationCoordinator.runExclusive(memoryDataRoot, operation),
   });
   const ordinaryMemoryFactRepository = createFileSystemOrdinaryMemoryFactRepository(
     agentDataRoot,
@@ -497,8 +515,8 @@ function assemblePanelHost(input: {
     readManagedKnowledgeAsset: async (input) =>
       await readManagedKnowledgeAsset(knowledgeAssetRoot, input.page, input),
   });
-  // Memory v2（隐式长期记忆）：内容表与证据读取口齐备时装配真实 Provider/Capture；
-  // policy 行仍决定 off/shadow/active，默认由发布初始化写入 active，但用户 consent
+  // Memory 文档产物（0.6.0）：内容仓储 + 证据读取口齐备时装配真实实现；
+  // policy 行决定 off/shadow/active，默认发布初始化写入 active，用户 consent
   // 与 Space participation 仍 fail-closed。
   // evidence reader 惰性委托 ordinaryAgentFeature（装配在本函数后段），与上方
   // invalidateSpaceReferenceAccess 引用 workspaceFeature 的模式一致。
@@ -508,16 +526,61 @@ function assemblePanelHost(input: {
   });
   const memoryRuntime: MemoryRuntime = createMemoryRuntime({
     controlRepository: memoryControlRepository,
-    contentRepository: memoryContentRepository,
+    documentRepository: memoryContentRepository,
     evidenceReader: memoryEvidenceReader,
+    conversationLookup: {
+      resolveConversationOwner: (conversationId) =>
+        ordinaryAgentFeature.queries.getConversationOwner(conversationId),
+      resolveConversationTitle: async (conversationId) => {
+        const conversation = await ordinaryAgentFeature.queries.getConversation(conversationId);
+        return conversation?.title;
+      },
+    },
   });
-  // Memory v2 Consolidation 调度（T21）：idle timer 只是触发器，待处理边界的
-  // 唯一事实源是 durable queued job；启动补扫与空闲提炼共用同一条串行路径。
-  const memoryCaptureScheduler = createMemoryCaptureScheduler({
+  const memoryRuntimeHealth = createMemoryRuntimeHealthTracker();
+  // Memory 维护调度（0.6.0）：每会话空闲资格 + 全局单 worker；timer 只是唤醒器，
+  // 待处理边界的唯一事实源是 durable queued job。
+  const maintenanceOutcomeLog: {
+    readonly at: number;
+    readonly conversationId?: string;
+    readonly ownerKey?: string;
+    readonly outcome: "committed" | "discarded" | "failed" | "retry_queued" | "no_evidence";
+    readonly reason?: string;
+    readonly longTermUpdated: boolean;
+  }[] = [];
+  const memoryCaptureScheduler = createMemoryMaintenanceScheduler({
     controlRepository: memoryControlRepository,
-    contentRepository: memoryContentRepository,
+    documentRepository: memoryContentRepository,
     evidenceReader: memoryEvidenceReader,
     model: createConfigCenterConsolidationModel({ configCenter: input.configCenter }),
+    isConversationActive: async (conversationId) => {
+      try {
+        const conversation = await ordinaryAgentFeature.queries.getConversation(conversationId);
+        return conversation !== undefined &&
+          (conversation.activeRunId !== undefined || conversation.queuedRunIds.length > 0);
+      } catch {
+        return false;
+      }
+    },
+    onDiagnostic: (topic, error) => {
+      memoryRuntimeHealth.reportFault("capture");
+      console.error(`[panel-server] ${topic}`, error);
+    },
+    onOutcome: (outcome) => {
+      if (outcome.status === "completed") memoryRuntimeHealth.reportSuccess("capture");
+      else if (outcome.status === "failed" || outcome.status === "retry_queued") memoryRuntimeHealth.reportFault("capture");
+      if (outcome.status === "completed" || outcome.status === "failed" || outcome.status === "retry_queued") {
+        maintenanceOutcomeLog.unshift({
+          at: Date.now(),
+          outcome: outcome.status === "completed"
+            ? "committed"
+            : outcome.status,
+          ...(outcome.status === "failed" || outcome.status === "retry_queued" ? { reason: outcome.reason } : {}),
+          longTermUpdated: outcome.status === "completed" ? outcome.longTermUpdated : false,
+        });
+        if (maintenanceOutcomeLog.length > 50) maintenanceOutcomeLog.pop();
+      }
+    },
   });
   void memoryReady
     .then(() => memoryCaptureScheduler.recoverQueuedJobs())
@@ -587,6 +650,7 @@ function assemblePanelHost(input: {
     pathDependencies: pathDependencyFeature,
     spaces: spaceFeature,
     personalKnowledge: personalKnowledgeFeature,
+    memoryHistory: { historyQueryPort: memoryRuntime.historyQueryPort },
     revocationOverlay: spaceRevocationOverlay,
     spaceReferenceContentApplication: () => spaceReferenceApplications.content,
     spaceReferenceLifecycleApplication: () => spaceReferenceApplications.lifecycle,
@@ -678,23 +742,11 @@ function assemblePanelHost(input: {
       recordReference: async (fact) =>
         await ordinaryAgentFeature.commands.recordMemoryReference({ runId, ...fact }),
     }),
-    resolveImplicitMemoryBlock: async ({ owner, conversationId, userText }) => {
-      // Recall 截止时间是实验参数（《手册》检索预算），Noop 不消费；Phase 3 接真实预算。
-      try {
-        const contribution = await memoryRuntime.contextProvider.contribute({
-          owner,
-          conversationId,
-          currentUserText: userText,
-          deadlineAt: Date.now() + 700,
-        });
-        return renderImplicitMemoryBlock(contribution);
-      } catch (error) {
-        // 只有 Memory 自有检索/索引故障可以在 Host 的可选贡献边界降级；
-        // Product Home/SQLite 完整性与未知错误继续上抛，不能伪装成 no-hit。
-        if (error instanceof MemoryError && error.code === "memory_index_degraded") return undefined;
-        throw error;
-      }
-    },
+    resolveMemoryBackground: createMemoryBackgroundResolver({
+      backgroundPort: memoryRuntime.backgroundPort,
+      // 惰性委托：ordinaryAgentFeature 在组合根后段装配。
+      ordinary: () => ordinaryAgentFeature,
+    }),
     contextAttachmentReadAuthorization,
     resolveWorkspacePathAuthorization: ({ runContext, workspaceRoot }) =>
       createSpaceRunPathAuthorization({
@@ -798,6 +850,7 @@ function assemblePanelHost(input: {
     ordinaryAgentFeature,
     personalKnowledgeFeature,
     agentNotesFeature,
+    collaborationRulesFeature,
     pathDependencyFeature,
     memoryLifecycle: memoryRuntime.lifecycle,
     processRegistry,
@@ -821,19 +874,13 @@ function assemblePanelHost(input: {
     spaceConversationDeletion,
     workspaceDeletion,
   } = applicationRuntime;
-  const memoryAdminApplication = createMemoryAdminApplication({
-    controlRepository: memoryControlRepository,
-    lifecycle: memoryRuntime.lifecycle,
-    contentRepository: memoryContentRepository,
+  const collaborationRulesApplication = createCollaborationRulesApplication({
+    rules: collaborationRulesFeature,
     spaceAdmission: {
-      assertAvailable: (spaceId) => spaceConversationDeletion.assertAvailable(spaceId),
       admit: (spaceId, operation) => spaceConversationDeletion.admit(spaceId, operation),
     },
     workspaceAdmission: {
       admit: (workspaceId, operation) => workspaceDeletion.admit(workspaceId, operation),
-    },
-    conversationAdmission: {
-      admit: (conversationId, operation) => conversationLifecycle.admitConversation(conversationId, operation),
     },
     ownerExistsQuery: {
       isSpaceAvailable: async (spaceId) => await spaceFeature.queries.getTree(spaceId) !== undefined,
@@ -841,11 +888,31 @@ function assemblePanelHost(input: {
         const workspace = await workspaceFeature.queries.get(workspaceId);
         return workspace?.status === "available" && !workspaceDeletion.isDeleting(workspaceId);
       },
-      getConversationOwner: async (conversationId) => {
-        const owner = await ordinaryAgentFeature.queries.getConversationOwner(conversationId);
-        return owner === undefined ? undefined : { exists: true, owner };
+    },
+  });
+  const memoryAdminApplication = createMemoryAdminApplication({
+    controlRepository: memoryControlRepository,
+    documentRepository: memoryContentRepository,
+    lifecycle: memoryRuntime.lifecycle,
+    // 高水位经 Ordinary 窄查询（含排队与未稳定运行），clear/启用边界据此写排除。
+    conversationHighWaterQuery: {
+      listConversationHighWaters: () => ordinaryAgentFeature.queries.listConversationMemoryHighWaters(),
+    },
+    spaceAdmission: {
+      assertAvailable: (spaceId) => spaceConversationDeletion.assertAvailable(spaceId),
+      admit: (spaceId, operation) => spaceConversationDeletion.admit(spaceId, operation),
+    },
+    workspaceAdmission: {
+      admit: (workspaceId, operation) => workspaceDeletion.admit(workspaceId, operation),
+    },
+    ownerExistsQuery: {
+      isSpaceAvailable: async (spaceId) => await spaceFeature.queries.getTree(spaceId) !== undefined,
+      isWorkspaceAvailable: async (workspaceId) => {
+        const workspace = await workspaceFeature.queries.get(workspaceId);
+        return workspace?.status === "available" && !workspaceDeletion.isDeleting(workspaceId);
       },
     },
+    runtimeHealth: { read: () => memoryRuntimeHealth.read() },
   });
   const memoryFeature = createMemoryFeature({
     adminApplication: memoryAdminApplication,
@@ -859,14 +926,13 @@ function assemblePanelHost(input: {
         ]);
         return {
           enabled: true,
-          traces: memoryRuntime.traceLog?.snapshot() ?? [],
-          shadowWouldInject: memoryRuntime.shadowInjectionLog?.snapshot() ?? [],
           jobs: {
             queued: queued.length,
             running: running.length,
             done: done.length,
             failed: failed.length,
           },
+          recentOutcomes: [...maintenanceOutcomeLog],
         };
       },
     },
@@ -921,6 +987,8 @@ function assemblePanelHost(input: {
     resolveManagedAttachmentPath,
     contextAttachmentUploadApplication,
     agentNotesFeature,
+    collaborationRulesFeature,
+    collaborationRulesApplication,
     pathDependencyFeature,
     spaceFeature,
     webReferenceMetadataWorker,
@@ -940,12 +1008,9 @@ function assemblePanelHost(input: {
     memoryCaptureApplication,
     // run birth 时异步补扫 Capture 缺口（典型为上次关闭错过稳定信号）；
     // Memory v2 Capture 口要求不阻塞、不向主链路抛出。
-    onRunBirthActivity: ({ conversationId, owner }) => {
+    onRunBirthActivity: ({ conversationId }) => {
       if (conversationId === undefined) return;
-      void memoryRuntime.captureRuntime.noteActivity({ conversationId, owner }).catch((error) => {
-        console.error("[panel-server] Memory capture catch-up failed", error);
-      });
-      // 会话活动重置 Consolidation idle timer（调度失败只走自身诊断，不抛主链路）。
+      // 会话活动安排维护唤醒（调度失败只走自身诊断，不抛主链路）。
       memoryCaptureScheduler.noteActivity({ conversationId });
     },
     dataMaintenance,

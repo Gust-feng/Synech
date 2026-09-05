@@ -24,7 +24,6 @@ export function createMemoryCaptureApplication(input: {
       const acceptance = await input.captureRuntime.acceptStableSignal({
         owner,
         conversationId: facts.turn.conversationId,
-        turnOverrideOff: facts.turnMemoryOverrideOff,
         stableThrough: {
           turnId: facts.turn.userTurnId,
           ordinal: facts.turn.ordinal,

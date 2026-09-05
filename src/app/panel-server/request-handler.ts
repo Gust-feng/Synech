@@ -36,6 +36,7 @@ import {
 import { SpaceReferenceContentApplicationError } from "../application/space-reference-content-application.js";
 import { agentMemoryHttpError, handlePanelAgentMemoryRoute } from "./ordinary/agent-memory-routes.js";
 import { AgentNotesError } from "../agent-notes/index.js";
+import { CollaborationRulesError } from "../collaboration-rules/index.js";
 import { PathDependencyFeatureError } from "../path-dependencies/index.js";
 import { SpaceFeatureError } from "../spaces/index.js";
 import { handlePanelSpaceRoute, spaceFeatureHttpError } from "./spaces/space-routes.js";
@@ -51,7 +52,9 @@ import {
   handleMemoryCapabilityRoute,
   handleMemoryDiagnosticsRoute,
   handleMemoryMutationRoute,
+  handleMemorySpaceViewRoute,
 } from "./routes-memory.js";
+import { handleCollaborationRulesRoute } from "./routes-collaboration-rules.js";
 import { createPanelUsageStatistics } from "./workbench/panel-usage-statistics.js";
 import { handlePanelDataRoute, dataMaintenanceHttpError } from "./storage/data-routes.js";
 import { DataMaintenanceError } from "./storage/data-maintenance.js";
@@ -214,6 +217,10 @@ function createPanelRequestHandler(runtime: PanelHost): (request: IncomingMessag
         writePanelError(response, agentMemoryHttpError(error));
         return;
       }
+      if (error instanceof CollaborationRulesError) {
+        writePanelError(response, collaborationRulesHttpError(error));
+        return;
+      }
       if (error instanceof SpaceFeatureError) {
         writePanelError(response, spaceFeatureHttpError(error));
         return;
@@ -293,6 +300,18 @@ export function ordinaryTurnApplicationHttpError(error: OrdinaryTurnApplicationE
       return new PanelHttpError(409, "conversation_owner_conflict", error.message);
     case "conversation_space_not_found":
       return new PanelHttpError(404, "conversation_space_not_found", error.message);
+  }
+}
+
+function collaborationRulesHttpError(error: CollaborationRulesError): PanelHttpError {
+  switch (error.code) {
+    case "collaboration_rule_invalid_scope":
+    case "collaboration_rule_too_large":
+      return new PanelHttpError(400, error.code, error.message);
+    case "collaboration_rule_owner_deleted":
+      return new PanelHttpError(409, error.code, error.message);
+    case "collaboration_rule_io_failure":
+      return new PanelHttpError(500, error.code, error.message);
   }
 }
 
@@ -399,6 +418,10 @@ async function handlePanelRequest(
     return;
   }
 
+  if (await handleCollaborationRulesRoute(runtime.collaborationRulesApplication, request, response, url)) {
+    return;
+  }
+
   if (await handlePanelAgentMemoryRoute({
     pathDependencyFeature: runtime.pathDependencyFeature,
     agentNotesFeature: runtime.agentNotesFeature,
@@ -412,6 +435,9 @@ async function handlePanelRequest(
   }
 
   if (await handleMemoryCapabilityRoute(runtime.memoryFeature, request, response, url)) {
+    return;
+  }
+  if (await handleMemorySpaceViewRoute(runtime.memoryFeature, request, response, url)) {
     return;
   }
   if (await handleMemoryDiagnosticsRoute(runtime.memoryFeature, request, response, url)) {
@@ -543,8 +569,11 @@ function memoryHttpError(error: MemoryError): PanelHttpError {
     case "memory_generation_fenced":
       return new PanelHttpError(409, error.code, error.message);
     case "memory_model_unavailable":
-    case "memory_index_degraded":
       return new PanelHttpError(503, error.code, error.message);
+    case "memory_capacity_exceeded":
+      return new PanelHttpError(413, error.code, error.message);
+    case "memory_revision_stale":
+      return new PanelHttpError(409, error.code, error.message);
     case "memory_store_failure":
       return new PanelHttpError(500, error.code, error.message);
   }

@@ -9,50 +9,51 @@ export type MemoryCapabilityStatus = {
   readonly rollout: MemoryRolloutMode;
   readonly health: MemoryRuntimeHealth;
   readonly effective: MemoryEffective;
-  readonly scopeParticipation?: boolean;
-  readonly conversationExcluded?: boolean;
+  readonly spaceParticipation?: boolean;
 };
 
 export type MemoryCapabilityQuery = {
   readonly owner?: DomainMemoryOwner;
+};
+
+export type MemoryMaintenanceOutcomeTrace = {
+  readonly at: number;
   readonly conversationId?: string;
+  readonly ownerKey?: string;
+  readonly outcome: "committed" | "discarded" | "failed" | "retry_queued" | "no_evidence";
+  readonly reason?: string;
+  readonly longTermUpdated: boolean;
 };
 
 export type MemoryDiagnosticSnapshot = {
   readonly enabled: boolean;
-  readonly traces: readonly {
-    readonly at: number;
-    readonly ownerKey: string;
-    readonly conversationId?: string;
-    readonly recallId: string;
-    readonly effective: "off" | "shadow" | "active";
-    readonly outcome: "off" | "no_hit" | "degraded" | "ok" | "invalidated";
-    readonly policyRevision: string;
-    readonly generation: number;
-    readonly retrievedRefs: readonly { readonly id: string; readonly revision: number }[];
-    readonly injectedRefs: readonly { readonly id: string; readonly revision: number }[];
-    readonly latencyMs: number;
-  }[];
-  readonly shadowWouldInject: readonly {
-    readonly at: number;
-    readonly ownerKey: string;
-    readonly conversationId?: string;
-    readonly recallId: string;
-    readonly policyRevision: string;
-    readonly generation: number;
-    readonly candidateRefs: readonly { readonly id: string; readonly revision: number }[];
-  }[];
   readonly jobs: {
     readonly queued: number;
     readonly running: number;
     readonly done: number;
     readonly failed: number;
   };
+  readonly recentOutcomes: readonly MemoryMaintenanceOutcomeTrace[];
+};
+
+export type SpaceMemoryDocumentView = {
+  readonly revisionId: string;
+  readonly revision: number;
+  readonly origin: "model" | "user_edit";
+  readonly markdown: string;
+  readonly generation: number;
+  readonly updatedAt: number;
+};
+
+export type SpaceMemoryView = {
+  readonly document: SpaceMemoryDocumentView | undefined;
+  readonly summaryCount: number;
+  readonly lastMaintenanceAt: number | null;
 };
 
 export type SetMemoryConsentInput = { readonly globalConsent: boolean };
+export type SetMemoryRolloutInput = { readonly rollout: MemoryRolloutMode };
 export type SetMemorySpaceParticipationInput = { readonly spaceId: string; readonly enabled: boolean };
-export type SetMemoryConversationParticipationInput = { readonly conversationId: string; readonly excluded: boolean };
 export type ClearImplicitMemoryInput = { readonly scope: DomainMemoryOwner };
 
 export type MemoryMutationResult = { readonly ok: true; readonly policyRevision: string };
@@ -76,7 +77,6 @@ export async function fetchMemoryCapability(
     query.set("ownerKind", input.owner.kind);
     query.set("ownerId", input.owner.id);
   }
-  if (input.conversationId !== undefined) query.set("conversationId", input.conversationId);
   const suffix = query.toString();
   const response = await fetch(`/api/memory/capability${suffix.length === 0 ? "" : `?${suffix}`}`, { method: "GET" });
   await assertMemoryResponse(response, "无法读取记忆状态");
@@ -112,14 +112,36 @@ export async function setMemoryConsent(input: SetMemoryConsentInput): Promise<Me
   return postJson<MemoryMutationResult>({ op: "setConsent", ...input });
 }
 
+export async function setMemoryRollout(input: SetMemoryRolloutInput): Promise<MemoryMutationResult> {
+  return postJson<MemoryMutationResult>({ op: "setRollout", ...input });
+}
+
 export async function setMemorySpaceParticipation(input: SetMemorySpaceParticipationInput): Promise<MemoryMutationResult> {
   return postJson<MemoryMutationResult>({ op: "setSpaceParticipation", ...input });
 }
 
-export async function setMemoryConversationParticipation(input: SetMemoryConversationParticipationInput): Promise<MemoryMutationResult> {
-  return postJson<MemoryMutationResult>({ op: "setConversationParticipation", ...input });
-}
-
 export async function clearImplicitMemory(input: ClearImplicitMemoryInput): Promise<ClearMemoryResult> {
   return postJson<ClearMemoryResult>({ op: "clearImplicitMemory", scope: input.scope });
+}
+
+export type WriteSpaceMemoryInput = {
+  readonly spaceId: string;
+  readonly expectedRevisionId: string | null;
+  readonly markdown: string;
+  readonly requestId: string;
+};
+export type WriteSpaceMemoryResult = { readonly ok: true; readonly revisionId: string; readonly revision: number };
+
+export async function writeSpaceMemory(input: WriteSpaceMemoryInput): Promise<WriteSpaceMemoryResult> {
+  return postJson<WriteSpaceMemoryResult>({ op: "writeSpaceMemory", ...input });
+}
+
+export async function fetchSpaceMemoryView(spaceId: string): Promise<{
+  readonly ok: true;
+  readonly view: SpaceMemoryView;
+}> {
+  const query = new URLSearchParams({ spaceId });
+  const response = await fetch(`/api/memory/space?${query.toString()}`, { method: "GET" });
+  await assertMemoryResponse(response, "无法读取 Space 记忆");
+  return (await response.json()) as { readonly ok: true; readonly view: SpaceMemoryView };
 }

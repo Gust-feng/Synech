@@ -127,9 +127,9 @@ export class RootHarnessEventProjector {
           throw error;
         }
         this.safeLeafEntryId = sessionCompaction.compactionEntryRef.entryId;
-        return { messages: [...sessionCompaction.compactedContextMessages] };
+        return await withMemoryBackground(sessionCompaction.compactedContextMessages, this.options.loopOptions);
       }
-      return { messages: [...messages] };
+      return await withMemoryBackground(messages, this.options.loopOptions);
     });
     harness.on("session_before_compact", ({ preparation }) => {
       if (!compactionPreparationContainsImage(preparation)) return undefined;
@@ -519,4 +519,27 @@ function sameIds(expected: readonly string[], actual: readonly string[]): boolea
   if (expected.length !== actual.length) return false;
   const actualIds = new Set(actual);
   return actualIds.size === actual.length && expected.every((id) => actualIds.has(id));
+}
+
+/**
+ * 0.6.0 记忆背景：每次冻结前复核供给并作为独立临时 contribution 插入 provider
+ * 上下文（置于会话历史之前、当前请求之后由消息序列自然满足）。pi 的 LLM 上下文
+ * 中 systemPrompt 是独立字段、消息流没有 system 角色，因此合成 user 消息携带
+ * advisory 头部承载背景；该消息不写入 Session 持久化、不进入 JSONL 投影，撤销/
+ * 关闭后下一次冻结即消失。无可供给背景时按原样返回。
+ */
+async function withMemoryBackground(
+  messages: readonly AgentMessage[],
+  loopOptions: AgentSessionLoopOptions,
+): Promise<{ readonly messages: AgentMessage[] }> {
+  const resolver = loopOptions.resolveMemoryBackgroundBlock;
+  if (resolver === undefined) return { messages: [...messages] };
+  const block = await resolver();
+  if (block === undefined || block.trim().length === 0) return { messages: [...messages] };
+  const backgroundMessage: AgentMessage = {
+    role: "user",
+    content: block,
+    timestamp: Date.now(),
+  };
+  return { messages: [backgroundMessage, ...messages] };
 }

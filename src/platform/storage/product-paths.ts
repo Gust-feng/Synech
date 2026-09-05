@@ -25,6 +25,7 @@ export type KnowledgeDataPaths = {
 export type MemoryDataPaths = {
   readonly root: string;
   readonly agentNotes: string;
+  readonly collaborationRules: string;
   readonly methods: string;
 };
 
@@ -111,6 +112,7 @@ export function resolveProductPaths(options: ResolveProductHomeOptions = {}): Pr
       memory: {
         root: memoryRoot,
         agentNotes: path.join(memoryRoot, "agent-notes"),
+        collaborationRules: path.join(memoryRoot, "collaboration-rules"),
         methods: path.join(memoryRoot, "methods"),
       },
     },
@@ -159,6 +161,7 @@ export function productStorageDirectories(paths: ProductPaths): readonly string[
     paths.data.knowledge.assets,
     paths.data.memory.root,
     paths.data.memory.agentNotes,
+    paths.data.memory.collaborationRules,
     paths.data.memory.methods,
     paths.state.root,
     paths.state.journals,

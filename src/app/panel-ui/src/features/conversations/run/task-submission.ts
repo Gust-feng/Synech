@@ -46,8 +46,6 @@ export type PanelTaskSubmissionOptions = {
   readonly aiMode: VisibleAiMode;
   readonly composerReasoningEffort: ComposerReasoningEffort;
   readonly toolConfirmationPolicy: ComposerToolConfirmationPolicy;
-  readonly turnMemoryOverrideOff: boolean;
-  readonly setTurnMemoryOverrideOff: React.Dispatch<React.SetStateAction<boolean>>;
   readonly selectedModelId: string;
   readonly selectedModelSupportsReasoningEffort: boolean;
   readonly mountedRef: React.MutableRefObject<boolean>;
@@ -95,7 +93,6 @@ export async function submitPanelTask(
     : `/api/conversations/${encodeURIComponent(conversationForSubmit.conversationId)}/messages`;
   const requestBody = {
     goal: trimmed,
-    turnMemoryOverrideOff: startsNewConversation ? false : options.turnMemoryOverrideOff,
     aiMode: options.aiMode,
     toolConfirmationPolicy: options.toolConfirmationPolicy,
     modelOverride: modelOverrideFromSelectedOption(options.selectedModelId),
@@ -362,7 +359,6 @@ export async function submitPanelTask(
   if (options.submissionAttemptRef.current?.id === submissionId) {
     options.submissionAttemptRef.current = undefined;
   }
-  options.setTurnMemoryOverrideOff(false);
   return true;
 }
 

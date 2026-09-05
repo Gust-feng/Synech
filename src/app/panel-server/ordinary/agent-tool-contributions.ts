@@ -18,6 +18,8 @@ import type {
   AgentToolProviderFetch,
   AgentToolRegistryContribution,
 } from "../../tool-center/factory.js";
+import type { HistoryQueryPort } from "../../memory/index.js";
+import { createMemoryHistoryToolRegistryContribution } from "../../memory/history/history-tools.js";
 import type { ContextAttachmentRunContext } from "../../tool-center/adapters/context-attachment-access.js";
 import type { ConversationOwner } from "../../../domain/execution-scope/index.js";
 import type { AgentHostRunResources } from "./agent-run-resources.js";
@@ -45,6 +47,8 @@ export function createHostFeatureAgentToolContributionResolver(input: {
   readonly pathDependencies?: Pick<PathDependencyFeature, "commands" | "queries">;
   readonly spaces?: Pick<SpaceFeature, "commands" | "queries" | "events">;
   readonly personalKnowledge?: Pick<PersonalKnowledgeFeature, "commands" | "queries">;
+  /** search_history / read_history 的查询端口（Memory Feature 经窄端口提供）。 */
+  readonly memoryHistory?: { readonly historyQueryPort: HistoryQueryPort };
   readonly revocationOverlay?: SpaceRevocationOverlay;
   readonly spaceReferenceContentApplication: () => SpaceReferenceContentApplication;
   readonly spaceReferenceLifecycleApplication: () => SpaceReferenceLifecycleApplication;
@@ -92,6 +96,12 @@ export function createHostFeatureAgentToolContributionResolver(input: {
           run,
           memoryFacts,
           countMemoryTokens,
+        })]),
+    ...(input.memoryHistory === undefined
+      ? []
+      : [createMemoryHistoryToolRegistryContribution({
+          historyQueryPort: input.memoryHistory.historyQueryPort,
+          owner: memoryOwner,
         })]),
     ...(input.spaces === undefined
       ? []

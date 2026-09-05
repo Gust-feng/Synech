@@ -1,24 +1,29 @@
 import { createId, nowIso, type IdFactory } from "../../../kernel/id.js";
 import { memoryOwnerKey, type MemoryOwner } from "../../../domain/memory/index.js";
 import type { MemoryControlRepository } from "../store/control-repository.js";
-import type { MemoryContentRepository } from "../store/content-repository.js";
+import type { MemoryDocumentRepository } from "../store/content-repository.js";
 import { MemoryError, type MemoryLifecycle, type RemovalTicket } from "../contracts.js";
 
 /**
- * Durable 删除生命周期（ADR 12.5/12.6 两阶段），基于 memory_lifecycle 控制表。
+ * Durable 删除生命周期（两阶段），基于 memory_lifecycle 控制表。
  *
  * prepare：bump generation 立 durable fence（所有旧请求携带的 generation 即刻失效，
- * fence 之后迟到的 capture/recall 必须被 Policy Gate 拒绝），返回带 fencedGeneration
- * 的 ticket；协调方在 owner/conversation 本体删除后调用 finalize 落 tombstone。
+ * fence 之后迟到的接单/整理/背景供给必须被 Policy Gate 拒绝），返回带 fencedGeneration
+ * 的 ticket；来源删除的依赖失效也发生在 prepare：引用该会话来源的全部文档/总结
+ * revision（含已被会话绑定的版本）立即失效并退出摘要投影（正式设计 §11.4"先失效"）。
  *
- * finalize 先把 fence 收敛到 tombstone，再通过注入的内容仓储清理 Record、Source、
- * Cursor、Job、Outbox 与索引投影；物理清理失败时 fence 保持有效，重试仍可收敛。
+ * finalize 先把 fence 收敛到 tombstone，再通过注入的文档仓储物理清理总结、依赖
+ * 文档 revision、来源、进度、transcript/摘要投影与任务；物理清理失败时 fence 保持
+ * 有效，重试仍可收敛。
  */
 export function createControlMemoryLifecycle(
   repository: MemoryControlRepository,
   options: {
     readonly idFactory?: IdFactory;
-    readonly contentRepository?: Pick<MemoryContentRepository, "purgeOwner" | "purgeAll" | "purgeConversation">;
+    readonly documentRepository?: Pick<
+      MemoryDocumentRepository,
+      "invalidateDependentRevisions" | "purgeOwner" | "purgeAll" | "purgeConversation"
+    >;
   } = {},
 ): MemoryLifecycle {
   const idFactory = options.idFactory ?? createId;
@@ -28,6 +33,15 @@ export function createControlMemoryLifecycle(
     const ownerKey = scope.kind === "owner" ? memoryOwnerKey(scope.owner) : conversationKey(scope.conversationId);
     // 单事务原子地 bump generation + 立 fenced，避免两步之间被并发 prepare/写入交错。
     const fenced = await repository.fenceForRemoval(ownerKey);
+    if (scope.kind === "conversation" && options.documentRepository !== undefined) {
+      // 依赖该会话来源的派生版本先失效（fence 已挡住新供给，失效让绑定复核即刻拒绝）。
+      try {
+        await options.documentRepository.invalidateDependentRevisions(scope.conversationId);
+      } catch (error) {
+        // 失效失败不阻断 fence：finalize 的物理清理会重试同一生命周期。
+        console.error("[memory] dependent revision invalidation failed during removal prepare", error);
+      }
+    }
     return {
       ticketId: idFactory("memrm"),
       scope,
@@ -54,11 +68,11 @@ export function createControlMemoryLifecycle(
     if (current.fenceState === "fenced") {
       await repository.setLifecycleFence(ownerKey, "tombstone", null, ticket.fencedGeneration);
     }
-    if (options.contentRepository !== undefined) {
+    if (options.documentRepository !== undefined) {
       if (ticket.scope.kind === "owner") {
-        await options.contentRepository.purgeOwner(ownerKey);
+        await options.documentRepository.purgeOwner(ownerKey);
       } else {
-        await options.contentRepository.purgeConversation(ticket.scope.conversationId);
+        await options.documentRepository.purgeConversation(ticket.scope.conversationId);
       }
     }
   };
@@ -74,13 +88,15 @@ export function createControlMemoryLifecycle(
       await finalize(ticket, memoryOwnerKey(ticket.scope.owner));
     },
     async clearOwnerMemory(owner: MemoryOwner) {
+      // 清除工作流（Admin 已在 admission 边界写入排除高水位）：
+      // fence → 派生内容 purge（保留进度行中的排除边界）→ 恢复为可继续参与状态。
       const ticket = await prepare({ kind: "owner", owner });
       const ownerKey = memoryOwnerKey(owner);
-      if (options.contentRepository !== undefined) {
+      if (options.documentRepository !== undefined) {
         if (owner.kind === "global") {
-          await options.contentRepository.purgeAll({ preserveCursors: true });
+          await options.documentRepository.purgeAll({ preserveExclusions: true });
         } else {
-          await options.contentRepository.purgeOwner(ownerKey, { preserveCursors: true });
+          await options.documentRepository.purgeOwner(ownerKey, { preserveExclusions: true });
         }
       }
       const reset = await repository.setLifecycleFence(

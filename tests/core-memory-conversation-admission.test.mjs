@@ -12,6 +12,7 @@ test("conversation-scoped mutations are rejected once deletion admission starts"
   const deletionStartedPromise = new Promise((resolve) => { deletionStarted = resolve; });
   let releaseDelete;
   const deleteGate = new Promise((resolve) => { releaseDelete = resolve; });
+  const lifecycleEvents = [];
 
   const coordinator = createConversationLifecycleCoordinator({
     ordinary: {
@@ -20,6 +21,7 @@ test("conversation-scoped mutations are rejected once deletion admission starts"
           throw new Error("not used");
         },
         async deleteConversation() {
+          lifecycleEvents.push("ordinary.delete");
           deletionStarted();
           await deleteGate;
         },
@@ -53,6 +55,18 @@ test("conversation-scoped mutations are rejected once deletion admission starts"
         records.delete(operationId);
       },
     },
+    prepareConversationRemoval: async () => {
+      lifecycleEvents.push("memory.prepare");
+      return {
+        ticketId: "memory-ticket",
+        scope: { kind: "conversation", conversationId: "conversation-1" },
+        fencedGeneration: 1,
+        preparedAt: "2026-09-02T00:00:00.000Z",
+      };
+    },
+    finalizeConversationRemoval: async () => {
+      lifecycleEvents.push("memory.finalize");
+    },
   });
 
   const deletion = coordinator.deleteConversation("conversation-1");
@@ -63,4 +77,5 @@ test("conversation-scoped mutations are rejected once deletion admission starts"
   );
   releaseDelete();
   await deletion;
+  assert.deepEqual(lifecycleEvents, ["memory.prepare", "ordinary.delete", "memory.finalize"]);
 });

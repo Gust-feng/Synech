@@ -46,9 +46,6 @@ export type ChatInputProps = AttachmentInputProps & {
   readonly onToolConfirmationPolicyChange: (value: ComposerToolConfirmationPolicy) => void;
   readonly onModelSelect: (modelId: string) => void | Promise<void>;
   readonly onOpenSettings: () => void;
-  /** Applies only to the next submitted user turn. */
-  readonly turnMemoryOverrideOff?: boolean;
-  readonly onTurnMemoryOverrideChange?: (disabled: boolean) => void;
   readonly onSubmit: () => void;
   readonly onCancel?: () => void;
   readonly cancelLabel?: string;

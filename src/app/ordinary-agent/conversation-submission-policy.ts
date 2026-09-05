@@ -23,7 +23,6 @@ export function normalizedSubmissionId(value: string | undefined): string | unde
 
 export function sameSubmissionInput(left: OrdinaryRunInput, right: OrdinaryRunInput): boolean {
   if (left.userMessage !== right.userMessage) return false;
-  if (left.turnMemoryOverrideOff !== right.turnMemoryOverrideOff) return false;
   const leftRefs = left.context?.contextRefs ?? [];
   const rightRefs = right.context?.contextRefs ?? [];
   if (leftRefs.length !== rightRefs.length) return false;

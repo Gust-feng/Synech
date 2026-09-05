@@ -15,6 +15,8 @@ import { agentNoteScopeIdentity } from "./scope-identity.js";
 export type CreateAgentNotesFeatureInput = {
   readonly repository: AgentNoteRepository;
   readonly now?: () => string;
+  /** Shared Product Home lease used to make file snapshots coherent with backups. */
+  readonly runStorageExclusive?: <T>(operation: () => Promise<T>) => Promise<T>;
 };
 
 /**
@@ -26,6 +28,7 @@ export type CreateAgentNotesFeatureInput = {
  */
 export function createAgentNotesFeature(input: CreateAgentNotesFeatureInput): AgentNotesFeature {
   const now = input.now ?? nowIso;
+  const runStorageExclusive = input.runStorageExclusive ?? (async <T>(operation: () => Promise<T>) => await operation());
   const writeTails = new Map<string, Promise<void>>();
   /**
    * Owner identity is stable for the lifetime of a Space / Workspace. Once a
@@ -51,15 +54,15 @@ export function createAgentNotesFeature(input: CreateAgentNotesFeatureInput): Ag
     queries: {
       async get(scope: AgentNoteScope) {
         assertAgentNoteScope(scope);
-        return input.repository.read(scope);
+        return await runStorageExclusive(async () => await input.repository.read(scope));
       },
 
       async startupSnapshot(owner: AgentNoteOwner) {
         assertAgentNoteScope(owner);
-        const [global, ownerNotebook] = await Promise.all([
+        const [global, ownerNotebook] = await runStorageExclusive(async () => await Promise.all([
           input.repository.read({ kind: "global" }),
           input.repository.read(owner),
-        ]);
+        ]));
         const sections: string[] = [];
         if (global.content.trim().length > 0) {
           sections.push(`## 全局笔记\n\n${global.content.trim()}`);
@@ -92,16 +95,18 @@ export function createAgentNotesFeature(input: CreateAgentNotesFeatureInput): Ag
           );
         }
         assertOwnerWritable(command.scope, deletedOwners);
-        return enqueueWrite(command.scope, () => input.repository.write({
-          ...command,
-          updatedAt: now(),
-        }));
+        return await enqueueWrite(command.scope, async () => await runStorageExclusive(async () =>
+          await input.repository.write({
+            ...command,
+            updatedAt: now(),
+          })));
       },
 
       async delete(command: AgentNoteDeleteInput): Promise<AgentNoteDeleteResult> {
         assertAgentNoteScope(command.scope);
         assertOwnerWritable(command.scope, deletedOwners);
-        return enqueueWrite(command.scope, () => input.repository.delete(command));
+        return await enqueueWrite(command.scope, async () => await runStorageExclusive(async () =>
+          await input.repository.delete(command)));
       },
 
       async deleteByOwner(owner) {
@@ -110,7 +115,8 @@ export function createAgentNotesFeature(input: CreateAgentNotesFeatureInput): Ag
         // FIFO finish before deletion; every later write is rejected instead
         // of being queued behind the physical rm and recreating the notebook.
         deletedOwners.add(agentNoteScopeIdentity(owner));
-        await enqueueWrite(owner, () => input.repository.deleteByOwner(owner));
+        await enqueueWrite(owner, async () => await runStorageExclusive(async () =>
+          await input.repository.deleteByOwner(owner)));
       },
     },
   };
