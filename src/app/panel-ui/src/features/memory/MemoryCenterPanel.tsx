@@ -16,7 +16,10 @@ const MEMORY_SECTIONS: readonly {
   { id: "implicit", title: "自动记忆", caption: "Space 级后台提炼与自动使用" },
 ];
 
-export function MemoryCenterPanel(props: { readonly scope: MemorySettingsScope | null }): React.ReactElement {
+export function MemoryCenterPanel(props: {
+  readonly scope: MemorySettingsScope | null;
+  readonly onOpenConversation?: (conversationId: string) => void;
+}): React.ReactElement {
   const [section, setSection] = useState<MemoryCenterSection>("rules");
   return (
     <section className="memory-center" aria-label="记忆设置">
@@ -38,7 +41,7 @@ export function MemoryCenterPanel(props: { readonly scope: MemorySettingsScope |
       <div className="memory-center-body">
         {section === "rules" && <CollaborationRulesPanel scope={props.scope} />}
         {section === "methods" && <PathDependenciesPanel scope={props.scope} />}
-        {section === "implicit" && <MemorySettingsPanel scope={props.scope} />}
+        {section === "implicit" && <MemorySettingsPanel scope={props.scope}  onOpenConversation={props.onOpenConversation} />}
       </div>
     </section>
   );

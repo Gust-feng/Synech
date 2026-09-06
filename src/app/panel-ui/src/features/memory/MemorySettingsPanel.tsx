@@ -57,6 +57,8 @@ function describeHelp(scope: MemorySettingsScope | null): string {
 export type MemorySettingsPanelProps = {
   readonly scope: MemorySettingsScope | null;
   readonly onAfterChange?: () => void;
+  /** 回看入口（N05）：从来源会话打开对应对话；由宿主导航提供。 */
+  readonly onOpenConversation?: (conversationId: string) => void;
 };
 
 export function MemorySettingsPanel(props: MemorySettingsPanelProps) {
@@ -136,7 +138,11 @@ export function MemorySettingsPanel(props: MemorySettingsPanelProps) {
           <p className="memory-hint">全局关闭；重新开启后，此 Space 会恢复当前参与设置。</p>
         )}
         {props.scope?.owner?.kind === "space" && (
-          <SpaceMemoryEditor spaceId={props.scope.owner.id} runMutation={runMutation} />
+          <SpaceMemoryEditor
+            spaceId={props.scope.owner.id}
+            runMutation={runMutation}
+            onOpenConversation={props.onOpenConversation}
+          />
         )}
         {clearScope !== null ? (
           <ConfirmClear
@@ -208,6 +214,7 @@ function SpaceParticipationControl(props: {
 function SpaceMemoryEditor(props: {
   readonly spaceId: string;
   readonly runMutation: (operation: () => Promise<unknown>) => Promise<boolean>;
+  readonly onOpenConversation?: (conversationId: string) => void;
 }) {
   const [view, setView] = useState<SpaceMemoryView | null>(null);
   const [draft, setDraft] = useState<string | null>(null);
@@ -251,8 +258,17 @@ function SpaceMemoryEditor(props: {
           <ul>
             {view.sources.map((source) => (
               <li key={source.conversationId}>
-                <code>{source.conversationId}</code>
+                {props.onOpenConversation === undefined ? (
+                  <span>{source.title ?? source.conversationId}</span>
+                ) : (
+                  <button type="button" className="memory-source-link" onClick={() => props.onOpenConversation?.(source.conversationId)}>
+                    {source.title ?? source.conversationId}
+                  </button>
+                )}
                 <span> · ordinal {source.fromOrdinal}–{source.toOrdinal}</span>
+                {source.sourceTime !== undefined && (
+                  <span> · 来源更新于 {new Date(source.sourceTime).toLocaleString()}</span>
+                )}
               </li>
             ))}
           </ul>

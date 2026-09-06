@@ -190,8 +190,8 @@ export function createMemoryHistoryQueryPort(
         const cost = countTokens(JSON.stringify(item));
         if (items.length === 0 && totalTokens + cost > HISTORY_SEARCH_TOTAL_MAX_TOKENS) {
           // 单条本身超总预算：硬截断其正文，永不超限且至少返回一条。
-          const hard = hardTruncateToTokens(item.text, HISTORY_SEARCH_TOTAL_MAX_TOKENS - 200, countTokens);
-          items.push({ ...item, text: hard.text, truncated: true });
+          const shrunk = excerptFromStart(item.text, HISTORY_SEARCH_TOTAL_MAX_TOKENS - 200, countTokens);
+          items.push({ ...item, text: shrunk.text, truncated: true });
           break;
         }
         if (totalTokens + cost > HISTORY_SEARCH_TOTAL_MAX_TOKENS) break;
@@ -199,12 +199,24 @@ export function createMemoryHistoryQueryPort(
         totalTokens += cost;
       }
 
+      // N03：搜索结果同样按完整序列化包装做最终校验，超出时逐条丢弃。
+      const coverage = { summary: summaryCoverage, transcript: transcriptCov };
+      let fitted = items;
+      while (fitted.length > 1 &&
+             countTokens(JSON.stringify({ outcome: "ok", coverage, items: fitted })) > HISTORY_SEARCH_TOTAL_MAX_TOKENS) {
+        fitted = fitted.slice(0, -1);
+      }
+      if (fitted.length === 1 &&
+          countTokens(JSON.stringify({ outcome: "ok", coverage, items: fitted })) > HISTORY_SEARCH_TOTAL_MAX_TOKENS) {
+        const shrunk = excerptFromStart(fitted[0].text, HISTORY_SEARCH_TOTAL_MAX_TOKENS - 200, countTokens);
+        fitted = [{ ...fitted[0], text: shrunk.text, truncated: true }];
+      }
       const degraded = (summaryRequested && admission.effective === "off") || transcriptCov === "unavailable";
-      const outcome = items.length > 0 ? "ok" : degraded ? "degraded" : "no_hit";
+      const outcome = fitted.length > 0 ? "ok" : degraded ? "degraded" : "no_hit";
       return {
         outcome,
-        coverage: { summary: summaryCoverage, transcript: transcriptCov },
-        items,
+        coverage,
+        items: fitted,
       };
     },
 
@@ -230,19 +242,21 @@ export function createMemoryHistoryQueryPort(
         const budget = Math.min(Math.max(readInput.limitTokens, 1), HISTORY_READ_MAX_TOKENS);
         const excerpt = excerptFromStart(summary.markdown, budget, countTokens);
         const coverage = await input.documentRepository.getTranscriptCoverage(readInput.conversationId);
-        return {
+        // N03：摘要头与覆盖字段计入最终预算，超出时收缩正文。
+        const raw: HistoryReadResult = {
           outcome: "ok",
           text: `[模型生成摘要 · 覆盖至 ordinal ${summary.coveredThroughOrdinal}]\n${excerpt.text}`,
           truncated: excerpt.truncated,
           coveredThroughOrdinal: summary.coveredThroughOrdinal,
           hasUnsummarizedMessages: coverage !== undefined && coverage.indexedThroughOrdinal > summary.coveredThroughOrdinal,
         };
+        return fitReadResultToBudget(raw, budget, countTokens);
       }
 
-      // transcript：按完整轮次分页（R11）——同一 run 的 user/assistant 共享
-      // ordinal，页面只能结束在完整轮次边界；单轮超预算时硬截断该轮正文，
-      // 永不返回空页；扫描跨度用尽时探测下一轮，区分「token 截断」「跨度到界」
-      // 与「真正读到末尾」。
+      // transcript：消息/片段级分页（N01）——页面按完整轮次填充；单轮超预算时
+      // 取该轮 turn 流的字符前缀并把续读位置留在同一轮（配合 fragmentStart），
+      // 剩余内容经续读可达，绝不永久跳过；扫描跨度用尽时探测下一轮，区分
+      // 「token 截断」「跨度到界」与「真正读到末尾」。
       const fromOrdinal = Math.max(readInput.fromOrdinal ?? 1, 1);
       const spanEnd = fromOrdinal + HISTORY_READ_MAX_ORDINAL_SPAN - 1;
       const window = await input.evidenceReader.readTurnWindow({
@@ -254,44 +268,62 @@ export function createMemoryHistoryQueryPort(
         return { outcome: "unavailable", reason: "transcript_not_available" };
       }
       const budget = Math.min(Math.max(readInput.limitTokens, 1), HISTORY_READ_MAX_TOKENS);
-      const ordinalGroups = new Map<number, EvidenceTurn[]>();
-      for (const turn of window.turns) {
-        const group = ordinalGroups.get(turn.ordinal) ?? [];
-        group.push(turn);
-        ordinalGroups.set(turn.ordinal, group);
+      const ordinalStreams = new Map<number, string>();
+      {
+        const groups = new Map<number, EvidenceTurn[]>();
+        for (const turn of window.turns) {
+          const group = groups.get(turn.ordinal) ?? [];
+          group.push(turn);
+          groups.set(turn.ordinal, group);
+        }
+        for (const [ordinal, group] of groups) {
+          ordinalStreams.set(
+            ordinal,
+            group.map((turn) => `[${turn.role} · ${turn.occurredAt}]\n${turn.text}`).join("\n\n"),
+          );
+        }
       }
+      const startFragmentOffset = Math.max(readInput.fragmentStart ?? 0, 0);
+      let cursorOrdinal = fromOrdinal;
+      let cursorOffset = fromOrdinal === (readInput.fromOrdinal ?? 1) ? startFragmentOffset : 0;
       const lines: string[] = [];
       let usedTokens = 0;
       let truncated = false;
       let lastOrdinal = fromOrdinal - 1;
       let includedOrdinals = 0;
-      for (const [ordinal, group] of ordinalGroups) {
-        const block = group
-          .map((turn) => `[${turn.role} · ${turn.occurredAt}]\n${turn.text}`)
-          .join("\n");
-        const cost = countTokens(block);
-        if (usedTokens + cost > budget) {
-          if (includedOrdinals === 0) {
-            // 单轮超预算：硬截断该轮正文，页面必须前进（不存在空页循环）。
-            const hard = hardTruncateToTokens(block, budget, countTokens);
-            lines.push(hard.text);
-            usedTokens += hard.tokens;
-            truncated = true;
-            lastOrdinal = ordinal;
-            includedOrdinals += 1;
-          } else {
-            truncated = true;
-          }
-          break;
+      for (const [ordinal, stream] of ordinalStreams) {
+        if (ordinal < cursorOrdinal) continue;
+        const offset = ordinal === cursorOrdinal ? Math.min(cursorOffset, stream.length) : 0;
+        if (offset >= stream.length) {
+          // 该轮已在前页读完（防御分支）。
+          lastOrdinal = ordinal;
+          cursorOrdinal = ordinal + 1;
+          cursorOffset = 0;
+          continue;
         }
-        lines.push(block);
-        usedTokens += cost;
+        const remaining = stream.slice(offset);
+        const remainingTokens = countTokens(remaining);
+        if (usedTokens + remainingTokens <= budget) {
+          lines.push(remaining);
+          usedTokens += remainingTokens;
+          lastOrdinal = ordinal;
+          includedOrdinals += 1;
+          cursorOrdinal = ordinal + 1;
+          cursorOffset = 0;
+          continue;
+        }
+        const prefix = takePrefixByTokens(remaining, budget - usedTokens, countTokens);
+        lines.push(prefix.text);
+        usedTokens += prefix.tokens;
         lastOrdinal = ordinal;
         includedOrdinals += 1;
+        truncated = true;
+        cursorOffset = offset + prefix.consumedChars;
+        break;
       }
 
       // 扫描跨度用尽且未触发 token 截断时，探测下一轮判断是否真的读到末尾。
-      const reachedSpanEnd = ordinalGroups.size >= HISTORY_READ_MAX_ORDINAL_SPAN;
+      const reachedSpanEnd = ordinalStreams.size >= HISTORY_READ_MAX_ORDINAL_SPAN;
       if (!truncated && reachedSpanEnd) {
         const probe = await input.evidenceReader.readTurnWindow({
           conversationId: readInput.conversationId,
@@ -301,14 +333,66 @@ export function createMemoryHistoryQueryPort(
         if (probe.turns.length > 0) truncated = true;
       }
 
-      return {
+      // N03：最终返回按完整包装（JSON 转义、分页/覆盖字段）计入预算，超出时
+      // 收缩正文并保留有效续读位置。
+      const raw: HistoryReadResult = {
         outcome: "ok",
         text: lines.join("\n\n"),
         truncated,
-        nextFromOrdinal: truncated ? lastOrdinal + 1 : undefined,
+        ...(truncated
+          ? { nextFromOrdinal: cursorOffset > 0 ? cursorOrdinal : lastOrdinal + 1 }
+          : {}),
+        ...(truncated && cursorOffset > 0 ? { nextFragmentStart: cursorOffset } : {}),
       };
+      return fitReadResultToBudget(raw, budget, countTokens);
     },
   };
+}
+
+/**
+ * N03：把完整返回（含 JSON 转义与包装字段）收缩进预算——wrapper 以「正文置空的
+ * 完整序列化」精确计量，正文二分收缩；续读位置保持有效（页面仍前进）。
+ */
+function fitReadResultToBudget(
+  result: HistoryReadResult,
+  budget: number,
+  countTokens: (text: string) => number,
+): HistoryReadResult {
+  if (result.outcome !== "ok") return result;
+  const wrapperCost = countTokens(JSON.stringify({ ...result, text: "" }));
+  const textBudget = budget - wrapperCost;
+  if (textBudget <= 0 || countTokens(result.text) <= textBudget) return result;
+  const shrunk = excerptFromStart(result.text, textBudget, countTokens);
+  return { ...result, text: shrunk.text, truncated: true };
+}
+
+/** 在 token 预算内取文本前缀（字符二分）；至少消费 1 个字符。 */
+function takePrefixByTokens(
+  text: string,
+  maxTokens: number,
+  countTokens: (text: string) => number,
+): { readonly text: string; readonly tokens: number; readonly consumedChars: number } {
+  if (maxTokens <= 0) {
+    const one = text.slice(0, 1);
+    return { text: one, tokens: countTokens(one), consumedChars: 1 };
+  }
+  if (countTokens(text) <= maxTokens) {
+    return { text, tokens: countTokens(text), consumedChars: text.length };
+  }
+  let low = 1;
+  let high = text.length;
+  let best = 1;
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    if (countTokens(text.slice(0, mid)) <= maxTokens) {
+      best = mid;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+  const out = text.slice(0, Math.max(best, 1));
+  return { text: out, tokens: countTokens(out), consumedChars: out.length };
 }
 
 /** 摘要命中片段：优先对齐第一个查询词命中位置，保证片段有语境。 */
@@ -363,16 +447,6 @@ function excerptBounded(
     }
   }
   return { text: text.slice(start, best), truncated: true };
-}
-
-function hardTruncateToTokens(
-  text: string,
-  maxTokens: number,
-  countTokens: (text: string) => number,
-): { readonly text: string; readonly tokens: number } {
-  if (countTokens(text) <= maxTokens) return { text, tokens: countTokens(text) };
-  const truncated = excerptBounded(text, 0, maxTokens, countTokens);
-  return { text: truncated.text, tokens: countTokens(truncated.text) };
 }
 
 function lexicalTermsOf(query: string): readonly string[] {

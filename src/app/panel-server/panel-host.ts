@@ -898,6 +898,14 @@ function assemblePanelHost(input: {
     conversationHighWaterQuery: {
       listConversationHighWaters: () => ordinaryAgentFeature.queries.listConversationMemoryHighWaters(),
     },
+    conversationInfoQuery: {
+      getConversationInfo: async (conversationId) => {
+        const conversation = await ordinaryAgentFeature.queries.getConversation(conversationId);
+        return conversation === undefined
+          ? undefined
+          : { title: conversation.title, updatedAt: conversation.updatedAt };
+      },
+    },
     spaceAdmission: {
       assertAvailable: (spaceId) => spaceConversationDeletion.assertAvailable(spaceId),
       admit: (spaceId, operation) => spaceConversationDeletion.admit(spaceId, operation),

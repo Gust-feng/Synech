@@ -305,23 +305,43 @@ test("R11: pagination covers every message without gaps, repeats or empty pages"
   });
 });
 
-test("R11: a single oversized message is hard-truncated and the page still advances", async () => {
+test("N01: an oversized message is fragment-continuable — all pages reassemble the full text", async () => {
+  const tailMarker = "TAIL_ANSWER_MUST_BE_ACCESSIBLE";
+  const fullText = `很长的消息。${"x".repeat(900)}尾部标记：${tailMarker}`;
   await withHarness(async ({ history }) => {
-    const result = await history.read({
-      owner: { kind: "space", id: "s1" },
-      conversationId: "c-huge",
-      source: "transcript",
-      limitTokens: 100,
-    });
-    assert.equal(result.outcome, "ok");
-    assert.ok(result.text.length > 0);
-    assert.equal(result.truncated, true);
-    assert.equal(result.nextFromOrdinal, 2);
+    const pages = [];
+    let cursor = { fromOrdinal: 1, fragmentStart: undefined };
+    for (let page = 0; page < 20; page += 1) {
+      const result = await history.read({
+        owner: { kind: "space", id: "s1" },
+        conversationId: "c-huge",
+        source: "transcript",
+        fromOrdinal: cursor.fromOrdinal,
+        ...(cursor.fragmentStart === undefined ? {} : { fragmentStart: cursor.fragmentStart }),
+        limitTokens: 100,
+      });
+      assert.equal(result.outcome, "ok");
+      assert.ok(result.text.length > 0, "a page must never be empty");
+      pages.push(result.text);
+      if (result.truncated !== true || result.nextFromOrdinal === undefined) break;
+      assert.ok(
+        result.nextFromOrdinal > cursor.fromOrdinal ||
+          (result.nextFromOrdinal === cursor.fromOrdinal && (result.nextFragmentStart ?? 0) > (cursor.fragmentStart ?? 0)),
+        "continuation must advance within the ordinal or move to the next one",
+      );
+      cursor = { fromOrdinal: result.nextFromOrdinal, fragmentStart: result.nextFragmentStart };
+    }
+    const joined = pages.join("\n");
+    assert.ok(joined.includes("很长的消息。"), "head must be reachable");
+    assert.ok(joined.includes(tailMarker), "the tail of an oversized message must be reachable via fragment continuation");
   }, {
     extraConversation: {
       conversationId: "c-huge",
       ownerKey: "space:s1",
-      turns: [{ ordinal: 1, role: "user", text: "很长的消息。".repeat(500), occurredAt: "2026-09-05T00:00:00.000Z" }],
+      turns: [
+        { ordinal: 1, role: "user", text: fullText, occurredAt: "2026-09-05T00:00:00.000Z" },
+        { ordinal: 2, role: "assistant", text: "第2轮短消息。", occurredAt: "2026-09-05T00:00:01.000Z" },
+      ],
     },
   });
 });
@@ -361,10 +381,10 @@ test("R11: the scan-span end probes for more messages instead of claiming the en
   });
 });
 
-test("R14: returned content respects the token budget counted with a real tokenizer", async () => {
-  await withHarness(async ({ history }) => {
-    // emoji 在字符近似估算下严重低估（R14 复现）；真实 tokenizer 计数必须守住预算。
-    const emoji = "🦊🐶🐹".repeat(200);
+test("N03: the serialized tool result — not just the text — respects the token budget", async () => {
+  await withHarness(async ({ control, documents, history }) => {
+    await seed(documents, control);
+    // emoji 在字符近似估算下严重低估（R14 复现）；以完整序列化结果计数。
     const result = await history.read({
       owner: { kind: "space", id: "s1" },
       conversationId: "c-emoji",
@@ -372,14 +392,25 @@ test("R14: returned content respects the token budget counted with a real tokeni
       limitTokens: 6_000,
     });
     assert.equal(result.outcome, "ok");
-    assert.ok(historyCountTokens(result.text) <= 6_000,
-      `read text must stay within the token budget (actual ${historyCountTokens(result.text)})`);
-    void emoji;
+    const serialized = JSON.stringify({ status: "ok", ...result });
+    const actual = historyCountTokens(serialized);
+    assert.ok(actual <= 6_000, `serialized tool result must stay within budget (actual ${actual})`);
+
+    const summaryRead = await history.read({
+      owner: { kind: "space", id: "s1" },
+      conversationId: "c1",
+      source: "summary",
+      limitTokens: 100,
+    });
+    assert.equal(summaryRead.outcome, "ok");
+    const summarySerialized = JSON.stringify({ status: "ok", ...summaryRead });
+    assert.ok(historyCountTokens(summarySerialized) <= 100,
+      `summary envelope must stay within budget (actual ${historyCountTokens(summarySerialized)})`);
   }, {
     extraConversation: {
       conversationId: "c-emoji",
       ownerKey: "space:s1",
-      turns: [{ ordinal: 1, role: "user", text: "🦊🐶🐹".repeat(4_000), occurredAt: "2026-09-05T00:00:00.000Z" }],
+      turns: [{ ordinal: 1, role: "user", text: "🦊🐶🐹".repeat(800), occurredAt: "2026-09-05T00:00:00.000Z" }],
     },
   });
 });

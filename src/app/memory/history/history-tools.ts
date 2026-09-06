@@ -102,6 +102,7 @@ function readHistoryTool(options: MemoryHistoryToolOptions): ToolExecutor {
           conversationId: { type: "string", description: "Conversation id returned by search_history." },
           source: { type: "string", enum: ["summary", "transcript"], description: "summary = curated digest, transcript = raw user/assistant messages." },
           fromOrdinal: { type: "number", minimum: 1, description: "Transcript continuation position returned by a previous read." },
+          fragmentStart: { type: "number", minimum: 0, description: "Character offset inside fromOrdinal's turn stream returned by a previous read (fragment continuation)." },
           limitTokens: { type: "number", minimum: 1, maximum: HISTORY_READ_MAX_TOKENS, description: "Maximum tokens to return (default 4000)." },
         },
         required: ["conversationId", "source"],
@@ -122,12 +123,14 @@ function readHistoryTool(options: MemoryHistoryToolOptions): ToolExecutor {
         return { status: "invalid_input", message: "source must be 'summary' or 'transcript'." };
       }
       const fromOrdinal = optionalPositiveNumber(record.fromOrdinal);
+      const fragmentStart = optionalNonNegativeNumber(record.fragmentStart);
       const limitTokens = optionalLimit(record.limitTokens, HISTORY_READ_DEFAULT_TOKENS);
       const result = await options.historyQueryPort.read({
         owner,
         conversationId,
         source,
         ...(fromOrdinal === undefined ? {} : { fromOrdinal }),
+        ...(fragmentStart === undefined ? {} : { fragmentStart }),
         limitTokens,
       });
       return { status: "ok", ...result };
@@ -143,6 +146,12 @@ function parseSource(value: unknown): "summary" | "transcript" | "all" {
 function optionalLimit(value: unknown, fallback: number): number {
   const parsed = typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : NaN;
   if (!Number.isInteger(parsed) || parsed < 1) return fallback;
+  return parsed;
+}
+
+function optionalNonNegativeNumber(value: unknown): number | undefined {
+  const parsed = typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : NaN;
+  if (!Number.isInteger(parsed) || parsed < 0) return undefined;
   return parsed;
 }
 

@@ -7,6 +7,7 @@ export function workbenchSettingsDialogPropsFrom(options: {
   readonly closeSettings: () => void;
   readonly settingsGroup: SettingsGroup;
   readonly memoryScope: MemorySettingsScope | null;
+  readonly onOpenConversation?: (conversationId: string) => void;
   readonly app: WorkbenchSettingsDialogProps["app"];
   readonly modelCatalogs: WorkbenchSettingsDialogProps["modelCatalogs"];
   readonly forms: WorkbenchSettingsDialogProps["forms"];
@@ -20,6 +21,7 @@ export function workbenchSettingsDialogPropsFrom(options: {
     onClose: options.closeSettings,
     initialGroup: options.settingsGroup,
     memoryScope: options.memoryScope,
+    onOpenConversation: options.onOpenConversation,
     app: options.app,
     modelCatalogs: options.modelCatalogs,
     forms: options.forms,

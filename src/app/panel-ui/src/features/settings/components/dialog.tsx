@@ -50,6 +50,7 @@ export function SettingsDialog(props: {
   readonly onClose: () => void;
   readonly initialGroup?: SettingsGroup;
   readonly memoryScope: MemorySettingsScope | null;
+  readonly onOpenConversation?: (conversationId: string) => void;
   readonly config?: ConfigResponse;
   readonly modelForm: ModelForm;
   readonly setModelForm: (form: ModelForm) => void;
@@ -266,7 +267,9 @@ export function SettingsDialog(props: {
                 onSaveCommandShell={props.onSaveCommandShell}
               />
             )}
-            {visibleActiveGroup === "memory" && <MemoryCenterPanel scope={props.memoryScope} />}
+            {visibleActiveGroup === "memory" && (
+  <MemoryCenterPanel scope={props.memoryScope} onOpenConversation={props.onOpenConversation} />
+)}
             {visibleActiveGroup === "appearance" && <AppearanceSettings />}
             {visibleActiveGroup === "statistics" && <UsageStatisticsSettings />}
             {visibleActiveGroup === "developer" && (

@@ -74,8 +74,15 @@ export type CommitMaintenanceBatchInput = {
     readonly sourceRevision: number;
   };
   readonly advanceProgressTo: {
+    /** 最后一个「完整消费」的 ordinal；进度只推进到完整轮次（R01）。 */
     readonly ordinal: number;
     readonly sourceFingerprint: string;
+    /**
+     * 片段级进度（N04）：单轮超过请求容量时按片段消费——该 ordinal 未读完，
+     * end 记录其字符流中已消费的终点；轮次读完后必须为 null。ordinal 必须
+     * 大于上方完整推进边界。
+     */
+    readonly fragment?: { readonly ordinal: number; readonly end: number } | null;
   };
 };
 
@@ -176,7 +183,8 @@ const SUMMARY_COLUMNS =
 const SOURCE_COLUMNS =
   "source_id, revision_id, dep_kind, conversation_id, from_ordinal, to_ordinal, source_revision, request_id, created_at";
 const PROGRESS_COLUMNS =
-  "conversation_id, owner_key, processed_through_ordinal, excluded_through_ordinal, source_fingerprint, updated_at";
+  "conversation_id, owner_key, processed_through_ordinal, excluded_through_ordinal, " +
+  "processed_fragment_ordinal, processed_fragment_end, source_fingerprint, updated_at";
 
 export type FtsSummaryHit = { readonly summary: MemorySummaryRow; readonly bm25: number };
 export type FtsTranscriptHit = { readonly conversationId: string; readonly ordinal: number; readonly bm25: number };
@@ -436,6 +444,11 @@ export function createSqliteMemoryDocumentRepository(
           if (existingProgress.processedThroughOrdinal > input.advanceProgressTo.ordinal) {
             return { status: "discarded" as const, reason: "progress_regressed" };
           }
+          if (existingProgress.processedThroughOrdinal === input.advanceProgressTo.ordinal &&
+              existingProgress.processedFragmentOrdinal === input.advanceProgressTo.fragment?.ordinal &&
+              (existingProgress.processedFragmentEnd ?? 0) > (input.advanceProgressTo.fragment?.end ?? 0)) {
+            return { status: "discarded" as const, reason: "progress_regressed" };
+          }
         }
 
         // 4. 发布 CAS：批次读取的总结/记忆 head 必须仍是当前有效版本（用户编辑或
@@ -538,20 +551,31 @@ export function createSqliteMemoryDocumentRepository(
           });
         }
 
-        // 7. 推进 processed 游标（只进不退）。
+        // 7. 推进 processed 游标（只进不退）：完整轮次边界 + 可选片段偏移（N04）。
+        const fragment = input.advanceProgressTo.fragment ?? null;
+        if (fragment !== null && fragment.ordinal <= input.advanceProgressTo.ordinal) {
+          throw new MemoryError(
+            "memory_store_failure",
+            `Fragment ordinal ${fragment.ordinal} must be beyond the complete boundary ${input.advanceProgressTo.ordinal}.`,
+          );
+        }
         database.connection.prepare(`
           INSERT INTO memory_capture_progress(
             conversation_id, owner_key, processed_through_ordinal, excluded_through_ordinal,
-            source_fingerprint, updated_at
-          ) VALUES (?, ?, ?, 0, ?, ?)
+            processed_fragment_ordinal, processed_fragment_end, source_fingerprint, updated_at
+          ) VALUES (?, ?, ?, 0, ?, ?, ?, ?)
           ON CONFLICT(conversation_id) DO UPDATE SET
             processed_through_ordinal = excluded.processed_through_ordinal,
+            processed_fragment_ordinal = excluded.processed_fragment_ordinal,
+            processed_fragment_end = excluded.processed_fragment_end,
             source_fingerprint = excluded.source_fingerprint,
             updated_at = excluded.updated_at
         `).run(
           input.conversationId,
           input.ownerKey,
           input.advanceProgressTo.ordinal,
+          fragment?.ordinal ?? null,
+          fragment?.end ?? null,
           input.advanceProgressTo.sourceFingerprint,
           now,
         );

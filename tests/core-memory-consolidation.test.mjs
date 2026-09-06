@@ -22,9 +22,10 @@ async function withHarness(run, options = {}) {
   await control.setPolicy({ key: spaceParticipationKey("s1"), kind: "space_participation", scopeOwnerKey: "space:s1", enabled: true });
   await control.setPolicy({ key: POLICY_KEY.rollout, kind: "rollout", scopeOwnerKey: "active", enabled: true });
 
+  const pad = options.turnTextPad ?? "";
   const turns = (options.turns ?? [1, 2, 3, 4]).flatMap((ordinal) => ([
-    { turnId: `u${ordinal}`, ordinal, role: "user", text: `第${ordinal}轮：我们确认本地存储采用 SQLite。`, runId: `r${ordinal}`, occurredAt: "2026-09-05T00:00:00.000Z", sourceRevision: ordinal },
-    { turnId: `a${ordinal}`, ordinal, role: "assistant", text: `第${ordinal}轮已确认。`, runId: `r${ordinal}`, occurredAt: "2026-09-05T00:00:01.000Z", sourceRevision: ordinal },
+    { turnId: `u${ordinal}`, ordinal, role: "user", text: `第${ordinal}轮：我们确认本地存储采用 SQLite。${pad}`, runId: `r${ordinal}`, occurredAt: "2026-09-05T00:00:00.000Z", sourceRevision: ordinal },
+    { turnId: `a${ordinal}`, ordinal, role: "assistant", text: `第${ordinal}轮已确认。${pad}`, runId: `r${ordinal}`, occurredAt: "2026-09-05T00:00:01.000Z", sourceRevision: ordinal },
   ]));
   const evidenceReader = {
     async readTurnWindow({ conversationId, fromOrdinal, through }) {
@@ -324,5 +325,65 @@ test("R08: full_conversation mode actually re-reads the processed legal range", 
     assert.equal(outcome.mode, "full_conversation");
     assert.ok(seenOrdinals.includes(1), "full mode must re-read already-processed legal range");
     assert.ok(seenOrdinals.includes(4));
+  });
+});
+
+test("N04: a single oversized ordinal is consumed in bounded fragments with fragment-precise progress", async () => {
+  let fakeNow = 10_000_000;
+  await withHarness(async ({ control, documents, deps }) => {
+    deps.now = () => fakeNow;
+    const job = await acceptSignal(control, { stableThroughOrdinal: 1 });
+    let seenTotalTokens = 0;
+    let calls = 0;
+    // 每次请求的模型输入必须低于容量硬顶；分片推进直到整轮读完。
+    for (let round = 0; round < 10; round += 1) {
+      const progress = await documents.getProgress("c1");
+      if ((progress?.processedThroughOrdinal ?? 0) === 1) break;
+      const [queued] = await control.listJobsByStatus("queued");
+      if (queued === undefined) break;
+      const outcome = await maintainConversationJob({
+        ...deps,
+        maxRequestInputTokens: 20_000,
+        model: { async generate({ messages }) {
+          calls += 1;
+          const payload = JSON.parse(messages[1].content);
+          const evidenceText = payload.evidence.map((item) => item.text).join("\n");
+          seenTotalTokens = Math.max(seenTotalTokens, Math.ceil(evidenceText.length / 4));
+          return { status: "completed", text: JSON.stringify({
+            conversationSummary: { markdown: `s-${calls}`, sourceRefs: [] },
+            longTermUpdate: null,
+          }) };
+        } },
+      }, queued.jobId);
+      assert.ok(
+        ["completed", "retry_queued", "no_evidence"].includes(outcome.status),
+        `unexpected outcome ${JSON.stringify(outcome)}`,
+      );
+      fakeNow += 10_000_000;
+    }
+    assert.ok(calls >= 2, `an oversized ordinal must consume in fragments (calls=${calls})`);
+    assert.ok(seenTotalTokens <= 20_000, `every request must respect the input capacity (max ${seenTotalTokens})`);
+    const progress = await documents.getProgress("c1");
+    assert.equal(progress.processedThroughOrdinal, 1, "the full ordinal must eventually be consumed");
+    assert.equal(progress.processedFragmentOrdinal, null, "fragment state clears when the ordinal completes");
+  }, {
+    turns: [1],
+    turnTextPad: "x".repeat(16_000),
+  });
+});
+
+test("N04: capacity below the minimum processing unit fails explicitly without advancing the cursor", async () => {
+  await withHarness(async ({ control, documents, deps }) => {
+    const job = await acceptSignal(control);
+    const outcome = await maintainConversationJob({
+      ...deps,
+      maxRequestInputTokens: 500,
+      model: { async generate() { throw new Error("model must not be called"); } },
+    }, job.jobId);
+    assert.equal(outcome.status, "failed");
+    assert.equal(outcome.reason, "input_capacity_exceeded");
+    assert.equal(await documents.getLatestValidSummary("c1"), undefined);
+    const [queued] = await control.listJobsByStatus("failed");
+    assert.equal(queued.jobId, job.jobId);
   });
 });

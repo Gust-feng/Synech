@@ -57,6 +57,8 @@ export type MemoryFeatureQueries = {
       readonly conversationId: string;
       readonly fromOrdinal: number;
       readonly toOrdinal: number;
+      readonly title?: string;
+      readonly sourceTime?: string;
     }[];
     readonly summaryCount: number;
     readonly lastMaintenanceAt: number | null;

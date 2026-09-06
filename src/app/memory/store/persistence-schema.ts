@@ -204,6 +204,10 @@ const captureProgressRowSchema = z.object({
   owner_key: z.string().min(1),
   processed_through_ordinal: ordinal,
   excluded_through_ordinal: ordinal,
+  // 片段级进度（N04）：单轮超过请求容量时按片段消费，记录该轮内已消费的
+  // 字符偏移；null 表示该轮已完整处理（无未消费片段）。
+  processed_fragment_ordinal: ordinal.nullable(),
+  processed_fragment_end: ordinal.nullable(),
   source_fingerprint: z.string().min(1),
   updated_at: epochMs,
 }).strict();
@@ -258,6 +262,9 @@ export type MemoryCaptureProgressRow = {
   readonly ownerKey: string;
   readonly processedThroughOrdinal: number;
   readonly excludedThroughOrdinal: number;
+  /** 片段级进度：该 ordinal 内已消费的字符终点；null = 无未完成片段。 */
+  readonly processedFragmentOrdinal: number | null;
+  readonly processedFragmentEnd: number | null;
   readonly sourceFingerprint: string;
   readonly updatedAt: number;
 };
@@ -323,6 +330,8 @@ export function parseCaptureProgressRow(value: unknown): MemoryCaptureProgressRo
     ownerKey: row.owner_key,
     processedThroughOrdinal: row.processed_through_ordinal,
     excludedThroughOrdinal: row.excluded_through_ordinal,
+    processedFragmentOrdinal: row.processed_fragment_ordinal,
+    processedFragmentEnd: row.processed_fragment_end,
     sourceFingerprint: row.source_fingerprint,
     updatedAt: row.updated_at,
   };

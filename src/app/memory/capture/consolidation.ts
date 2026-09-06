@@ -49,6 +49,16 @@ export const MAINTENANCE_MEMORY_TARGET_TOKENS = 3_000;
 export const MAINTENANCE_MEMORY_MAX_TOKENS = 6_000;
 /** 全文对照模式的证据总预算：不超过时优先从原文重新读取整段会话。 */
 export const MAINTENANCE_FULL_CONVERSATION_TOKEN_BUDGET = 24_000;
+/**
+ * 后台请求输入容量硬顶（N04，实验参数）：系统提示 + 旧产物 + 证据 + 输出预留
+ * 的总 token 计数不得超过该值；单轮超过剩余证据容量时按「片段」消费（进度
+ * 精确到字符偏移，正式设计 §8.2）。
+ */
+export const MAINTENANCE_MAX_REQUEST_INPUT_TOKENS = 32_000;
+/** 输出预留：双正文 + JSON 开销的输出预算（§13）。 */
+export const MAINTENANCE_OUTPUT_RESERVE_TOKENS = 12_000;
+/** 证据容量的最低可用值：低于该值视为配置/容量不足（§13「最低可处理单元」）。 */
+export const MAINTENANCE_MIN_EVIDENCE_CAPACITY_TOKENS = 200;
 
 export const MAINTENANCE_PROMPT_REF = "prompt:memory.maintenance.v1";
 
@@ -170,15 +180,32 @@ export function defaultCountTokens(text: string): number {
   return sharedEncoding.encode(text).length;
 }
 
-/** 顺序累加完整轮次；预算满即截断，但空批必收下一轮（超长单轮独立成批，不丢证据）。
- * 批次边界只能落在完整 ordinal 上：同一 run 的 user/assistant 共享 ordinal，
- * 只装下 user 就推进游标会让 assistant 永久漏记（R01）。
- * 返回 lastCompleteOrdinal = 本批最后一个完整 ordinal（进度推进边界）。 */
-export function takeTokenBoundedBatch(
+/**
+ * 按「完整轮次优先 + 片段收尾」消费证据组（R01 + N04）。
+ *
+ * - 批次边界优先落在完整 ordinal 上（同轮 user/assistant 共享 ordinal，只装下
+ *   user 就推进游标会让 assistant 永久漏记）；
+ * - 单轮超过剩余容量时按「消息/片段」消费：以该轮 turn 流的字符偏移为片段
+ *   游标（流 = 各 turn 的 `${role}\n${text}` 依次拼接），本批只取容量内的前缀，
+ *   progress 记录片段终点；下一 claim 从该偏移继续，读完才推进 ordinal；
+ * - 每次消费至少推进一个字符（不存在空页/空批循环）。
+ */
+export type EvidenceConsumption = {
+  readonly batch: readonly EvidenceTurn[];
+  /** 最后一个完整消费的 ordinal；片段进行中时其之前的位置。 */
+  readonly completeThroughOrdinal: number;
+  readonly fragment: { readonly ordinal: number; readonly end: number } | null;
+};
+
+export function consumeEvidenceGroups(
   turns: readonly EvidenceTurn[],
-  countTokens: (text: string) => number,
-  budget: number,
-): { readonly batch: readonly EvidenceTurn[]; readonly lastCompleteOrdinal: number } {
+  input: {
+    readonly startOrdinal: number;
+    readonly startFragmentOffset: number;
+    readonly capacity: number;
+    readonly countTokens: (text: string) => number;
+  },
+): EvidenceConsumption {
   const ordinalGroups = new Map<number, EvidenceTurn[]>();
   for (const turn of turns) {
     const group = ordinalGroups.get(turn.ordinal) ?? [];
@@ -187,16 +214,115 @@ export function takeTokenBoundedBatch(
   }
   const batch: EvidenceTurn[] = [];
   let used = 0;
-  let lastCompleteOrdinal = 0;
+  let completeThroughOrdinal = input.startOrdinal - 1;
+  let fragment: { readonly ordinal: number; readonly end: number } | null = null;
+  let cursorOrdinal = input.startOrdinal;
+  let cursorOffset = input.startFragmentOffset;
   for (const [ordinal, group] of ordinalGroups) {
-    const cost = group.reduce((sum, turn) => sum + countTokens(`${turn.role}\n${turn.text}`), 0);
-    // 空批必收：单轮超预算时整轮独立成批（完整处理该轮，不允许部分推进）。
-    if (batch.length > 0 && used + cost > budget) break;
-    batch.push(...group);
-    used += cost;
-    lastCompleteOrdinal = ordinal;
+    if (ordinal < cursorOrdinal) continue;
+    const stream = group.map((turn) => ({ turn, text: `${turn.role}\n${turn.text}` }));
+    const totalChars = stream.reduce((sum, segment) => sum + segment.text.length, 0);
+    const offset = ordinal === cursorOrdinal ? Math.min(cursorOffset, totalChars) : 0;
+    if (offset >= totalChars) {
+      // 该轮已在此前的片段中读完（防御分支）：完整推进。
+      completeThroughOrdinal = ordinal;
+      cursorOrdinal = ordinal + 1;
+      cursorOffset = 0;
+      continue;
+    }
+    const remainingSegments = suffixSegments(stream, offset);
+    const remainingTokens = remainingSegments.reduce(
+      (sum, segment) => sum + input.countTokens(segment.text),
+      0,
+    );
+    if (used + remainingTokens <= input.capacity) {
+      batch.push(...remainingSegments.map((segment) => withSlicedText(segment.turn, segment.text)));
+      used += remainingTokens;
+      completeThroughOrdinal = ordinal;
+      cursorOrdinal = ordinal + 1;
+      cursorOffset = 0;
+      continue;
+    }
+    // 部分消费：在剩余流内按 token 预算取前缀（字符二分），片段终点 = 字符偏移。
+    const prefix = takeStreamPrefixByTokens(remainingSegments, input.capacity - used, input.countTokens);
+    if (prefix.consumedChars <= 0) break;
+    batch.push(...prefix.segments.map((segment) => withSlicedText(segment.turn, segment.text)));
+    used += prefix.usedTokens;
+    const newOffset = offset + prefix.consumedChars;
+    if (newOffset >= totalChars) {
+      completeThroughOrdinal = ordinal;
+      cursorOrdinal = ordinal + 1;
+      cursorOffset = 0;
+    } else {
+      fragment = { ordinal, end: newOffset };
+    }
+    break;
   }
-  return { batch, lastCompleteOrdinal };
+  return { batch, completeThroughOrdinal, fragment };
+}
+
+type StreamSegment = { readonly turn: EvidenceTurn; readonly text: string };
+
+function suffixSegments(stream: readonly StreamSegment[], offset: number): readonly StreamSegment[] {
+  const segments: StreamSegment[] = [];
+  let consumed = 0;
+  for (const segment of stream) {
+    if (consumed + segment.text.length <= offset) {
+      consumed += segment.text.length;
+      continue;
+    }
+    const localStart = Math.max(0, offset - consumed);
+    segments.push({ turn: segment.turn, text: segment.text.slice(localStart) });
+    consumed += segment.text.length;
+  }
+  return segments;
+}
+
+function takeStreamPrefixByTokens(
+  segments: readonly StreamSegment[],
+  maxTokens: number,
+  countTokens: (text: string) => number,
+): { readonly segments: readonly StreamSegment[]; readonly usedTokens: number; readonly consumedChars: number } {
+  const out: StreamSegment[] = [];
+  let usedTokens = 0;
+  let consumedChars = 0;
+  for (const segment of segments) {
+    const remainingTokens = maxTokens - usedTokens;
+    if (remainingTokens <= 0) break;
+    const wholeCost = countTokens(segment.text);
+    if (wholeCost <= remainingTokens) {
+      out.push(segment);
+      usedTokens += wholeCost;
+      consumedChars += segment.text.length;
+      continue;
+    }
+    // 二分取该段的前缀，使 token 计数落入剩余预算（同轮内的字符级片段）。
+    let low = 1;
+    let high = segment.text.length;
+    let best = 0;
+    while (low <= high) {
+      const mid = Math.floor((low + high) / 2);
+      if (countTokens(segment.text.slice(0, mid)) <= remainingTokens) {
+        best = mid;
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
+    }
+    if (best <= 0) break;
+    out.push({ turn: segment.turn, text: segment.text.slice(0, best) });
+    usedTokens += countTokens(segment.text.slice(0, best));
+    consumedChars += best;
+    break;
+  }
+  return { segments: out, usedTokens, consumedChars };
+}
+
+function withSlicedText(turn: EvidenceTurn, text: string): EvidenceTurn {
+  if (text.startsWith(`${turn.role}\n`)) {
+    return { ...turn, text: text.slice(turn.role.length + 1) };
+  }
+  return { ...turn, text };
 }
 
 /**
@@ -390,8 +516,9 @@ export type MaintenanceDeps = {
   readonly model: MemoryMaintenanceModelPort;
   /** 缺省用 js-tiktoken o200k_base；测试可注入确定性计数。 */
   readonly countTokens?: (text: string) => number;
-  readonly batchTokenBudget?: number;
   readonly fullConversationTokenBudget?: number;
+  /** 后台请求输入容量硬顶（N04，实验参数；缺省 MAINTENANCE_MAX_REQUEST_INPUT_TOKENS）。 */
+  readonly maxRequestInputTokens?: number;
   readonly now?: () => number;
 };
 
@@ -462,15 +589,18 @@ export async function maintainConversationJob(deps: MaintenanceDeps, jobId: stri
       return { status: "no_evidence" };
     }
 
-    // 3. 处理起点与目标边界。legalStart 是「合法原文」下界：排除高水位（清除/
-    //    关闭/rollout 关闭期间）之后的范围才允许进入后台输入（R02/R08）。
+    // 3. 处理起点与目标边界：片段进度优先（N04），其次完整轮次边界；
+    //    legalStart 是「合法原文」下界（R02/R08：排除区间不进入后台输入）。
     const excludedThrough = progress?.excludedThroughOrdinal ?? 0;
-    const startOrdinal = Math.max(
-      progress?.processedThroughOrdinal ?? 0,
-      excludedThrough,
-    ) + 1;
-    const legalStartOrdinal = excludedThrough + 1;
+    const processedThrough = progress?.processedThroughOrdinal ?? 0;
+    const fragmentOrdinal = progress?.processedFragmentOrdinal ?? null;
+    const fragmentEnd = progress?.processedFragmentEnd ?? 0;
     const targetThrough = claimed.targetThroughOrdinal;
+    const inFragment = fragmentOrdinal !== null
+      && fragmentOrdinal > excludedThrough
+      && fragmentOrdinal <= targetThrough;
+    const startOrdinal = inFragment ? fragmentOrdinal : Math.max(processedThrough, excludedThrough) + 1;
+    const legalStartOrdinal = excludedThrough + 1;
     if (startOrdinal > targetThrough) {
       await convergeQuietly();
       return { status: "no_evidence" };
@@ -487,11 +617,32 @@ export async function maintainConversationJob(deps: MaintenanceDeps, jobId: stri
       return { status: "no_evidence" };
     }
 
-    // 5. 模式选择：合法全文（legalStart..target）可容纳时优先对照原文——已处理
-    //    范围也会真实重读，而不是只拿新增后缀标成 full（R08）；否则有界增量
-    //    （每 claim 一批，剩余范围由 commit 事务重排到就绪队列尾）。
+    // 5. 旧产物与请求容量（N04）：系统提示 + 旧产物 + 输出预留之外的剩余容量
+    //    才是本次证据预算；连最低处理单元都容纳不下时明确报容量不足。
+    const [previousSummary, currentMemoryHead] = await Promise.all([
+      deps.documentRepository.getLatestValidSummary(conversationId),
+      deps.documentRepository.getActiveSpaceMemoryHead(ownerKey),
+    ]);
+    const baseCost = countTokens(MAINTENANCE_SYSTEM_PROMPT)
+      + (previousSummary === undefined ? 0 : countTokens(previousSummary.markdown))
+      + (currentMemoryHead === undefined ? 0 : countTokens(currentMemoryHead.markdown))
+      + MAINTENANCE_OUTPUT_RESERVE_TOKENS;
+    const evidenceCapacity = (deps.maxRequestInputTokens ?? MAINTENANCE_MAX_REQUEST_INPUT_TOKENS) - baseCost;
+    if (evidenceCapacity < MAINTENANCE_MIN_EVIDENCE_CAPACITY_TOKENS) {
+      await deps.controlRepository.finishJob({
+        jobId,
+        claimToken,
+        status: "failed",
+        now: now(),
+        lastFailure: "input_capacity_exceeded",
+      });
+      return { status: "failed", reason: "input_capacity_exceeded" };
+    }
+
+    // 6. 模式选择与分组消费：合法全文可容纳时优先对照原文（R08，片段进行中
+    //    除外——先把未读完的轮次消费完）；否则有界增量，完整轮次优先、单轮
+    //    超容量按片段消费（R01 + N04）。
     const fullBudget = deps.fullConversationTokenBudget ?? MAINTENANCE_FULL_CONVERSATION_TOKEN_BUDGET;
-    const batchBudget = deps.batchTokenBudget ?? MAINTENANCE_BATCH_TOKEN_BUDGET;
     const legalFullWindow = legalStartOrdinal < startOrdinal
       ? await deps.evidenceReader.readTurnWindow({
           conversationId,
@@ -503,30 +654,32 @@ export async function maintainConversationJob(deps: MaintenanceDeps, jobId: stri
       (sum, turn) => sum + countTokens(`${turn.role}\n${turn.text}`),
       0,
     );
-    const fullMode = legalFullWindow.turns.length > 0 && legalFullTokens <= fullBudget;
-    const incrementalBatch = takeTokenBoundedBatch(newEvidenceWindow.turns, countTokens, batchBudget);
-    const newTurns = fullMode ? legalFullWindow.turns : incrementalBatch.batch;
-    if (newTurns.length === 0) {
+    const fullMode = !inFragment
+      && legalFullWindow.turns.length > 0
+      && legalFullTokens <= Math.min(fullBudget, evidenceCapacity);
+    const consumption = fullMode
+      ? {
+          batch: legalFullWindow.turns,
+          completeThroughOrdinal: legalFullWindow.turns.at(-1)!.ordinal,
+          fragment: null,
+        }
+      : consumeEvidenceGroups(newEvidenceWindow.turns, {
+          startOrdinal,
+          startFragmentOffset: inFragment ? fragmentEnd : 0,
+          capacity: evidenceCapacity,
+          countTokens,
+        });
+    const newTurns = consumption.batch;
+    if (newTurns.length === 0 || consumption.completeThroughOrdinal < startOrdinal - 1) {
       await convergeQuietly();
       return { status: "no_evidence" };
     }
     const batchFromOrdinal = newTurns[0]!.ordinal;
-    // 进度推进边界 = 本批最后一个完整 ordinal（R01：同轮 user/assistant 一起处理）。
-    const batchToOrdinal = fullMode
-      ? legalFullWindow.turns.at(-1)!.ordinal
-      : incrementalBatch.lastCompleteOrdinal;
-    if (batchToOrdinal < batchFromOrdinal) {
-      await convergeQuietly();
-      return { status: "no_evidence" };
-    }
+    const batchToOrdinal = consumption.completeThroughOrdinal;
 
-    // 6. 有限相邻原文（incremental 模式，R02）：只允许来自仍合法的依赖范围——
+    // 7. 有限相邻原文（incremental 模式，R02）：只允许来自仍合法的依赖范围——
     //    不得越过排除高水位，且必须落在当前有效总结已覆盖的范围之内；不存在
     //    有效总结（清除后首次整理）时不提供任何相邻旧内容。
-    const [previousSummary, currentMemoryHead] = await Promise.all([
-      deps.documentRepository.getLatestValidSummary(conversationId),
-      deps.documentRepository.getActiveSpaceMemoryHead(ownerKey),
-    ]);
     const adjacentTurns = fullMode
       ? []
       : await readAdjacentTurns(deps, {
@@ -653,12 +806,13 @@ export async function maintainConversationJob(deps: MaintenanceDeps, jobId: stri
       longTermUpdate: validated.value.longTermUpdate,
       batchRange: {
         fromOrdinal: batchFromOrdinal,
-        toOrdinal: batchToOrdinal,
+        toOrdinal: Math.max(batchToOrdinal, consumption.fragment?.ordinal ?? batchToOrdinal),
         sourceRevision: lastEvidenceRevision,
       },
       advanceProgressTo: {
         ordinal: batchToOrdinal,
         sourceFingerprint: `rev:${lastEvidenceRevision}`,
+        ...(consumption.fragment === null ? {} : { fragment: consumption.fragment }),
       },
     };
     const commit = await deps.documentRepository.commitMaintenanceBatch(commitInput);

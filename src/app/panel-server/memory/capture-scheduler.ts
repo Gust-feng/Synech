@@ -43,6 +43,8 @@ export function createMemoryMaintenanceScheduler(input: {
   readonly model: MemoryMaintenanceModelPort;
   /** 宿主注入的会话活动端口：true 表示该会话当前有运行/审批在途，延后整理。 */
   readonly isConversationActive?: (conversationId: string) => Promise<boolean>;
+  /** 活动任务延期间隔（N02，实验参数）；缺省 60 秒。 */
+  readonly activeDeferMs?: number;
   readonly idleDelayMs?: number;
   readonly now?: () => number;
   readonly onDiagnostic?: (topic: string, error: unknown) => void;
@@ -52,6 +54,7 @@ export function createMemoryMaintenanceScheduler(input: {
   const now = input.now ?? Date.now;
   const onDiagnostic = input.onDiagnostic ?? ((topic, error) => console.error(`[panel-server] ${topic}`, error));
   const isConversationActive = input.isConversationActive ?? (async () => false);
+  const activeDeferMs = input.activeDeferMs ?? 60_000;
 
   let released = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -117,8 +120,17 @@ export function createMemoryMaintenanceScheduler(input: {
     for (const job of jobs) {
       if (released) return;
       if (await isConversationActive(job.conversationId)) {
-        // 恢复活动的会话延后：worker 继续其他任务，不在队首等待
-        // （其下一次稳定终结会重算 eligibleAt）。
+        // N02：恢复活动的会话其待办持久延期（默认 60s，实验参数）——不占据
+        // 队首、不触发忙循环；其下一次稳定终结会按最新 eligibleAt 重算。
+        try {
+          await input.controlRepository.deferJobUntil({
+            jobId: job.jobId,
+            deferUntil: now() + activeDeferMs,
+            now: now(),
+          });
+        } catch (error) {
+          onDiagnostic(`Memory maintenance could not defer active job ${job.jobId}`, error);
+        }
         continue;
       }
       try {

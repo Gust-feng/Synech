@@ -50,6 +50,17 @@ export type ConversationHighWaterQuery = {
   >;
 };
 
+/**
+ * 会话只读信息端口（N05）：由 Composition Root 注入 Ordinary 只读查询，
+ * 把来源会话从裸 ID 变成用户可识别的标题与来源时间。
+ */
+export type ConversationInfoQuery = {
+  readonly getConversationInfo: (conversationId: string) => Promise<{
+    readonly title: string;
+    readonly updatedAt: string;
+  } | undefined>;
+};
+
 export type CreateMemoryAdminApplicationInput = {
   readonly controlRepository: MemoryControlRepository;
   readonly documentRepository: MemoryDocumentRepository;
@@ -59,6 +70,7 @@ export type CreateMemoryAdminApplicationInput = {
   readonly workspaceAdmission: Pick<SpaceAdmission, "admit">;
   readonly ownerExistsQuery: MemoryOwnerExistsQuery;
   readonly conversationHighWaterQuery: ConversationHighWaterQuery;
+  readonly conversationInfoQuery?: ConversationInfoQuery;
   readonly runtimeHealth?: MemoryRuntimeHealthQuery;
   readonly now?: () => number;
 };
@@ -316,6 +328,15 @@ export function createMemoryAdminApplication(
         existing.fromOrdinal = Math.min(existing.fromOrdinal, source.fromOrdinal);
         existing.toOrdinal = Math.max(existing.toOrdinal, source.toOrdinal);
       }
+      const infoQuery = input.conversationInfoQuery;
+      const viewSources = [];
+      for (const entry of [...aggregated.values()].sort((left, right) => left.conversationId.localeCompare(right.conversationId))) {
+        const info = infoQuery === undefined ? undefined : await infoQuery.getConversationInfo(entry.conversationId);
+        viewSources.push({
+          ...entry,
+          ...(info === undefined ? {} : { title: info.title, sourceTime: info.updatedAt }),
+        });
+      }
       const stats = await documentRepository.getSpaceViewStats(ownerKey);
       const document: SpaceMemoryBackground | undefined = head === undefined ? undefined : {
         revisionId: head.revisionId,
@@ -327,7 +348,7 @@ export function createMemoryAdminApplication(
       };
       return {
         document,
-        sources: [...aggregated.values()].sort((left, right) => left.conversationId.localeCompare(right.conversationId)),
+        sources: viewSources,
         summaryCount: stats.summaryCount,
         lastMaintenanceAt: stats.lastMaintenanceAt,
       };

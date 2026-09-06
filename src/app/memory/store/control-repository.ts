@@ -285,6 +285,15 @@ export const MEMORY_MIGRATIONS = [{
       updated_at INTEGER NOT NULL
     ) STRICT;
   `,
+}, {
+  // v6（N04）：片段级进度列。单轮超过后台输入容量时按「消息/片段」消费，
+  // processed_through 只能推进到完整轮次；片段偏移记录该轮内已消费的字符
+  // 终点，轮次读完后清空并推进 ordinal（正式设计 §8.2 覆盖位置精确到片段）。
+  version: 6,
+  sql: `
+    ALTER TABLE memory_capture_progress ADD COLUMN processed_fragment_ordinal INTEGER;
+    ALTER TABLE memory_capture_progress ADD COLUMN processed_fragment_end INTEGER;
+  `,
 }] as const;
 
 export type SetPolicyInput = {
@@ -352,6 +361,15 @@ export interface MemoryControlRepository {
   claimJob(input: ClaimJobInput): Promise<MemoryJobRow | undefined>;
   /** 携带 claimToken 的收敛：done / 重排（剩余范围或退避重试）/ 终态 failed。 */
   finishJob(input: FinishJobInput): Promise<MemoryJobRow | undefined>;
+  /**
+   * 活动任务延期（N02）：恢复活动的会话其待办推迟到 deferUntil 之后再领取
+   * （其下一次稳定终态会按最新 eligibleAt 重算）；只作用于 queued 任务。
+   */
+  deferJobUntil(input: {
+    readonly jobId: string;
+    readonly deferUntil: number;
+    readonly now: number;
+  }): Promise<MemoryJobRow | undefined>;
   listJobsByStatus(status: PersistedJobStatus): Promise<readonly MemoryJobRow[]>;
   /** 启动恢复：把残留 running job 退回 queued 并 attempt+1，返回恢复数量。 */
   recoverInterruptedJobs(): Promise<number>;
@@ -641,6 +659,21 @@ export function createSqliteMemoryControlRepository(
         if (Number(updated.changes) !== 1) return undefined;
         const saved = readJob(input.jobId);
         if (saved === undefined) throw new MemoryError("memory_store_failure", "Finished memory job vanished.");
+        return saved;
+      });
+    },
+
+    async deferJobUntil(input) {
+      return database.transaction(() => {
+        const updated = database.connection.prepare(`
+          UPDATE memory_job SET
+            eligible_at = MAX(eligible_at, ?),
+            updated_at = ?
+          WHERE job_id = ? AND status = 'queued'
+        `).run(input.deferUntil, input.now, input.jobId);
+        if (Number(updated.changes) !== 1) return undefined;
+        const saved = readJob(input.jobId);
+        if (saved === undefined) throw new MemoryError("memory_store_failure", "Deferred memory job vanished.");
         return saved;
       });
     },

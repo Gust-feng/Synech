@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useState } from "react";
 import { PersonalWorkbench } from "./personal-workbench/personal-workbench";
 import { useAppShellEffects } from "./shell/effects";
 import { persistSidebarCollapsedPreference, useAppShellState } from "./shell/state";
@@ -14,10 +14,6 @@ import type { MemorySettingsScope } from "./features/memory/MemorySettingsPanel"
 
 export function App(): React.ReactElement {
   const [app, setApp] = useState(createInitialAppState);
-  const [turnMemoryOverrideOff, setTurnMemoryOverrideOff] = useState(false);
-  useEffect(() => {
-    setTurnMemoryOverrideOff(false);
-  }, [app.conversation?.conversationId]);
   const taskState = useAppWorkbenchTaskState();
   const spaceProjection = useSpaceProjection();
   const {
@@ -74,8 +70,6 @@ export function App(): React.ReactElement {
     goal,
     aiMode,
     composerReasoningEffort,
-    turnMemoryOverrideOff,
-    setTurnMemoryOverrideOff,
     toolConfirmationPolicy,
     setToolConfirmationPolicy,
     setComposerSelectedModelId,
@@ -164,8 +158,6 @@ export function App(): React.ReactElement {
     closeSignal: inputCloseSignal,
     onModelSelect: selectInputModel,
     onOpenSettings: () => openSettings("models"),
-    turnMemoryOverrideOff,
-    onTurnMemoryOverrideChange: setTurnMemoryOverrideOff,
     enqueueMessage,
     startTask,
     clearQueuedMessages,
@@ -194,6 +186,7 @@ export function App(): React.ReactElement {
     closeSettings,
     settingsGroup,
     memoryScope: memorySettingsScopeFromConversation(app.conversation),
+    onOpenConversation: openConversation,
     app,
     modelCatalogs,
     forms: {
@@ -277,13 +270,11 @@ export function App(): React.ReactElement {
 
 function memorySettingsScopeFromConversation(
   conversation: {
-    readonly conversationId: string;
     readonly owner?: { readonly kind: "space" | "workspace"; readonly id: string };
   } | undefined,
 ): MemorySettingsScope | null {
   if (conversation === undefined || conversation.owner === undefined) return null;
   return {
     owner: conversation.owner,
-    conversationId: conversation.conversationId,
   };
 }

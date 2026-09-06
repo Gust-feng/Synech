@@ -49,6 +49,9 @@ export type SpaceMemorySourceView = {
   readonly conversationId: string;
   readonly fromOrdinal: number;
   readonly toOrdinal: number;
+  readonly title?: string;
+  /** 来源会话最近更新时间；不是事实发生时间。 */
+  readonly sourceTime?: string;
 };
 
 export type SpaceMemoryView = {

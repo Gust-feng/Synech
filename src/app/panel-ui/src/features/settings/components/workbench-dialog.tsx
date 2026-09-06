@@ -39,6 +39,7 @@ export type WorkbenchSettingsDialogProps = {
   readonly onClose: () => void;
   readonly initialGroup?: SettingsGroup;
   readonly memoryScope: MemorySettingsScope | null;
+  readonly onOpenConversation?: (conversationId: string) => void;
   readonly app: Pick<AppState, "config" | "tools" | "skills" | "subAgents">;
   readonly modelCatalogs?: Readonly<Record<string, ModelProviderModelCatalog>>;
   readonly forms: WorkbenchSettingsDialogFormState;
@@ -54,6 +55,7 @@ export function WorkbenchSettingsDialog(props: WorkbenchSettingsDialogProps): Re
       onClose={props.onClose}
       initialGroup={props.initialGroup}
       memoryScope={props.memoryScope}
+      onOpenConversation={props.onOpenConversation}
       config={props.app.config}
       modelForm={props.forms.modelForm}
       setModelForm={props.forms.setModelForm}

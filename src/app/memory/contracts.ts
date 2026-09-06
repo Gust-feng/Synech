@@ -170,6 +170,8 @@ export type HistoryReadInput = {
   readonly conversationId: string;
   readonly source: "summary" | "transcript";
   readonly fromOrdinal?: number;
+  /** 片段续读偏移（N01）：fromOrdinal 所指轮次 turn 流内的字符起点。 */
+  readonly fragmentStart?: number;
   readonly limitTokens: number;
 };
 
@@ -181,7 +183,12 @@ export type HistoryReadResult =
       /** summary 来源时的覆盖信息；transcript 来源时为 undefined。 */
       readonly coveredThroughOrdinal?: number;
       readonly hasUnsummarizedMessages?: boolean;
+      /**
+       * 续读位置（N01）：truncated 且片段进行中时指向同一 ordinal（配合
+       * nextFragmentStart）；完整轮次边界推进时无 fragment。
+       */
       readonly nextFromOrdinal?: number;
+      readonly nextFragmentStart?: number;
     }
   | { readonly outcome: "unavailable"; readonly reason: string };
 
@@ -283,11 +290,14 @@ export interface MemoryAdminApplication {
   /** Memory Center 只读视图：当前文档、真实来源会话与最近整理时间。 */
   getSpaceMemoryView(input: { readonly spaceId: string }): Promise<{
     readonly document: SpaceMemoryBackground | undefined;
-    /** 当前文档的来源会话范围（文档级保守依赖粒度，按会话聚合）。 */
+    /** 当前文档的来源会话范围（文档级保守依赖粒度，按会话聚合；含可识别信息）。 */
     readonly sources: readonly {
       readonly conversationId: string;
       readonly fromOrdinal: number;
       readonly toOrdinal: number;
+      readonly title?: string;
+      /** 来源会话最近更新时间（Ordinary 会话事实），不是事实发生时间。 */
+      readonly sourceTime?: string;
     }[];
     readonly summaryCount: number;
     readonly lastMaintenanceAt: number | null;
