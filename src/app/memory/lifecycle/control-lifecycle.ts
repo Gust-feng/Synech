@@ -34,13 +34,10 @@ export function createControlMemoryLifecycle(
     // 单事务原子地 bump generation + 立 fenced，避免两步之间被并发 prepare/写入交错。
     const fenced = await repository.fenceForRemoval(ownerKey);
     if (scope.kind === "conversation" && options.documentRepository !== undefined) {
-      // 依赖该会话来源的派生版本先失效（fence 已挡住新供给，失效让绑定复核即刻拒绝）。
-      try {
-        await options.documentRepository.invalidateDependentRevisions(scope.conversationId);
-      } catch (error) {
-        // 失效失败不阻断 fence：finalize 的物理清理会重试同一生命周期。
-        console.error("[memory] dependent revision invalidation failed during removal prepare", error);
-      }
+      // 依赖该会话来源的派生版本必须先失效（R05）：失效写入失败时 prepare 必须
+      // 上抛——生命周期保持「fence 已立、供给未断」的可重试拒绝状态，由删除
+      // journal 重试恢复；吞掉异常会让依赖文档在清理停滞期间继续注入。
+      await options.documentRepository.invalidateDependentRevisions(scope.conversationId);
     }
     return {
       ticketId: idFactory("memrm"),

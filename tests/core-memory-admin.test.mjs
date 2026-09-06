@@ -7,7 +7,9 @@ import test from "node:test";
 import { SqliteRuntimeDatabase } from "../dist/adapters/runtime-storage/index.js";
 import {
   MemoryError,
+  POLICY_KEY,
   createControlMemoryLifecycle,
+  spaceParticipationKey,
   createMemoryAdminApplication,
   createSqliteMemoryControlRepository,
   createSqliteMemoryDocumentRepository,
@@ -150,5 +152,55 @@ test("capability status reflects consent/participation/rollout without caching",
     assert.equal(status.spaceParticipation, true);
     assert.equal(status.rollout, "active");
     assert.equal(status.effective, "active");
+  });
+});
+
+test("R09: rollout off -> active writes exclusions; active -> shadow does not", async () => {
+  await withHarness(async ({ admin, documents }) => {
+    await admin.setRollout({ rollout: "active" });
+    assert.equal((await documents.getProgress("c1")).excludedThroughOrdinal, 12);
+    // active -> shadow：不排除（shadow 期间正常整理）。
+    await admin.setRollout({ rollout: "shadow" });
+    assert.equal((await documents.getProgress("c1")).excludedThroughOrdinal, 12);
+  }, {
+    highWaters: [{ conversationId: "c1", ownerKey: "space:s1", allocatedThroughOrdinal: 12 }],
+  });
+});
+
+test("R15: the view exposes the real source conversations of the current document", async () => {
+  await withHarness(async ({ admin, documents, control }) => {
+    // 提交边界会锁内重算有效准入：本测试需要一组开启的 policy。
+    void control.setPolicy({ key: POLICY_KEY.consent, kind: "global_consent", scopeOwnerKey: null, enabled: true });
+    void control.setPolicy({ key: spaceParticipationKey("s1"), kind: "space_participation", scopeOwnerKey: "space:s1", enabled: true });
+    void control.setPolicy({ key: POLICY_KEY.rollout, kind: "rollout", scopeOwnerKey: "active", enabled: true });
+    await control.acceptConversationSignal({
+      conversationId: "c1", ownerKey: "space:s1", stableThroughOrdinal: 3,
+      sourceFingerprint: "fp", eligibleAt: 100, now: 0,
+      generation: 0, policyRevision: "g1:r1:s1:gen0",
+    });
+    const [queued] = await control.listJobsByStatus("queued");
+    const claimToken = "claim-view";
+    await control.claimJob({ jobId: queued.jobId, claimToken, now: 100 });
+    await documents.commitMaintenanceBatch({
+      jobId: queued.jobId,
+      claimToken,
+      conversationId: "c1",
+      ownerKey: "space:s1",
+      expectedPolicyRevision: "g1:r1:s1:gen0",
+      expectedGeneration: 0,
+      expectedSummaryRevisionId: null,
+      expectedMemoryHeadRevisionId: null,
+      summary: { markdown: "总结", coveredThroughOrdinal: 3 },
+      longTermUpdate: { markdown: "# Space Memory" },
+      batchRange: { fromOrdinal: 1, toOrdinal: 3, sourceRevision: 3 },
+      advanceProgressTo: { ordinal: 3, sourceFingerprint: "rev:3" },
+    });
+    const view = await admin.getSpaceMemoryView({ spaceId: "s1" });
+    assert.equal(view.sources.length, 1);
+    assert.equal(view.sources[0].conversationId, "c1");
+    assert.equal(view.sources[0].fromOrdinal, 1);
+    assert.equal(view.sources[0].toOrdinal, 3);
+  }, {
+    highWaters: [{ conversationId: "c1", ownerKey: "space:s1", allocatedThroughOrdinal: 12 }],
   });
 });

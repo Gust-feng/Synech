@@ -45,8 +45,15 @@ export type SpaceMemoryDocumentView = {
   readonly updatedAt: number;
 };
 
+export type SpaceMemorySourceView = {
+  readonly conversationId: string;
+  readonly fromOrdinal: number;
+  readonly toOrdinal: number;
+};
+
 export type SpaceMemoryView = {
   readonly document: SpaceMemoryDocumentView | undefined;
+  readonly sources: readonly SpaceMemorySourceView[];
   readonly summaryCount: number;
   readonly lastMaintenanceAt: number | null;
 };

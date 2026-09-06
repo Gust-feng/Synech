@@ -66,34 +66,44 @@ export function createMemoryMaintenanceScheduler(input: {
     now,
   };
 
+  let scheduledWakeAt: number | undefined;
+
   function scheduleWake(delayMs: number): void {
     if (released) return;
+    const wakeAt = now() + Math.max(delayMs, 250);
     if (timer !== undefined) clearTimeout(timer);
+    scheduledWakeAt = wakeAt;
     timer = setTimeout(() => {
       timer = undefined;
+      scheduledWakeAt = undefined;
       void runDrain();
     }, Math.max(delayMs, 250));
     // 不阻止进程退出：调度器只是唤醒器，durable job 重启后仍会被补扫。
     timer.unref?.();
   }
 
-  /** drain 收尾后按最近的到期任务安排下一次唤醒；无到期任务时低频兜底轮询。 */
+  /** drain 收尾后按最近的到期任务安排下一次唤醒（R03）：队列里仍有「已到期」
+   * 的任务（长会话余批、被 16 条快照截断的尾部）必须继续处理——安排立即唤醒，
+   * 而不是只看未来的 eligibleAt；有未来任务时按最早资格唤醒；都没有则停止轮询，
+   * 由下一次活动信号重新安排。 */
   async function scheduleNextWakeFromJobs(): Promise<void> {
     try {
       const queued = await input.controlRepository.listJobsByStatus("queued");
       const nowMs = now();
-      const nextDue = queued
-        .map((job) => Math.max(job.eligibleAt, job.nextAttemptAt ?? 0))
-        .filter((due) => due > nowMs)
-        .sort((left, right) => left - right)[0];
-      if (nextDue !== undefined) {
-        scheduleWake(nextDue - nowMs);
+      const readyTimes = queued.map((job) => Math.max(job.eligibleAt, job.nextAttemptAt ?? 0));
+      const earliestDue = Math.min(...readyTimes);
+      if (readyTimes.length > 0 && earliestDue <= nowMs) {
+        scheduleWake(0);
+        return;
+      }
+      if (earliestDue !== Number.POSITIVE_INFINITY) {
+        scheduleWake(earliestDue - nowMs);
         return;
       }
     } catch (error) {
       onDiagnostic("Memory scheduler could not schedule next wake", error);
     }
-    // 没有未来到期任务时不再轮询：下一次活动信号会重新安排唤醒。
+    // 没有任何待办时不再轮询：下一次活动信号会重新安排唤醒。
   }
 
   async function drainDueJobsOnce(): Promise<void> {
@@ -143,7 +153,12 @@ export function createMemoryMaintenanceScheduler(input: {
     noteActivity({ conversationId }) {
       void conversationId;
       if (released) return;
-      scheduleWake(idleDelayMs);
+      // R06：无关会话的活动不得推迟已安排的更早唤醒——只有当前没有唤醒安排，
+      // 或现有唤醒比本次空闲资格更晚时，才把唤醒提前到本次资格时间。
+      const candidateWakeAt = now() + idleDelayMs;
+      if (scheduledWakeAt === undefined || scheduledWakeAt > candidateWakeAt) {
+        scheduleWake(idleDelayMs);
+      }
     },
 
     async recoverQueuedJobs() {

@@ -147,11 +147,13 @@ export interface MemoryDocumentRepository {
   searchSummaries(input: {
     readonly ownerKey: string;
     readonly match: string;
+    readonly conversationId?: string;
     readonly limit: number;
   }): Promise<readonly { readonly summary: MemorySummaryRow; readonly bm25: number }[]>;
   searchTranscript(input: {
     readonly ownerKey: string;
     readonly match: string;
+    readonly conversationId?: string;
     readonly limit: number;
   }): Promise<readonly { readonly conversationId: string; readonly ordinal: number; readonly bm25: number }[]>;
 
@@ -604,6 +606,14 @@ export function createSqliteMemoryDocumentRepository(
           contentHash: contentHashOf(input.markdown),
           updatedAt: now,
         };
+        // 用户编辑是显式纠正：被此次编辑替换的全部旧有效版本（不只是被覆盖的
+        // head）都停止供给——更早版本里同样存在被纠正前的错误事实，绑定它们的
+        // 会话必须立即停止注入（R04）。保守来源继承到新版本，使权限/删除追踪
+        // 连续；不自动换绑。（先撤销旧版再插入新版，避免误伤自身。）
+        database.connection.prepare(`
+          UPDATE memory_space_doc SET validity = 'invalidated'
+          WHERE owner_key = ? AND validity = 'valid'
+        `).run(input.ownerKey);
         database.connection.prepare(`
           INSERT INTO memory_space_doc(
             revision_id, owner_key, revision, origin, markdown, validity,
@@ -618,12 +628,7 @@ export function createSqliteMemoryDocumentRepository(
           docRow.contentHash,
           docRow.updatedAt,
         );
-        // 用户编辑撤销被明确替换的旧 head 供给；更早的有效版本（被其他会话绑定）
-        // 按设计继续有效，不做自动失效。
         if (currentHead !== undefined) {
-          database.connection.prepare(
-            "UPDATE memory_space_doc SET validity = 'invalidated' WHERE revision_id = ?",
-          ).run(currentHead.revisionId);
           copySources(currentHead.revisionId, revisionId, now);
         }
         database.connection.prepare(`
@@ -717,13 +722,15 @@ export function createSqliteMemoryDocumentRepository(
     async searchSummaries(input) {
       if (input.match.trim() === "" || input.limit <= 0) return [];
       const ftsLimit = Math.max(input.limit * 4, 16);
+      // R12：会话范围条件在 LIMIT 之前过滤，不能先取全 Space top-k 再展示过滤。
       const hits = database.connection.prepare(`
         SELECT revision_id, bm25(memory_summary_fts) AS bm25_score
         FROM memory_summary_fts
         WHERE memory_summary_fts MATCH ? AND owner_key = ? AND validity = 'valid'
+          AND (? IS NULL OR conversation_id = ?)
         ORDER BY bm25(memory_summary_fts)
         LIMIT ?
-      `).all(input.match, input.ownerKey, ftsLimit) as {
+      `).all(input.match, input.ownerKey, input.conversationId ?? null, input.conversationId ?? null, ftsLimit) as {
         readonly revision_id: SQLInputValue;
         readonly bm25_score: SQLInputValue;
       }[];
@@ -743,9 +750,10 @@ export function createSqliteMemoryDocumentRepository(
         SELECT conversation_id, ordinal, bm25(memory_transcript_fts) AS bm25_score
         FROM memory_transcript_fts
         WHERE memory_transcript_fts MATCH ? AND owner_key = ?
+          AND (? IS NULL OR conversation_id = ?)
         ORDER BY bm25(memory_transcript_fts)
         LIMIT ?
-      `).all(input.match, input.ownerKey, input.limit) as {
+      `).all(input.match, input.ownerKey, input.conversationId ?? null, input.conversationId ?? null, input.limit) as {
         readonly conversation_id: SQLInputValue;
         readonly ordinal: SQLInputValue;
         readonly bm25_score: SQLInputValue;
@@ -838,6 +846,8 @@ export function createSqliteMemoryDocumentRepository(
           .all(ownerKey) as { readonly revision_id: string }[];
         for (const row of summaries) {
           database.connection.prepare("DELETE FROM memory_summary_fts WHERE revision_id = ?").run(row.revision_id);
+          // R10：总结来源行没有外键级联，必须与总结行同事务清理。
+          database.connection.prepare("DELETE FROM memory_doc_source WHERE revision_id = ?").run(row.revision_id);
         }
         database.connection.prepare("DELETE FROM memory_conversation_summary WHERE owner_key = ?").run(ownerKey);
         database.connection.prepare("DELETE FROM memory_transcript_fts WHERE owner_key = ?").run(ownerKey);

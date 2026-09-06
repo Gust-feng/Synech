@@ -599,6 +599,8 @@ export function createSqliteMemoryControlRepository(
 
     async claimJob(input) {
       return database.transaction(() => {
+        // R07：领取时在权威边界重验最新资格（列表快照之后新到达的稳定信号会
+        // 重算 eligibleAt/next_attempt_at，过期快照不得跳过新的空闲等待）。
         const updated = database.connection.prepare(`
           UPDATE memory_job SET
             status = 'running',
@@ -607,7 +609,8 @@ export function createSqliteMemoryControlRepository(
             attempt = attempt + 1,
             updated_at = ?
           WHERE job_id = ? AND status = 'queued' AND claim_token IS NULL
-        `).run(input.claimToken, input.now, input.jobId);
+            AND eligible_at <= ? AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+        `).run(input.claimToken, input.now, input.jobId, input.now, input.now);
         if (Number(updated.changes) !== 1) return undefined;
         const saved = readJob(input.jobId);
         if (saved === undefined) throw new MemoryError("memory_store_failure", "Claimed memory job vanished.");

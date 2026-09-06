@@ -128,3 +128,16 @@ test("due jobs are ordered by eligibility and only include due tasks", async () 
     assert.deepEqual(due.map((job) => job.conversationId), ["c-early"]);
   });
 });
+
+test("claim re-verifies current eligibility instead of trusting the queue snapshot (R07)", async () => {
+  await withStore(async ({ repository }) => {
+    await repository.acceptConversationSignal(signal());
+    // 队列快照产生后，同会话新稳定信号把 eligibleAt 推到未来。
+    await repository.acceptConversationSignal(signal({ stableThroughOrdinal: 9, eligibleAt: 5_000, now: 300 }));
+    const staleSnapshotClaim = await repository.claimJob({ jobId: "memjob-1", claimToken: "claim-stale", now: 400 });
+    assert.equal(staleSnapshotClaim, undefined);
+    // 到期后才能领取。
+    const due = await repository.claimJob({ jobId: "memjob-1", claimToken: "claim-due", now: 5_000 });
+    assert.equal(due.status, "running");
+  });
+});

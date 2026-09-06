@@ -171,6 +171,9 @@ export function createMemoryAdminApplication(
     async setRollout({ rollout }: { rollout: MemoryRolloutMode }) {
       const policyRows = await controlRepository.readAllPolicy();
       const existing = policyRows.find((row) => row.key === POLICY_KEY.rollout);
+      const previousMode = existing?.enabled === true && (existing.scopeOwnerKey === "shadow" || existing.scopeOwnerKey === "active")
+        ? existing.scopeOwnerKey
+        : "off";
       await controlRepository.setPolicy({
         key: POLICY_KEY.rollout,
         kind: "rollout",
@@ -180,6 +183,12 @@ export function createMemoryAdminApplication(
         enabled: rollout !== "off",
         ...(existing === undefined ? {} : { expectedRevision: existing.revision }),
       });
+      if (previousMode === "off" && rollout !== "off") {
+        // R09：从 off 重新启用（active 或 shadow）与 consent/participation 启用
+        // 同一资格边界——关闭期间不推进进度，必须按高水位排除，不得回填。
+        // active↔shadow 之间的切换不排除（shadow 期间正常整理）。
+        await writeExclusionsForScope({ kind: "global" });
+      }
       return { policyRevision: await readPolicyRevision() };
     },
 
@@ -285,10 +294,29 @@ export function createMemoryAdminApplication(
 
     async getSpaceMemoryView({ spaceId }) {
       const ownerKey = memoryOwnerKey({ kind: "space", id: spaceId });
-      const [head, stats] = await Promise.all([
-        documentRepository.getActiveSpaceMemoryHead(ownerKey),
-        documentRepository.getSpaceViewStats(ownerKey),
-      ]);
+      const head = await documentRepository.getActiveSpaceMemoryHead(ownerKey);
+      // R15：把数据库中已有的来源关系暴露给用户——来源会话与范围按会话聚合，
+      // 文档级保守依赖粒度如实展示，不调用模型生成事后解释。
+      const sources = head === undefined
+        ? []
+        : (await documentRepository.listSpaceDocSources(head.revisionId))
+            .filter((source) => source.depKind === "conversation_range" && source.conversationId !== null)
+            .map((source) => ({
+              conversationId: source.conversationId as string,
+              fromOrdinal: source.fromOrdinal ?? 0,
+              toOrdinal: source.toOrdinal ?? 0,
+            }));
+      const aggregated = new Map<string, { conversationId: string; fromOrdinal: number; toOrdinal: number }>();
+      for (const source of sources) {
+        const existing = aggregated.get(source.conversationId);
+        if (existing === undefined) {
+          aggregated.set(source.conversationId, { ...source });
+          continue;
+        }
+        existing.fromOrdinal = Math.min(existing.fromOrdinal, source.fromOrdinal);
+        existing.toOrdinal = Math.max(existing.toOrdinal, source.toOrdinal);
+      }
+      const stats = await documentRepository.getSpaceViewStats(ownerKey);
       const document: SpaceMemoryBackground | undefined = head === undefined ? undefined : {
         revisionId: head.revisionId,
         revision: head.revision,
@@ -299,6 +327,7 @@ export function createMemoryAdminApplication(
       };
       return {
         document,
+        sources: [...aggregated.values()].sort((left, right) => left.conversationId.localeCompare(right.conversationId)),
         summaryCount: stats.summaryCount,
         lastMaintenanceAt: stats.lastMaintenanceAt,
       };

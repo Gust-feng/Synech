@@ -6,6 +6,7 @@ import test from "node:test";
 
 import { SqliteRuntimeDatabase } from "../dist/adapters/runtime-storage/index.js";
 import { lexicalMatchExpression } from "../dist/app/memory/recall/lexical-projection.js";
+import { historyCountTokens } from "../dist/app/memory/history/history-query-port.js";
 import {
   POLICY_KEY,
   createMemoryHistoryQueryPort,
@@ -39,9 +40,23 @@ async function withHarness(run, options = {}) {
       { turnId: `a${ordinal}`, ordinal, role: "assistant", text: `第${ordinal}轮回复。`, runId: `r${ordinal}`, occurredAt: "2026-09-05T00:00:01.000Z", sourceRevision: ordinal },
     );
   }
+  const turnsByConversation = new Map([[ "c1", turns ]]);
+  if (options.extraConversation !== undefined) {
+    const extra = options.extraConversation;
+    turnsByConversation.set(extra.conversationId, extra.turns.map((turn) => ({
+      turnId: `u-${extra.conversationId}-${turn.ordinal}`,
+      ordinal: turn.ordinal,
+      role: turn.role,
+      text: turn.text,
+      runId: `r-${extra.conversationId}-${turn.ordinal}`,
+      occurredAt: turn.occurredAt,
+      sourceRevision: turn.ordinal,
+    })));
+  }
   const evidenceReader = {
     async readTurnWindow({ conversationId, fromOrdinal, through }) {
-      const selected = turns.filter((turn) => turn.ordinal >= fromOrdinal && turn.ordinal <= through.ordinal);
+      const source = turnsByConversation.get(conversationId) ?? [];
+      const selected = source.filter((turn) => turn.ordinal >= fromOrdinal && turn.ordinal <= through.ordinal);
       return {
         turns: selected,
         nextCursor: selected.length === 0 ? undefined : {
@@ -58,7 +73,9 @@ async function withHarness(run, options = {}) {
     evidenceReader,
     conversationLookup: {
       resolveConversationOwner: async (conversationId) =>
-        conversationId === "c1" ? { kind: "space", id: "s1" }
+        conversationId === "c1" || conversationId === "c2" ||
+        conversationId.startsWith("c-huge") || conversationId.startsWith("c-many") || conversationId.startsWith("c-emoji")
+          ? { kind: "space", id: "s1" }
         : conversationId === "c-other" ? { kind: "space", id: "s2" }
         : undefined,
     },
@@ -210,5 +227,159 @@ test("unknown conversations are unavailable, not fabricated", async () => {
     });
     assert.equal(read.outcome, "unavailable");
     assert.equal(read.reason, "conversation_not_found");
+  });
+});
+
+test("R12: conversation-scoped search filters before the limit, not after", async () => {
+  await withHarness(async ({ control, documents, history }) => {
+    await seed(documents, control);
+    // c2（同 Space）制造 10 个更强的命中，占满全 Space 的 top-k。
+    await documents.indexTranscriptRange({
+      conversationId: "c2", ownerKey: "space:s1",
+      entries: Array.from({ length: 10 }, (_, index) => ({
+        ordinal: index + 1,
+        text: `安装器 安装器 安装器 设计第${index + 1}条。`,
+        sourceRevision: index + 1,
+      })),
+      now: 30,
+    });
+    const result = await history.search({
+      owner: { kind: "space", id: "s1" },
+      query: "安装器",
+      conversationId: "c1",
+      sources: "transcript",
+      limit: 8,
+    });
+    assert.equal(result.outcome, "ok");
+    assert.ok(result.items.length > 0, "scoped search must find the target conversation's hits");
+    assert.ok(result.items.every((item) => item.conversationId === "c1"));
+  });
+});
+
+test("R13: caller limit is respected and all sources participate in candidate selection", async () => {
+  await withHarness(async ({ control, documents, history }) => {
+    await seed(documents, control);
+    const limited = await history.search({
+      owner: { kind: "space", id: "s1" },
+      query: "安装器",
+      sources: "all",
+      limit: 1,
+    });
+    assert.equal(limited.items.length, 1);
+
+    const full = await history.search({
+      owner: { kind: "space", id: "s1" },
+      query: "安装器",
+      sources: "all",
+      limit: 8,
+    });
+    const types = new Set(full.items.map((item) => item.type));
+    assert.ok(types.has("conversation_summary") && types.has("raw_excerpt"),
+      "round-robin merge must let both source types into the results");
+  });
+});
+
+test("R11: pagination covers every message without gaps, repeats or empty pages", async () => {
+  await withHarness(async ({ history }) => {
+    const pages = [];
+    let fromOrdinal;
+    for (let page = 0; page < 12; page += 1) {
+      const result = await history.read({
+        owner: { kind: "space", id: "s1" },
+        conversationId: "c1",
+        source: "transcript",
+        ...(fromOrdinal === undefined ? {} : { fromOrdinal }),
+        limitTokens: 300,
+      });
+      if (result.outcome !== "ok") break;
+      assert.ok(result.text.length > 0, "a page must never be empty");
+      pages.push(result);
+      if (!result.truncated || result.nextFromOrdinal === undefined) break;
+      assert.ok(result.nextFromOrdinal > (fromOrdinal ?? 1), "continuation must advance");
+      fromOrdinal = result.nextFromOrdinal;
+    }
+    const joined = pages.map((page) => page.text).join("\n");
+    for (let ordinal = 1; ordinal <= 6; ordinal += 1) {
+      assert.ok(joined.includes(`第${ordinal}轮`), `ordinal ${ordinal} must appear in some page`);
+    }
+  });
+});
+
+test("R11: a single oversized message is hard-truncated and the page still advances", async () => {
+  await withHarness(async ({ history }) => {
+    const result = await history.read({
+      owner: { kind: "space", id: "s1" },
+      conversationId: "c-huge",
+      source: "transcript",
+      limitTokens: 100,
+    });
+    assert.equal(result.outcome, "ok");
+    assert.ok(result.text.length > 0);
+    assert.equal(result.truncated, true);
+    assert.equal(result.nextFromOrdinal, 2);
+  }, {
+    extraConversation: {
+      conversationId: "c-huge",
+      ownerKey: "space:s1",
+      turns: [{ ordinal: 1, role: "user", text: "很长的消息。".repeat(500), occurredAt: "2026-09-05T00:00:00.000Z" }],
+    },
+  });
+});
+
+test("R11: the scan-span end probes for more messages instead of claiming the end", async () => {
+  await withHarness(async ({ history }) => {
+    // 201 轮短消息 > 200 的扫描跨度：第一页必须给出续读位置。
+    const first = await history.read({
+      owner: { kind: "space", id: "s1" },
+      conversationId: "c-many",
+      source: "transcript",
+      limitTokens: 6_000,
+    });
+    assert.equal(first.outcome, "ok");
+    assert.equal(first.truncated, true);
+    assert.equal(first.nextFromOrdinal, 201);
+    const second = await history.read({
+      owner: { kind: "space", id: "s1" },
+      conversationId: "c-many",
+      source: "transcript",
+      fromOrdinal: first.nextFromOrdinal,
+      limitTokens: 6_000,
+    });
+    assert.equal(second.outcome, "ok");
+    assert.ok(second.text.includes("第201轮"));
+  }, {
+    extraConversation: {
+      conversationId: "c-many",
+      ownerKey: "space:s1",
+      turns: Array.from({ length: 201 }, (_, index) => ({
+        ordinal: index + 1,
+        role: "user",
+        text: `第${index + 1}轮短消息。`,
+        occurredAt: "2026-09-05T00:00:00.000Z",
+      })),
+    },
+  });
+});
+
+test("R14: returned content respects the token budget counted with a real tokenizer", async () => {
+  await withHarness(async ({ history }) => {
+    // emoji 在字符近似估算下严重低估（R14 复现）；真实 tokenizer 计数必须守住预算。
+    const emoji = "🦊🐶🐹".repeat(200);
+    const result = await history.read({
+      owner: { kind: "space", id: "s1" },
+      conversationId: "c-emoji",
+      source: "transcript",
+      limitTokens: 6_000,
+    });
+    assert.equal(result.outcome, "ok");
+    assert.ok(historyCountTokens(result.text) <= 6_000,
+      `read text must stay within the token budget (actual ${historyCountTokens(result.text)})`);
+    void emoji;
+  }, {
+    extraConversation: {
+      conversationId: "c-emoji",
+      ownerKey: "space:s1",
+      turns: [{ ordinal: 1, role: "user", text: "🦊🐶🐹".repeat(4_000), occurredAt: "2026-09-05T00:00:00.000Z" }],
+    },
   });
 });

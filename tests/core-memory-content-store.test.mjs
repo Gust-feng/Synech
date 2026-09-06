@@ -248,3 +248,52 @@ test("progress regression is discarded", async () => {
     assert.equal(regressed.reason, "progress_regressed");
   });
 });
+
+test("R04: a user edit revokes supply of every older valid revision, not only the head", async () => {
+  await withStore(async ({ documents, control }) => {
+    const first = await claimJob(control);
+    const v1 = await documents.commitMaintenanceBatch(commitInput({
+      jobId: first.job.jobId, claimToken: first.claimToken,
+      summary: { markdown: "v1 总结", coveredThroughOrdinal: 3 },
+    }));
+    assert.equal(v1.status, "committed");
+    const head1 = await documents.getActiveSpaceMemoryHead("space:s1");
+
+    const second = await claimJob(control, { stableThroughOrdinal: 3 });
+    const v2 = await documents.commitMaintenanceBatch(commitInput({
+      jobId: second.job.jobId, claimToken: second.claimToken,
+      expectedSummaryRevisionId: v1.summaryRevisionId,
+      expectedMemoryHeadRevisionId: head1.revisionId,
+      summary: { markdown: "v2 总结", coveredThroughOrdinal: 3 },
+      advanceProgressTo: { ordinal: 3, sourceFingerprint: "rev:3b" },
+      batchRange: { fromOrdinal: 1, toOrdinal: 3, sourceRevision: 3 },
+    }));
+    assert.equal(v2.status, "committed");
+    const head2 = await documents.getActiveSpaceMemoryHead("space:s1");
+
+    // v3（用户纠正）：v1 与 v2 全部停止供给（旧错误事实不能继续注入）。
+    const v3 = await documents.recordUserSpaceMemoryEdit({
+      ownerKey: "space:s1",
+      markdown: "v3 用户纠正后的认识。",
+      requestId: "req-v3",
+      expectedRevisionId: head2.revisionId,
+      now: 400,
+    });
+    assert.equal((await documents.getSpaceMemoryRevision(head1.revisionId)).validity, "invalidated");
+    assert.equal((await documents.getSpaceMemoryRevision(head2.revisionId)).validity, "invalidated");
+    assert.equal((await documents.getSpaceMemoryRevision(v3.revisionId)).validity, "valid");
+  });
+});
+
+test("R10: purgeOwner removes summary source rows together with the summaries", async () => {
+  await withStore(async ({ documents, control }) => {
+    const first = await claimJob(control);
+    const v1 = await documents.commitMaintenanceBatch(commitInput({
+      jobId: first.job.jobId, claimToken: first.claimToken,
+    }));
+    const sourcesBefore = await documents.listSummarySources(v1.summaryRevisionId);
+    assert.ok(sourcesBefore.length > 0);
+    await documents.purgeOwner("space:s1");
+    assert.equal((await documents.listSummarySources(v1.summaryRevisionId)).length, 0);
+  });
+});

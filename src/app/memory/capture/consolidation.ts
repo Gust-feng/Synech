@@ -170,45 +170,66 @@ export function defaultCountTokens(text: string): number {
   return sharedEncoding.encode(text).length;
 }
 
-/** 顺序累加轮次；预算满即截断，但空批必收下一轮（超长单轮独立成批，不丢证据）。 */
+/** 顺序累加完整轮次；预算满即截断，但空批必收下一轮（超长单轮独立成批，不丢证据）。
+ * 批次边界只能落在完整 ordinal 上：同一 run 的 user/assistant 共享 ordinal，
+ * 只装下 user 就推进游标会让 assistant 永久漏记（R01）。
+ * 返回 lastCompleteOrdinal = 本批最后一个完整 ordinal（进度推进边界）。 */
 export function takeTokenBoundedBatch(
   turns: readonly EvidenceTurn[],
   countTokens: (text: string) => number,
   budget: number,
-): EvidenceTurn[] {
+): { readonly batch: readonly EvidenceTurn[]; readonly lastCompleteOrdinal: number } {
+  const ordinalGroups = new Map<number, EvidenceTurn[]>();
+  for (const turn of turns) {
+    const group = ordinalGroups.get(turn.ordinal) ?? [];
+    group.push(turn);
+    ordinalGroups.set(turn.ordinal, group);
+  }
   const batch: EvidenceTurn[] = [];
   let used = 0;
-  for (const turn of turns) {
-    const cost = countTokens(`${turn.role}\n${turn.text}`);
+  let lastCompleteOrdinal = 0;
+  for (const [ordinal, group] of ordinalGroups) {
+    const cost = group.reduce((sum, turn) => sum + countTokens(`${turn.role}\n${turn.text}`), 0);
+    // 空批必收：单轮超预算时整轮独立成批（完整处理该轮，不允许部分推进）。
     if (batch.length > 0 && used + cost > budget) break;
-    batch.push(turn);
+    batch.push(...group);
     used += cost;
+    lastCompleteOrdinal = ordinal;
   }
-  return batch;
+  return { batch, lastCompleteOrdinal };
 }
 
 /**
- * 有限相邻原文：读取本批之前的已处理连续轮次（最多 adjacentLimitTurns 轮），
- * token 预算内从近到远保留。失败/缺口时静默返回空（上下文是尽力而为的辅助）。
+ * 有限相邻原文（incremental 模式，R02）：只读取「合法依赖范围」内的已处理轮次——
+ * 下界不得越过排除高水位（清除/关闭期间的内容绝不回流），上界不得超过当前有效
+ * 总结的覆盖范围（那是唯一合法的原文依赖），且必须存在有效总结（合法依赖存在）。
+ * 最多 4 个完整轮次、1,000 tokens，仅作理解上下文——不推进进度、不进入来源依赖。
  */
 async function readAdjacentTurns(
   deps: MaintenanceDeps,
-  conversationId: string,
-  batchFromOrdinal: number,
-  countTokens: (text: string) => number,
+  input: {
+    readonly conversationId: string;
+    readonly batchFromOrdinal: number;
+    readonly excludedThrough: number;
+    readonly coveredThroughOrdinal: number;
+    readonly hasLegalDependency: boolean;
+    readonly countTokens: (text: string) => number;
+  },
 ): Promise<readonly EvidenceTurn[]> {
-  if (batchFromOrdinal <= 1) return [];
-  const fromOrdinal = Math.max(1, batchFromOrdinal - 4);
+  if (!input.hasLegalDependency) return [];
+  const rangeEnd = Math.min(input.batchFromOrdinal - 1, input.coveredThroughOrdinal);
+  const rangeStart = Math.max(input.excludedThrough + 1, rangeEnd - 3, 1);
+  if (rangeStart > rangeEnd) return [];
   try {
     const window = await deps.evidenceReader.readTurnWindow({
-      conversationId,
-      fromOrdinal,
-      through: { turnId: "", ordinal: batchFromOrdinal - 1, sourceRevision: 0 },
+      conversationId: input.conversationId,
+      fromOrdinal: rangeStart,
+      through: { turnId: "", ordinal: rangeEnd, sourceRevision: 0 },
     });
     const adjacent: EvidenceTurn[] = [];
     let used = 0;
     for (const turn of [...window.turns].reverse()) {
-      const cost = countTokens(`${turn.role}\n${turn.text}`);
+      const cost = input.countTokens(`${turn.role}\n${turn.text}`);
       if (used + cost > MAINTENANCE_ADJACENT_TOKEN_BUDGET) break;
       adjacent.unshift(turn);
       used += cost;
@@ -441,58 +462,82 @@ export async function maintainConversationJob(deps: MaintenanceDeps, jobId: stri
       return { status: "no_evidence" };
     }
 
-    // 3. 处理起点与目标边界。
+    // 3. 处理起点与目标边界。legalStart 是「合法原文」下界：排除高水位（清除/
+    //    关闭/rollout 关闭期间）之后的范围才允许进入后台输入（R02/R08）。
+    const excludedThrough = progress?.excludedThroughOrdinal ?? 0;
     const startOrdinal = Math.max(
       progress?.processedThroughOrdinal ?? 0,
-      progress?.excludedThroughOrdinal ?? 0,
+      excludedThrough,
     ) + 1;
+    const legalStartOrdinal = excludedThrough + 1;
     const targetThrough = claimed.targetThroughOrdinal;
     if (startOrdinal > targetThrough) {
       await convergeQuietly();
       return { status: "no_evidence" };
     }
 
-    // 4. 连续证据窗（适配器保证不跳洞；缺口前的连续块先行处理）。
-    const window = await deps.evidenceReader.readTurnWindow({
+    // 4. 新增证据窗（适配器保证不跳洞；缺口前的连续块先行处理）。
+    const newEvidenceWindow = await deps.evidenceReader.readTurnWindow({
       conversationId,
       fromOrdinal: startOrdinal,
       through: { turnId: "", ordinal: targetThrough, sourceRevision: 0 },
     });
-    if (window.turns.length === 0) {
+    if (newEvidenceWindow.turns.length === 0) {
       await convergeQuietly();
       return { status: "no_evidence" };
     }
 
-    // 5. 模式选择：全文可容纳时优先对照原文，否则有界增量（每 claim 一批，
-    //    剩余范围由 commit 事务重排到就绪队列尾）。
-    const totalEvidenceTokens = window.turns.reduce(
+    // 5. 模式选择：合法全文（legalStart..target）可容纳时优先对照原文——已处理
+    //    范围也会真实重读，而不是只拿新增后缀标成 full（R08）；否则有界增量
+    //    （每 claim 一批，剩余范围由 commit 事务重排到就绪队列尾）。
+    const fullBudget = deps.fullConversationTokenBudget ?? MAINTENANCE_FULL_CONVERSATION_TOKEN_BUDGET;
+    const batchBudget = deps.batchTokenBudget ?? MAINTENANCE_BATCH_TOKEN_BUDGET;
+    const legalFullWindow = legalStartOrdinal < startOrdinal
+      ? await deps.evidenceReader.readTurnWindow({
+          conversationId,
+          fromOrdinal: legalStartOrdinal,
+          through: { turnId: "", ordinal: targetThrough, sourceRevision: 0 },
+        })
+      : newEvidenceWindow;
+    const legalFullTokens = legalFullWindow.turns.reduce(
       (sum, turn) => sum + countTokens(`${turn.role}\n${turn.text}`),
       0,
     );
-    const fullBudget = deps.fullConversationTokenBudget ?? MAINTENANCE_FULL_CONVERSATION_TOKEN_BUDGET;
-    const batchBudget = deps.batchTokenBudget ?? MAINTENANCE_BATCH_TOKEN_BUDGET;
-    const fullMode = totalEvidenceTokens <= fullBudget;
-    const newTurns = fullMode
-      ? window.turns
-      : takeTokenBoundedBatch(window.turns, countTokens, batchBudget);
+    const fullMode = legalFullWindow.turns.length > 0 && legalFullTokens <= fullBudget;
+    const incrementalBatch = takeTokenBoundedBatch(newEvidenceWindow.turns, countTokens, batchBudget);
+    const newTurns = fullMode ? legalFullWindow.turns : incrementalBatch.batch;
     if (newTurns.length === 0) {
       await convergeQuietly();
       return { status: "no_evidence" };
     }
     const batchFromOrdinal = newTurns[0]!.ordinal;
-    const batchToOrdinal = newTurns.at(-1)!.ordinal;
-    // 有限相邻原文（incremental 模式）：读取本批之前的已处理轮次，最多 1,000 tokens，
-    // 只作为理解上下文——不推进进度、不进入来源依赖。
-    const adjacentTurns = fullMode
-      ? []
-      : await readAdjacentTurns(deps, conversationId, batchFromOrdinal, countTokens);
-    const evidenceTurns: readonly EvidenceTurn[] = [...adjacentTurns, ...newTurns];
+    // 进度推进边界 = 本批最后一个完整 ordinal（R01：同轮 user/assistant 一起处理）。
+    const batchToOrdinal = fullMode
+      ? legalFullWindow.turns.at(-1)!.ordinal
+      : incrementalBatch.lastCompleteOrdinal;
+    if (batchToOrdinal < batchFromOrdinal) {
+      await convergeQuietly();
+      return { status: "no_evidence" };
+    }
 
-    // 6. 读取旧产物（发布 CAS 的 expected 值）。
+    // 6. 有限相邻原文（incremental 模式，R02）：只允许来自仍合法的依赖范围——
+    //    不得越过排除高水位，且必须落在当前有效总结已覆盖的范围之内；不存在
+    //    有效总结（清除后首次整理）时不提供任何相邻旧内容。
     const [previousSummary, currentMemoryHead] = await Promise.all([
       deps.documentRepository.getLatestValidSummary(conversationId),
       deps.documentRepository.getActiveSpaceMemoryHead(ownerKey),
     ]);
+    const adjacentTurns = fullMode
+      ? []
+      : await readAdjacentTurns(deps, {
+          conversationId,
+          batchFromOrdinal,
+          excludedThrough,
+          coveredThroughOrdinal: previousSummary?.coveredThroughOrdinal ?? 0,
+          hasLegalDependency: previousSummary !== undefined,
+          countTokens,
+        });
+    const evidenceTurns: readonly EvidenceTurn[] = [...adjacentTurns, ...newTurns];
 
     // 7. 构造契约输入并发起一次有界无工具请求。
     const evidenceItems: MaintenanceEvidenceItem[] = evidenceTurns.map((turn) => ({
@@ -509,7 +554,7 @@ export async function maintainConversationJob(deps: MaintenanceDeps, jobId: stri
       displayTimezone: "local",
       mode: fullMode ? "full_conversation" : "incremental",
       providedCoverage: fullMode
-        ? `ordinal ${startOrdinal}..${targetThrough}（全文）`
+        ? `ordinal ${legalStartOrdinal}..${targetThrough}（合法全文）`
         : `ordinal ${batchFromOrdinal}..${batchToOrdinal}`,
       summaryTargetTokens: MAINTENANCE_SUMMARY_TARGET_TOKENS,
       summaryMaxTokens: MAINTENANCE_SUMMARY_MAX_TOKENS,

@@ -22,7 +22,7 @@ async function withHarness(run, options = {}) {
   await control.setPolicy({ key: spaceParticipationKey("s1"), kind: "space_participation", scopeOwnerKey: "space:s1", enabled: true });
   await control.setPolicy({ key: POLICY_KEY.rollout, kind: "rollout", scopeOwnerKey: "active", enabled: true });
 
-  const turns = [1, 2, 3, 4].flatMap((ordinal) => ([
+  const turns = (options.turns ?? [1, 2, 3, 4]).flatMap((ordinal) => ([
     { turnId: `u${ordinal}`, ordinal, role: "user", text: `第${ordinal}轮：我们确认本地存储采用 SQLite。`, runId: `r${ordinal}`, occurredAt: "2026-09-05T00:00:00.000Z", sourceRevision: ordinal },
     { turnId: `a${ordinal}`, ordinal, role: "assistant", text: `第${ordinal}轮已确认。`, runId: `r${ordinal}`, occurredAt: "2026-09-05T00:00:01.000Z", sourceRevision: ordinal },
   ]));
@@ -180,7 +180,9 @@ test("no new eligible evidence converges the job without calling the model", asy
 });
 
 test("a user edit during the model call discards the batch and the retry re-reads the edit", async () => {
+  let fakeNow = 1_000_000;
   await withHarness(async ({ control, documents, deps }) => {
+    deps.now = () => fakeNow;
     const job = await acceptSignal(control);
     // 用户编辑发生在"模型调用期间"（由模型桩在首次调用时同步执行）：
     // 管线读取 expected head 在模型调用之前，提交时 CAS 失败 → 整批废弃并重排。
@@ -209,7 +211,8 @@ test("a user edit during the model call discards the batch and the retry re-read
     assert.equal(await documents.getLatestValidSummary("c1"), undefined);
     assert.equal((await documents.getActiveSpaceMemoryHead("space:s1")).markdown, "用户直接修订");
 
-    // 重试：管线以最新 head（用户编辑）为输入，可成功提交。
+    // 重试（越过退避时间）：管线以最新 head（用户编辑）为输入，可成功提交。
+    fakeNow += 31_000;
     const [queued] = await control.listJobsByStatus("queued");
     const retry = await maintainConversationJob({
       ...deps,
@@ -220,5 +223,106 @@ test("a user edit during the model call discards the batch and the retry re-read
     }, queued.jobId);
     assert.equal(retry.status, "completed");
     assert.equal((await documents.getLatestValidSummary("c1")).markdown, "s-retry");
+  });
+});
+
+test("R01: a batch only ends on complete ordinals; the shared-ordinal assistant is never skipped", async () => {
+  await withHarness(async ({ control, documents, deps }) => {
+    // 预算只装得下 ordinal 1 的 user：按完整轮次切批后，整轮（user+assistant）
+    // 必须一起进入模型输入，进度推进到该轮并包含两条来源。
+    const job = await acceptSignal(control);
+    const seenEvidenceIds = [];
+    const outcome = await maintainConversationJob({
+      ...deps,
+      countTokens: (text) => (text.includes("assistant") ? 10_000 : 100),
+      model: { async generate({ messages }) {
+        const payload = JSON.parse(messages[1].content);
+        for (const item of payload.evidence) seenEvidenceIds.push(item.id);
+        return { status: "completed", text: JSON.stringify({
+          conversationSummary: { markdown: "s", sourceRefs: payload.allowedSummaryRefs },
+          longTermUpdate: null,
+        }) };
+      } },
+    }, job.jobId);
+    assert.equal(outcome.status, "completed");
+    assert.ok(seenEvidenceIds.includes("source:u1"), "user turn must be in the batch");
+    assert.ok(seenEvidenceIds.includes("source:a1"), "shared-ordinal assistant must be in the same batch");
+    const progress = await documents.getProgress("c1");
+    assert.equal(progress.processedThroughOrdinal, 1);
+    const summary = await documents.getLatestValidSummary("c1");
+    const sources = await documents.listSummarySources(summary.revisionId);
+    const coveredOrdinals = new Set(sources.map((source) => source.toOrdinal));
+    // 来源覆盖包含 ordinal 1 的全部消息（没有只覆盖 user 的半轮）。
+    assert.ok(coveredOrdinals.has(1));
+  }, { turns: [1] });
+});
+
+test("R02: adjacent context never crosses the exclusion boundary and requires a legal dependency", async () => {
+  await withHarness(async ({ control, documents, deps }) => {
+    await documents.setExcludedThrough({
+      conversationId: "c1", ownerKey: "space:s1", excludedThroughOrdinal: 5, now: 10,
+    });
+    const job = await acceptSignal(control, { stableThroughOrdinal: 8 });
+    const seenOrdinals = [];
+    const outcome = await maintainConversationJob({
+      ...deps,
+      model: { async generate({ messages }) {
+        const payload = JSON.parse(messages[1].content);
+        for (const item of payload.evidence) {
+          const match = /source:[ua](\d+)/u.exec(item.id);
+          if (match !== null) seenOrdinals.push(Number(match[1]));
+        }
+        return { status: "completed", text: JSON.stringify({
+          conversationSummary: { markdown: "s", sourceRefs: [] },
+          longTermUpdate: null,
+        }) };
+      } },
+    }, job.jobId);
+    assert.equal(outcome.status, "completed");
+    // 清除后不存在合法旧产物：没有 ordinal ≤ 5 的相邻旧内容进入后台输入。
+    assert.ok(seenOrdinals.length > 0);
+    assert.ok(seenOrdinals.every((ordinal) => ordinal >= 6));
+  }, { turns: [1, 2, 3, 4, 5, 6, 7, 8] });
+});
+
+test("R08: full_conversation mode actually re-reads the processed legal range", async () => {
+  await withHarness(async ({ control, deps }) => {
+    // 第一批（1..2）正常提交。
+    const firstJob = await acceptSignal(control);
+    await maintainConversationJob({
+      ...deps,
+      model: { async generate({ messages }) {
+        return { status: "completed", text: JSON.stringify({
+          conversationSummary: { markdown: "v1", sourceRefs: [] },
+          longTermUpdate: null,
+        }) };
+      } },
+    }, firstJob.jobId);
+    // 第二批：新增 3..4，合法全文（1..4）可容纳 → full 模式必须真实重读 ordinal 1。
+    await control.acceptConversationSignal({
+      conversationId: "c1", ownerKey: "space:s1", stableThroughOrdinal: 4,
+      sourceFingerprint: "fp", eligibleAt: 500, now: 400,
+      generation: 0, policyRevision: "g1:r1:s1:gen0",
+    });
+    const [second] = await control.listJobsByStatus("queued");
+    const seenOrdinals = [];
+    const outcome = await maintainConversationJob({
+      ...deps,
+      model: { async generate({ messages }) {
+        const payload = JSON.parse(messages[1].content);
+        for (const item of payload.evidence) {
+          const match = /source:[ua](\d+)/u.exec(item.id);
+          if (match !== null) seenOrdinals.push(Number(match[1]));
+        }
+        return { status: "completed", text: JSON.stringify({
+          conversationSummary: { markdown: "v2", sourceRefs: [] },
+          longTermUpdate: null,
+        }) };
+      } },
+    }, second.jobId);
+    assert.equal(outcome.status, "completed");
+    assert.equal(outcome.mode, "full_conversation");
+    assert.ok(seenOrdinals.includes(1), "full mode must re-read already-processed legal range");
+    assert.ok(seenOrdinals.includes(4));
   });
 });

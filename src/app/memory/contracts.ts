@@ -280,9 +280,15 @@ export interface MemoryAdminApplication {
     readonly markdown: string;
     readonly requestId: string;
   }): Promise<WriteSpaceMemoryResult>;
-  /** Memory Center 只读视图：当前文档、来源与最近整理时间。 */
+  /** Memory Center 只读视图：当前文档、真实来源会话与最近整理时间。 */
   getSpaceMemoryView(input: { readonly spaceId: string }): Promise<{
     readonly document: SpaceMemoryBackground | undefined;
+    /** 当前文档的来源会话范围（文档级保守依赖粒度，按会话聚合）。 */
+    readonly sources: readonly {
+      readonly conversationId: string;
+      readonly fromOrdinal: number;
+      readonly toOrdinal: number;
+    }[];
     readonly summaryCount: number;
     readonly lastMaintenanceAt: number | null;
   }>;

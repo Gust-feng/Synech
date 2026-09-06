@@ -45,6 +45,21 @@ export function createMemoryBackgroundPort(deps: {
       if (row === undefined || row.validity !== "valid") return undefined;
       // 绑定携带的 generation 与当前 owner generation 不一致（clear/删除）→ 停止供给。
       if (row.generation !== input.generation) return undefined;
+      // R05：来源会话的删除 fence 是供给边界的权威条件之一——即使依赖失效写入
+      // 尚未完成（清理停滞/重试中），引用被 fence 会话的文档也不得继续注入。
+      const sources = await deps.documentRepository.listSpaceDocSources(row.revisionId);
+      const sourceConversations = [...new Set(
+        sources
+          .filter((source) => source.depKind === "conversation_range" && source.conversationId !== null)
+          .map((source) => `conversation:${source.conversationId}`),
+      )];
+      for (const conversationKey of sourceConversations) {
+        const conversationLifecycle = await deps.controlRepository.getLifecycle(conversationKey);
+        if (conversationLifecycle !== undefined &&
+            (conversationLifecycle.fenceState === "fenced" || conversationLifecycle.fenceState === "tombstone")) {
+          return undefined;
+        }
+      }
       const admission = resolveAdmissionFromPolicy({
         owner: input.owner,
         conversationId: "__memory_background__",

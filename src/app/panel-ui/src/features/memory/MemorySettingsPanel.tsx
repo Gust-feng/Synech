@@ -243,6 +243,21 @@ function SpaceMemoryEditor(props: {
         <span>整理时间：{view.lastMaintenanceAt === null ? "—" : new Date(view.lastMaintenanceAt).toLocaleString()}</span>
         <span>会话总结：{view.summaryCount} 份</span>
       </div>
+      <details className="memory-space-editor-sources">
+        <summary>来源会话（文档级保守依赖）</summary>
+        {view.sources.length === 0 ? (
+          <p className="memory-hint">当前文档没有已登记的来源会话。</p>
+        ) : (
+          <ul>
+            {view.sources.map((source) => (
+              <li key={source.conversationId}>
+                <code>{source.conversationId}</code>
+                <span> · ordinal {source.fromOrdinal}–{source.toOrdinal}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </details>
       <textarea
         value={draft ?? ""}
         rows={10}

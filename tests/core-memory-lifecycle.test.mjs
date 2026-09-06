@@ -153,3 +153,22 @@ test("late in-flight commits are rejected after the fence (generation mismatch)"
     await lifecycle.finalizeConversationRemoval(ticket);
   });
 });
+
+test("prepare fails (retryable, fence retained) when dependent invalidation write fails (R05)", async () => {
+  await withHarness(async ({ control, documents }) => {
+    const failing = {
+      ...documents,
+      invalidateDependentRevisions: async () => {
+        throw new Error("injected invalidation failure");
+      },
+    };
+    const lifecycleWithFailure = createControlMemoryLifecycle(control, { documentRepository: failing });
+    await assert.rejects(
+      () => lifecycleWithFailure.prepareConversationRemoval("c1"),
+      /injected invalidation failure/,
+    );
+    // fence 已立（generation 单调前进），重试用同一入口恢复。
+    const after = await control.getLifecycle("conversation:c1");
+    assert.equal(after.fenceState, "fenced");
+  });
+});
