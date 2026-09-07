@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
-import { ArrowUp, Brain, Check, ChevronDown, FileText, Plus, ShieldCheck, X } from 'lucide-react'
+import { ArrowUp, Check, ChevronDown, FileText, Plus, ShieldCheck, X } from 'lucide-react'
 import type { ChatInputProps } from '@ui/contracts/composer'
 import type { ComposerToolConfirmationPolicy } from '@ui/features/settings/config-projection'
 import { formatCompactTokenCount, formatContextUsagePercent } from '@ui/features/conversations/context-window-usage'
@@ -108,19 +108,6 @@ export function ConversationComposer({ input, onCompositionChange }: Conversatio
           >
             <Plus size={17} strokeWidth={1.8} aria-hidden="true" />
           </button>
-          {input.onTurnMemoryOverrideChange !== undefined && (
-            <button
-              type="button"
-              onClick={() => input.onTurnMemoryOverrideChange?.(!input.turnMemoryOverrideOff)}
-              className="ui-conversation-composer__icon-button"
-              style={{ color: input.turnMemoryOverrideOff ? 'var(--ui-accent)' : 'var(--ui-text-3)' }}
-              aria-label="本轮不使用智能记忆"
-              aria-pressed={input.turnMemoryOverrideOff === true}
-              title="本轮不使用智能记忆"
-            >
-              <Brain size={16} strokeWidth={input.turnMemoryOverrideOff ? 2.2 : 1.8} aria-hidden="true" />
-            </button>
-          )}
         </div>
         <div className="ui-conversation-composer__toolbar-right">
           {input.contextUsage !== undefined && <ComposerContextUsage usage={input.contextUsage} />}

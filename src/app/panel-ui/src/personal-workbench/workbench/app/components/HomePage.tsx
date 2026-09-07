@@ -62,8 +62,6 @@ export function HomePage({
   const hasDraft = ambientDraftValue.trim().length > 0
   const homeInput = {
     ...(input.contextUsage === undefined ? input : { ...input, contextUsage: undefined }),
-    turnMemoryOverrideOff: false,
-    onTurnMemoryOverrideChange: undefined,
   }
 
   const handleCompositionChange = (composing: boolean): void => {
