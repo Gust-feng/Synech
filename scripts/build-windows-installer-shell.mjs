@@ -143,9 +143,27 @@ function findMsBuild() {
     "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\MSBuild\\Current\\Bin\\MSBuild.exe",
     "C:\\Program Files\\Microsoft Visual Studio\\2022\\Enterprise\\MSBuild\\Current\\Bin\\MSBuild.exe",
     "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\MSBuild\\Current\\Bin\\MSBuild.exe",
+    "C:\\Program Files\\Microsoft Visual Studio\\2022\\BuildTools\\MSBuild\\Current\\Bin\\MSBuild.exe",
   ];
   const discovered = knownPaths.find(existsSync);
   if (discovered) return discovered;
+  const vswhere = "C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe";
+  if (existsSync(vswhere)) {
+    try {
+      const installRoot = execFileSync(vswhere, [
+        "-latest",
+        "-products", "*",
+        "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+        "-property", "installationPath",
+      ], { encoding: "utf8", windowsHide: true }).split(/\r?\n/u)[0].trim();
+      if (installRoot.length > 0) {
+        const fromVswhere = path.join(installRoot, "MSBuild", "Current", "Bin", "MSBuild.exe");
+        if (existsSync(fromVswhere)) return fromVswhere;
+      }
+    } catch {
+      // 无 C++ workload 或 vswhere 不可用时落到错误信息。
+    }
+  }
   throw new Error("MSBuild with the C++ workload was not found. Set SYNECH_MSBUILD_PATH.");
 }
 
