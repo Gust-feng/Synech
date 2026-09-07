@@ -136,11 +136,13 @@ function normalizeInstallerSuffix(suffix) {
 }
 
 function findMsBuild() {
-  const configured = process.env.SYNECH_MSBUILD_PATH;
+  const configured = process.env.SYNECH_MSBUILD_PATH ?? process.env.MSBUILD_PATH;
   if (configured && existsSync(configured)) return configured;
   const knownPaths = [
     "D:\\VS\\BuildTools\\MSBuild\\Current\\Bin\\MSBuild.exe",
     "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\MSBuild\\Current\\Bin\\MSBuild.exe",
+    "C:\\Program Files\\Microsoft Visual Studio\\2022\\Enterprise\\MSBuild\\Current\\Bin\\MSBuild.exe",
+    "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\MSBuild\\Current\\Bin\\MSBuild.exe",
   ];
   const discovered = knownPaths.find(existsSync);
   if (discovered) return discovered;
