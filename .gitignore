@@ -16,6 +16,7 @@ obj/
 
 # Local documents and media
 docs/
+AGENTS.md
 local-assets/
 .workbuddy/
 

@@ -1,6 +1,6 @@
 {
   "name": "synech",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.7.0",
@@ -69,6 +69,7 @@
     "chardet": "^2.2.0",
     "diff": "9.0.0",
     "docx-preview": "0.4.0",
+    "electron-updater": "^6.6.2",
     "iconv-lite": "^0.7.3",
     "js-tiktoken": "^1.0.21",
     "lowlight": "^3.3.0",

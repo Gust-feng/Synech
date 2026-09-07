@@ -16,6 +16,13 @@ files:
 extraMetadata:
   main: dist/app/panel-desktop.js
   productName: Synech
+# Updates are served from GitHub Releases via electron-updater. The release
+# workflow enforces that the tag matches package.json version, and attaches
+# latest.yml plus the Setup exe the updater feed expects.
+publish:
+  provider: github
+  owner: Gust-feng
+  repo: Synech
 asar: true
 compression: normal
 win:

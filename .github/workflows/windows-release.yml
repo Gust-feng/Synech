@@ -1,0 +1,80 @@
+name: Windows Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify tag matches package version
+        shell: bash
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          package_version="$(node -p "require('./package.json').version")"
+          tag_version="${TAG_NAME#v}"
+          if [ "$package_version" != "$tag_version" ]; then
+            echo "::error::tag $TAG_NAME does not match package.json version $package_version"
+            exit 1
+          fi
+
+      - name: Build Windows installers
+        run: pnpm dist:desktop:win
+
+      - name: Collect release artifacts
+        shell: bash
+        run: |
+          mkdir -p release/upload
+          cp release/installer-backend/Synech-Setup-*.exe release/upload/
+          cp release/installer-backend/Synech-Setup-*.exe.blockmap release/upload/
+          cp release/installer-backend/latest.yml release/upload/
+          cp release/Synech-Installer-*.exe release/upload/
+          ls -la release/upload
+
+      - name: Publish GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          {
+            echo "Synech ${TAG_NAME#v} 发布。"
+            echo
+            echo "- 本地优先的 Agent 工作台：模型对话、工具执行、空间与知识库组织在同一个桌面应用中"
+            echo "- Windows x64 一键安装：Synech-Installer-*.exe 为品牌安装体验，Synech-Setup-*.exe 为标准安装包"
+            echo "- 内置自动更新：新版本自动下载，退出应用时安装"
+          } > release-notes.md
+          gh release create "$TAG_NAME" release/upload/* \
+            --title "Synech ${TAG_NAME#v} · Local-first Agent Workspace" \
+            --notes-file release-notes.md \
+            || gh release upload "$TAG_NAME" release/upload/* --clobber

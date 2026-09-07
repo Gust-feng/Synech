@@ -31,6 +31,7 @@ import {
 import { startLocalPanelServer } from "../panel-server/index.js";
 import { resolveProductPaths, type ProductPaths } from "../../platform/storage/index.js";
 import { acquireDesktopSingleInstance } from "./panel-desktop-single-instance.js";
+import { startDesktopAutoUpdater } from "./panel-desktop-updater.js";
 import {
   DESKTOP_APP_NAME,
   desktopAppUserModelId,
@@ -166,6 +167,9 @@ async function main(): Promise<void> {
     console.log(`Synech 本地桌面面板：${session.url}`);
     console.log(`产品目录：${session.productHome}`);
     console.log(`配置目录：${session.configDirectory}`);
+    if (!args.smoke) {
+      startDesktopAutoUpdater();
+    }
   } catch (error) {
     console.error("应用桌面面板启动失败。");
     console.error(error);
