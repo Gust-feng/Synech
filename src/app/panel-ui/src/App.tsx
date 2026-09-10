@@ -180,6 +180,10 @@ export function App(): React.ReactElement {
     clearQueuedMessages();
     return runActions.loadConversation(conversationId);
   }, [clearQueuedMessages, runActions.loadConversation]);
+  const resetConversation = useCallback(() => {
+    clearQueuedMessages();
+    runActions.resetChat();
+  }, [clearQueuedMessages, runActions.resetChat]);
 
   const settingsDialogProps = workbenchSettingsDialogPropsFrom({
     settingsOpen,
@@ -237,6 +241,7 @@ export function App(): React.ReactElement {
       confirmationBusy={confirmationBusy}
       onDecision={(decision, guidance) => void decideConfirmation(decision, guidance)}
       onStartNewConversation={startNewConversation}
+      onResetConversation={resetConversation}
       onOpenConversation={openConversation}
       pendingConversationIds={pendingConversationIds}
       onRenameConversation={sidebarActions.renameConversation}
@@ -270,11 +275,13 @@ export function App(): React.ReactElement {
 
 function memorySettingsScopeFromConversation(
   conversation: {
+    readonly conversationId: string;
     readonly owner?: { readonly kind: "space" | "workspace"; readonly id: string };
   } | undefined,
 ): MemorySettingsScope | null {
   if (conversation === undefined || conversation.owner === undefined) return null;
   return {
     owner: conversation.owner,
+    conversationId: conversation.conversationId,
   };
 }

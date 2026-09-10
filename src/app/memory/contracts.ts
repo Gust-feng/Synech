@@ -309,6 +309,8 @@ export interface MemoryAdminApplication {
 // ---------------------------------------------------------------------------
 
 export type MemoryMaintenanceOutcomeTrace = {
+  readonly jobId?: string;
+  readonly durationMs?: number;
   readonly at: number;
   readonly conversationId?: string;
   readonly ownerKey?: string;
@@ -319,6 +321,8 @@ export type MemoryMaintenanceOutcomeTrace = {
 
 export type MemoryDiagnosticSnapshot = {
   readonly enabled: boolean;
+  readonly generatedAt: number;
+  readonly capability: MemoryCapabilityStatus | null;
   readonly jobs: {
     readonly queued: number;
     readonly running: number;
@@ -326,6 +330,71 @@ export type MemoryDiagnosticSnapshot = {
     readonly failed: number;
   };
   readonly recentOutcomes: readonly MemoryMaintenanceOutcomeTrace[];
+  readonly jobRows: readonly MemoryDiagnosticJob[];
+  readonly jobRowsTruncated: boolean;
+  readonly context: MemoryDiagnosticContext | null;
+  readonly limits: {
+    readonly idleDelayMs: number;
+    readonly requestTokens: number;
+    readonly outputReserveTokens: number;
+    readonly memoryTokens: number;
+    readonly summaryTokens: number;
+  } | null;
+};
+
+export type MemoryDiagnosticQuery = {
+  readonly spaceId?: string;
+  readonly conversationId?: string;
+};
+
+export type MemoryDiagnosticJob = {
+  readonly jobId: string;
+  readonly conversationId: string;
+  readonly title: string;
+  readonly ownerKey: string;
+  readonly status: "queued" | "running" | "done" | "failed";
+  readonly waitReason: "active_conversation" | "policy_blocked" | "retry_backoff" | "idle_delay" | "ready" | null;
+  readonly requestedThrough: number;
+  readonly processedThrough: number;
+  readonly excludedThrough: number;
+  readonly fragment: { readonly ordinal: number; readonly end: number } | null;
+  readonly eligibleAt: number;
+  readonly nextAttemptAt: number | null;
+  readonly attempt: number;
+  readonly lastFailure: string | null;
+  readonly updatedAt: number;
+};
+
+export type MemoryDiagnosticBinding =
+  | { readonly kind: "none"; readonly boundAt: string }
+  | { readonly kind: "revision"; readonly boundAt: string; readonly revisionId: string; readonly revision: number; readonly generation: number };
+
+export type MemoryDiagnosticContext = {
+  readonly spaceId: string;
+  readonly spaceTitle: string;
+  readonly conversation: { readonly id: string; readonly title: string; readonly active: boolean } | null;
+  readonly capability: MemoryCapabilityStatus;
+  readonly blockingReasons: readonly string[];
+  readonly memory: SpaceMemoryBackground | null;
+  readonly summary: {
+    readonly revision: number;
+    readonly markdown: string;
+    readonly updatedAt: number;
+    readonly coveredThroughOrdinal: number;
+  } | null;
+  readonly binding: {
+    readonly state: "unbound" | "none" | "available" | "unavailable";
+    readonly reference: MemoryDiagnosticBinding | null;
+    readonly differsFromHead: boolean;
+    readonly markdown: string | null;
+  } | null;
+};
+
+export type MemoryDiagnosticSearchInput = {
+  readonly spaceId: string;
+  readonly conversationId?: string;
+  readonly query: string;
+  readonly source: "summary" | "transcript" | "all";
 };
 
 // ---------------------------------------------------------------------------

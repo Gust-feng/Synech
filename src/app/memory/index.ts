@@ -21,6 +21,9 @@ export {
   type MemoryCaptureRuntime,
   type MemoryCaptureSignal,
   type MemoryDiagnosticSnapshot,
+  type MemoryDiagnosticQuery,
+  type MemoryDiagnosticSearchInput,
+  type MemoryMaintenanceOutcomeTrace,
   type MemoryLifecycle,
   type MemoryRolloutMode,
   type MemoryRuntimeHealth,
@@ -43,6 +46,7 @@ export {
 } from "./context/render-background.js";
 export { createControlMemoryLifecycle } from "./lifecycle/control-lifecycle.js";
 export { createMemoryRuntime, type MemoryRuntime } from "./memory-runtime.js";
+export { createMemoryDiagnostics } from "./diagnostics/diagnostic-query.js";
 export { createMemoryRuntimeHealthTracker, type MemoryRuntimeHealthTracker } from "./runtime-health.js";
 export {
   ADMISSION_REASON,

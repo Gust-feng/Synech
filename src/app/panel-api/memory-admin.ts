@@ -1,4 +1,7 @@
 import type { MemoryOwner as DomainMemoryOwner } from "../../domain/memory/index.js";
+import type { MemoryDiagnosticSnapshot, MemoryDiagnosticQuery, MemoryDiagnosticSearchInput, HistorySearchResult } from "../memory/contracts.js";
+export type { MemoryDiagnosticSnapshot, MemoryDiagnosticQuery, MemoryDiagnosticJob, MemoryDiagnosticContext,
+  MemoryMaintenanceOutcomeTrace, MemoryDiagnosticSearchInput, HistorySearchResult } from "../memory/contracts.js";
 
 export type MemoryRolloutMode = "off" | "shadow" | "active";
 export type MemoryRuntimeHealth = "ready" | "degraded" | "unavailable";
@@ -14,26 +17,6 @@ export type MemoryCapabilityStatus = {
 
 export type MemoryCapabilityQuery = {
   readonly owner?: DomainMemoryOwner;
-};
-
-export type MemoryMaintenanceOutcomeTrace = {
-  readonly at: number;
-  readonly conversationId?: string;
-  readonly ownerKey?: string;
-  readonly outcome: "committed" | "discarded" | "failed" | "retry_queued" | "no_evidence";
-  readonly reason?: string;
-  readonly longTermUpdated: boolean;
-};
-
-export type MemoryDiagnosticSnapshot = {
-  readonly enabled: boolean;
-  readonly jobs: {
-    readonly queued: number;
-    readonly running: number;
-    readonly done: number;
-    readonly failed: number;
-  };
-  readonly recentOutcomes: readonly MemoryMaintenanceOutcomeTrace[];
 };
 
 export type SpaceMemoryDocumentView = {
@@ -93,11 +76,14 @@ export async function fetchMemoryCapability(
   return (await response.json()) as { readonly ok: true; readonly status: MemoryCapabilityStatus };
 }
 
-export async function fetchMemoryDiagnostics(): Promise<{
+export async function fetchMemoryDiagnostics(input: MemoryDiagnosticQuery = {}, signal?: AbortSignal): Promise<{
   readonly ok: true;
   readonly diagnostics: MemoryDiagnosticSnapshot;
 }> {
-  const response = await fetch("/api/memory/diagnostics", { method: "GET" });
+  const query = new URLSearchParams();
+  if (input.spaceId !== undefined) query.set("spaceId", input.spaceId);
+  if (input.conversationId !== undefined) query.set("conversationId", input.conversationId);
+  const response = await fetch(`/api/memory/diagnostics?${query}`, { method: "GET", signal });
   await assertMemoryResponse(response, "无法读取记忆诊断");
   return (await response.json()) as { readonly ok: true; readonly diagnostics: MemoryDiagnosticSnapshot };
 }
@@ -154,4 +140,13 @@ export async function fetchSpaceMemoryView(spaceId: string): Promise<{
   const response = await fetch(`/api/memory/space?${query.toString()}`, { method: "GET" });
   await assertMemoryResponse(response, "无法读取 Space 记忆");
   return (await response.json()) as { readonly ok: true; readonly view: SpaceMemoryView };
+}
+
+export async function searchMemoryDiagnostics(input: MemoryDiagnosticSearchInput, signal?: AbortSignal): Promise<HistorySearchResult> {
+  const query = new URLSearchParams({ spaceId: input.spaceId, query: input.query, source: input.source });
+  if (input.conversationId !== undefined) query.set("conversationId", input.conversationId);
+  const response = await fetch(`/api/memory/diagnostics/search?${query}`, { method: "GET", signal });
+  await assertMemoryResponse(response, "无法搜索历史");
+  const payload = await response.json() as { readonly result: HistorySearchResult };
+  return payload.result;
 }

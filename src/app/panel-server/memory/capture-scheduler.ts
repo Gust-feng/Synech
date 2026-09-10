@@ -48,7 +48,12 @@ export function createMemoryMaintenanceScheduler(input: {
   readonly idleDelayMs?: number;
   readonly now?: () => number;
   readonly onDiagnostic?: (topic: string, error: unknown) => void;
-  readonly onOutcome?: (outcome: MaintenanceJobOutcome) => void;
+  readonly onOutcome?: (outcome: MaintenanceJobOutcome, trace: {
+    readonly jobId: string;
+    readonly conversationId: string;
+    readonly ownerKey: string;
+    readonly durationMs: number;
+  }) => void;
 }): MemoryMaintenanceScheduler {
   const idleDelayMs = input.idleDelayMs ?? MAINTENANCE_IDLE_DELAY_MS;
   const now = input.now ?? Date.now;
@@ -134,8 +139,10 @@ export function createMemoryMaintenanceScheduler(input: {
         continue;
       }
       try {
+        const startedAt = now();
         const outcome = await maintainConversationJob(maintenanceDeps, job.jobId);
-        input.onOutcome?.(outcome);
+        input.onOutcome?.(outcome, { jobId: job.jobId, conversationId: job.conversationId,
+          ownerKey: job.ownerKey, durationMs: Math.max(0, now() - startedAt) });
       } catch (error) {
         onDiagnostic(`Memory maintenance job ${job.jobId} failed`, error);
       }

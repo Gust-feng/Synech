@@ -23,6 +23,9 @@ import type {
   MemoryAdminApplication,
   MemoryCapabilityStatus,
   MemoryDiagnosticSnapshot,
+  MemoryDiagnosticQuery,
+  MemoryDiagnosticSearchInput,
+  HistorySearchResult,
   MemoryRolloutMode,
   PolicyRevision,
   WriteSpaceMemoryResult,
@@ -43,7 +46,8 @@ export type MemoryFeatureCommands = {
 
 export type MemoryFeatureQueries = {
   getCapabilityStatus(input?: MemoryCapabilityQuery): Promise<MemoryCapabilityStatus>;
-  getDiagnosticSnapshot(): Promise<MemoryDiagnosticSnapshot>;
+  getDiagnosticSnapshot(input?: MemoryDiagnosticQuery): Promise<MemoryDiagnosticSnapshot>;
+  searchDiagnosticHistory(input: MemoryDiagnosticSearchInput): Promise<HistorySearchResult>;
   getSpaceMemoryView(input: { readonly spaceId: string }): Promise<{
     readonly document: {
       readonly revisionId: string;
@@ -72,12 +76,19 @@ export type MemoryFeature = {
 
 export function createMemoryFeature(input: {
   readonly adminApplication: MemoryAdminApplication;
-  readonly diagnostics?: { readonly getSnapshot: () => Promise<MemoryDiagnosticSnapshot> };
+  readonly diagnostics?: {
+    readonly getSnapshot: (input?: MemoryDiagnosticQuery) => Promise<MemoryDiagnosticSnapshot>;
+    readonly searchHistory: (input: MemoryDiagnosticSearchInput) => Promise<HistorySearchResult>;
+  };
 }): MemoryFeature {
   const admin = input.adminApplication;
   const diagnostics = input.diagnostics ?? {
     async getSnapshot(): Promise<MemoryDiagnosticSnapshot> {
-      return { enabled: false, jobs: { queued: 0, running: 0, done: 0, failed: 0 }, recentOutcomes: [] };
+      return { enabled: false, generatedAt: Date.now(), capability: null, jobs: { queued: 0, running: 0, done: 0, failed: 0 },
+        recentOutcomes: [], jobRows: [], jobRowsTruncated: false, context: null, limits: null };
+    },
+    async searchHistory(): Promise<HistorySearchResult> {
+      return { outcome: "degraded", coverage: { summary: "unavailable", transcript: "unavailable" }, items: [] };
     },
   };
   return {
@@ -102,8 +113,11 @@ export function createMemoryFeature(input: {
       async getCapabilityStatus(input) {
         return await admin.getCapabilityStatus(input);
       },
-      async getDiagnosticSnapshot() {
-        return await diagnostics.getSnapshot();
+      async getDiagnosticSnapshot(args) {
+        return await diagnostics.getSnapshot(args);
+      },
+      async searchDiagnosticHistory(args) {
+        return await diagnostics.searchHistory(args);
       },
       async getSpaceMemoryView(args) {
         return await admin.getSpaceMemoryView(args);
