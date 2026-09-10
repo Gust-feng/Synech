@@ -4,6 +4,10 @@ import { stat } from "node:fs/promises";
 import path from "node:path";
 import { backup, DatabaseSync } from "node:sqlite";
 import { PRODUCT_DATA_FORMAT_ID, PRODUCT_NAMESPACE } from "../../platform/product-identity.js";
+import {
+  RELEASED_V101_DATA_FORMAT_ID,
+  upgradeReleasedV101Database,
+} from "./sqlite-v1-release-upgrade.js";
 
 export type SqliteMigration = {
   readonly version: number;
@@ -96,14 +100,26 @@ export class SqliteRuntimeDatabase {
           VALUES (?, ?)
         `).run(PRODUCT_NAMESPACE, PRODUCT_DATA_FORMAT_ID);
       } else {
-        const identity = connection.prepare(`
+        let identity = connection.prepare(`
           SELECT product_namespace AS productNamespace, data_format_id AS dataFormatId
           FROM ${PRODUCT_IDENTITY_TABLE}
           ORDER BY rowid LIMIT 1
         `).get() as { readonly productNamespace?: unknown; readonly dataFormatId?: unknown } | undefined;
+        if (identity?.productNamespace === PRODUCT_NAMESPACE &&
+            identity.dataFormatId === RELEASED_V101_DATA_FORMAT_ID &&
+            upgradeReleasedV101Database(connection)) {
+          identity = connection.prepare(`
+            SELECT product_namespace AS productNamespace, data_format_id AS dataFormatId
+            FROM ${PRODUCT_IDENTITY_TABLE}
+            ORDER BY rowid LIMIT 1
+          `).get() as { readonly productNamespace?: unknown; readonly dataFormatId?: unknown } | undefined;
+        }
         if (identity?.productNamespace !== PRODUCT_NAMESPACE || identity.dataFormatId !== PRODUCT_DATA_FORMAT_ID) {
           throw new SqliteRuntimeDatabaseIdentityError(
-            `SQLite database ${filePath} belongs to a different product namespace or data format.`,
+            `SQLite database ${filePath} uses data format ${String(identity?.dataFormatId)} ` +
+            `(namespace ${String(identity?.productNamespace)}); expected ${PRODUCT_DATA_FORMAT_ID} ` +
+            `(namespace ${PRODUCT_NAMESPACE}). ` +
+            "Only the exact published Synech v1.0.1 ledger can be upgraded automatically; back up and reset other incompatible data explicitly.",
           );
         }
       }

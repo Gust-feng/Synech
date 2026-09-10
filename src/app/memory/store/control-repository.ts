@@ -29,12 +29,13 @@ import {
  * - 进程重启后 running 必须 recoverInterruptedJobs 回到 queued（durable 边界不丢）。
  */
 
+// Frozen v1 initializes the target schema; future changes append migrations.
 export const MEMORY_MIGRATIONS = [{
   version: 1,
   sql: `
     CREATE TABLE memory_policy (
       policy_key TEXT PRIMARY KEY,
-      policy_kind TEXT NOT NULL CHECK(policy_kind IN ('global_consent', 'rollout', 'scope_participation', 'conversation_exclusion')),
+      policy_kind TEXT NOT NULL CHECK(policy_kind IN ('global_consent', 'rollout', 'space_participation')),
       scope_owner_key TEXT,
       enabled INTEGER NOT NULL CHECK(enabled IN (0, 1)),
       revision INTEGER NOT NULL CHECK(revision > 0),
@@ -47,140 +48,6 @@ export const MEMORY_MIGRATIONS = [{
       fence_state TEXT NOT NULL CHECK(fence_state IN ('none', 'preparing', 'fenced', 'tombstone')),
       updated_at INTEGER NOT NULL
     ) STRICT;
-    CREATE TABLE memory_job (
-      job_id TEXT PRIMARY KEY,
-      conversation_id TEXT NOT NULL,
-      owner_key TEXT NOT NULL,
-      covered_through_turn_id TEXT,
-      covered_through_ordinal INTEGER NOT NULL CHECK(covered_through_ordinal >= 0),
-      source_fingerprint TEXT NOT NULL,
-      status TEXT NOT NULL CHECK(status IN ('queued', 'running', 'done', 'failed')),
-      attempt INTEGER NOT NULL CHECK(attempt >= 0),
-      generation INTEGER NOT NULL CHECK(generation >= 0),
-      policy_revision TEXT NOT NULL,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
-    ) STRICT;
-    CREATE INDEX memory_job_status_idx ON memory_job(status, created_at);
-    CREATE INDEX memory_job_conversation_idx ON memory_job(conversation_id);
-    CREATE UNIQUE INDEX memory_job_active_unique_idx ON memory_job(conversation_id)
-      WHERE status IN ('queued', 'running');
-  `,
-}, {
-  version: 2,
-  sql: `
-    CREATE TABLE memory_record (
-      record_id TEXT NOT NULL,
-      revision INTEGER NOT NULL CHECK(revision >= 1),
-      owner_key TEXT NOT NULL,
-      owner_kind TEXT NOT NULL CHECK(owner_kind IN ('global', 'space', 'workspace')),
-      kind TEXT NOT NULL CHECK(kind IN ('preference', 'goal', 'decision', 'constraint', 'open_loop', 'episode')),
-      model_text TEXT NOT NULL CHECK(length(model_text) > 0),
-      status TEXT NOT NULL CHECK(status IN ('active', 'retired')),
-      evidence_class TEXT NOT NULL CHECK(evidence_class IN ('quoted_user_evidence', 'observed_result', 'derived_synthesis')),
-      confirmation TEXT NOT NULL CHECK(confirmation IN ('unconfirmed', 'user_confirmed')),
-      content_hash TEXT NOT NULL CHECK(length(content_hash) > 0),
-      generation INTEGER NOT NULL CHECK(generation >= 0),
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      effective_at INTEGER NOT NULL,
-      PRIMARY KEY(record_id, revision)
-    ) STRICT;
-    CREATE INDEX memory_record_owner_idx ON memory_record(owner_key, status);
-    CREATE UNIQUE INDEX memory_record_active_unique_idx ON memory_record(record_id)
-      WHERE status = 'active';
-
-    CREATE TABLE memory_record_source (
-      source_id TEXT PRIMARY KEY,
-      record_id TEXT NOT NULL,
-      revision INTEGER NOT NULL CHECK(revision >= 1),
-      conversation_id TEXT NOT NULL,
-      run_id TEXT,
-      turn_id TEXT,
-      from_ordinal INTEGER CHECK(from_ordinal IS NULL OR from_ordinal >= 0),
-      to_ordinal INTEGER CHECK(to_ordinal IS NULL OR to_ordinal >= 0),
-      source_revision INTEGER NOT NULL CHECK(source_revision >= 0),
-      FOREIGN KEY(record_id, revision) REFERENCES memory_record(record_id, revision) ON DELETE CASCADE
-    ) STRICT;
-    CREATE INDEX memory_record_source_record_idx ON memory_record_source(record_id, revision);
-    CREATE INDEX memory_record_source_conversation_idx ON memory_record_source(conversation_id);
-
-    CREATE TABLE memory_capture_cursor (
-      conversation_id TEXT PRIMARY KEY,
-      owner_key TEXT NOT NULL,
-      covered_through_ordinal INTEGER NOT NULL CHECK(covered_through_ordinal >= 0),
-      source_fingerprint TEXT NOT NULL CHECK(length(source_fingerprint) > 0),
-      updated_at INTEGER NOT NULL
-    ) STRICT;
-
-    CREATE TABLE memory_index_outbox (
-      outbox_id TEXT PRIMARY KEY,
-      record_id TEXT NOT NULL,
-      revision INTEGER NOT NULL CHECK(revision >= 1),
-      op TEXT NOT NULL CHECK(op IN ('index', 'remove')),
-      status TEXT NOT NULL CHECK(status IN ('pending', 'done', 'failed')),
-      attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0),
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
-    ) STRICT;
-    CREATE INDEX memory_index_outbox_status_idx ON memory_index_outbox(status, created_at);
-  `,
-}, {
-  version: 3,
-  sql: `
-    CREATE VIRTUAL TABLE memory_record_fts USING fts5(
-      terms,
-      record_id UNINDEXED,
-      revision UNINDEXED,
-      owner_key UNINDEXED,
-      status UNINDEXED,
-      generation UNINDEXED,
-      tokenize = 'unicode61'
-    );
-  `,
-}, {
-  version: 4,
-  sql: `
-    CREATE TABLE memory_policy_v4 (
-      policy_key TEXT PRIMARY KEY,
-      policy_kind TEXT NOT NULL CHECK(policy_kind IN ('global_consent', 'rollout', 'space_participation')),
-      scope_owner_key TEXT,
-      enabled INTEGER NOT NULL CHECK(enabled IN (0, 1)),
-      revision INTEGER NOT NULL CHECK(revision > 0),
-      updated_at INTEGER NOT NULL
-    ) STRICT;
-    INSERT INTO memory_policy_v4(policy_key, policy_kind, scope_owner_key, enabled, revision, updated_at)
-      SELECT
-        policy_key,
-        CASE WHEN policy_kind = 'scope_participation' THEN 'space_participation' ELSE policy_kind END,
-        scope_owner_key,
-        enabled,
-        revision,
-        updated_at
-      FROM memory_policy
-      WHERE policy_kind IN ('global_consent', 'rollout')
-        OR (policy_kind = 'scope_participation' AND scope_owner_key GLOB 'space:*');
-    DROP TABLE memory_policy;
-    ALTER TABLE memory_policy_v4 RENAME TO memory_policy;
-  `,
-}, {
-  // v5（0.6.0 文档产物重构）：删除记录时代的表，创建目标文档 schema。旧开发库由
-  // PRODUCT_DATA_FORMAT_ID 升级在迁移前拒绝（显式 reset 处理），本迁移只为全新
-  // 数据库从 v4 状态确定性地构造目标 schema：
-  // - memory_space_doc / memory_conversation_summary：不可变 revision 文档产物；
-  // - memory_doc_source：文档级保守依赖（revision 间复制继承）；
-  // - memory_capture_progress：processed / excluded 两种进度分离（取代旧 cursor）；
-  // - memory_job：重建为每会话空闲调度边界（eligible_at/claim_token/target_through）；
-  // - memory_summary_fts / memory_transcript_fts + memory_transcript_coverage：
-  //   摘要与原文的 FTS5 派生投影（中文 bigram/拉丁词 lexical projection）。
-  version: 5,
-  sql: `
-    DROP TABLE IF EXISTS memory_record_fts;
-    DROP TABLE IF EXISTS memory_index_outbox;
-    DROP TABLE IF EXISTS memory_record_source;
-    DROP TABLE IF EXISTS memory_record;
-    DROP TABLE IF EXISTS memory_capture_cursor;
-    DROP TABLE IF EXISTS memory_job;
 
     CREATE TABLE memory_space_doc (
       revision_id TEXT PRIMARY KEY,
@@ -234,7 +101,9 @@ export const MEMORY_MIGRATIONS = [{
       processed_through_ordinal INTEGER NOT NULL CHECK(processed_through_ordinal >= 0),
       excluded_through_ordinal INTEGER NOT NULL CHECK(excluded_through_ordinal >= 0),
       source_fingerprint TEXT NOT NULL CHECK(length(source_fingerprint) > 0),
-      updated_at INTEGER NOT NULL
+      updated_at INTEGER NOT NULL,
+      processed_fragment_ordinal INTEGER,
+      processed_fragment_end INTEGER
     ) STRICT;
     CREATE INDEX memory_capture_progress_owner_idx ON memory_capture_progress(owner_key);
 
@@ -284,15 +153,6 @@ export const MEMORY_MIGRATIONS = [{
       source_revision INTEGER NOT NULL CHECK(source_revision >= 0),
       updated_at INTEGER NOT NULL
     ) STRICT;
-  `,
-}, {
-  // v6（N04）：片段级进度列。单轮超过后台输入容量时按「消息/片段」消费，
-  // processed_through 只能推进到完整轮次；片段偏移记录该轮内已消费的字符
-  // 终点，轮次读完后清空并推进 ordinal（正式设计 §8.2 覆盖位置精确到片段）。
-  version: 6,
-  sql: `
-    ALTER TABLE memory_capture_progress ADD COLUMN processed_fragment_ordinal INTEGER;
-    ALTER TABLE memory_capture_progress ADD COLUMN processed_fragment_end INTEGER;
   `,
 }] as const;
 
