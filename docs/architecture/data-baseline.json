@@ -1,29 +1,23 @@
 {
   "productNamespace": "synech",
-  "dataFormatId": "synech/v1-baseline-5",
-  "schemaFingerprint": "65198beb14485ce14323d1d225d66b629d04e130f8dace984a7e99d66a2dd5d8",
+  "dataFormatId": "synech/v1",
+  "schemaFingerprint": "cf860f950996085262f054154428850b16bbc31f88cf4005171c39f0e4c7eac1",
   "migrationOwners": {
     "conversation-lifecycle": 1,
     "managed-assets": 1,
-    "memory": 6,
+    "memory": 1,
     "personal-knowledge": 1,
     "space-conversation-deletion": 1,
-    "spaces": 2,
+    "spaces": 1,
     "workspaces": 1
   },
   "migrationChecksums": {
     "conversation-lifecycle/1": "ca7ecb9854e63dae1438816b573cb57eceb9625167f690dad50b975202ce7a2a",
     "managed-assets/1": "d81174fdfb81bfda1a49d8c62029a326f297a776818dd74328e13ef65d697495",
-    "memory/1": "2dffd4ab92580beea0a6b5cfd9f45db43d8bf1444742253d8704c5be9d2f371f",
-    "memory/2": "fc6212e17aad369eb6182ff9d0ade6b204be6cc612c8d1acefe932e3dc06777c",
-    "memory/3": "03d27d5ae01b30dcb4c9b84d79d1b613619f3fab71dae5c8eee3237aee00d4b5",
-    "memory/4": "98c02fa0ec5f8077e46ef83eafbe3346ee82ed1d4df9a4d82e06a232b275676c",
-    "memory/5": "4ec2318bb3a29ad5ad1da636a5217c64184be323bb7f1b8f5abec836ed5e54ce",
+    "memory/1": "3d349f2d045023e2c80711b6701a2168fea7b41f0a09594ee649387d0187c2e6",
     "personal-knowledge/1": "765a1c04ff9d0be57bf1e5285f6733f7308ae43fdb8b86b96fd0b03c2415c5a1",
     "space-conversation-deletion/1": "fcc367ac68ae21c2e453a683ee1aa1058338f320fab41348dc3b589491fe4b11",
-    "spaces/1": "ec9bca6dc50030789f488591bf130ede75110e41a8b1b348e896f476c581d0b4",
-    "spaces/2": "419efc52a2931e46f914e718e34d727cd2597a0d9dd789feb40058511133ae9d",
-    "workspaces/1": "2dde5c2c686904e92333c633c38095fe2178e33f4f86d0a360d5925cefd0f373",
-    "memory/6": "0685642cc3cc5da6dda7eb86d1313f0ad0c6100b7435ae6b75e1366a29cfa276"
+    "spaces/1": "d783205b4e31fc0a3445ad6d448e35bb147088a732bca23d3bf5cd255f44df0e",
+    "workspaces/1": "2dde5c2c686904e92333c633c38095fe2178e33f4f86d0a360d5925cefd0f373"
   }
 }

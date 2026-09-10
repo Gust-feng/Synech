@@ -31,13 +31,11 @@ const MIGRATIONS = [{
       annotation_json TEXT,
       image_captions_json TEXT,
       created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
+      updated_at TEXT NOT NULL,
+      web_metadata_json TEXT
     ) STRICT;
     CREATE INDEX space_references_space_idx ON space_references(space_id);
   `,
-}, {
-  version: 2,
-  sql: "ALTER TABLE space_references ADD COLUMN web_metadata_json TEXT;",
 }] as const;
 
 export function createSqliteSpaceRepository(database: SqliteRuntimeDatabase): SpaceRepository {

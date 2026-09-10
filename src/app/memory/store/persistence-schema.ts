@@ -6,12 +6,13 @@ import { z } from "zod";
  * 结构字段（origin/validity/dep_kind/fence_state）用枚举约束，负责程序分支。
  *
  * 目标 schema 见《架构决策记录》"记忆系统文档产物重构"条：
- * - memory_policy / memory_lifecycle：沿用 Memory v2 分账（迁移 v1–v4 不变）；
+ * - memory_policy / memory_lifecycle：策略分账和生命周期控制；
  * - memory_space_doc / memory_conversation_summary：不可变 revision 的文档产物；
  * - memory_doc_source：文档级保守依赖（revision 间复制继承）；
  * - memory_capture_progress：processed / excluded 两种进度分离；
  * - memory_job：每会话至多一个活跃待办（eligible_at / claim_token 调度边界）；
- * - memory_summary_fts / memory_transcript_fts：FTS5 派生投影（迁移 v5 内创建）。
+ * - memory_summary_fts / memory_transcript_fts：FTS5 派生投影。
+ * v1 的初始 schema 已冻结；后续结构变化通过追加 migration 演进。
  */
 
 const epochMs = z.number().finite().int().nonnegative();
@@ -150,7 +151,7 @@ export function parseJobRow(value: unknown): MemoryJobRow {
 }
 
 // ---------------------------------------------------------------------------
-// 文档产物行（memory/5）
+// 文档产物行
 // ---------------------------------------------------------------------------
 
 export const docOriginSchema = z.enum(["model", "user_edit"]);

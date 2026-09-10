@@ -506,6 +506,21 @@ function checkMigrationChecksumHistory() {
   } catch {
     return;
   }
+  if (previous.dataFormatId === "synech/v1-baseline-5" && current.dataFormatId === "synech/v1") {
+    // The published v1.0.1 ledger is adopted exactly once by the narrow runtime
+    // conversion in sqlite-v1-release-upgrade.ts. From synech/v1 onward every
+    // migration checksum is immutable and new versions are appended only.
+    return;
+  }
+  if (previous.dataFormatId !== current.dataFormatId) {
+    violations.push({
+      rule: "data-format-id-immutable",
+      file: "docs/architecture/data-baseline.json",
+      line: 1,
+      message: `Released data format cannot change from ${previous.dataFormatId} to ${current.dataFormatId}`,
+    });
+    return;
+  }
   for (const [identity, checksum] of Object.entries(previous.migrationChecksums ?? {})) {
     if (current.migrationChecksums?.[identity] !== checksum) {
       violations.push({
