@@ -12,6 +12,7 @@ export type ConversationModeController = {
 export function useConversationMode(rootRef: RefObject<HTMLDivElement | null>): ConversationModeController {
   const [mode, setModeState] = useState<ConversationMode>("normal");
   const focusTransitionRef = useRef<FocusModeTransitionHandle | null>(null);
+  const focusTriggerRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => () => {
     focusTransitionRef.current?.cancel();
@@ -23,6 +24,7 @@ export function useConversationMode(rootRef: RefObject<HTMLDivElement | null>): 
       after?.();
       return;
     }
+    if (next === "focus") focusTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     focusTransitionRef.current?.cancel();
     focusTransitionRef.current = runFocusModeTransition({
       root: rootRef.current,
@@ -33,6 +35,22 @@ export function useConversationMode(rootRef: RefObject<HTMLDivElement | null>): 
       }),
     });
   }, [mode, rootRef]);
+
+  useEffect(() => {
+    if (mode !== "focus") {
+      if (focusTriggerRef.current?.isConnected) focusTriggerRef.current.focus({ preventScroll: true });
+      focusTriggerRef.current = null;
+      return;
+    }
+    rootRef.current?.querySelector<HTMLButtonElement>(".ui-focus-header button")?.focus({ preventScroll: true });
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      event.preventDefault();
+      setMode("normal");
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [mode, rootRef, setMode]);
 
   return { mode, setMode };
 }

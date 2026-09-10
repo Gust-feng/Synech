@@ -264,6 +264,8 @@ export interface UseMountedTreeResult {
   refreshByReference: (referenceId: string, relativePath: string) => Promise<void>
   /** 刷新某子路径的父目录（重命名 / 删除后用），失败抛错。 */
   refreshParentOf: (referenceId: string, childRelativePath: string) => Promise<void>
+  /** 丢弃已变更子树的缓存与展开态，避免旧路径再次被复用。 */
+  discardReferenceSubtree: (referenceId: string, relativePath: string) => void
   /** 重新取得所有已展开目录的快照（窗口重新聚焦时用）。 */
   refreshAllExpanded: () => void
 }
@@ -414,6 +416,29 @@ export function useMountedTree(options: UseMountedTreeOptions): UseMountedTreeRe
     return fetchByReference(referenceId, parentPath, 'refresh')
   }
 
+  /** Discard mounted descendants after a filesystem rename or deletion. */
+  function discardReferenceSubtree(referenceId: string, relativePath: string): void {
+    const entryId = referenceChildId(referenceId, relativePath)
+    const descendantPrefix = referenceChildId(referenceId, `${relativePath}/`)
+    const isInSubtree = (id: string): boolean => id === entryId || id.startsWith(descendantPrefix)
+
+    for (const [key] of inFlightRef.current) {
+      const directoryId = key.slice(`${spaceId}::`.length)
+      if (isInSubtree(directoryId)) inFlightRef.current.delete(key)
+    }
+    setDirectories((current) => {
+      const next = new Map(current)
+      for (const [key, state] of current) {
+        if (isInSubtree(state.directoryId)) next.delete(key)
+      }
+      return next.size === current.size ? current : next
+    })
+    setExpandedIds((current) => {
+      const next = new Set([...current].filter((id) => !isInSubtree(id)))
+      return next.size === current.size ? current : next
+    })
+  }
+
   function toggleExpand(item: SpaceItem): void {
     const opening = !expandedIds.has(item.id)
     setExpandedIds((current) => {
@@ -546,6 +571,7 @@ export function useMountedTree(options: UseMountedTreeOptions): UseMountedTreeRe
     refreshDirectory,
     refreshByReference,
     refreshParentOf,
+    discardReferenceSubtree,
     refreshAllExpanded,
   }
 }

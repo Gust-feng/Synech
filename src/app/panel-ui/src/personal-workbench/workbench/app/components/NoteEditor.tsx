@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { diffLines, type Change } from 'diff'
-import { AlertTriangle, Brain, Check, Code2, Maximize2 } from 'lucide-react'
+import { AlertTriangle, Brain, Check, ChevronRight, Code2, Maximize2 } from 'lucide-react'
 import { EditorContent, useEditor } from '@tiptap/react'
 import { useBrain } from './brainStore'
 import type { Note } from './notesStore'
@@ -18,6 +18,7 @@ import {
 import { SAVED_NOTE_SAVE_STATE } from './personalKnowledgeState'
 import './note-conflict.css'
 import { createMarkdownEditorExtensions, isEditorUsable, markdownFromEditor } from './markdownEditor'
+import { CollaborationToggle } from './CollaborationToggle'
 
 interface NoteEditorProps {
   note: Note
@@ -251,14 +252,18 @@ export function NoteEditor({ note, onSave, onOpenFocus, onClose, onRestoreAsNew 
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden min-w-0">
-      <header className="shrink-0 flex items-center gap-3 px-5" style={{ height: 48, borderBottom: '1px solid var(--ui-border, rgba(45,40,34,0.09))' }}>
-        <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: '#6f8778' }} />
-        <span className="text-xs shrink-0" style={{ color: 'var(--ui-text-3, #aba39b)' }}>笔记</span>
+      <header className="ui-preview-toolbar">
+        <div className="ui-preview-location">
+          <nav className="ui-preview-breadcrumb" aria-label="笔记路径" title={title}>
+            <span>笔记</span><ChevronRight size={12} aria-hidden="true" /><span aria-current="page">{title || '无标题'}</span>
+          </nav>
+        </div>
+        <div className="ui-preview-toolbar-actions">
+        <CollaborationToggle available={incoming?.status !== 'deleted'} />
         <span className="flex items-center gap-1 text-xs shrink-0" style={{ color: 'var(--ui-text-3, #aba39b)' }}>
           {saved && durableSaveState.status === 'saved' ? <Check size={12} /> : <span className="w-2 h-2 rounded-full animate-pulse" style={{ background: durableSaveState.status === 'error' ? '#b85c52' : 'var(--ui-accent, #6865a7)' }} />}
           {durableSaveState.status === 'error' ? '保存失败' : saved && durableSaveState.status === 'saved' ? '已保存' : '保存中…'}
         </span>
-        <div className="flex-1" />
         <button onClick={toggleSourceMode} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs transition-colors hover:bg-[var(--ui-hover-tint)]" style={{ color: sourceMode ? 'var(--ui-accent, #6865a7)' : 'var(--ui-text-2, #87827c)' }}>
           <Code2 size={12} />{sourceMode ? '编辑' : '源码'}
         </button>
@@ -266,6 +271,7 @@ export function NoteEditor({ note, onSave, onOpenFocus, onClose, onRestoreAsNew 
         <button onClick={() => (collected ? brain.uncollect(note.id) : brain.collectNote(note.id))} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs transition-colors hover:bg-[var(--ui-hover-tint)]" style={{ color: collected ? 'var(--ui-accent, #6865a7)' : 'var(--ui-text-2, #87827c)' }}>
           <Brain size={12} />{collected ? '已收藏' : '收藏'}
         </button>
+        </div>
       </header>
 
       {incoming !== undefined && (

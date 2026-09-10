@@ -11,6 +11,7 @@ import { ImageDocumentSurface } from './ImageDocumentSurface'
 import { DocxDocumentSurface } from './DocxDocumentSurface'
 import { SpreadsheetDocumentSurface } from './SpreadsheetDocumentSurface'
 import { isMarkdownDocument } from './documentProjection'
+import { CollaborationToggle } from './CollaborationToggle'
 import './reference-preview.css'
 
 const AUTOSAVE_MS = 500
@@ -38,6 +39,7 @@ type ReferenceDocumentSessionProps = {
   apiBase?: string
   readOnly?: boolean
   onNavigatePath?: (relativePath: string) => void
+  embedded?: boolean
 }
 
 export const ReferencePreview = forwardRef<ReferencePreviewHandle, {
@@ -79,6 +81,7 @@ export const ReferencePreview = forwardRef<ReferencePreviewHandle, {
         apiBase={resolvedApiBase}
         readOnly={readOnly}
         onNavigatePath={onNavigatePath}
+        embedded={embedded}
       />
     </div>
   )
@@ -98,6 +101,7 @@ function ReferenceDocumentSessionView({
   apiBase = '/api/spaces/references',
   readOnly = false,
   onNavigatePath,
+  embedded = false,
   sessionRef,
 }: ReferenceDocumentSessionProps & { sessionRef: ForwardedRef<ReferencePreviewHandle> }) {
   const targetKey = `${apiBase}:${itemId}:${initialRelativePath}`
@@ -357,6 +361,7 @@ function ReferenceDocumentSessionView({
         saveState={!readOnly && preview.content.kind === 'text' && preview.presentation.editable ? saveState : undefined}
         sourceMode={!readOnly && preview.presentation.sourceMode && preview.content.kind === 'text' ? sourceModeActive : undefined}
         onToggleSourceMode={toggleSourceMode}
+        splitAvailable={!embedded && preview.status === 'ready' && preview.presentation.kind !== 'directory' && preview.presentation.kind !== 'unavailable'}
       />
 
       {incoming !== undefined && (
@@ -446,7 +451,7 @@ function WebSourceFavicon({ url }: { readonly url: string }) {
   return <img className="ui-reference-preview__site-icon" src={url} alt="" onError={() => setFailed(true)} />
 }
 
-function ReferenceHeader({ rootTitle, relativePath, source, actions, canOpen, onOpen, saveState, sourceMode, onToggleSourceMode }: {
+function ReferenceHeader({ rootTitle, relativePath, source, actions, canOpen, onOpen, saveState, sourceMode, onToggleSourceMode, splitAvailable = false }: {
   rootTitle: string
   relativePath: string
   source: string
@@ -456,11 +461,13 @@ function ReferenceHeader({ rootTitle, relativePath, source, actions, canOpen, on
   saveState?: 'saved' | 'saving' | 'error'
   sourceMode?: boolean
   onToggleSourceMode?: () => void
+  splitAvailable?: boolean
 }) {
   return (
     <header className="ui-reference-preview__header">
       <ReferenceBreadcrumb rootTitle={rootTitle} relativePath={relativePath} source={source} />
       <div className="ui-reference-preview__actions">
+        <CollaborationToggle available={splitAvailable} />
         {saveState !== undefined && (
           <span className="ui-reference-preview__save-state" data-state={saveState}>
             {saveState === 'saved' ? <Check size={12} /> : <span />}
@@ -488,7 +495,7 @@ function ReferenceBreadcrumb({ rootTitle, relativePath, source }: { rootTitle: s
   const segments = relativePath.split('/').filter(Boolean)
   return (
     <nav className="ui-reference-preview__breadcrumb" aria-label="文件路径" title={source}>
-      <span data-root>{rootTitle}</span>
+      <span data-root data-current={segments.length === 0 || undefined} aria-current={segments.length === 0 ? 'page' : undefined}>{rootTitle}</span>
       {segments.map((segment, index) => (
         <Fragment key={`${index}:${segment}`}>
           <ChevronRight size={12} aria-hidden="true" />

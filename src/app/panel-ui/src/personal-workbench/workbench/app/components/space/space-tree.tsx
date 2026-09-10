@@ -22,14 +22,12 @@ import {
 } from 'lucide-react'
 import type {
   PersonalSpaceActions,
-  PersonalSpaceConversationContext,
   PersonalSpaceProjection,
 } from '@ui/personal-workbench/space'
 import { FloatingMenu } from '@ui/components/floating-menu'
 import type { Note } from '../notesStore'
 import type { SpaceItem } from '../useMountedTree'
-import { InlineName } from './space-actions'
-import { SpaceConversationList } from './space-conversations'
+import { InlineName } from '@ui/components/inline-name'
 
 const NOTE_DRAG_TYPE = 'space-note-row'
 
@@ -50,7 +48,6 @@ export function SpaceExplorer({
   onSearch,
   notes,
   references,
-  conversations,
 }: {
   space: PersonalSpaceProjection | undefined
   itemCount: number
@@ -60,17 +57,6 @@ export function SpaceExplorer({
   onSearch: () => void
   notes: Parameters<typeof SpaceNotesSection>[0]
   references: Parameters<typeof SpaceReferencesSection>[0]
-  conversations: {
-    readonly items: readonly PersonalSpaceConversationContext[]
-    readonly selectedId: string | null
-    readonly renamingId: string | null
-    readonly onOpen: (conversationId: string) => void
-    readonly onStartRename: (conversationId: string) => void
-    readonly onRename: (conversationId: string, title: string) => void
-    readonly onCancelRename: () => void
-    readonly onTogglePinned: (conversationId: string, pinned: boolean) => void
-    readonly onDelete: (conversationId: string) => void
-  }
 }) {
   return (
     <div
@@ -107,17 +93,6 @@ export function SpaceExplorer({
       >
         <SpaceNotesSection {...notes} />
         <SpaceReferencesSection {...references} />
-        <SpaceConversationList
-          conversations={conversations.items}
-          selectedConversationId={conversations.selectedId}
-          renamingConversationId={conversations.renamingId}
-          onOpen={conversations.onOpen}
-          onStartRename={conversations.onStartRename}
-          onRename={conversations.onRename}
-          onCancelRename={conversations.onCancelRename}
-          onTogglePinned={conversations.onTogglePinned}
-          onDelete={conversations.onDelete}
-        />
       </div>
     </div>
   )
@@ -389,20 +364,23 @@ function TreeNode({
   const [hovered, setHovered] = useState(false)
   const [editing, setEditing] = useState(false)
   const selected = selectedId === item.id
+  const canMutateFilesystemEntry = item.externalChild
+    && item.referenceId !== undefined
+    && item.relativePath !== undefined
   const isManagedFolder = !item.externalChild && item.domainKind === 'managed_folder'
   const canCreateExternalEntry = !item.externalChild
     && item.type === 'folder'
     && item.referenceId !== undefined
     && item.domainKind === 'managed_folder'
-  const canRename = !item.externalChild
-    && item.domainKind !== 'workspace'
-    && renameEnabled
+  const canRename = canMutateFilesystemEntry
+    || (!item.externalChild && item.domainKind !== 'workspace' && renameEnabled)
   const canUnlink = !item.externalChild
     && (item.domainKind === 'workspace' || item.domainKind === 'local_file' || item.domainKind === 'web_reference' || item.domainKind === 'generated_artifact')
     && unlinkEnabled
   const canReconnect = !item.externalChild && item.domainKind === 'workspace' && item.workspaceStatus === 'disconnected'
   const canRemove = (isManagedFolder && removeManagedFolderEnabled
     || (!item.externalChild && item.domainKind === 'folder' && removeEnabled))
+  const canDeleteFilesystemEntry = canMutateFilesystemEntry
   const paddingLeft = 10 + depth * 14
 
   return (
@@ -473,7 +451,7 @@ function TreeNode({
           </span>
         )}
 
-        {!editing && (canCreateExternalEntry || canRename || canReconnect || canUnlink || canRemove) && (
+        {!editing && (canCreateExternalEntry || canRename || canReconnect || canUnlink || canRemove || canDeleteFilesystemEntry) && (
           <FloatingMenu
             label={`${item.name}操作`}
             visible={hovered}
@@ -482,7 +460,7 @@ function TreeNode({
               ...(canRename ? [{ label: '重命名', icon: <Pencil size={12} />, onClick: () => setEditing(true) }] : []),
               ...(canReconnect ? [{ label: '重新连接', icon: <RefreshCw size={12} />, onClick: () => onReconnectWorkspace(item) }] : []),
               ...(canUnlink ? [{ label: '移除引用', icon: <Unlink size={12} />, onClick: () => onUnlink(item) }] : []),
-              ...(canRemove ? [{ label: deleteLabelFor(item), icon: <Trash2 size={12} />, danger: true, onClick: () => onDelete(item) }] : []),
+              ...((canRemove || canDeleteFilesystemEntry) ? [{ label: deleteLabelFor(item), icon: <Trash2 size={12} />, danger: true, onClick: () => onDelete(item) }] : []),
             ]}
           />
         )}

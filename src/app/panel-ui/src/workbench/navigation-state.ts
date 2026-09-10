@@ -1,14 +1,19 @@
-export type WorkbenchView = "home" | "space" | "search" | "brain";
+export type WorkbenchView = "home" | "space" | "workspace" | "search" | "brain";
 
 export type ConversationOwnerSelection = {
   readonly kind: "space" | "workspace";
   readonly id: string;
 };
 
-export type ConversationSurfaceRequest = {
-  readonly conversationId: string;
-  readonly spaceId: string;
-};
+export function sameConversationOwner(left: ConversationOwnerSelection | null | undefined, right: ConversationOwnerSelection | null | undefined): boolean {
+  return left != null && right != null && left.kind === right.kind && left.id === right.id;
+}
+
+export function selectedConversationOwner(state: Pick<WorkbenchNavigationState, "view" | "activeSpaceId" | "activeWorkspaceId">): ConversationOwnerSelection | null {
+  if (state.view === "space" && state.activeSpaceId !== null) return { kind: "space", id: state.activeSpaceId };
+  if (state.view === "workspace" && state.activeWorkspaceId !== null) return { kind: "workspace", id: state.activeWorkspaceId };
+  return null;
+}
 
 export type WorkbenchNavigationState = {
   readonly view: WorkbenchView;
@@ -16,9 +21,9 @@ export type WorkbenchNavigationState = {
   readonly brainSelectedId: string | null;
   readonly spaceTargetId: string | null;
   readonly activeSpaceId: string | null;
+  readonly activeWorkspaceId: string | null;
   readonly homeOwnerSelection: ConversationOwnerSelection | null;
   readonly homeFocusRequest: number;
-  readonly conversationSurfaceRequest: ConversationSurfaceRequest | null;
 };
 
 export type WorkbenchNavigationAction =
@@ -26,9 +31,9 @@ export type WorkbenchNavigationAction =
   | { readonly type: "set-brain-selection"; readonly id: string | null }
   | { readonly type: "set-space-target"; readonly id: string | null }
   | { readonly type: "set-active-space"; readonly id: string | null }
+  | { readonly type: "set-active-workspace"; readonly id: string | null }
   | { readonly type: "set-home-owner"; readonly owner: ConversationOwnerSelection | null }
   | { readonly type: "focus-home-input" }
-  | { readonly type: "set-conversation-surface"; readonly request: ConversationSurfaceRequest | null }
   | {
       readonly type: "sync-context-selection";
       readonly spaceIds: readonly string[];
@@ -42,9 +47,9 @@ export function createInitialWorkbenchNavigationState(): WorkbenchNavigationStat
     brainSelectedId: null,
     spaceTargetId: null,
     activeSpaceId: null,
+    activeWorkspaceId: null,
     homeOwnerSelection: null,
     homeFocusRequest: 0,
-    conversationSurfaceRequest: null,
   };
 }
 
@@ -59,7 +64,6 @@ export function reduceWorkbenchNavigation(
         view: action.target,
         previousView: action.target === "search" ? state.view : state.previousView,
         spaceTargetId: null,
-        brainSelectedId: action.target === "brain" ? state.brainSelectedId : null,
       };
     case "set-brain-selection":
       return { ...state, brainSelectedId: action.id };
@@ -67,17 +71,22 @@ export function reduceWorkbenchNavigation(
       return { ...state, spaceTargetId: action.id };
     case "set-active-space":
       return { ...state, activeSpaceId: action.id };
+    case "set-active-workspace":
+      return { ...state, activeWorkspaceId: action.id };
     case "set-home-owner":
       return { ...state, homeOwnerSelection: action.owner };
     case "focus-home-input":
       return { ...state, homeFocusRequest: state.homeFocusRequest + 1 };
-    case "set-conversation-surface":
-      return { ...state, conversationSurfaceRequest: action.request };
     case "sync-context-selection": {
       const firstSpaceId = action.spaceIds[0];
       const activeSpaceId = state.activeSpaceId !== null && action.spaceIds.includes(state.activeSpaceId)
         ? state.activeSpaceId
         : firstSpaceId ?? null;
+      // 工作区不做“默认选中”：缺失（被移除/尚未加载）时回到 null，由调用方决定表面。
+      const activeWorkspaceId = state.activeWorkspaceId !== null
+        && action.workspaceIds.includes(state.activeWorkspaceId)
+        ? state.activeWorkspaceId
+        : null;
       const owner = state.homeOwnerSelection;
       const ownerStillExists = owner !== null && (
         owner.kind === "space"
@@ -91,10 +100,13 @@ export function reduceWorkbenchNavigation(
           : { kind: "space" as const, id: firstSpaceId };
       const ownerUnchanged = state.homeOwnerSelection?.kind === homeOwnerSelection?.kind
         && state.homeOwnerSelection?.id === homeOwnerSelection?.id;
-      if (state.activeSpaceId === activeSpaceId && ownerUnchanged) return state;
+      if (state.activeSpaceId === activeSpaceId
+        && state.activeWorkspaceId === activeWorkspaceId
+        && ownerUnchanged) return state;
       return {
         ...state,
         activeSpaceId,
+        activeWorkspaceId,
         homeOwnerSelection,
       };
     }

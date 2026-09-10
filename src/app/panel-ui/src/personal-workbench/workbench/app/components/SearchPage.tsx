@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
-import { Search, FileText, Globe, MessageSquare, NotebookPen, ArrowRight, X, AlertCircle, LoaderCircle } from 'lucide-react'
-import type { WorkbenchView as View } from '../../../../workbench/navigation-state'
+import { Search, FileText, Globe, NotebookPen, ArrowRight, X, AlertCircle, LoaderCircle } from 'lucide-react'
 import { beginRemoteSearch, completeRemoteSearch, failRemoteSearch, type RemoteSearchState } from '../../../../workbench/search-state'
 import type { ConversationSummary } from '@ui/contracts/conversation'
 import type { PersonalSpaceItemProjection, PersonalSpaceProjection } from '../../../space'
@@ -84,7 +83,7 @@ function resultIcon(type: ResultType) {
     case 'web':
       return <Globe size={14} style={{ color: '#4A8A6A' }} />
     case 'conversation':
-      return <MessageSquare size={14} style={{ color: 'var(--ui-lavender-mid)' }} />
+      return null
   }
 }
 
@@ -98,19 +97,19 @@ function typeLabel(type: ResultType) {
 }
 
 interface SearchPageProps {
-  onNavigate: (v: View) => void
   spaces: readonly PersonalSpaceProjection[]
   conversations: readonly ConversationSummary[]
   /** 在空间里打开某个笔记/材料。 */
   onOpenInSpace: (spaceId: string, id: string) => void
   /** 打开不再归属于 Space 的长期 Knowledge 条目。 */
   onOpenInKnowledge: (id: string) => void
+  /** 打开对话后由宿主按其固定 owner 进入对应表面。 */
   onOpenConversation: (conversationId: string) => boolean | Promise<boolean>
 }
 
 const searchMemory: { query: string; filter: FilterType } = { query: '', filter: 'all' }
 
-export function SearchPage({ onNavigate, onOpenInSpace, onOpenInKnowledge, onOpenConversation, spaces, conversations }: SearchPageProps) {
+export function SearchPage({ onOpenInSpace, onOpenInKnowledge, onOpenConversation, spaces, conversations }: SearchPageProps) {
   const { notes } = useNotes()
   const [query, setQuery] = useState(searchMemory.query)
   const [debouncedQuery, setDebouncedQuery] = useState(searchMemory.query)
@@ -219,7 +218,6 @@ export function SearchPage({ onNavigate, onOpenInSpace, onOpenInKnowledge, onOpe
       if (result.conversationId !== undefined) {
         const opened = await onOpenConversation(result.conversationId)
         if (opened === false) throw new Error('无法打开这条对话。')
-        onNavigate('space')
       } else if (result.spaceId !== undefined) {
         await onOpenInSpace(result.spaceId, result.id)
       } else if (result.type === 'note') {

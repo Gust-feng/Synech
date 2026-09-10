@@ -23,7 +23,7 @@ export function ConversationPage(props: ConversationPageProps) {
     >
       {props.focus !== undefined && <FocusModeHeader key="focus-header" {...props.focus} />}
 
-      <div key="conversation-body" className="flex min-w-0 flex-1 flex-col overflow-hidden">
+      <div key="conversation-body" className="ui-conversation-body flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <ConversationScrollArea
           scrollKey={props.scrollKey}
           contentClassName="ui-conversation-transcript reading-prose mx-auto px-6 pb-24 pt-8"

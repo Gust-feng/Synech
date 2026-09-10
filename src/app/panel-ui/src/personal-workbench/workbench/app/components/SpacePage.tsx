@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { DndProvider } from 'react-dnd'
 import { HTML5Backend } from 'react-dnd-html5-backend'
 import type { WorkbenchView as View } from '../../../../workbench/navigation-state'
@@ -7,7 +7,12 @@ import type {
   PersonalSpaceProjection,
 } from '../../../space'
 import type { ReferencePreviewHandle } from './ReferencePreview'
-import { createSpaceReferenceEntry, fetchDocumentPreview } from './referencePreviewClient'
+import {
+  createSpaceReferenceEntry,
+  deleteSpaceReferenceEntry,
+  fetchDocumentPreview,
+  renameSpaceReferenceEntry,
+} from './referencePreviewClient'
 import {
   useMountedTree,
   getItem,
@@ -18,6 +23,7 @@ import {
   type SpaceItem,
 } from './useMountedTree'
 import { useNotes } from './notesStore'
+import { WorkbenchExplorer } from './WorkbenchExplorer'
 import {
   ActionConfirmationDialog,
   type ActionConfirmationRequest,
@@ -29,28 +35,16 @@ import {
   SpaceExplorer,
 } from './space/space-tree'
 
-/** Space 组合资料树、笔记与所属对话；Workspace 引用为 Space Run 提供完整读写授权根。 */
+/** Space owns the resource explorer and reader; Collaboration owns conversation navigation. */
 
 interface SpacePageProps {
   onNavigate: (v: View) => void
   space?: PersonalSpaceProjection
   actions?: PersonalSpaceActions
   onOpenItem?: (spaceId: string, itemId: string) => void | Promise<void>
-  onOpenConversation?: (conversationId: string) => boolean | Promise<boolean>
-  /** 当前正式对话的右侧工作台内容，由 Synech 组合根提供。 */
-  conversationContent?: ReactNode
-  /** 从空间右侧对话进入已有的全屏专注模式。 */
-  onEnterFocus?: () => void
-  activeConversationId?: string
-  /** 宿主当前活动会话的固定 Owner；用于在右侧展示本空间的会话。 */
-  activeConversationOwner?: { readonly kind: "space" | "workspace"; readonly id: string } | undefined
-  /** 宿主当前活动会话标题；空间 read-model 尚未刷新时作为面板头回退。 */
-  activeConversationTitle?: string | undefined
-  /** Host request for presenting a Conversation in this Space context. */
-  conversationSurfaceRequest?: { readonly conversationId: string; readonly spaceId: string } | null
-  onRenameConversation?: (conversationId: string, title: string) => void | Promise<void>
-  onToggleConversationPinned?: (conversationId: string, pinned: boolean) => void | Promise<void>
-  onDeleteConversation?: (conversationId: string) => void | Promise<void>
+  explorerCollapsed: boolean
+  onActivateReading: () => void
+  onOpenPreview: () => void
   /** 从搜索等入口跳转时,要求空间预先选中并打开的对象 id。 */
   targetId?: string | null
 }
@@ -74,16 +68,9 @@ export function SpacePage({
   space,
   actions,
   onOpenItem,
-  onOpenConversation,
-  conversationContent,
-  onEnterFocus,
-  activeConversationId,
-  activeConversationOwner,
-  activeConversationTitle,
-  conversationSurfaceRequest,
-  onRenameConversation,
-  onToggleConversationPinned,
-  onDeleteConversation,
+  explorerCollapsed,
+  onActivateReading,
+  onOpenPreview,
 }: SpacePageProps) {
   const noteStore = useNotes()
   const spaceId = space?.spaceId
@@ -120,16 +107,6 @@ export function SpacePage({
 
   const [creatingNoteId, setCreatingNoteId] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
-  const [renamingConversationId, setRenamingConversationId] = useState<string | null>(null)
-  const [openConversationId, setOpenConversationId] = useState<string | null>(() => (
-    activeConversationId !== undefined
-      && space?.conversations?.some((conversation) => conversation.conversationId === activeConversationId)
-      ? activeConversationId
-      : null
-  ))
-  // Host 加载下一条会话期间继续显示当前会话，避免右栏短暂回落到资料页。
-  const [pendingConversationId, setPendingConversationId] = useState<string | null>(null)
-  const conversationSwitchRequestRef = useRef(0)
   const [creatingFolder, setCreatingFolder] = useState(false)
   const [creatingReferenceFile, setCreatingReferenceFile] = useState<{ referenceId: string; parentId: string; parentPath: string } | null>(null)
   const referenceCreationRequestRef = useRef(0)
@@ -161,37 +138,23 @@ export function SpacePage({
     && (notes.some((note) => note.id === selectedId) || getItem(tree, selectedId) !== undefined)
   const previousMemoryKeyRef = useRef(memoryKey)
 
-  // 显式资料选择优先于会话；切换空间时再交还给宿主活动会话。
-  const explicitItemSelectionRef = useRef(false)
   useLayoutEffect(() => {
     if (previousMemoryKeyRef.current === memoryKey) return
     previousMemoryKeyRef.current = memoryKey
-    explicitItemSelectionRef.current = false
     dragOrderRef.current = null
-    conversationSwitchRequestRef.current += 1
     referenceCreationRequestRef.current += 1
     setDragOrder(null)
     setCreatingNoteId(null)
     setActionError(null)
-    setRenamingConversationId(null)
-    setPendingConversationId(null)
-    setOpenConversationId(
-      activeConversationId !== undefined && space?.conversations?.some((conversation) => conversation.conversationId === activeConversationId)
-        ? activeConversationId
-        : null,
-    )
     setCreatingFolder(false)
     setCreatingReferenceFile(null)
     setPendingSpaceConfirmation(null)
     setSelectedId(targetId ?? rememberedSelectedId ?? null)
-  }, [activeConversationId, memoryKey, notes, projectedTree, rememberedSelectedId, space?.conversations, targetId])
+  }, [memoryKey, rememberedSelectedId, targetId])
 
   function selectItem(id: string) {
-    explicitItemSelectionRef.current = true
+    onOpenPreview()
     setActionError(null)
-    conversationSwitchRequestRef.current += 1
-    setPendingConversationId(null)
-    setOpenConversationId(null)
     setSelectedId(id)
   }
 
@@ -208,7 +171,7 @@ export function SpacePage({
   function selectTreeItem(id: string) {
     const item = getItem(tree, id)
     if (item === undefined || item.type === 'folder') {
-      selectItem(id)
+      setSelectedId(id)
       return
     }
     const referenceId = item.referenceId ?? item.id
@@ -236,12 +199,11 @@ export function SpacePage({
   }, [expandedIds, memoryKey, selectedId])
   useEffect(() => {
     if (targetId !== null && targetId !== undefined) return
-    if (openConversationId !== null || pendingConversationId !== null) return
     if (selectedId === null) return
     if (selectedStillExists) return
     const nextId = notes[0]?.id ?? firstSelectableSpaceTreeItemId(tree)
     setSelectedId(nextId)
-  }, [openConversationId, pendingConversationId, selectedId, selectedStillExists, targetId, notes, tree])
+  }, [selectedId, selectedStillExists, targetId, notes, tree])
   useLayoutEffect(() => {
     const explorer = explorerRef.current
     if (explorer !== null) explorer.scrollTop = spaceViewMemory.get(memoryKey)?.scrollTop ?? 0
@@ -249,52 +211,16 @@ export function SpacePage({
 
   useEffect(() => {
     if (targetId) {
-      conversationSwitchRequestRef.current += 1
-      setPendingConversationId(null)
-      setOpenConversationId(null)
       setSelectedId(targetId)
     }
   }, [targetId])
-
-  // Host 确认活动会话后再提交本地选择，等待期间保持原会话表面。
-  useEffect(() => {
-    if (pendingConversationId === null || activeConversationId !== pendingConversationId) return
-    setOpenConversationId(pendingConversationId)
-    setPendingConversationId(null)
-  }, [activeConversationId, pendingConversationId])
-
-  useEffect(() => {
-    if (openConversationId === null) return
-    if (space?.conversations?.some((conversation) => conversation.conversationId === openConversationId) === true) return
-    setOpenConversationId(null)
-  }, [openConversationId, space?.conversations])
 
   const selectedNote = notes.find((n) => n.id === selectedId)
   const selectedItem = selectedId ? getItem(tree, selectedId) : null
   const selectedReferenceRoot = selectedItem?.referenceId === undefined ? undefined : getItem(tree, selectedItem.referenceId)
   const itemCount = notes.length + (space?.itemCount ?? countSpaceItems(projectedTree))
-  // 本地打开、等待 Host 确认，或 Host 明确归属本空间时展示会话；显式资料选择优先。
-  const conversationSurfaceVisible = conversationContent !== undefined && (
-    (openConversationId !== null && openConversationId === activeConversationId)
-    || (pendingConversationId !== null && (
-      openConversationId !== null || activeConversationId === pendingConversationId
-    ))
-    || (activeConversationId !== undefined
-      && !explicitItemSelectionRef.current
-      && (
-        (activeConversationOwner?.kind === "space" && activeConversationOwner.id === spaceId)
-        || (conversationSurfaceRequest !== null && conversationSurfaceRequest !== undefined
-          && conversationSurfaceRequest.conversationId === activeConversationId
-          && conversationSurfaceRequest.spaceId === spaceId)
-      ))
-  )
-  const visibleConversationId = openConversationId ?? activeConversationId
-  const visibleConversationTitle = space?.conversations?.find(
-    (conversation) => conversation.conversationId === visibleConversationId,
-  )?.title ?? (visibleConversationId === activeConversationId ? activeConversationTitle : undefined) ?? '对话'
-
   function handleCreateNote() {
-    explicitItemSelectionRef.current = true
+    onOpenPreview()
     if (notes.length === 0) {
       const note = create({ spaceId, title: '写下第一篇笔记' })
       setSelectedId(note.id)
@@ -306,7 +232,6 @@ export function SpacePage({
   }
 
   function openNameDraft(id: string) {
-    explicitItemSelectionRef.current = true
     setSelectedId(id)
     setCreatingNoteId(id)
   }
@@ -327,8 +252,25 @@ export function SpacePage({
   }
 
   function handleRenameItem(item: SpaceItem, name: string) {
+    if (item.externalChild) {
+      const referenceId = item.referenceId
+      const relativePath = item.relativePath
+      if (referenceId === undefined || relativePath === undefined) return
+      void runSpaceAction(async () => {
+        const renamedRelativePath = await renameSpaceReferenceEntry(referenceId, relativePath, name)
+        mountedTree.discardReferenceSubtree(referenceId, relativePath)
+        await mountedTree.refreshParentOf(referenceId, renamedRelativePath)
+        setSelectedId((current) => remapReferenceSubtreeSelection(
+          current,
+          referenceId,
+          relativePath,
+          renamedRelativePath,
+        ))
+      })
+      return
+    }
     const rename = actions?.rename
-    if (item.externalChild || rename === undefined) return
+    if (rename === undefined) return
     void runSpaceAction(() => rename({ kind: 'reference', id: item.id }, name))
   }
   function requestSpaceConfirmation(request: ActionConfirmationRequest, action: () => void | Promise<void>): void {
@@ -343,7 +285,29 @@ export function SpacePage({
   }
 
   function handleDeleteItem(item: SpaceItem) {
-    if (item.externalChild) return
+    if (item.externalChild) {
+      const referenceId = item.referenceId
+      const relativePath = item.relativePath
+      if (referenceId === undefined || relativePath === undefined) return
+      const deletesFolder = item.type === 'folder'
+      requestSpaceConfirmation({
+        eyebrow: '已挂载资料',
+        title: deletesFolder
+          ? `删除“${item.name}”及其中的所有内容`
+          : `删除“${item.name}”`,
+        description: deletesFolder
+          ? '这会从磁盘递归删除该文件夹及其中的所有内容。'
+          : '这会从磁盘物理删除该文件。',
+        consequence: '此操作不可撤销。',
+        confirmLabel: deletesFolder ? '删除文件夹' : '删除文件',
+      }, async () => {
+        await deleteSpaceReferenceEntry(referenceId, relativePath)
+        mountedTree.discardReferenceSubtree(referenceId, relativePath)
+        await mountedTree.refreshParentOf(referenceId, relativePath)
+        setSelectedId((current) => isReferenceSubtreeSelection(current, referenceId, relativePath) ? null : current)
+      })
+      return
+    }
     if (item.domainKind === 'local_file' || item.domainKind === 'workspace' || item.domainKind === 'web_reference' || item.domainKind === 'generated_artifact') return
     if (item.domainKind === 'managed_folder') {
       const removeReference = actions?.removeReference
@@ -405,28 +369,6 @@ export function SpacePage({
     if (item.openUrl !== undefined) window.open(item.openUrl, '_blank', 'noopener,noreferrer')
   }
 
-  async function openConversation(conversationId: string) {
-    if (onOpenConversation === undefined) return
-    setActionError(null)
-    const requestId = conversationSwitchRequestRef.current + 1
-    conversationSwitchRequestRef.current = requestId
-    setPendingConversationId(conversationId)
-    try {
-      const opened = await onOpenConversation(conversationId)
-      if (conversationSwitchRequestRef.current !== requestId) return
-      if (opened === false) {
-        setPendingConversationId(null)
-        return
-      }
-      setOpenConversationId(conversationId)
-      setPendingConversationId(null)
-    } catch (error) {
-      if (conversationSwitchRequestRef.current !== requestId) return
-      setPendingConversationId(null)
-      setActionError(actionErrorMessage(error))
-    }
-  }
-
   async function runSpaceAction(operation: () => void | Promise<void>) {
     setActionError(null)
     try {
@@ -448,6 +390,7 @@ export function SpacePage({
       ? tree.find((item) => isFileSystemFolderKind(item.domainKind) && item.referenceId !== undefined)
       : getItem(tree, sourceReferenceId)
     if (root === undefined) return
+    onActivateReading()
     let parent = root
     if (targetItem !== undefined && sourceReferenceId !== undefined) {
       if (targetItem.type === 'folder') parent = targetItem
@@ -486,7 +429,8 @@ export function SpacePage({
 
   return (
     <DndProvider backend={HTML5Backend}>
-      <section className="personal-space-surface flex flex-1 overflow-hidden" style={{ minHeight: 0 }}>
+      <section className="personal-space-surface relative flex min-w-0 flex-1 overflow-hidden" style={{ minHeight: 0 }}>
+        <WorkbenchExplorer collapsed={explorerCollapsed}>
         <SpaceExplorer
           space={space}
           itemCount={itemCount}
@@ -540,29 +484,10 @@ export function SpacePage({
               setCreatingReferenceFile(null)
             },
           }}
-          conversations={{
-            items: space?.conversations ?? [],
-            selectedId: pendingConversationId ?? openConversationId,
-            renamingId: renamingConversationId,
-            onOpen: (conversationId) => { void openConversation(conversationId) },
-            onStartRename: setRenamingConversationId,
-            onRename: (conversationId, title) => {
-              void onRenameConversation?.(conversationId, title)
-              setRenamingConversationId(null)
-            },
-            onCancelRename: () => setRenamingConversationId(null),
-            onTogglePinned: (conversationId, pinned) => {
-              void onToggleConversationPinned?.(conversationId, pinned)
-            },
-            onDelete: (conversationId) => { void onDeleteConversation?.(conversationId) },
-          }}
         />
+        </WorkbenchExplorer>
 
         <SpaceContent
-          conversationVisible={conversationSurfaceVisible}
-          conversationTitle={visibleConversationTitle}
-          conversationContent={conversationContent}
-          onEnterFocus={onEnterFocus}
           selectedNote={selectedNote}
           onSaveNote={update}
           onCloseNote={() => setSelectedId(null)}
@@ -583,4 +508,28 @@ export function SpacePage({
       />
     </DndProvider>
   )
+}
+
+function isReferenceSubtreeSelection(
+  selectedId: string | null,
+  referenceId: string,
+  relativePath: string,
+): boolean {
+  if (selectedId === null) return false
+  const entryId = referenceChildId(referenceId, relativePath)
+  return selectedId === entryId || selectedId.startsWith(referenceChildId(referenceId, `${relativePath}/`))
+}
+
+function remapReferenceSubtreeSelection(
+  selectedId: string | null,
+  referenceId: string,
+  previousRelativePath: string,
+  nextRelativePath: string,
+): string | null {
+  if (selectedId === null) return null
+  const previousEntryId = referenceChildId(referenceId, previousRelativePath)
+  if (selectedId === previousEntryId) return referenceChildId(referenceId, nextRelativePath)
+  const previousPrefix = referenceChildId(referenceId, `${previousRelativePath}/`)
+  if (!selectedId.startsWith(previousPrefix)) return selectedId
+  return `${referenceChildId(referenceId, `${nextRelativePath}/`)}${selectedId.slice(previousPrefix.length)}`
 }
