@@ -31,3 +31,10 @@ local-assets/
 
 # Standalone frontend prototype template
 panel-template/
+
+# Local evaluation material and one-off exports
+panel-template-export/
+panel-template-upload50/
+panel-template-export.zip
+scripts/eval-*.mjs
+scripts/tmp-*.py
