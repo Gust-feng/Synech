@@ -16,6 +16,8 @@
     "build:node": "pnpm generate:icons && tsc -p tsconfig.json && pnpm copy:initial-workbench-assets",
     "copy:initial-workbench-assets": "node scripts/copy-initial-workbench-assets.mjs",
     "copy:sub-agents": "node scripts/copy-sub-agent-assets.mjs",
+    "test": "pnpm clean:dist && pnpm build:node && pnpm check:baseline && pnpm test:core",
+    "test:core": "node --test --test-concurrency=1 tests/core-*.test.mjs",
     "check:architecture": "node scripts/check-module-cycles.mjs",
     "check:baseline": "pnpm check:architecture && node scripts/check-architecture-baseline.mjs",
     "check:whitespace": "node scripts/check-whitespace.mjs",
