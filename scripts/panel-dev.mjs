@@ -135,11 +135,12 @@ if (args.smoke || args.desktop) {
       startRestartableDesktop([
         electronBin,
         panelDesktopEntry,
+        "--",
         "--host",
         args.host,
         "--port",
         String(apiPort),
-        "--dev-url",
+        "--synech-dev-url",
         `http://${args.host}:${frontendPort}/`,
         ...productHomeArgs(args.productHome),
       ], { env: childEnv });
