@@ -8,7 +8,6 @@ import { prefetchDocumentSurface } from '../documentPreviewWarmup'
 import { fetchDocumentPreview, getCachedReferencePreview } from '../referencePreviewClient'
 import type { SpaceItem } from '../useMountedTree'
 import { CollectSpaceReferenceButton, canCollectSpaceReference } from './space-actions'
-import { SpaceConversationSurface } from './space-conversations'
 
 export function prefetchReferencePreview(referenceId: string, relativePath: string): Promise<void> {
   const cached = getCachedReferencePreview(referenceId, relativePath)
@@ -22,10 +21,6 @@ export function prefetchReferencePreview(referenceId: string, relativePath: stri
 }
 
 export function SpaceContent({
-  conversationVisible,
-  conversationTitle,
-  conversationContent,
-  onEnterFocus,
   selectedNote,
   onSaveNote,
   onCloseNote,
@@ -35,10 +30,6 @@ export function SpaceContent({
   referencePreviewRef,
   onOpenReference,
 }: {
-  conversationVisible: boolean
-  conversationTitle: string
-  conversationContent: ReactNode
-  onEnterFocus?: () => void
   selectedNote: Note | undefined
   onSaveNote: (id: string, patch: { title?: string; bodyMarkdown?: string }) => void
   onCloseNote: () => void
@@ -49,16 +40,6 @@ export function SpaceContent({
   onOpenReference: (item: SpaceItem) => void
 }) {
   const brain = useBrain()
-
-  if (conversationVisible) {
-    return (
-      <SpaceConversationSurface
-        title={conversationTitle}
-        content={conversationContent}
-        onEnterFocus={onEnterFocus}
-      />
-    )
-  }
 
   if (selectedNote !== undefined) {
     return (

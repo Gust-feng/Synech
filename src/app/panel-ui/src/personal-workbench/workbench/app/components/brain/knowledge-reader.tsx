@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
-import { CornerUpLeft, Link2, Plus, Trash2, X } from 'lucide-react'
+import { ChevronRight, CornerUpLeft, Link2, Plus, Trash2, X } from 'lucide-react'
 import { MarkdownDocumentSurface } from '../MarkdownDocumentSurface'
 import { getNote } from '../notesStore'
 import { useBrain, type ResolvedPage } from '../brainStore'
 import { knowledgePageIcon } from '../knowledge-view-projection'
 import { ReferencePreview } from '../ReferencePreview'
+import { CollaborationToggle } from '../CollaborationToggle'
 
 export function KnowledgeReader({
   page,
@@ -27,9 +28,16 @@ export function KnowledgeReader({
   return (
     <section className="flex flex-1 overflow-hidden" style={{ minHeight: 0 }}>
       <div className="flex-1 flex flex-col overflow-hidden min-w-0">
-        {/* 路径面包屑(知识库 › 文件)已上移到顶栏;这里只留内容操作。 */}
-        <header className="shrink-0 flex items-center gap-2 px-5" style={{ height: 44 }}>
-          <div className="flex-1" />
+        <header className="ui-preview-toolbar">
+          <div className="ui-preview-location">
+            <nav className="ui-preview-breadcrumb" aria-label="知识库路径" title={page.title}>
+              <button type="button" onClick={onBack}>知识库</button>
+              <ChevronRight size={12} aria-hidden="true" />
+              <span aria-current="page">{page.title}</span>
+            </nav>
+          </div>
+          <div className="ui-preview-toolbar-actions">
+          <CollaborationToggle available={page.exists} />
           <button
             type="button"
             onClick={() => {
@@ -42,6 +50,7 @@ export function KnowledgeReader({
             <Trash2 size={12} />
             移出
           </button>
+          </div>
         </header>
 
         <div className="flex flex-1 min-h-0 overflow-hidden">

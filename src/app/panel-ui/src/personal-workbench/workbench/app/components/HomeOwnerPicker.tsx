@@ -1,8 +1,10 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { Check, ChevronDown, Layers } from 'lucide-react'
+import type { ConversationOwnerSelection } from '../../../../workbench/navigation-state'
 import type { PersonalWorkspaceProjection } from '../../../workspace'
 
-export type HomeOwnerSelection = { readonly kind: 'space' | 'workspace'; readonly id: string }
+export type HomeOwnerSelection = ConversationOwnerSelection
+
 
 interface HomeOwnerOption {
   readonly kind: 'space' | 'workspace'

@@ -33,7 +33,7 @@ export type PersonalSpaceProjection = {
   readonly description?: string;
   readonly color?: string;
   readonly items: readonly PersonalSpaceItemProjection[];
-  /** 关联对话由组合根 read-model 提供；新对话不进入 Space 树。 */
+  /** Space-scoped query data; the resource tree does not render conversation entries. */
   readonly conversations?: readonly PersonalSpaceConversationContext[];
 };
 

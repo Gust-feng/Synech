@@ -33,6 +33,20 @@ export function ConversationComposer({ input, onCompositionChange }: Conversatio
     if (input.autoFocus === true) ref.current?.focus()
   }, [input.autoFocus])
 
+  useEffect(() => {
+    const textarea = ref.current
+    if (textarea === null) return
+    let previousWidth = textarea.clientWidth
+    const observer = new ResizeObserver(() => {
+      if (textarea.clientWidth === previousWidth) return
+      previousWidth = textarea.clientWidth
+      textarea.style.height = 'auto'
+      textarea.style.height = `${Math.min(textarea.scrollHeight, 128)}px`
+    })
+    observer.observe(textarea)
+    return () => observer.disconnect()
+  }, [])
+
   const submit = (): void => {
     if (canSend) input.onSubmit()
   }

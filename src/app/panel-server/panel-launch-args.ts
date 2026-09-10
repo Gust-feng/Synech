@@ -58,10 +58,11 @@ function parsePanelArgsWithDefaults(
       productHome = requireNext(argv, index, "--home"); index += 1; continue;
     }
     if (arg.startsWith("--home=")) { productHome = requireValue(arg.slice("--home=".length), "--home"); continue; }
-    if (arg === "--dev-url") {
-      devUrl = requireNext(argv, index, "--dev-url"); index += 1; continue;
+    // Electron consumes --dev-url before it reaches this app process.
+    if (arg === "--synech-dev-url") {
+      devUrl = requireNext(argv, index, "--synech-dev-url"); index += 1; continue;
     }
-    if (arg.startsWith("--dev-url=")) { devUrl = requireValue(arg.slice("--dev-url=".length), "--dev-url"); continue; }
+    if (arg.startsWith("--synech-dev-url=")) { devUrl = requireValue(arg.slice("--synech-dev-url=".length), "--synech-dev-url"); continue; }
     throw new Error(`Unknown panel argument: ${arg}`);
   }
 

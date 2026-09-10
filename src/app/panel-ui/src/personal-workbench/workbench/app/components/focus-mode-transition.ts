@@ -33,7 +33,7 @@ let transitionSequence = 0
 export function runFocusModeTransition(input: FocusModeTransitionInput): FocusModeTransitionHandle {
   const root = input.root
   const surface = root?.querySelector<HTMLElement>('.ui-conversation-surface') ?? null
-  const main = root?.querySelector<HTMLElement>('.ui-workbench-main') ?? null
+  const main = root?.querySelector<HTMLElement>('.ui-workbench-conversation') ?? null
 
   if (root !== null) activeTransitions.get(root)?.handle.cancel()
 
@@ -102,7 +102,9 @@ function exitFocusMode(
   update: () => void,
 ): FocusModeTransitionHandle {
   const surfaceRect = surface.getBoundingClientRect()
-  const targetSurfaceRect = main.getBoundingClientRect()
+  const paneRect = main.getBoundingClientRect()
+  const paneHeaderHeight = main.querySelector<HTMLElement>('.ui-workbench-conversation-header')?.offsetHeight ?? 0
+  const targetSurfaceRect = new DOMRect(paneRect.x, paneRect.y + paneHeaderHeight, paneRect.width, paneRect.height - paneHeaderHeight)
   const content = surface.querySelector<HTMLElement>('.ui-conversation-scroll-content')
   const composer = surface.querySelector<HTMLElement>('.ui-conversation-composer-frame')
   const header = surface.querySelector<HTMLElement>('.ui-focus-header')

@@ -18,15 +18,12 @@ import {
   SidebarSectionLabel,
 } from './SidebarRows'
 import { ActionConfirmationDialog } from './ActionConfirmationDialog'
-import type { ConversationSummary } from '@ui/contracts/conversation'
 import type { PersonalSpaceProjection } from '../../../space'
 import type { PersonalWorkspaceProjection } from '../../../workspace'
 import { WorkspaceSidebarLoadingRows, WorkspaceSidebarRow } from './WorkspaceSidebarRow'
 import type { WorkbenchView } from '../../../../workbench/navigation-state'
 
-/**
- * 所有会话统一进入空间右侧对话面板。
- */
+/** Global navigation selects resource contexts; conversation navigation belongs to the right pane. */
 export type View = WorkbenchView
 
 interface SidebarProps {
@@ -34,7 +31,6 @@ interface SidebarProps {
   onNavigate: (v: View) => void
   onOpenSettings: () => void
   collapsed: boolean
-  conversations: readonly ConversationSummary[]
   spaces: readonly PersonalSpaceProjection[]
   spaceLoadState?: {
     readonly loading: boolean
@@ -54,14 +50,10 @@ interface SidebarProps {
   onHideWorkspace?: (workspaceId: string) => void | Promise<void>
   onReconnectWorkspace?: (workspaceId: string) => void | Promise<void>
   activeSpaceId: string | null
-  activeConversationId?: string
-  onOpenConversation: (conversationId: string) => boolean | Promise<boolean>
-  pendingConversationIds: ReadonlySet<string>
-  onRenameConversation: (conversationId: string, title: string) => void | Promise<void>
-  onToggleConversationPinned: (conversationId: string, pinned: boolean) => void | Promise<void>
-  onDeleteConversation: (conversationId: string) => void | Promise<void>
+  activeWorkspaceId: string | null
   onOpenSpace?: (spaceId: string) => void | Promise<void>
   onActiveSpaceChange: (spaceId: string) => void
+  onActiveWorkspaceChange: (workspaceId: string) => void
   onCreateSpace?: (title: string) => void | Promise<void>
   onRenameSpace?: (spaceId: string, title: string) => void | Promise<void>
   onDeleteSpace?: (spaceId: string) => void | Promise<void>
@@ -78,7 +70,6 @@ export function Sidebar({
   onNavigate,
   onOpenSettings,
   collapsed,
-  conversations,
   spaces,
   spaceLoadState,
   workspaces = [],
@@ -87,14 +78,10 @@ export function Sidebar({
   onHideWorkspace,
   onReconnectWorkspace,
   activeSpaceId,
-  activeConversationId,
-  onOpenConversation,
-  pendingConversationIds,
-  onRenameConversation,
-  onToggleConversationPinned,
-  onDeleteConversation,
+  activeWorkspaceId,
   onOpenSpace,
   onActiveSpaceChange,
+  onActiveWorkspaceChange,
   onCreateSpace,
   onRenameSpace,
   onDeleteSpace,
@@ -109,45 +96,11 @@ export function Sidebar({
     label: space.title,
     dot: space.color ?? SPACE_DOT_FALLBACK,
   })), [spaces])
-  const orderedConversations = useMemo(
-    () => [...conversations].sort(compareConversations),
-    [conversations],
-  )
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameSelectAll, setRenameSelectAll] = useState(false)
   const pendingSpaceIdsRef = useRef<Set<string> | null>(null)
-  const [openingConversationId, setOpeningConversationId] = useState<string | null>(null)
-  const conversationOpenRequestRef = useRef(0)
   const [pendingSpaceDeletion, setPendingSpaceDeletion] = useState<{ readonly id: string; readonly label: string } | null>(null)
   const [pendingWorkspaceRemoval, setPendingWorkspaceRemoval] = useState<{ readonly id: string; readonly label: string } | null>(null)
-
-  async function openConversation(conversationId: string) {
-    if (openingConversationId === conversationId || pendingConversationIds.has(conversationId)) return
-    const requestId = ++conversationOpenRequestRef.current
-    setOpeningConversationId(conversationId)
-    try {
-      const opened = await onOpenConversation(conversationId)
-      if (conversationOpenRequestRef.current !== requestId) return
-      // The host opens the loaded Conversation in its current Synech surface.
-      if (opened !== false) onNavigate('space')
-    } catch {
-      // The runtime owns the visible load error; the sidebar only prevents a false navigation.
-    } finally {
-      if (conversationOpenRequestRef.current === requestId) {
-        setOpeningConversationId((current) => current === conversationId ? null : current)
-      }
-    }
-  }
-
-  // Conversation metadata becomes active before historical runs finish
-  // loading. Navigate on that authoritative state change instead of keeping
-  // the previous surface mounted until the full load promise settles.
-  // The host owns the target surface while the Sidebar mirrors the loaded Conversation.
-  useEffect(() => {
-    if (openingConversationId === null || activeConversationId !== openingConversationId) return
-    onNavigate('space')
-    setOpeningConversationId(null)
-  }, [activeConversationId, onNavigate, openingConversationId])
 
   useEffect(() => {
     const previousIds = pendingSpaceIdsRef.current
@@ -340,22 +293,10 @@ export function Sidebar({
             <WorkspaceSidebarRow
               key={workspace.workspaceId}
               workspace={workspace}
+              active={view === 'workspace' && activeWorkspaceId === workspace.workspaceId}
+              onOpen={() => onActiveWorkspaceChange(workspace.workspaceId)}
               onDelete={() => setPendingWorkspaceRemoval({ id: workspace.workspaceId, label: workspace.title })}
               onReconnect={() => { void onReconnectWorkspace?.(workspace.workspaceId) }}
-              conversations={orderedConversations.filter((conversation) =>
-                conversation.owner?.kind === 'workspace' && conversation.owner.id === workspace.workspaceId)}
-              activeConversationId={activeConversationId}
-              openConversation={openConversation}
-              pendingConversationIds={pendingConversationIds}
-              renamingConversationId={renamingId}
-              onStartRenameConversation={(conversationId) => { setRenameSelectAll(false); setRenamingId(conversationId) }}
-              onRenameConversation={(conversationId, title) => {
-                void onRenameConversation(conversationId, title)
-                finishRename()
-              }}
-              onCancelRenameConversation={finishRename}
-              onToggleConversationPinned={(conversationId, pinned) => void onToggleConversationPinned(conversationId, pinned)}
-              onDeleteConversation={(conversationId) => void onDeleteConversation(conversationId)}
             />
           ))}
           {workspaceLoadState?.error !== undefined && (
@@ -436,26 +377,4 @@ function SpaceLoadFailure(props: {
       </button>
     </div>
   )
-}
-
-/**
- * 会话行尾的运行状态标志：处理中/排队用循环圆环，等待用户决定用强调点，
- * 失败用三角感叹号，完成用安静小圆点。idle 与用户主动取消不显示任何标志。
- * 只消费后端 read-model 的 ConversationSummary 状态，不本地猜测。
- */
-function compareConversations(left: ConversationSummary, right: ConversationSummary): number {
-  const leftPinned = left.pinnedAt !== undefined
-  const rightPinned = right.pinnedAt !== undefined
-  if (leftPinned !== rightPinned) return rightPinned ? 1 : -1
-  if (leftPinned && rightPinned) {
-    const pinnedOrder = timestampValue(right.pinnedAt) - timestampValue(left.pinnedAt)
-    if (pinnedOrder !== 0) return pinnedOrder
-  }
-  return timestampValue(right.updatedAt) - timestampValue(left.updatedAt)
-}
-
-function timestampValue(value: string | undefined): number {
-  if (value === undefined) return 0
-  const timestamp = Date.parse(value)
-  return Number.isFinite(timestamp) ? timestamp : 0
 }

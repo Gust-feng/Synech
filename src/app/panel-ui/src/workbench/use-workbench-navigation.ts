@@ -3,7 +3,6 @@ import {
   createInitialWorkbenchNavigationState,
   reduceWorkbenchNavigation,
   type ConversationOwnerSelection,
-  type ConversationSurfaceRequest,
   type WorkbenchNavigationState,
   type WorkbenchView,
 } from "./navigation-state";
@@ -14,9 +13,9 @@ export type WorkbenchNavigationController = {
   readonly setBrainSelection: (id: string | null) => void;
   readonly setSpaceTarget: (id: string | null) => void;
   readonly setActiveSpace: (id: string | null) => void;
+  readonly setActiveWorkspace: (id: string | null) => void;
   readonly setHomeOwner: (owner: ConversationOwnerSelection | null) => void;
   readonly focusHomeInput: () => void;
-  readonly setConversationSurface: (request: ConversationSurfaceRequest | null) => void;
   readonly syncContextSelection: (input: {
     readonly spaceIds: readonly string[];
     readonly workspaceIds: readonly string[];
@@ -42,14 +41,14 @@ export function useWorkbenchNavigation(): WorkbenchNavigationController {
   const setActiveSpace = useCallback((id: string | null) => {
     dispatch({ type: "set-active-space", id });
   }, []);
+  const setActiveWorkspace = useCallback((id: string | null) => {
+    dispatch({ type: "set-active-workspace", id });
+  }, []);
   const setHomeOwner = useCallback((owner: ConversationOwnerSelection | null) => {
     dispatch({ type: "set-home-owner", owner });
   }, []);
   const focusHomeInput = useCallback(() => {
     dispatch({ type: "focus-home-input" });
-  }, []);
-  const setConversationSurface = useCallback((request: ConversationSurfaceRequest | null) => {
-    dispatch({ type: "set-conversation-surface", request });
   }, []);
   const syncContextSelection = useCallback((input: {
     readonly spaceIds: readonly string[];
@@ -64,9 +63,9 @@ export function useWorkbenchNavigation(): WorkbenchNavigationController {
     setBrainSelection,
     setSpaceTarget,
     setActiveSpace,
+    setActiveWorkspace,
     setHomeOwner,
     focusHomeInput,
-    setConversationSurface,
     syncContextSelection,
   };
 }

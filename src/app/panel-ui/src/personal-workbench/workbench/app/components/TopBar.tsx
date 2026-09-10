@@ -1,4 +1,4 @@
-import { ChevronLeft, Maximize2, Search, PanelLeftOpen, PanelLeftClose } from 'lucide-react'
+import { ChevronLeft, ListTree, Maximize2, Search, PanelLeftOpen, PanelLeftClose } from 'lucide-react'
 import { DesktopWindowControls } from './DesktopWindowControls'
 import type { WorkbenchView as View } from '../../../../workbench/navigation-state'
 import {
@@ -14,19 +14,19 @@ interface TopBarProps {
   onSearch: () => void
   sidebarCollapsed: boolean
   onToggleSidebar: () => void
+  explorerCollapsed: boolean
+  onToggleExplorer?: () => void
   surfaceTitle?: string
   /** 对话固定 Owner 徽标，如“空间 · 产品规划”。 */
   surfaceOwner?: string
   conversationState?: LiveConversationState
   onResumeConversation?: () => void
   onEnterFocus?: () => void
-  // 知识库路径面包屑:打开的文件标题(无则在知识库根部);点根部回到知识库列表。
-  brainFileTitle: string | null
   onBrainRoot: () => void
 }
 
 // 有自己完整 header 的视图 → TopBar 只保留返回 + 标题。
-const MINIMAL_VIEWS: View[] = ['space']
+const MINIMAL_VIEWS: View[] = ['space', 'workspace']
 
 export function TopBar({
   view,
@@ -34,12 +34,13 @@ export function TopBar({
   onSearch,
   sidebarCollapsed,
   onToggleSidebar,
+  explorerCollapsed,
+  onToggleExplorer,
   surfaceTitle,
   surfaceOwner,
   conversationState,
   onResumeConversation,
   onEnterFocus,
-  brainFileTitle,
   onBrainRoot,
 }: TopBarProps) {
   const isMinimal = MINIMAL_VIEWS.includes(view)
@@ -59,6 +60,7 @@ export function TopBar({
           type="button"
           onClick={onToggleSidebar}
           aria-label={sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}
+          title={sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}
           aria-expanded={!sidebarCollapsed}
           className="topbar-nav-button shrink-0"
         >
@@ -66,6 +68,19 @@ export function TopBar({
             ? <PanelLeftOpen size={15} strokeWidth={1.75} />
             : <PanelLeftClose size={15} strokeWidth={1.75} />}
         </button>
+        {onToggleExplorer !== undefined && (
+          <button
+            type="button"
+            onClick={onToggleExplorer}
+            data-explorer-toggle
+            aria-label={explorerCollapsed ? '展开目录' : '收起目录'}
+            title={explorerCollapsed ? '展开目录' : '收起目录'}
+            aria-expanded={!explorerCollapsed}
+            className="topbar-nav-button shrink-0"
+          >
+            <ListTree size={15} aria-hidden="true" />
+          </button>
+        )}
         {view !== 'search' && (
           <button
             type="button"
@@ -83,8 +98,7 @@ export function TopBar({
           </button>
         )}
         {view === 'home' ? null : view === 'brain' ? (
-          /* 知识库:走真正的路径面包屑「知识库 › 文件」,不再是「首页」返回。
-             复用与其它视图完全一致的按钮 / 标题样式,只是把返回目标换成知识库根部。 */
+          /* 顶栏只负责全局导航，文件路径与阅读操作留在预览头部。 */
           <>
             <button
               type="button"
@@ -96,14 +110,6 @@ export function TopBar({
                 知识库
               </span>
             </button>
-            {brainFileTitle && (
-              <span
-                className="text-xs truncate max-w-[200px] -ml-1"
-                style={{ color: 'var(--ui-text-3)' }}
-              >
-                {brainFileTitle}
-              </span>
-            )}
           </>
         ) : (
           <>

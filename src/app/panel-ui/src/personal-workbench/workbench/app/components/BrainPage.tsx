@@ -22,6 +22,7 @@ import {
 } from './brain/knowledge-cards'
 import { KnowledgeReader } from './brain/knowledge-reader'
 import { useKnowledgeCardWarmup } from './knowledgeCardWarmup'
+import { WorkbenchExplorer } from './WorkbenchExplorer'
 import {
   KnowledgeWiki,
   WIKI_PANE_WIDTH,
@@ -33,10 +34,14 @@ const KNOWLEDGE_VIEW_STORAGE_KEY = panelStorageKey('knowledge.view')
 export function BrainPage({
   selectedId,
   onSelect,
+  explorerCollapsed,
+  onActivateReading,
 }: {
   // 当前打开的文件 id 提升到 App 管理,好让顶栏渲染「知识库 › 文件」的路径面包屑。
   selectedId: string | null
   onSelect: (id: string | null) => void
+  explorerCollapsed: boolean
+  onActivateReading: () => void
 }) {
   const brain = useBrain()
   const themeApi = useThemes()
@@ -98,6 +103,7 @@ export function BrainPage({
     })
   }
   const changeView = (next: KnowledgeView) => {
+    onActivateReading()
     if (next === 'stack' && trail.length === 0 && selected) setTrail([selected.refId])
     setView(next)
     window.localStorage.setItem(KNOWLEDGE_VIEW_STORAGE_KEY, next)
@@ -136,8 +142,9 @@ export function BrainPage({
   }
 
   return (
-    <section className="flex-1 flex" style={{ minHeight: 0 }}>
+    <section className="relative min-w-0 flex-1 flex overflow-hidden" style={{ minHeight: 0 }}>
       {/* ── 左栏:纯导航入口 ── */}
+      <WorkbenchExplorer collapsed={explorerCollapsed} width={224}>
       <KnowledgeNavigation
         nav={nav}
         setNav={(n) => {
@@ -155,6 +162,7 @@ export function BrainPage({
         activeStackPane={activeStackPane}
         onRevealStackPane={navigateStackPane}
       />
+      </WorkbenchExplorer>
 
       <div className="relative min-w-0 flex-1 overflow-hidden">
         <AnimatePresence>

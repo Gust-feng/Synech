@@ -11,6 +11,7 @@ import { Clock, Columns3, CornerUpLeft, LayoutGrid, Link2, X } from 'lucide-reac
 import { useBrain, type ResolvedPage } from '../brainStore'
 import { knowledgeKindLabel, knowledgePageIcon } from '../knowledge-view-projection'
 import { KnowledgePageContent } from './knowledge-reader'
+import { CollaborationToggle } from '../CollaborationToggle'
 
 export const WIKI_PANE_WIDTH = 460 // 每栏总宽
 export const WIKI_SPINE_WIDTH = 46 // 收起后露出的书脊宽
@@ -362,6 +363,7 @@ function Pane({
             {knowledgeKindLabel(page)}
           </span>
           <div className="flex-1" />
+          <CollaborationToggle available={page.exists} />
           {onClose && (
             <button
               type="button"
