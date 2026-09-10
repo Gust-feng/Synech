@@ -270,11 +270,13 @@ export function App(): React.ReactElement {
 
 function memorySettingsScopeFromConversation(
   conversation: {
+    readonly conversationId: string;
     readonly owner?: { readonly kind: "space" | "workspace"; readonly id: string };
   } | undefined,
 ): MemorySettingsScope | null {
   if (conversation === undefined || conversation.owner === undefined) return null;
   return {
     owner: conversation.owner,
+    conversationId: conversation.conversationId,
   };
 }

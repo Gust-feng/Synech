@@ -73,12 +73,14 @@ import {
 import {
   createMemoryAdminApplication,
   createMemoryFeature,
+  createMemoryDiagnostics,
   createMemoryRuntime,
   createMemoryRuntimeHealthTracker,
   POLICY_KEY,
   type MemoryControlRepository,
   type MemoryFeature,
   type MemoryRuntime,
+  type MemoryMaintenanceOutcomeTrace,
 } from "../memory/index.js";
 import { createMemoryMaintenanceScheduler } from "./memory/capture-scheduler.js";
 import { createConfigCenterConsolidationModel } from "./memory/consolidation-model.js";
@@ -540,14 +542,7 @@ function assemblePanelHost(input: {
   const memoryRuntimeHealth = createMemoryRuntimeHealthTracker();
   // Memory 维护调度（0.6.0）：每会话空闲资格 + 全局单 worker；timer 只是唤醒器，
   // 待处理边界的唯一事实源是 durable queued job。
-  const maintenanceOutcomeLog: {
-    readonly at: number;
-    readonly conversationId?: string;
-    readonly ownerKey?: string;
-    readonly outcome: "committed" | "discarded" | "failed" | "retry_queued" | "no_evidence";
-    readonly reason?: string;
-    readonly longTermUpdated: boolean;
-  }[] = [];
+  const maintenanceOutcomeLog: MemoryMaintenanceOutcomeTrace[] = [];
   const memoryCaptureScheduler = createMemoryMaintenanceScheduler({
     controlRepository: memoryControlRepository,
     documentRepository: memoryContentRepository,
@@ -566,11 +561,12 @@ function assemblePanelHost(input: {
       memoryRuntimeHealth.reportFault("capture");
       console.error(`[panel-server] ${topic}`, error);
     },
-    onOutcome: (outcome) => {
+    onOutcome: (outcome, trace) => {
       if (outcome.status === "completed") memoryRuntimeHealth.reportSuccess("capture");
       else if (outcome.status === "failed" || outcome.status === "retry_queued") memoryRuntimeHealth.reportFault("capture");
-      if (outcome.status === "completed" || outcome.status === "failed" || outcome.status === "retry_queued") {
+      if (outcome.status !== "not_claimed") {
         maintenanceOutcomeLog.unshift({
+          ...trace,
           at: Date.now(),
           outcome: outcome.status === "completed"
             ? "committed"
@@ -924,26 +920,24 @@ function assemblePanelHost(input: {
   });
   const memoryFeature = createMemoryFeature({
     adminApplication: memoryAdminApplication,
-    diagnostics: {
-      async getSnapshot() {
-        const [queued, running, done, failed] = await Promise.all([
-          memoryControlRepository.listJobsByStatus("queued"),
-          memoryControlRepository.listJobsByStatus("running"),
-          memoryControlRepository.listJobsByStatus("done"),
-          memoryControlRepository.listJobsByStatus("failed"),
-        ]);
-        return {
-          enabled: true,
-          jobs: {
-            queued: queued.length,
-            running: running.length,
-            done: done.length,
-            failed: failed.length,
-          },
-          recentOutcomes: [...maintenanceOutcomeLog],
+    diagnostics: createMemoryDiagnostics({
+      control: memoryControlRepository,
+      documents: memoryContentRepository,
+      admin: memoryAdminApplication,
+      background: memoryRuntime.backgroundPort,
+      history: memoryRuntime.historyQueryPort,
+      recentOutcomes: () => maintenanceOutcomeLog,
+      getConversation: async (id) => {
+        const conversation = await ordinaryAgentFeature.queries.getConversation(id);
+        const owner = await ordinaryAgentFeature.queries.getConversationOwner(id);
+        return conversation === undefined || owner === undefined ? undefined : {
+          title: conversation.title, owner,
+          active: conversation.activeRunId !== undefined || conversation.queuedRunIds.length > 0,
         };
       },
-    },
+      getBinding: (id) => ordinaryAgentFeature.queries.getMemoryBackground(id),
+      getSpaceTitle: async (id) => (await spaceFeature.queries.getTree(id))?.space.title,
+    }),
   });
   managedSpaceFolderApplication = applicationRuntime.managedSpaceFolderApplication;
   workbenchCoordination = applicationRuntime.workbenchCoordination;

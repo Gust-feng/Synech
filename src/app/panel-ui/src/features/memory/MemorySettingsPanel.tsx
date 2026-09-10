@@ -17,6 +17,7 @@ export type MemorySettingsOwner =
 
 export type MemorySettingsScope = {
   readonly owner?: MemorySettingsOwner;
+  readonly conversationId?: string;
 };
 
 type MemoryScope = { readonly kind: "global" } | Extract<MemorySettingsOwner, { readonly kind: "space" }>;

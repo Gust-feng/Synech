@@ -30,6 +30,16 @@ const mutationBodySchema = z.discriminatedUnion("op", [
   writeMemorySchema,
 ]);
 
+const diagnosticQuerySchema = z.object({
+  spaceId: z.string().min(1).max(256).optional(),
+  conversationId: z.string().min(1).max(256).optional(),
+}).strict();
+const diagnosticSearchSchema = diagnosticQuerySchema.extend({
+  spaceId: z.string().min(1).max(256),
+  query: z.string().trim().min(1).max(2048),
+  source: z.enum(["summary", "transcript", "all"]).default("all"),
+});
+
 export async function handleMemoryCapabilityRoute(
   feature: Pick<MemoryFeature, "queries">,
   request: IncomingMessage,
@@ -49,8 +59,17 @@ export async function handleMemoryDiagnosticsRoute(
   response: ServerResponse,
   url: URL,
 ): Promise<boolean> {
-  if (request.method !== "GET" || url.pathname !== "/api/memory/diagnostics") return false;
-  writeJson(response, 200, { ok: true, diagnostics: await feature.queries.getDiagnosticSnapshot() });
+  if (request.method !== "GET") return false;
+  if (url.pathname === "/api/memory/diagnostics/search") {
+    const query = diagnosticSearchSchema.safeParse(Object.fromEntries(url.searchParams));
+    if (!query.success) throw new PanelHttpError(400, "memory_diagnostic_query_invalid", "检索参数无效。");
+    writeJson(response, 200, { ok: true, result: await feature.queries.searchDiagnosticHistory(query.data) });
+    return true;
+  }
+  if (url.pathname !== "/api/memory/diagnostics") return false;
+  const query = diagnosticQuerySchema.safeParse(Object.fromEntries(url.searchParams));
+  if (!query.success) throw new PanelHttpError(400, "memory_diagnostic_query_invalid", "诊断范围无效。");
+  writeJson(response, 200, { ok: true, diagnostics: await feature.queries.getDiagnosticSnapshot(query.data) });
   return true;
 }
 

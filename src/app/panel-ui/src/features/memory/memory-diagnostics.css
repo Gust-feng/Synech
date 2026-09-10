@@ -1,0 +1,96 @@
+.memory-debug {
+  min-width: 0;
+  font-size: 13px;
+  color: var(--ui-text-1, #292722);
+}
+
+.memory-debug h3,
+.memory-debug h4 { margin: 0; }
+.memory-debug h4 { font-size: 13px; font-weight: 600; }
+.memory-debug h4 small { font-weight: 400; }
+.memory-debug p { margin: 6px 0; line-height: 1.6; }
+.memory-debug button,
+.memory-debug input,
+.memory-debug select { font: inherit; color: inherit; }
+.memory-debug button,
+.memory-debug select,
+.memory-debug-search input {
+  min-height: 30px;
+  padding: 5px 9px;
+  border: 1px solid var(--ui-border, #e1dfda);
+  border-radius: 6px;
+  background: var(--ui-surface, #faf9f7);
+}
+.memory-debug button { cursor: pointer; }
+.memory-debug button:disabled { opacity: .5; cursor: default; }
+.memory-debug button:hover:not(:disabled) { background: var(--ui-surface-hover, #eeebe6); }
+.memory-debug :is(button, input, select, summary):focus-visible {
+  outline: 2px solid var(--ui-accent, #6865a7);
+  outline-offset: 2px;
+}
+
+.memory-debug-toolbar,
+.memory-debug-row-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.memory-debug-toolbar { margin: 16px 0 12px; justify-content: flex-start; }
+.memory-debug-toolbar label,
+.memory-debug-policy label { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.memory-debug .memory-debug-toggle { font-size: 12px; color: var(--ui-text-2, #5f5a53); }
+.memory-debug-toggle input { margin: 0; }
+.memory-debug .memory-debug-back { margin-bottom: 10px; }
+.memory-debug-meta,
+.memory-debug small { color: var(--ui-text-3, #756f68); font-size: 11px; font-variant-numeric: tabular-nums; }
+.memory-debug-policy { padding: 14px 0 2px; }
+.memory-debug-state { color: var(--ui-text-2, #5f5a53); }
+.memory-debug-section { border-top: 1px solid var(--ui-border, #e1dfda); padding-top: 16px; margin-top: 16px; }
+.memory-debug-section > h4 { margin-bottom: 10px; }
+.memory-debug summary { cursor: pointer; }
+.memory-debug-binding { padding: 12px; margin: 12px 0; border-radius: 6px; background: color-mix(in srgb, currentColor 4%, transparent); }
+.memory-debug-binding strong { font-size: 12px; font-weight: 600; }
+.memory-debug-document { margin-top: 9px; }
+.memory-debug-document > summary { padding: 6px 0; }
+.memory-debug pre {
+  max-height: 300px;
+  overflow: auto;
+  margin: 8px 0;
+  padding: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: color-mix(in srgb, currentColor 4%, transparent);
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.65;
+}
+.memory-debug code { overflow-wrap: anywhere; font-size: 11px; }
+.memory-debug-jobs { border-top: 1px solid var(--ui-border, #e1dfda); }
+.memory-debug-job { padding: 10px 0; border-bottom: 1px solid var(--ui-border, #e1dfda); }
+.memory-debug-job > summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 9px; }
+.memory-debug-job > summary::before { content: "+"; width: 9px; color: var(--ui-text-3, #756f68); }
+.memory-debug-job[open] > summary::before { content: "−"; }
+.memory-debug-job-status { font-size: 11px; min-width: 34px; color: var(--ui-text-2, #5f5a53); }
+.memory-debug-job[data-status="failed"] .memory-debug-job-status { color: var(--ui-danger, #b04438); }
+.memory-debug-job-title { flex: 1 1 130px; min-width: 0; overflow-wrap: anywhere; }
+.memory-debug-facts { display: grid; grid-template-columns: 105px minmax(0, 1fr); gap: 7px 12px; margin: 12px 0; line-height: 1.6; }
+.memory-debug-facts dt { color: var(--ui-text-3, #756f68); font-size: 12px; }
+.memory-debug-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.memory-debug-search { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.memory-debug-search input { flex: 1 1 220px; min-width: 100px; }
+.memory-debug-results,
+.memory-debug-traces { list-style: none; padding: 0; margin: 12px 0 0; }
+.memory-debug-results > li,
+.memory-debug-traces > li { padding: 12px 0; border-top: 1px solid var(--ui-border, #e1dfda); }
+.memory-debug-results .memory-debug-row-title > span { font-size: 12px; color: var(--ui-text-2, #5f5a53); }
+.memory-debug-traces li > div { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+.memory-debug-traces time { color: var(--ui-text-3, #756f68); font-size: 11px; }
+.memory-debug-traces code { display: block; margin: 6px 0; }
+.memory-debug-traces button { margin-top: 6px; }
+
+@media (max-width: 650px) {
+  .memory-debug-facts { grid-template-columns: 85px minmax(0, 1fr); gap: 6px; }
+  .memory-debug-job > summary > .memory-debug-meta { flex-basis: 100%; padding-left: 18px; }
+}

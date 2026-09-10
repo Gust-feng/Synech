@@ -286,7 +286,10 @@ export function SettingsDialog(props: {
                 </div>
                 <ResponsivenessDiagnostics />
                 <DeveloperToolStatistics />
-                <MemoryDiagnosticsPanel />
+                <MemoryDiagnosticsPanel scope={props.memoryScope} onOpenMemorySettings={() => setActiveGroup("memory")} onOpenConversation={props.onOpenConversation === undefined ? undefined : (id) => {
+                  props.onClose();
+                  props.onOpenConversation?.(id);
+                }} />
               </>
             )}
             {visibleActiveGroup === "about" && (

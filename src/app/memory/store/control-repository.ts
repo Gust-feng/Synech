@@ -231,6 +231,11 @@ export interface MemoryControlRepository {
     readonly now: number;
   }): Promise<MemoryJobRow | undefined>;
   listJobsByStatus(status: PersistedJobStatus): Promise<readonly MemoryJobRow[]>;
+  readDiagnosticJobs(input: { readonly ownerKey?: string; readonly conversationId?: string; readonly limit: number }): Promise<{
+    readonly counts: Record<PersistedJobStatus, number>;
+    readonly rows: readonly MemoryJobRow[];
+    readonly truncated: boolean;
+  }>;
   /** 启动恢复：把残留 running job 退回 queued 并 attempt+1，返回恢复数量。 */
   recoverInterruptedJobs(): Promise<number>;
 }
@@ -536,6 +541,26 @@ export function createSqliteMemoryControlRepository(
         if (saved === undefined) throw new MemoryError("memory_store_failure", "Deferred memory job vanished.");
         return saved;
       });
+    },
+
+    async readDiagnosticJobs(input) {
+      const filter = "(? IS NULL OR owner_key = ?) AND (? IS NULL OR conversation_id = ?)";
+      const params = [input.ownerKey ?? null, input.ownerKey ?? null, input.conversationId ?? null, input.conversationId ?? null];
+      const counts = { queued: 0, running: 0, done: 0, failed: 0 };
+      for (const status of ["queued", "running", "done", "failed"] as const) {
+        const row = database.connection.prepare(
+          `SELECT COUNT(*) AS count FROM memory_job WHERE ${filter} AND status = ?`,
+        ).get(...params, status);
+        counts[status] = Number(row?.count ?? 0);
+      }
+      const limit = Math.min(Math.max(input.limit, 1), 30);
+      const rows = database.connection.prepare(`
+        SELECT ${JOB_COLUMNS} FROM memory_job WHERE ${filter}
+        ORDER BY CASE status WHEN 'running' THEN 0 WHEN 'failed' THEN 1 WHEN 'queued' THEN 2 ELSE 3 END,
+          updated_at DESC, job_id
+        LIMIT ?
+      `).all(...params, limit) as Record<string, SQLInputValue>[];
+      return { counts, rows: rows.map(parseJobRow), truncated: Object.values(counts).reduce((a, b) => a + b, 0) > rows.length };
     },
 
     async listJobsByStatus(status) {
