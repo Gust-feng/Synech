@@ -208,11 +208,17 @@ async function createReleasedV101Fixture(root) {
       DROP TABLE _fixture_space_references;
       CREATE INDEX space_references_space_idx ON space_references(space_id);
       ALTER TABLE space_references ADD COLUMN web_metadata_json TEXT;
-
-      DROP TABLE research_query;
-      DROP TABLE research_source;
-      DROP TABLE research_task;
     `);
+    // The real v1.0.1 database predates the research owner, so the simulated
+    // fixture must leave no research tables behind for the ordinary startup
+    // migration to collide with. The current build owns this table family, so
+    // discover it from sqlite_master instead of naming tables by hand.
+    const researchTables = database.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'research%'",
+    ).all();
+    for (const { name } of researchTables) {
+      database.exec(`DROP TABLE "${name}"`);
+    }
     database.prepare(`
       INSERT INTO memory_policy(policy_key, policy_kind, scope_owner_key, enabled, revision, updated_at)
       VALUES (?, ?, ?, ?, ?, ?)
