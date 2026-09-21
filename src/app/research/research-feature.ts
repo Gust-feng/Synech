@@ -2,9 +2,15 @@ import { randomUUID } from "node:crypto";
 
 import {
   ResearchError,
+  assertConflictSidesBalanced,
+  assertQuestionOrigin,
+  type ResearchConflictDraft,
   type ResearchEvent,
   type ResearchFeature,
+  type ResearchLedger,
+  type ResearchObservationResult,
   type ResearchPlan,
+  type ResearchQuestionNode,
   type ResearchRepository,
   type ResearchStage,
   type ResearchTask,
@@ -31,6 +37,12 @@ function emptyUsage(): ResearchUsage {
  * - released 后拒绝新命令；
  * - 事件发布不与已提交结果互相影响（observer 抛错不改变命令结果）；
  * - 这里不做编排：轮数、模型调用与降级都由 Application 决定，本层只保存事实。
+ *
+ * 账本段的结构校验在串行队列内完成（无交错，读到的即当前状态）：
+ * - Conflict 双边各 ≥2 个不同来源的 Evidence，单边一律拒绝；
+ * - 新增 Question 必须携带 origin；
+ * - ID 由框架分配、不回收（草稿不携带 ID，strict 校验在 repository 边界复验）。
+ * 规则实现只有一份（contracts.ts 的 assert*）：这里预检，repository 事务内复验。
  */
 export function createResearchFeature(options: {
   readonly repository: ResearchRepository;
@@ -59,6 +71,26 @@ export function createResearchFeature(options: {
     }
   };
 
+  /**
+   * Conflict 双边预检：串行队列内读当前证据，按同一规则函数校验。
+   * repository 在事务内用同一函数复验（port 边界的最后防线）。
+   */
+  const assertConflictsTwoSided = async (
+    taskId: string,
+    conflicts: readonly ResearchConflictDraft[],
+  ): Promise<void> => {
+    if (conflicts.length === 0) return;
+    const evidence = await options.repository.listEvidenceItems(taskId);
+    const evidenceSourceIds = new Map(evidence.map((item) => [item.id, item.sourceId]));
+    for (const conflict of conflicts) {
+      assertConflictSidesBalanced({
+        evidenceAIds: conflict.evidenceAIds,
+        evidenceBIds: conflict.evidenceBIds,
+        evidenceSourceIds,
+      });
+    }
+  };
+
   return {
     commands: {
       async createTask(input): Promise<ResearchTask> {
@@ -82,6 +114,12 @@ export function createResearchFeature(options: {
             createdAt: now(),
             startedAt: null,
             endedAt: null,
+            // 账本结构字段：范围批准与 brief 落账前均为 null；终态事实由 finishTask 写。
+            completion: null,
+            reason: null,
+            ceilingHit: null,
+            scopeApproval: null,
+            briefId: null,
           };
           await options.repository.insertTask(task);
           publish(task.id, task.status);
@@ -156,6 +194,116 @@ export function createResearchFeature(options: {
           return finished;
         });
       },
+
+      // ---- 账本段命令 ----
+      // 这些命令不发布 research.task_changed：它们不改队列状态（queued/running 转换
+      // 才是 worker 的唤醒信号），账本的界面投影随研究 read-model 一起到位。
+
+      async approveScope(input) {
+        return await run(async () =>
+          await options.repository.approveScope({
+            taskId: input.taskId,
+            approval: input.approval,
+            brief: input.brief,
+          }));
+      },
+
+      async appendQuestions(input): Promise<readonly ResearchQuestionNode[]> {
+        return await run(async () => {
+          // 结构预检：每个新问题必须携带 origin（形状规则，无需读库）。
+          for (const question of input.questions) assertQuestionOrigin(question.origin);
+          return await options.repository.appendQuestions({
+            taskId: input.taskId,
+            questions: input.questions,
+            ...(input.edges === undefined ? {} : { edges: input.edges }),
+          });
+        });
+      },
+
+      async appendSourceEntries(input) {
+        return await run(async () =>
+          await options.repository.appendSourceEntries({
+            taskId: input.taskId,
+            drafts: input.drafts,
+          }));
+      },
+
+      async markSourceAccess(input): Promise<void> {
+        await run(async () => {
+          await options.repository.markSourceAccess(input);
+        });
+      },
+
+      async markSourceProvenance(input): Promise<void> {
+        await run(async () => {
+          await options.repository.markSourceProvenance(input);
+        });
+      },
+
+      async appendEvidenceItems(input) {
+        return await run(async () =>
+          await options.repository.appendEvidenceItems({
+            taskId: input.taskId,
+            items: input.items,
+          }));
+      },
+
+      async appendClaims(input) {
+        return await run(async () =>
+          await options.repository.appendClaims({
+            taskId: input.taskId,
+            claims: input.claims,
+          }));
+      },
+
+      async appendGaps(input) {
+        return await run(async () =>
+          await options.repository.appendGaps({
+            taskId: input.taskId,
+            gaps: input.gaps,
+          }));
+      },
+
+      async createConflict(input) {
+        return await run(async () => {
+          // 结构预检：双边各 ≥2 个不同来源的 Evidence（串行队列内读当前证据）。
+          await assertConflictsTwoSided(input.taskId, [input.conflict]);
+          return await options.repository.createConflict({
+            taskId: input.taskId,
+            conflict: input.conflict,
+          });
+        });
+      },
+
+      async appendCitationChecks(input) {
+        return await run(async () =>
+          await options.repository.appendCitationChecks({
+            taskId: input.taskId,
+            checks: input.checks,
+          }));
+      },
+
+      async appendActionEvents(input) {
+        return await run(async () =>
+          await options.repository.appendActionEvents({
+            taskId: input.taskId,
+            events: input.events,
+          }));
+      },
+
+      async applyObservations(input): Promise<ResearchObservationResult> {
+        return await run(async () => {
+          // 结构预检：新问题 origin 必填；新冲突双边各 ≥2 个不同来源的 Evidence。
+          for (const question of input.batch.newQuestions ?? []) {
+            assertQuestionOrigin(question.origin);
+          }
+          await assertConflictsTwoSided(input.taskId, input.batch.newConflicts ?? []);
+          return await options.repository.applyObservations({
+            taskId: input.taskId,
+            batch: input.batch,
+          });
+        });
+      },
     },
 
     queries: {
@@ -176,6 +324,9 @@ export function createResearchFeature(options: {
       },
       async hasQueuedTasks(): Promise<boolean> {
         return await options.repository.hasQueuedTasks();
+      },
+      async ledger(taskId: string): Promise<ResearchLedger | undefined> {
+        return await options.repository.readLedger(taskId);
       },
     },
 
