@@ -1,4 +1,4 @@
-export type WorkbenchView = "home" | "space" | "workspace" | "search" | "brain";
+export type WorkbenchView = "home" | "space" | "workspace" | "search" | "brain" | "research";
 
 export type ConversationOwnerSelection = {
   readonly kind: "space" | "workspace";

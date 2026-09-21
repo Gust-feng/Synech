@@ -9,6 +9,7 @@ import {
   createSqliteMemoryControlRepository,
 } from "../../memory/index.js";
 import { createSqlitePersonalKnowledgeRepository } from "../../personal-knowledge/index.js";
+import { createSqliteResearchRepository } from "../../research/index.js";
 import {
   createFileSystemSpaceReferenceDeletionJournal,
   createSpaceFeature,
@@ -86,6 +87,7 @@ export function openPanelStorage(productPaths: ProductPaths) {
       managedAssets: createSqliteManagedAssetRepository(database),
       spaceRepository: createSqliteSpaceRepository(database),
       personalKnowledgeRepository: createSqlitePersonalKnowledgeRepository(database),
+      researchRepository: createSqliteResearchRepository(database),
       memoryControlRepository: createSqliteMemoryControlRepository(database),
       memoryContentRepository: createSqliteMemoryDocumentRepository(database),
     };

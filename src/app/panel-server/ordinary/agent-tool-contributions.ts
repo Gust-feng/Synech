@@ -18,6 +18,9 @@ import type {
   AgentToolProviderFetch,
   AgentToolRegistryContribution,
 } from "../../tool-center/factory.js";
+import type { ResearchFeature } from "../../research/index.js";
+import type { ResearchApplication } from "../../application/research-application.js";
+import { createResearchToolRegistryContribution } from "../research/research-tools.js";
 import type { HistoryQueryPort } from "../../memory/index.js";
 import { createMemoryHistoryToolRegistryContribution } from "../../memory/history/history-tools.js";
 import type { ContextAttachmentRunContext } from "../../tool-center/adapters/context-attachment-access.js";
@@ -47,6 +50,13 @@ export function createHostFeatureAgentToolContributionResolver(input: {
   readonly pathDependencies?: Pick<PathDependencyFeature, "commands" | "queries">;
   readonly spaces?: Pick<SpaceFeature, "commands" | "queries" | "events">;
   readonly personalKnowledge?: Pick<PersonalKnowledgeFeature, "commands" | "queries">;
+  /** 深度研究：仅当本进程装配了研究能力时才暴露对应工具。 */
+  readonly research?: {
+    readonly feature: Pick<ResearchFeature, "queries">;
+    readonly application: Pick<ResearchApplication, "start" | "readiness">;
+    /** 入队唤醒：由 Host 的研究 worker 提供，工具不承接执行。 */
+    readonly noteQueued: () => void;
+  };
   /** search_history / read_history 的查询端口（Memory Feature 经窄端口提供）。 */
   readonly memoryHistory?: { readonly historyQueryPort: HistoryQueryPort };
   readonly revocationOverlay?: SpaceRevocationOverlay;
@@ -121,6 +131,14 @@ export function createHostFeatureAgentToolContributionResolver(input: {
     ...(input.personalKnowledge === undefined
       ? []
       : [createPersonalKnowledgeToolRegistryContribution({ knowledge: input.personalKnowledge })]),
+    ...(input.research === undefined
+      ? []
+      : [createResearchToolRegistryContribution({
+          application: input.research.application,
+          feature: input.research.feature,
+          // 工具只负责入队与唤醒；执行由 Host worker 承接，模型不直接跑研究循环。
+          noteQueued: input.research.noteQueued,
+        })]),
     ];
   };
 }

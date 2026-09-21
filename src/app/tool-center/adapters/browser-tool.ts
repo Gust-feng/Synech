@@ -24,6 +24,27 @@ export type BrowserToolOptions = {
 const DEFAULT_BROWSER_TEXT_CHARS = 64_000;
 const MAX_BROWSER_TEXT_CHARS = 128_000;
 
+/**
+ * 窄出口：在工具执行外壳之外抓取一次网页正文。
+ *
+ * 深度研究的取证要复用同一套浏览器能力（同一隔离会话、同样的超时与取消语义），
+ * 但不经过工具调用的确认与结果包络。这里只暴露「给 URL、拿文本快照」这一件事，
+ * 不改变 WebFetch 工具的行为。
+ */
+export async function fetchPageSnapshot(input: {
+  readonly url: string;
+  readonly waitMs?: number;
+  readonly automation?: BrowserAutomation;
+  readonly signal?: AbortSignal;
+}): Promise<BrowserSnapshotResult> {
+  const automation = input.automation ?? createPlaywrightBrowserAutomation();
+  return await automation.snapshot({
+    url: requireHttpUrl(input.url),
+    waitMs: Math.min(5_000, Math.max(0, input.waitMs ?? 500)),
+    ...(input.signal === undefined ? {} : { abortSignal: input.signal }),
+  });
+}
+
 export function createBrowserSnapshotTool(options: BrowserToolOptions = {}): ToolExecutor {
   const automation = options.automation ?? createPlaywrightBrowserAutomation();
   return {

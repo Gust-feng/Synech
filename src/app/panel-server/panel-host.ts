@@ -181,6 +181,8 @@ import {
 } from "../application/collaboration-rules-application.js";
 import { createWebReferenceMetadataWorker, type WebReferenceMetadataWorker } from "./spaces/web-reference-metadata-worker.js";
 import { createWebReferenceMetadataDiagnostics, type WebReferenceMetadataDiagnostics } from "./spaces/web-reference-metadata-diagnostics.js";
+import { createResearchRuntime, type ResearchRuntime } from "./composition/research-runtime.js";
+import { createResearchFeature, type ResearchFeature } from "../research/index.js";
 
 /**
  * The sole process-lifetime composition root for the local Panel host. Route
@@ -228,6 +230,10 @@ export type PanelHost = {
   readonly managedSpaceFolderApplication: ManagedSpaceFolderApplication<import("../spaces/index.js").SpaceReferenceItem>;
   readonly spaceReferenceApplications: SpaceReferenceApplicationRuntime;
   readonly personalKnowledgeFeature: PersonalKnowledgeFeature<import("../panel-api/workbench.js").DocumentPreview>;
+  /** 深度研究：研究与报告的本机事实 owner。 */
+  readonly researchFeature: ResearchFeature;
+  /** 深度研究编排与执行 worker 的组合结果。 */
+  readonly researchRuntime: ResearchRuntime;
   /** Memory v2 运行时（Context Provider / Capture / Lifecycle）。 */
   readonly memoryRuntime: MemoryRuntime;
   /** Memory 用户控制命令与状态查询的唯一 Feature facade。 */
@@ -355,6 +361,7 @@ function assemblePanelHost(input: {
     managedAssets,
     spaceRepository,
     personalKnowledgeRepository,
+    researchRepository,
     memoryControlRepository,
     memoryContentRepository,
   } = openPanelStorage(productPaths);
@@ -619,6 +626,14 @@ function assemblePanelHost(input: {
     await initialWorkbenchData.ensure();
   };
   const spaceKnowledgeSync = Promise.resolve();
+  // 深度研究：Feature 保存事实，Runtime 组装端口（模型/检索/正文）与执行 worker。
+  // 研究与 Space、Knowledge 无耦合：报告留在研究任务内，不写入 Knowledge。
+  const researchFeature = createResearchFeature({ repository: researchRepository });
+  const researchRuntime = createResearchRuntime({
+    feature: researchFeature,
+    configCenter: input.configCenter,
+    onDiagnostic: (topic, error) => console.error(`[panel-server] ${topic}`, error),
+  });
   const spaceReferenceRuntimeGuard = createSpaceReferenceRuntimeGuard({
     spaces: spaceFeature,
     processes: processRegistry,
@@ -646,6 +661,11 @@ function assemblePanelHost(input: {
     pathDependencies: pathDependencyFeature,
     spaces: spaceFeature,
     personalKnowledge: personalKnowledgeFeature,
+    research: {
+      feature: researchFeature,
+      application: researchRuntime.application,
+      noteQueued: () => researchRuntime.worker.noteQueued(),
+    },
     memoryHistory: { historyQueryPort: memoryRuntime.historyQueryPort },
     revocationOverlay: spaceRevocationOverlay,
     spaceReferenceContentApplication: () => spaceReferenceApplications.content,
@@ -1004,6 +1024,8 @@ function assemblePanelHost(input: {
     managedSpaceFolderApplication,
     spaceReferenceApplications,
     personalKnowledgeFeature,
+    researchFeature,
+    researchRuntime,
     memoryRuntime,
     memoryFeature,
     memoryReady,
@@ -1031,10 +1053,19 @@ function assemblePanelHost(input: {
     releaseAgentSessionStorage: () => agentSessionEnvironment.cleanup(),
   };
 
+  // 研究执行 worker 启动：先做 running→interrupted 收敛（不重放），再消化队列。
+  // 与其他后台 worker 相同：启动恢复失败只记录诊断，不阻塞 Panel 可用。
+  void researchRuntime.worker.ready().catch((error) => {
+    console.error("[panel-server] Research worker startup recovery failed", error);
+  });
+
   let restorePreparation: Promise<void> | undefined;
   beforeRestoreStage = () => restorePreparation ??= (async () => {
     host.isQuiescing = true;
     unsubscribeStableTerminalRuns();
+    // 研究 worker 先停：中止在途研究并等它收尾，再释放 Feature 与数据库。
+    await researchRuntime.worker.release();
+    await researchFeature.release();
     await memoryCaptureScheduler.release();
     await memoryRuntime.captureRuntime.release();
     await ordinaryAgentFeature.release();

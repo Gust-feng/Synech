@@ -37,6 +37,8 @@ export type OrdinaryModelPurpose =
   | "context_compaction"
   | "conversation_title"
   | "memory_consolidation"
+  /** 深度研究的拆题、取证判断与报告撰写；无工具、非 Agent 循环。 */
+  | "deep_research"
   | "ordinary_agent";
 
 /** Model request purposes supported by the current Ordinary product path. */

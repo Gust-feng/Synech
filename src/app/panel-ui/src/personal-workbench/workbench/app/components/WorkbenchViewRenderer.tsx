@@ -4,6 +4,7 @@ import type { PersonalSpaceActions, PersonalSpaceProjection } from "../../../spa
 import type { WorkspaceProjectionState } from "../../../../features/spaces/workspace-state";
 import { BrainPage } from "./BrainPage";
 import { HomePage } from "./HomePage";
+import { ResearchPage } from "./ResearchPage";
 import { SearchPage } from "./SearchPage";
 import { SpacePage } from "./SpacePage";
 import { WorkspacePage } from "./WorkspacePage";
@@ -11,6 +12,7 @@ import type {
   ConversationOwnerSelection,
   WorkbenchView,
 } from "../../../../workbench/navigation-state";
+import type { SettingsGroup } from "../../../../features/settings/components/types";
 
 export type WorkbenchViewRendererProps = {
   readonly view: WorkbenchView;
@@ -34,6 +36,7 @@ export type WorkbenchViewRendererProps = {
   readonly onBrainSelect: (id: string | null) => void;
   readonly navigate: (view: WorkbenchView) => void;
   readonly onOpenInSpace: (spaceId: string, id: string) => void;
+  readonly onOpenSettings?: (group?: SettingsGroup) => void;
 };
 
 export function WorkbenchViewRenderer(input: WorkbenchViewRendererProps): React.ReactElement | null {
@@ -88,6 +91,13 @@ export function WorkbenchViewRenderer(input: WorkbenchViewRendererProps): React.
       onOpenConversation={input.onOpenConversation}
       spaces={input.spaces}
       conversations={input.conversations}
+    />;
+  }
+  if (input.view === "research") {
+    return <ResearchPage
+      explorerCollapsed={input.explorerCollapsed}
+      onOpenSettings={input.onOpenSettings}
+      onNavigate={input.navigate}
     />;
   }
   return null;

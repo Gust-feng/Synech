@@ -40,6 +40,53 @@ function projectToolDisplayCore(request: ToolCallRequest, output: ToolFactValue 
       results,
     };
   }
+  // 深度研究：发起后只回任务标识，展示问题与排队状态；查看进度时展示状态与来源数。
+  if (request.toolName === "ResearchStart") {
+    const question = stringOrUndefined(input.question);
+    const taskId = stringOrUndefined(record.taskId);
+    const message = stringOrUndefined(record.message);
+    return {
+      kind: "generic_tool_summary",
+      category: "other",
+      action: toolDisplayName(request.toolName),
+      summary: message ?? (taskId === undefined ? "研究未开始" : "研究已开始"),
+      items: [
+        ...(question === undefined ? [] : [question]),
+        ...(taskId === undefined ? [] : [`研究任务 ${taskId}`]),
+      ],
+    };
+  }
+  if (request.toolName === "ResearchStatus") {
+    const tasks = Array.isArray(record.tasks) ? record.tasks : [];
+    if (tasks.length > 0) {
+      return {
+        kind: "generic_tool_summary",
+        category: "other",
+        action: toolDisplayName(request.toolName),
+        summary: `${tasks.length} 项研究`,
+        items: tasks.slice(0, 8).map((value) => {
+          const task = asRecord(value);
+          const question = stringOrUndefined(task.question);
+          const status = stringOrUndefined(task.status);
+          if (question === undefined) return undefined;
+          return status === undefined ? question : `${question} · ${status}`;
+        }).filter(isString),
+      };
+    }
+    const question = stringOrUndefined(record.question);
+    const status = stringOrUndefined(record.status);
+    const sources = Array.isArray(record.sources) ? record.sources.length : undefined;
+    const errorMessage = stringOrUndefined(record.errorMessage);
+    return {
+      kind: "generic_tool_summary",
+      category: "other",
+      action: toolDisplayName(request.toolName),
+      summary: status === undefined
+        ? (errorMessage ?? "研究任务不存在")
+        : `${status}${sources === undefined ? "" : ` · ${sources} 个来源`}`,
+      items: question === undefined ? [] : [question],
+    };
+  }
   if (request.toolName === "ResearchRead" && Array.isArray(record.items)) {
     return {
       kind: "generic_tool_summary",

@@ -169,6 +169,7 @@ export function TopBar({
 
 function topBarSectionLabel(view: View): string {
   if (view === 'search') return '搜索'
+  if (view === 'research') return '深度研究'
   return '首页'
 }
 

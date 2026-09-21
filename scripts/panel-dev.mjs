@@ -80,6 +80,12 @@ let desktopRestartRequested = false;
 // dev 服务器会被无报错地杀掉。--no-maglev 是目前官方确认的规避手段，
 // 对 dev 工具链的热路径性能影响可忽略，因此统一应用到所有 Node 子进程。
 const maglevWorkaroundArgs = ["--no-maglev"];
+// panel-api 会对外发起 HTTPS（模型、联网检索）。本机若装了做 TLS 扫描的安全软件
+// （企业代理、杀软 HTTPS 检查），它的根证书只存在于 Windows 证书库，不在 Node
+// 内置的根证书列表中，请求会以 SELF_SIGNED_CERT_IN_CHAIN 失败。
+// --use-system-ca 让 Node 按操作系统信任库校验证书——与其它 Windows 程序一致，
+// 且不关闭校验（区别于 rejectUnauthorized: false）。只有 panel-api 联网，其余子进程不加。
+const systemCaArgs = ["--use-system-ca"];
 pushChild(spawnLabeled("tsc-watch", process.execPath, [
     ...maglevWorkaroundArgs,
     tscBin,
@@ -94,6 +100,7 @@ if (shouldStartPanelApi) {
   const panelApiWatchArgs = args.noRestart ? [] : ["--watch"];
   pushChild(spawnLabeled("panel-api", process.execPath, [
       ...maglevWorkaroundArgs,
+      ...systemCaArgs,
       ...panelApiWatchArgs,
       panelEntry,
       "--host",

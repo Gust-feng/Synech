@@ -3,6 +3,7 @@ import {
   Home,
   Layers,
   Library,
+  FileSearch,
   Pencil,
   Trash2,
   Plus,
@@ -305,7 +306,7 @@ export function Sidebar({
         </div>
         </div>
 
-        {/* 知识库 */}
+        {/* 知识库与深度研究 */}
         <div className="space-y-0.5 mt-4">
           <SidebarNavRow
             active={view === 'brain'}
@@ -314,6 +315,14 @@ export function Sidebar({
             collapsed={collapsed}
             icon={<Library size={14}/>}
             label="知识库"
+          />
+          <SidebarNavRow
+            active={view === 'research'}
+            onClick={() => onNavigate('research')}
+            labelsVisible={labelsVisible}
+            collapsed={collapsed}
+            icon={<FileSearch size={14}/>}
+            label="深度研究"
           />
         </div>
       </nav>

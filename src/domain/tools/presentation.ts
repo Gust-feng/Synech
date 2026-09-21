@@ -27,6 +27,14 @@ export type CommandTextLike = {
 };
 
 const BUILTIN_TOOL_PRESENTATION: Readonly<Record<string, ToolPresentationSeed>> = {
+  ResearchStart: {
+    displayName: "开始深度研究",
+    displayDescription: "拆解研究问题、多轮联网检索与正文取证，生成带来源引用的研究报告。",
+  },
+  ResearchStatus: {
+    displayName: "查看研究进度",
+    displayDescription: "读取研究任务的状态、研究计划、已收集来源与最终报告。",
+  },
   ResearchSearch: {
     displayName: "资料搜索",
     displayDescription: "在已配置的信息源中检索资料，返回可引用的资料摘要。",

@@ -8,6 +8,7 @@ import type { Conversation, ConversationSummary } from "../../contracts/conversa
 import type { PendingConfirmation } from "../../contracts/run";
 import type { PersonalSpaceActions, PersonalSpaceProjection } from "../space";
 import { useWorkspaceProjection } from "../../features/spaces/workspace-state";
+import type { SettingsGroup } from "../../features/settings/components/types";
 
 import { SurfaceErrorBoundary } from "./app/components/SurfaceErrorBoundary";
 
@@ -73,7 +74,7 @@ export type PersonalWorkbenchProps = {
   readonly onOpenSpaceItem?: (spaceId: string, itemId: string) => void | Promise<void>;
   readonly onCreateSpace?: (title: string) => void | Promise<void>;
   readonly spaceActions?: PersonalSpaceActions;
-  readonly onOpenSettings: () => void;
+  readonly onOpenSettings?: (group?: SettingsGroup) => void;
   readonly settingsDialogProps?: WorkbenchSettingsDialogProps;
 };
 
@@ -382,7 +383,7 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
           ? undefined
           : (spaceId, title) => props.spaceActions?.rename?.({ kind: "space", id: spaceId }, title)}
         onDeleteSpace={props.spaceActions?.deleteSpace}
-        onOpenSettings={props.onOpenSettings}
+        onOpenSettings={props.onOpenSettings ? () => props.onOpenSettings?.() : () => undefined}
       />
 
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
@@ -399,7 +400,7 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
             revealConversation();
           }}
           explorerCollapsed={layout.explorerCollapsed}
-          onToggleExplorer={view === "space" || view === "brain" || view === "workspace" ? layout.toggleExplorer : undefined}
+          onToggleExplorer={view === "space" || view === "brain" || view === "workspace" || view === "research" ? layout.toggleExplorer : undefined}
           onBrainRoot={() => selectKnowledge(null)}
         />
 
@@ -448,6 +449,7 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
                       setSpaceTarget(id);
                       openReadingPreview();
                     }}
+                    onOpenSettings={props.onOpenSettings}
                   />
               </SurfaceErrorBoundary>
             )}
@@ -499,6 +501,7 @@ function viewLabel(view: WorkbenchView): string {
     case "workspace": return "工作区";
     case "brain": return "知识库";
     case "search": return "搜索";
+    case "research": return "深度研究";
   }
 }
 

@@ -45,9 +45,11 @@ import { handlePanelSpaceMetadataRoute } from "./spaces/space-metadata-routes.js
 import { WorkspaceFeatureError } from "../workspaces/index.js";
 import { handlePanelWorkspaceRoute, workspaceFeatureHttpError } from "./spaces/workspace-routes.js";
 import { PersonalKnowledgeError } from "../personal-knowledge/index.js";
+import { ResearchError } from "../research/index.js";
 import { WorkbenchCoordinationError } from "../workbench-coordination/index.js";
 import { MemoryError } from "../memory/index.js";
 import { handlePanelPersonalKnowledgeRoute, personalKnowledgeHttpError } from "./storage/personal-knowledge-routes.js";
+import { handlePanelResearchRoute, researchHttpError } from "./research/research-routes.js";
 import {
   handleMemoryCapabilityRoute,
   handleMemoryDiagnosticsRoute,
@@ -231,6 +233,10 @@ function createPanelRequestHandler(runtime: PanelHost): (request: IncomingMessag
       }
       if (error instanceof PersonalKnowledgeError) {
         writePanelError(response, personalKnowledgeHttpError(error));
+        return;
+      }
+      if (error instanceof ResearchError) {
+        writePanelError(response, researchHttpError(error));
         return;
       }
       if (error instanceof WorkbenchCoordinationError) {
@@ -498,11 +504,18 @@ async function handlePanelRequest(
     return;
   }
 
-  if (await handlePanelDataRoute({
-    dataMaintenance: runtime.dataMaintenance,
+  if (await handlePanelResearchRoute({
+    feature: runtime.researchFeature,
+    application: runtime.researchRuntime.application,
+    noteQueued: () => runtime.researchRuntime.worker.noteQueued(),
   }, request, response, url)) {
     return;
   }
+
+  if (await handlePanelDataRoute({
+    dataMaintenance: runtime.dataMaintenance,
+  }, request, response, url)) {
+    return;  }
 
   if (request.method === "GET" && url.pathname === "/api/skills") {
     writeJson(response, 200, {
