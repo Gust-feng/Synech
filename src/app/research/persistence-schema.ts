@@ -1,9 +1,40 @@
 import { z } from "zod";
 
 import type {
+  ResearchActionEvent,
+  ResearchActionEventDraft,
+  ResearchBrief,
+  ResearchBriefDraft,
+  ResearchCheckpointSummaryPayload,
+  ResearchCitationCheck,
+  ResearchCitationCheckDraft,
+  ResearchClaim,
+  ResearchClaimDraft,
+  ResearchClaimRead,
+  ResearchConflict,
+  ResearchConflictDraft,
   ResearchCoverageRound,
+  ResearchEvidenceItem,
+  ResearchEvidenceItemDraft,
+  ResearchEvidenceItemRead,
+  ResearchGap,
+  ResearchGapDraft,
+  ResearchObservationBatch,
+  ResearchObservationResult,
   ResearchPlan,
+  ResearchQuestionEdge,
+  ResearchQuestionEdgeDraft,
+  ResearchQuestionNode,
+  ResearchQuestionNodeDraft,
+  ResearchQuestionNodeRead,
   ResearchQueryRecord,
+  ResearchReport,
+  ResearchReportSpan,
+  ResearchReportSpanDraft,
+  ResearchScopeApproval,
+  ResearchSourceEntry,
+  ResearchSourceEntryDraft,
+  ResearchSourceFetchPayload,
   ResearchSource,
   ResearchTask,
   ResearchTaskSummary,
@@ -48,6 +79,12 @@ const usageSchema = z.object({
   elapsedMs: z.number().int().min(0),
 }).strict();
 
+const scopeApprovalSchema = z.object({
+  payloadHash: z.string().min(1),
+  approvedAt: timestamp,
+  conversationRef: z.string().min(1),
+}).strict();
+
 const taskSchema = z.object({
   id,
   question: z.string(),
@@ -63,6 +100,11 @@ const taskSchema = z.object({
   createdAt: timestamp,
   startedAt: timestamp.nullable(),
   endedAt: timestamp.nullable(),
+  completion: z.enum(["normal", "forced", "incomplete"]).nullable(),
+  reason: z.string().nullable(),
+  ceilingHit: z.string().nullable(),
+  scopeApproval: scopeApprovalSchema.nullable(),
+  briefId: id.nullable(),
 }).strict();
 
 const taskSummarySchema = z.object({
@@ -127,4 +169,489 @@ export function parseResearchCoverageRound(value: unknown): ResearchCoverageRoun
 
 export function parseResearchUsage(value: unknown): ResearchUsage {
   return usageSchema.parse(value);
+}
+
+// ---------------------------------------------------------------------------
+// 账本段 schema：读取行与写入草料都经 strict 校验。
+// 草稿 schema 一律 strict：模型输入（JSON）不得自带 id、不得夹带 access_level
+// 等框架字段——ID 不回收、access_level 只能由框架写入，就在这里强制。
+// ---------------------------------------------------------------------------
+
+const stringList = z.array(z.string());
+
+const briefSchema = z.object({
+  id,
+  taskId: id,
+  objective: z.string(),
+  inclusions: stringList,
+  exclusions: stringList,
+  audience: z.string(),
+  answerCriteria: z.string(),
+  createdAt: timestamp,
+}).strict();
+
+const briefDraftSchema = z.object({
+  objective: z.string(),
+  inclusions: stringList,
+  exclusions: stringList,
+  audience: z.string(),
+  answerCriteria: z.string(),
+}).strict();
+
+const questionOriginSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("brief"), scopeBasis: z.string() }).strict(),
+  z.object({ kind: z.literal("question"), questionId: id, scopeBasis: z.string() }).strict(),
+  z.object({ kind: z.literal("evidence"), evidenceId: id, scopeBasis: z.string() }).strict(),
+]);
+
+const questionNodeSchema = z.object({
+  id,
+  taskId: id,
+  parentId: id.nullable(),
+  text: z.string(),
+  boundaryNote: z.string(),
+  priority: z.enum(["critical", "normal", "optional"]),
+  status: z.enum(["open", "investigating", "covered", "disputed", "blocked", "abandoned"]),
+  origin: questionOriginSchema,
+  reopenedCount: z.number().int().min(0),
+  createdAt: timestamp,
+  updatedAt: timestamp,
+}).strict();
+
+const questionNodeReadSchema = questionNodeSchema.extend({
+  evidenceCount: z.number().int().min(0),
+  evidenceStatus: z.enum(["has_sources", "no_external_evidence"]),
+}).strict();
+
+const questionNodeDraftSchema = z.object({
+  text: z.string(),
+  boundaryNote: z.string(),
+  priority: z.enum(["critical", "normal", "optional"]),
+  origin: questionOriginSchema,
+  parentId: id.nullable().optional(),
+}).strict();
+
+const questionEdgeSchema = z.object({
+  id,
+  taskId: id,
+  fromQuestionId: id,
+  toQuestionId: id,
+  kind: z.enum(["split", "merge", "related"]),
+  createdAt: timestamp,
+}).strict();
+
+const questionEdgeDraftSchema = z.object({
+  fromQuestionId: id,
+  toQuestionId: id,
+  kind: z.enum(["split", "merge", "related"]),
+}).strict();
+
+const accessLevelSchema = z.enum(["snippet", "partial", "fulltext", "unavailable"]);
+
+const sourceEntrySchema = z.object({
+  id,
+  taskId: id,
+  canonicalUrl: z.string(),
+  title: z.string(),
+  domain: z.string(),
+  snippet: z.string(),
+  accessLevel: accessLevelSchema,
+  contentHash: z.string().nullable(),
+  provenanceStatus: z.enum(["unchecked", "confirmed", "changed", "unavailable"]),
+  createdAt: timestamp,
+}).strict();
+
+const sourceEntryDraftSchema = z.object({
+  title: z.string(),
+  url: z.string(),
+  snippet: z.string(),
+  canonicalUrl: z.string().optional(),
+  domain: z.string().optional(),
+  accessLevel: accessLevelSchema.optional(),
+}).strict();
+
+const evidenceItemSchema = z.object({
+  id,
+  taskId: id,
+  sourceId: id,
+  excerpt: z.string(),
+  locator: z.string(),
+  extractedClaim: z.string(),
+  stance: z.enum(["supports", "contradicts", "qualifies"]),
+  accessLevelSnapshot: accessLevelSchema,
+  createdByModelCall: z.string().nullable(),
+  createdAt: timestamp,
+}).strict();
+
+const evidenceItemReadSchema = evidenceItemSchema.extend({
+  questionIds: z.array(id),
+}).strict();
+
+/** 草稿没有 access_level 字段：快照写入时由来源行派生，模型无法声称读取深度。 */
+const evidenceItemDraftSchema = z.object({
+  sourceId: id,
+  excerpt: z.string(),
+  locator: z.string(),
+  extractedClaim: z.string(),
+  stance: z.enum(["supports", "contradicts", "qualifies"]),
+  questionIds: z.array(id),
+  createdByModelCall: z.string().nullable().optional(),
+}).strict();
+
+const claimSchema = z.object({
+  id,
+  taskId: id,
+  text: z.string(),
+  type: z.enum(["sourced", "synthesis", "inference"]),
+  status: z.enum(["provisional", "supported", "disputed", "unsupported", "withdrawn"]),
+  scope: z.string().nullable(),
+  qualifier: z.string().nullable(),
+  createdAt: timestamp,
+  updatedAt: timestamp,
+}).strict();
+
+const claimReadSchema = claimSchema.extend({
+  evidenceIds: z.array(id),
+}).strict();
+
+const claimDraftSchema = z.object({
+  text: z.string(),
+  type: z.enum(["sourced", "synthesis", "inference"]),
+  evidenceIds: z.array(id),
+  scope: z.string().nullable().optional(),
+  qualifier: z.string().nullable().optional(),
+  status: z.enum(["provisional", "supported", "disputed", "unsupported", "withdrawn"]).optional(),
+}).strict();
+
+const gapSchema = z.object({
+  id,
+  taskId: id,
+  questionId: id,
+  description: z.string(),
+  importance: z.enum(["critical", "material", "minor"]),
+  origin: z.enum([
+    "insufficient_evidence",
+    "conflicting_evidence",
+    "source_unavailable",
+    "search_exhausted",
+    "unclear_scope",
+    "possible_counterevidence",
+    "out_of_scope_lead",
+  ]),
+  attemptedSearchIds: z.array(id),
+  status: z.enum(["open", "mitigated", "unresolved", "impossible"]),
+  createdAt: timestamp,
+  updatedAt: timestamp,
+}).strict();
+
+const gapDraftSchema = z.object({
+  questionId: id,
+  description: z.string(),
+  importance: z.enum(["critical", "material", "minor"]),
+  origin: z.enum([
+    "insufficient_evidence",
+    "conflicting_evidence",
+    "source_unavailable",
+    "search_exhausted",
+    "unclear_scope",
+    "possible_counterevidence",
+    "out_of_scope_lead",
+  ]),
+  attemptedSearchIds: z.array(id).optional(),
+  status: z.enum(["open", "mitigated", "unresolved", "impossible"]).optional(),
+}).strict();
+
+const conflictSchema = z.object({
+  id,
+  taskId: id,
+  questionIds: z.array(id),
+  claimAId: id,
+  claimBId: id,
+  evidenceAIds: z.array(id),
+  evidenceBIds: z.array(id),
+  nature: z.enum(["factual", "definition", "timeframe", "methodology", "interpretation"]),
+  status: z.enum(["unresolved", "reconciled", "scoped"]),
+  resolutionNote: z.string().nullable(),
+  createdAt: timestamp,
+  updatedAt: timestamp,
+}).strict();
+
+const conflictDraftSchema = z.object({
+  questionIds: z.array(id),
+  claimAId: id,
+  claimBId: id,
+  evidenceAIds: z.array(id),
+  evidenceBIds: z.array(id),
+  nature: z.enum(["factual", "definition", "timeframe", "methodology", "interpretation"]),
+  status: z.enum(["unresolved", "reconciled", "scoped"]).optional(),
+}).strict();
+
+const reportSpanSchema = z.object({
+  id,
+  taskId: id,
+  reportId: id,
+  ordinal: z.number().int().min(1),
+  text: z.string(),
+  claimIds: z.array(id),
+  attributionType: z.enum(["source_statement", "synthesis", "inference"]),
+  citationSourceIds: z.array(id),
+  createdAt: timestamp,
+}).strict();
+
+const reportSpanDraftSchema = z.object({
+  text: z.string(),
+  claimIds: z.array(id),
+  attributionType: z.enum(["source_statement", "synthesis", "inference"]),
+  citationSourceIds: z.array(id),
+}).strict();
+
+const reportSchema = z.object({
+  id,
+  taskId: id,
+  title: z.string(),
+  spans: z.array(reportSpanSchema),
+  createdAt: timestamp,
+}).strict();
+
+const citationCheckSchema = z.object({
+  id,
+  taskId: id,
+  reportSpanId: id,
+  claimId: id.nullable(),
+  verdict: z.enum([
+    "supports",
+    "partially_supports",
+    "contradicts",
+    "does_not_support",
+    "insufficient_context",
+  ]),
+  sampled: z.boolean(),
+  verifierInput: z.string().nullable(),
+  verifierOutput: z.string().nullable(),
+  verifierModel: z.string().nullable(),
+  createdAt: timestamp,
+}).strict();
+
+const citationCheckDraftSchema = z.object({
+  reportSpanId: id,
+  verdict: z.enum([
+    "supports",
+    "partially_supports",
+    "contradicts",
+    "does_not_support",
+    "insufficient_context",
+  ]),
+  sampled: z.boolean(),
+  claimId: id.nullable().optional(),
+  verifierInput: z.string().nullable().optional(),
+  verifierOutput: z.string().nullable().optional(),
+  verifierModel: z.string().nullable().optional(),
+}).strict();
+
+const actionEventKindSchema = z.enum([
+  "model_content",
+  "tool_call",
+  "tool_result",
+  "ledger_change",
+  "resource_state_change",
+  "source_fetch",
+  "checkpoint_summary",
+]);
+
+/** 负载信封：version 必填，其余字段按 kind 由消费方解析（后置实体的版本化 JSON）。 */
+const actionEventPayloadSchema = z.looseObject({
+  version: z.number().int().min(1),
+});
+
+const actionEventSchema = z.object({
+  id,
+  taskId: id,
+  kind: actionEventKindSchema,
+  questionRefs: z.array(id),
+  payload: actionEventPayloadSchema,
+  createdAt: timestamp,
+}).strict();
+
+const actionEventDraftSchema = z.object({
+  kind: actionEventKindSchema,
+  questionRefs: z.array(id).optional(),
+  payload: actionEventPayloadSchema,
+}).strict();
+
+const sourceFetchPayloadSchema = z.object({
+  version: z.literal(1),
+  sourceId: id,
+  status: z.enum(["succeeded", "timeout", "http_error", "parse_error", "paywalled", "cancelled"]),
+  retryable: z.boolean(),
+  bytesRead: z.number().int().min(0).nullable(),
+  contentHash: z.string().nullable(),
+  requestedAt: timestamp,
+  completedAt: timestamp.nullable(),
+}).strict();
+
+const checkpointSummaryPayloadSchema = z.object({
+  version: z.literal(1),
+  text: z.string(),
+  retainedClaimIds: z.array(id),
+  retainedGapIds: z.array(id),
+  retainedConflictIds: z.array(id),
+  sourceIds: z.array(id),
+  supersedesCheckpointId: id.nullable(),
+}).strict();
+
+const questionUpdateSchema = z.object({
+  questionId: id,
+  status: z.enum(["open", "investigating", "covered", "disputed", "blocked", "abandoned"]).optional(),
+  priority: z.enum(["critical", "normal", "optional"]).optional(),
+  boundaryNote: z.string().optional(),
+}).strict();
+
+const claimUpdateSchema = z.object({
+  claimId: id,
+  status: z.enum(["provisional", "supported", "disputed", "unsupported", "withdrawn"]).optional(),
+  text: z.string().optional(),
+  scope: z.string().optional(),
+  qualifier: z.string().optional(),
+}).strict();
+
+const observationBatchSchema = z.object({
+  questionUpdates: z.array(questionUpdateSchema).optional(),
+  newQuestions: z.array(questionNodeDraftSchema).optional(),
+  evidenceItems: z.array(evidenceItemDraftSchema).optional(),
+  claimUpdates: z.array(claimUpdateSchema).optional(),
+  newGaps: z.array(gapDraftSchema).optional(),
+  newConflicts: z.array(conflictDraftSchema).optional(),
+  reopenQuestionIds: z.array(id).optional(),
+}).strict();
+
+const observationResultSchema = z.object({
+  questions: z.array(questionNodeSchema),
+  evidenceItems: z.array(evidenceItemSchema),
+  claims: z.array(claimSchema),
+  gaps: z.array(gapSchema),
+  conflicts: z.array(conflictSchema),
+}).strict();
+
+export function parseResearchScopeApproval(value: unknown): ResearchScopeApproval {
+  return scopeApprovalSchema.parse(value);
+}
+
+export function parseResearchBrief(value: unknown): ResearchBrief {
+  return briefSchema.parse(value);
+}
+
+export function parseResearchBriefDraft(value: unknown): ResearchBriefDraft {
+  return briefDraftSchema.parse(value);
+}
+
+export function parseResearchQuestionNode(value: unknown): ResearchQuestionNode {
+  return questionNodeSchema.parse(value);
+}
+
+export function parseResearchQuestionNodeRead(value: unknown): ResearchQuestionNodeRead {
+  return questionNodeReadSchema.parse(value);
+}
+
+export function parseResearchQuestionNodeDraft(value: unknown): ResearchQuestionNodeDraft {
+  return questionNodeDraftSchema.parse(value);
+}
+
+export function parseResearchQuestionEdge(value: unknown): ResearchQuestionEdge {
+  return questionEdgeSchema.parse(value);
+}
+
+export function parseResearchQuestionEdgeDraft(value: unknown): ResearchQuestionEdgeDraft {
+  return questionEdgeDraftSchema.parse(value);
+}
+
+export function parseResearchSourceEntry(value: unknown): ResearchSourceEntry {
+  return sourceEntrySchema.parse(value);
+}
+
+export function parseResearchSourceEntryDraft(value: unknown): ResearchSourceEntryDraft {
+  return sourceEntryDraftSchema.parse(value);
+}
+
+export function parseResearchEvidenceItem(value: unknown): ResearchEvidenceItem {
+  return evidenceItemSchema.parse(value);
+}
+
+export function parseResearchEvidenceItemRead(value: unknown): ResearchEvidenceItemRead {
+  return evidenceItemReadSchema.parse(value);
+}
+
+export function parseResearchEvidenceItemDraft(value: unknown): ResearchEvidenceItemDraft {
+  return evidenceItemDraftSchema.parse(value);
+}
+
+export function parseResearchClaim(value: unknown): ResearchClaim {
+  return claimSchema.parse(value);
+}
+
+export function parseResearchClaimRead(value: unknown): ResearchClaimRead {
+  return claimReadSchema.parse(value);
+}
+
+export function parseResearchClaimDraft(value: unknown): ResearchClaimDraft {
+  return claimDraftSchema.parse(value);
+}
+
+export function parseResearchGap(value: unknown): ResearchGap {
+  return gapSchema.parse(value);
+}
+
+export function parseResearchGapDraft(value: unknown): ResearchGapDraft {
+  return gapDraftSchema.parse(value);
+}
+
+export function parseResearchConflict(value: unknown): ResearchConflict {
+  return conflictSchema.parse(value);
+}
+
+export function parseResearchConflictDraft(value: unknown): ResearchConflictDraft {
+  return conflictDraftSchema.parse(value);
+}
+
+export function parseResearchReport(value: unknown): ResearchReport {
+  return reportSchema.parse(value);
+}
+
+export function parseResearchReportSpan(value: unknown): ResearchReportSpan {
+  return reportSpanSchema.parse(value);
+}
+
+export function parseResearchReportSpanDraft(value: unknown): ResearchReportSpanDraft {
+  return reportSpanDraftSchema.parse(value);
+}
+
+export function parseResearchCitationCheck(value: unknown): ResearchCitationCheck {
+  return citationCheckSchema.parse(value);
+}
+
+export function parseResearchCitationCheckDraft(value: unknown): ResearchCitationCheckDraft {
+  return citationCheckDraftSchema.parse(value);
+}
+
+export function parseResearchActionEvent(value: unknown): ResearchActionEvent {
+  return actionEventSchema.parse(value);
+}
+
+export function parseResearchActionEventDraft(value: unknown): ResearchActionEventDraft {
+  return actionEventDraftSchema.parse(value);
+}
+
+export function parseResearchSourceFetchPayload(value: unknown): ResearchSourceFetchPayload {
+  return sourceFetchPayloadSchema.parse(value);
+}
+
+export function parseResearchCheckpointSummaryPayload(value: unknown): ResearchCheckpointSummaryPayload {
+  return checkpointSummaryPayloadSchema.parse(value);
+}
+
+export function parseResearchObservationBatch(value: unknown): ResearchObservationBatch {
+  return observationBatchSchema.parse(value);
+}
+
+export function parseResearchObservationResult(value: unknown): ResearchObservationResult {
+  return observationResultSchema.parse(value);
 }
