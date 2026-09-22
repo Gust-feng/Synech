@@ -3,6 +3,7 @@ import type { ResearchFeature, ResearchScopeStartInput } from "../../research/in
 import { ResearchScopeGateError } from "../../research/scope-gate.js";
 import type { ResearchApplication } from "../../application/research-application.js";
 import type { AgentToolRegistryContribution } from "../../tool-center/factory.js";
+import { createResearchLoopTools, type ResearchLoopToolDependencies } from "./research-loop-tools.js";
 
 /**
  * 深度研究的 Agent 工具：Pi 在对话里发起研究与读取进度。
@@ -11,6 +12,13 @@ import type { AgentToolRegistryContribution } from "../../tool-center/factory.js
  * 发起研究是长任务且有额度副作用，且必须携带用户在范围卡上批准的结构化载荷
  * （ADR 0001 §2.2）：工具自己不编排、不补全字段、不提供免确认路径，
  * 结构缺口由范围门拒绝并把缺失字段清单带回对话侧。
+ *
+ * 作用域分工（设计草案 §7.4）：
+ * - 会话侧只有 ResearchStart / ResearchStatus（agent-basic + research scope），
+ *   入参形状不随研究 loop 的工具集演进而改变；
+ * - 研究 loop 的状态工具与 search/fetch 只注册在 `research` scope——会话 agent 的
+ *   工具中心按 agent-basic / mcp scope 装配，看不到它们；研究 loop 的工具中心按
+ *   research scope 装配，才拿到这套内部读写面。
  */
 
 export type ResearchToolOptions = {
@@ -18,6 +26,13 @@ export type ResearchToolOptions = {
   readonly feature: Pick<ResearchFeature, "queries">;
   /** 入队后唤醒执行 worker；工具本身不执行研究。 */
   readonly noteQueued: () => void;
+  /**
+   * 研究 loop 的工具依赖：由 Host 在装配研究执行时提供。
+   *
+   * 未提供时不注册任何 loop 工具——研究能力缺失要如实表现为「工具不存在」。
+   * 入参形状对会话侧完全不可见：会话 agent 的工具中心不请求 research scope。
+   */
+  readonly loop?: ResearchLoopToolDependencies;
 };
 
 export function createResearchToolRegistryContribution(
@@ -26,6 +41,11 @@ export function createResearchToolRegistryContribution(
   return (register) => {
     register({ executor: createResearchStartTool(options), scopes: ["agent-basic", "research"], enabledByDefault: true });
     register({ executor: createResearchStatusTool(options), scopes: ["agent-basic", "research"], enabledByDefault: true });
+    if (options.loop !== undefined) {
+      for (const executor of createResearchLoopTools(options.loop)) {
+        register({ executor, scopes: ["research"], enabledByDefault: true });
+      }
+    }
   };
 }
 

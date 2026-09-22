@@ -1,3 +1,4 @@
+export * from "./canonical-url.js";
 export * from "./contracts.js";
 export * from "./research-feature.js";
 export * from "./research-policy.js";

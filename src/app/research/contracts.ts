@@ -630,6 +630,128 @@ export type ResearchCheckpointSummaryPayload = {
   readonly supersedesCheckpointId: string | null;
 };
 
+// ---------------------------------------------------------------------------
+// 工具层动作事实的版本化 JSON 形状（ADR 0001 §2.1 / §2.6）
+//
+// 研究 loop 的 search/fetch 工具是框架自己的外部调用路径：调用是否真的发生、
+// 读到了什么、失败属于哪一类，都由工具落账，模型无法自述这些事实。
+// SearchAttempt 没有专属事件 kind（research/1 的 kind CHECK 冻结，本切片不改 DDL），
+// 因此动作与结果分别落在共用的 tool_call / tool_result kind 上，按 payload 的
+// version 与 tool 字段解析；SourceFetch / CheckpointSummary 有专属 kind 与严格负载。
+// ---------------------------------------------------------------------------
+
+/** 外部动作失败分类：框架按真实失败原因归类；程序分支看 class，detail 只作展示。 */
+export type ResearchActionFailureClass =
+  | "not_configured"
+  | "invalid_input"
+  | "timeout"
+  | "http_error"
+  | "parse_error"
+  | "cancelled";
+
+/**
+ * 「这类失败值不值得再试」是框架策略：分类决定 retryable，
+ * 重试次数上界在 RESEARCH_POLICY，模型只决定换来源或记 Gap，无权选择重试次数。
+ */
+export const RESEARCH_ACTION_FAILURE_RETRYABLE: Readonly<
+  Record<ResearchActionFailureClass, boolean>
+> = {
+  not_configured: false,
+  invalid_input: false,
+  timeout: true,
+  http_error: true,
+  parse_error: true,
+  cancelled: false,
+};
+
+export type ResearchActionFailure = {
+  readonly class: ResearchActionFailureClass;
+  readonly retryable: boolean;
+  /** 适配器返回的原始 code；展示与诊断用，不承担程序分支。 */
+  readonly detail: string;
+};
+
+/** SearchAttempt 的版本化 JSON 形状（后置实体，先以动作事件持久化）。 */
+export type ResearchSearchAttemptPayload = {
+  readonly version: 1;
+  readonly tool: "research_search";
+  readonly query: string;
+  /** 工具入参携带、仓储校验：轨迹经 questionRefs 可 Join 问题树（ADR §2.6）。 */
+  readonly questionRefs: readonly string[];
+  readonly requestedAt: number;
+  /** 是否真的发出了外部检索：重复查询或到达策略上界时框架跳过外部调用。 */
+  readonly executed: boolean;
+  /** 精确查询去重：与任务内之前某次尝试完全相同的查询。 */
+  readonly duplicateQuery: { readonly previousEventId: string } | null;
+  /** 模型显式要求执行被判定重复的查询；override 事实本身要落账。 */
+  readonly overrideDuplicateQuery: boolean;
+};
+
+/** 一次检索的结果事实：按 canonical URL 去重后的入列、重复与失败分类。 */
+export type ResearchSearchOutcomePayload = {
+  readonly version: 1;
+  readonly tool: "research_search";
+  readonly status: "completed" | "failed" | "duplicate_skipped" | "policy_ceiling";
+  readonly requestedAt: number;
+  readonly completedAt: number;
+  readonly appendedSourceIds: readonly string[];
+  readonly duplicateSourceIds: readonly string[];
+  readonly failure: ResearchActionFailure | null;
+};
+
+/** 抓取尝试：内容 hash 去重判定与模型显式 override 的事实。 */
+export type ResearchFetchAttemptPayload = {
+  readonly version: 1;
+  readonly tool: "research_fetch";
+  readonly sourceId: string;
+  readonly url: string;
+  readonly questionRefs: readonly string[];
+  readonly requestedAt: number;
+  readonly executed: boolean;
+  /** 内容 hash 去重：该来源已按同一 hash 读过，重复抓取不产生新事实。 */
+  readonly duplicateContentHash: {
+    readonly contentHash: string;
+    readonly accessLevel: ResearchSourceAccessLevel;
+  } | null;
+  /** 模型显式要求重读已读过的来源；override 事实本身要落账。 */
+  readonly overrideDuplicateRead: boolean;
+};
+
+/** StopAssessment 的版本化 JSON 形状（后置实体；循环对它的机械解释归执行层）。 */
+export type ResearchStopAssessmentPayload = {
+  readonly version: 1;
+  readonly tool: "research_propose_stop";
+  readonly assessment: {
+    readonly unresolvedCriticalQuestionIds: readonly string[];
+    readonly unresolvedGapIds: readonly string[];
+    readonly unresolvedConflictIds: readonly string[];
+    readonly strongestConclusionAtRisk: string;
+    readonly nextBestAction: string | null;
+    readonly expectedInformationGain: "high" | "medium" | "low";
+    readonly recentSearchYield: "material" | "marginal" | "none";
+    readonly recommendation: "continue" | "stop";
+    readonly reason: string;
+  };
+  readonly recordedAt: number;
+};
+
+/**
+ * 未真正发出抓取时的结果事实（重复跳过 / 策略上界）。
+ *
+ * 真实抓取的结果落在 `source_fetch`（SourceFetch 后置实体）上；这里的形状只描述
+ * 「这一次没有抓取」的原因，两种落账渠道互不重复。
+ */
+export type ResearchFetchOutcomePayload = {
+  readonly version: 1;
+  readonly tool: "research_fetch";
+  readonly status: "duplicate_skipped" | "policy_ceiling";
+  readonly requestedAt: number;
+  readonly completedAt: number;
+  readonly failure: ResearchActionFailure | null;
+};
+
+
+
 export type ResearchQuestionUpdate = {
   readonly questionId: string;
   readonly status?: ResearchQuestionStatus;
