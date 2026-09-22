@@ -76,6 +76,7 @@ async function withHarness(run) {
   const allowedTools = toolCenter.list().map((definition) => definition.name);
 
   const finalizationCalls = [];
+  const citationCheckCalls = [];
   let turnScripts = [];
   let openTurnCount = 0;
   const turns = {
@@ -114,6 +115,10 @@ async function withHarness(run) {
       finalizationCalls.push(request);
       return { status: "completed", title: "研究报告", spans: [] };
     },
+    // 抽样核验落账（S5w 第二步）：替身只记录调用，真实实现写入 CitationCheck。
+    recordCitationChecks: async (request) => {
+      citationCheckCalls.push(request);
+    },
   };
 
   const application = createResearchApplication({
@@ -129,6 +134,7 @@ async function withHarness(run) {
     feature,
     searchCalls,
     finalizationCalls,
+    citationCheckCalls,
     setTurnScripts: (scripts) => { turnScripts = scripts; },
     getOpenTurnCount: () => openTurnCount,
     startTask: async () => (await application.start(SCOPE_INPUT)).taskId,
@@ -216,6 +222,9 @@ test("propose_stop 落账后成稿：completion=normal、报告与终态同事�
     assert.equal(harness.finalizationCalls.length, 1);
     assert.equal(harness.finalizationCalls[0].completion, "normal");
     assert.equal(harness.finalizationCalls[0].ceilingHit, null);
+    // 抽样核验落账发生在报告写入之后（span 已存在才有挂靠点）：顺序固定，一次。
+    assert.equal(harness.citationCheckCalls.length, 1);
+    assert.equal(harness.citationCheckCalls[0].taskId, taskId);
     const ledger = await harness.feature.queries.ledger(taskId);
     assert.equal(ledger?.report?.title, "研究报告");
 
@@ -378,7 +387,10 @@ test("模型配置类不可用：立即收敛 research_model_unavailable，不�
     const failingApplication = createResearchApplication({
       feature: harness.feature,
       turns: failingTurns,
-      finalization: { finalize: async () => ({ status: "completed", title: "t", spans: [] }) },
+      finalization: {
+        finalize: async () => ({ status: "completed", title: "t", spans: [] }),
+        recordCitationChecks: async () => undefined,
+      },
       readiness: async () => ({ search: { available: true } }),
       now: () => 10_000,
     });

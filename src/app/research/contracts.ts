@@ -439,6 +439,13 @@ export type ResearchClaimDraft = {
   readonly evidenceIds: readonly string[];
   readonly scope?: string | null;
   readonly qualifier?: string | null;
+  /**
+   * 新建时的初始状态（缺省 provisional）。
+   *
+   * 新建主张没有「前一个状态」，因此校验口径是：它从初始状态 provisional 落库，
+   * 请求的状态必须是 provisional 的合法迁移目标（复用 canTransitionClaimStatus，
+   * 不另立一套新 claim 规则）。
+   */
   readonly status?: ResearchClaimStatus;
 };
 
@@ -827,15 +834,23 @@ export type ResearchClaimUpdate = {
 };
 
 /**
- * research_apply_observations 的批量形状（设计草案 §7.2）：
+ * research_apply_observations 的批量形状（设计草案 §7.2 / B3）：
  * 模型负责填充语义内容，框架负责分配/校验 ID、校验引用、校验状态迁移、事务写入。
  * 一次批量就是一次模型判断的原子状态变更。
+ *
+ * B3 的落地形状（按实现事实，不按草案愿景）：Evidence / Claim / Gap / Conflict 四类
+ * 创建都是本批量的段（`newClaims` 与 `evidenceItems` / `newGaps` / `newConflicts` 同级，
+ * 一次判断 = 一次提交），各自的结构约束在事务内由框架强校验——Conflict 的双边各 ≥2 个
+ * 不同来源 Evidence 即在这里校验（assertConflictSidesBalanced）。显式化为独立操作的只有
+ * Question split/merge（question edge）与最终 stop（research_propose_stop）；`newClaims`
+ * 的初始状态复用 canTransitionClaimStatus，与 claimUpdates 同一生命周期口径。
  */
 export type ResearchObservationBatch = {
   readonly questionUpdates?: readonly ResearchQuestionUpdate[];
   readonly newQuestions?: readonly ResearchQuestionNodeDraft[];
   readonly evidenceItems?: readonly ResearchEvidenceItemDraft[];
   readonly claimUpdates?: readonly ResearchClaimUpdate[];
+  readonly newClaims?: readonly ResearchClaimDraft[];
   readonly newGaps?: readonly ResearchGapDraft[];
   readonly newConflicts?: readonly ResearchConflictDraft[];
   readonly reopenQuestionIds?: readonly string[];

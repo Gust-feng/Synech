@@ -61,7 +61,10 @@ async function withApplication(run) {
   const application = createResearchApplication({
     feature,
     turns: { openTurn: async () => ({ status: "unavailable", reason: "not_configured" }) },
-    finalization: { finalize: async () => ({ status: "unavailable", reason: "not_configured" }) },
+    finalization: {
+      finalize: async () => ({ status: "unavailable", reason: "not_configured" }),
+      recordCitationChecks: async () => undefined,
+    },
     readiness: async () => ({ search: { available: true } }),
     now: () => clock,
   });

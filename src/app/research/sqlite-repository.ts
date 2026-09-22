@@ -18,6 +18,7 @@ import {
   type ResearchClaim,
   type ResearchClaimDraft,
   type ResearchClaimRead,
+  type ResearchClaimStatus,
   type ResearchClaimUpdate,
   type ResearchCompletion,
   type ResearchConflict,
@@ -396,6 +397,12 @@ function parseJsonArray(raw: string, label: string): string[] {
   }
   return parsed as string[];
 }
+
+/**
+ * 新建主张的初始状态：主张创建即落在 provisional，之后的状态变化是迁移
+ * （canTransitionClaimStatus 的唯一判定口径，更新与新建共用）。
+ */
+const CLAIM_INITIAL_STATUS: ResearchClaimStatus = "provisional";
 
 /**
  * 写入草稿的运行时校验：模型输入以 JSON 越界，strict schema 拒绝夹带字段
@@ -1018,6 +1025,16 @@ export function createSqliteResearchRepository(database: SqliteRuntimeDatabase):
           throw new ResearchError("research_invalid_input", `主张绑定了不存在的证据 ${evidenceId}。`);
         }
       }
+      // 新建主张从初始状态 provisional 落库；草稿指定的初始状态必须是 provisional 的
+      // 合法迁移目标（canTransitionClaimStatus 与更新共用同一份状态机）。今天枚举内
+      // 各值都从 provisional 可达；保留这条判定是为了「新建」与「更新」走同一条生命周期
+      // 口径——将来新增无法直接到达的状态时，把它当初始状态会被这里拒绝。
+      if (!canTransitionClaimStatus(CLAIM_INITIAL_STATUS, draft.status ?? CLAIM_INITIAL_STATUS)) {
+        throw new ResearchError(
+          "research_invalid_input",
+          `新建主张的初始状态不允许为 ${draft.status ?? CLAIM_INITIAL_STATUS}。`,
+        );
+      }
     }
     const ids = allocateIds(taskId, "c", existingIds(database, "research_claim", taskId), parsed.length);
     const edgeIds = allocateIds(
@@ -1037,7 +1054,7 @@ export function createSqliteResearchRepository(database: SqliteRuntimeDatabase):
     let edgeCursor = 0;
     parsed.forEach((draft, index) => {
       const id = ids[index] as string;
-      const status = draft.status ?? "provisional";
+      const status = draft.status ?? CLAIM_INITIAL_STATUS;
       insert.run(
         id, taskId, draft.text, draft.type, status,
         draft.scope ?? null, draft.qualifier ?? null, now, now,
@@ -1953,11 +1970,16 @@ export function createSqliteResearchRepository(database: SqliteRuntimeDatabase):
           if (batch.claimUpdates !== undefined && batch.claimUpdates.length > 0) {
             claims.push(...applyClaimUpdates(input.taskId, batch.claimUpdates, now));
           }
-          // 6. 新缺口。
+          // 6. 新主张（设计草案 §7.2 B3：普通 Claim 创建走批量提交）；初始状态校验
+          //    与证据引用校验在 insertClaims 内，与直接 appendClaims 同一规则。
+          if (batch.newClaims !== undefined && batch.newClaims.length > 0) {
+            claims.push(...insertClaims(input.taskId, batch.newClaims, now));
+          }
+          // 7. 新缺口。
           if (batch.newGaps !== undefined && batch.newGaps.length > 0) {
             gaps.push(...insertGaps(input.taskId, batch.newGaps, now));
           }
-          // 7. 新冲突：双边各 ≥2 个不同来源的 Evidence。
+          // 8. 新冲突：双边各 ≥2 个不同来源的 Evidence。
           if (batch.newConflicts !== undefined && batch.newConflicts.length > 0) {
             for (const draft of batch.newConflicts) {
               conflicts.push(insertConflict(input.taskId, draft, now));
