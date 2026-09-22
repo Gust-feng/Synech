@@ -13,6 +13,10 @@ import type {
 import { ResearchError, type ResearchFeature } from "../../research/index.js";
 import { ResearchScopeGateError, readResearchScopeGate } from "../../research/scope-gate.js";
 import type { ResearchApplication } from "../../application/research-application.js";
+import {
+  projectResearchLedgerView,
+  type ResearchLedgerInput,
+} from "../../panel-api/read-model/research/research-ledger-view.js";
 import { PanelHttpError, readJsonBody, writeJson } from "../http-utils.js";
 
 /**
@@ -140,11 +144,15 @@ export async function handlePanelResearchRoute(
     if (!id.safeParse(taskId).success) {
       throw new PanelHttpError(400, "invalid_research_input", "研究任务标识无效。");
     }
-    const detail = await dependencies.feature.queries.detail(taskId);
-    if (detail === undefined) {
+    // detail 与 ledger 是两次只读查询的组合（观察面投影随权威 detail 快照一起返回）。
+    const [detail, ledger] = await Promise.all([
+      dependencies.feature.queries.detail(taskId),
+      dependencies.feature.queries.ledger(taskId),
+    ]);
+    if (detail === undefined || ledger === undefined) {
       throw new PanelHttpError(404, "research_task_not_found", "研究任务不存在。");
     }
-    const body: ResearchDetailResponse = { ok: true, status: "completed", task: toDetailView(detail) };
+    const body: ResearchDetailResponse = { ok: true, status: "completed", task: toDetailView(detail, ledger) };
     writeJson(response, 200, body);
     return true;
   }
@@ -190,11 +198,14 @@ export async function handlePanelResearchRoute(
       // 已进入终态的任务不能再取消：这是既成事实，如实返回而不是假装成功。
       throw new PanelHttpError(409, "research_task_not_cancellable", "研究已经结束，无需停止。");
     }
-    const detail = await dependencies.feature.queries.detail(taskId);
-    if (detail === undefined) {
+    const [detail, ledger] = await Promise.all([
+      dependencies.feature.queries.detail(taskId),
+      dependencies.feature.queries.ledger(taskId),
+    ]);
+    if (detail === undefined || ledger === undefined) {
       throw new PanelHttpError(404, "research_task_not_found", "研究任务不存在。");
     }
-    const body: ResearchDetailResponse = { ok: true, status: "completed", task: toDetailView(detail) };
+    const body: ResearchDetailResponse = { ok: true, status: "completed", task: toDetailView(detail, ledger) };
     writeJson(response, 200, body);
     return true;
   }
@@ -225,7 +236,7 @@ export function researchHttpError(error: ResearchError): PanelHttpError {
 
 type ResearchDetail = NonNullable<Awaited<ReturnType<ResearchFeature["queries"]["detail"]>>>;
 
-function toDetailView(detail: ResearchDetail): ResearchTaskDetailView {
+function toDetailView(detail: ResearchDetail, ledger: ResearchLedgerInput): ResearchTaskDetailView {
   return {
     id: detail.task.id,
     question: detail.task.question,
@@ -277,6 +288,8 @@ function toDetailView(detail: ResearchDetail): ResearchTaskDetailView {
       status: query.status,
       resultCount: query.resultCount,
     })),
+    // 观察面：状态树 + 动作事件流的有界投影（ADR §2.6）；DTO 已做有界截断，不含上下文炸弹。
+    ledger: projectResearchLedgerView(ledger),
   };
 }
 
