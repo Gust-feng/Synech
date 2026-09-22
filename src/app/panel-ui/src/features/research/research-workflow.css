@@ -332,3 +332,129 @@
   color: var(--ui-text-3, #aba39b);
   padding: 8px 0;
 }
+
+/* ── 用户可见面：报告与发布判定（S7）── */
+.rw-report {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rw-report__rejected {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--ui-status-danger, #b0503e);
+}
+
+.rw-report__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.rw-report__title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ui-text-1, #2b2b2b);
+}
+
+.rw-report__spans {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.rw-report__span {
+  padding-left: 10px;
+  border-left: 2px solid var(--ui-border, rgba(0, 0, 0, 0.1));
+}
+
+.rw-report__text {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--ui-text-1, #2b2b2b);
+  word-break: break-word;
+}
+
+.rw-report__meta {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 4px;
+}
+
+.rw-report__cite {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--ui-accent, #4a6fa5);
+  text-decoration: none;
+  max-width: 100%;
+}
+
+.rw-report__cite:hover {
+  text-decoration: underline;
+}
+
+/* ── 用户可见面：用量区（评估插桩，S7）── */
+.rw-usage {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rw-usage__grid {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: var(--ui-text-2, #6b6b6b);
+}
+
+.rw-usage__grid b {
+  color: var(--ui-text-1, #2b2b2b);
+  font-weight: 600;
+}
+
+.rw-usage__line {
+  margin: 0;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: var(--ui-text-2, #6b6b6b);
+}
+
+.rw-usage__turns {
+  font-size: 11px;
+  color: var(--ui-text-2, #6b6b6b);
+}
+
+.rw-usage__turns summary {
+  cursor: pointer;
+}
+
+.rw-usage__turnlist {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.rw-usage__turnlist li {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}

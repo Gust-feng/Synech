@@ -8,7 +8,7 @@ import type {
   ResearchSourceAccessLevel,
   ResearchStopAssessmentPayload,
 } from "../contracts.js";
-import { RESEARCH_REPORT_POLICY } from "./contracts.js";
+import { RESEARCH_POLICY } from "../research-policy.js";
 
 /**
  * 成稿提示词构建器（设计草案 §8.4：MODEL 从 Claim / Evidence / Gap / Conflict
@@ -74,7 +74,7 @@ export function buildResearchReportWritingPrompt(spec: ResearchReportWritingSpec
     "只输出一个 JSON 对象，不要输出其他文字或 Markdown 围栏。键名必须严格如下：",
     '{"title":"<报告标题>","spans":[{"text":"<段落正文>","claim_ids":["<claim id>"],"attribution_type":"source_statement|synthesis|inference","citation_source_ids":["<来源 id>"],"section":"summary|background|analysis|conclusions|disagreements|limitations"}],"gap_ids":["<gap id>"],"conflict_ids":["<conflict id>"]}',
     "span 每项只有 text、claim_ids、attribution_type、citation_source_ids、section 五个键；顶层键只有 title、spans、gap_ids、conflict_ids。",
-    `span 总数不超过 ${RESEARCH_REPORT_POLICY.maxSpans} 个，单个 text 不超过 ${RESEARCH_REPORT_POLICY.spanMaxChars} 字符。`,
+    `span 总数不超过 ${RESEARCH_POLICY.maxSpans} 个，单个 text 不超过 ${RESEARCH_POLICY.spanMaxChars} 字符。`,
     "",
     renderBrief(spec.brief),
     "",
@@ -127,7 +127,7 @@ function renderClaim(
 
 function renderEvidenceCard(item: ResearchEvidenceItemRead): string {
   const depth = ACCESS_LEVEL_LABELS[item.accessLevelSnapshot];
-  const excerpt = clip(item.excerpt, RESEARCH_REPORT_POLICY.verifierExcerptMaxChars);
+  const excerpt = clip(item.excerpt, RESEARCH_POLICY.verifierExcerptMaxChars);
   return [
     `来源 id=${item.sourceId}`,
     `立场=${item.stance}`,

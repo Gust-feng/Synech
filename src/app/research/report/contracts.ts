@@ -50,31 +50,6 @@ export const RESEARCH_FACTUAL_ATTRIBUTION_TYPES: ReadonlySet<ResearchAttribution
   "synthesis",
 ]);
 
-/**
- * 报告子系统的有界参数。
- *
- * 说明：RESEARCH_POLICY（src/app/research/research-policy.ts）是编排参数的 owner，
- * 但那是既有文件、本切片不改；报告侧参数先在此定义，S5w 接线时如需统一再并入。
- * 首版保守值；标定归 Phase 4。
- */
-export const RESEARCH_REPORT_POLICY = {
-  /** 语义抽样核验默认样本量：每任务抽验的已覆盖问题数（设计草案 §8.4）。 */
-  citationSampleQuestionsPerTask: 1,
-  /** 单个 span 正文上限：防模型把整节压成一句或无限拉长。 */
-  spanMaxChars: 4_000,
-  /** 单篇报告 span 总数上限。 */
-  maxSpans: 80,
-  /** verifier 输入里单条证据摘录的截断长度（与读取投影同一量级）。 */
-  verifierExcerptMaxChars: 1_200,
-  /**
-   * 内部标识泄漏判定的最小长度。
-   *
-   * 生产 ID 形如 `<prefix>-<uuid>`（约 40+ 字符）；短于该长度的字符串不视为可识别
-   * 的内部标识，避免把普通词误判成泄漏。
-   */
-  internalIdMinChars: 8,
-} as const;
-
 /** 模型输出契约里的 span 条目（snake_case：与提示词给模型的键名逐字一致）。 */
 export type ResearchReportSpanModelEntry = {
   readonly text: string;

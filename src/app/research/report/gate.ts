@@ -3,9 +3,9 @@ import type {
   ResearchLedger,
   ResearchSourceEntry,
 } from "../contracts.js";
+import { RESEARCH_POLICY } from "../research-policy.js";
 import {
   RESEARCH_FACTUAL_ATTRIBUTION_TYPES,
-  RESEARCH_REPORT_POLICY,
   type ResearchReportDraft,
   type ResearchReportGateFailure,
   type ResearchReportGateResult,
@@ -257,7 +257,7 @@ function isQuoteVerified(
 function collectInternalIds(ledger: ResearchLedger): readonly string[] {
   const ids = new Set<string>();
   const add = (id: string): void => {
-    if (id.length >= RESEARCH_REPORT_POLICY.internalIdMinChars) ids.add(id);
+    if (id.length >= RESEARCH_POLICY.internalIdMinChars) ids.add(id);
   };
   for (const source of ledger.sources) add(source.id);
   for (const item of ledger.evidence) add(item.id);

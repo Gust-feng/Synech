@@ -11,6 +11,11 @@
  * 2. **单次动作限制**（§4.2）：一次检索拿多少条、一次抓取读多少字符、单次外部
  *    调用超时。它们是工具契约，不是研究深度上限。
  *
+ * 报告子系统（`report/**`：渲染器/硬门/抽样/导出）的有界参数同属本文件：
+ * 它们是同一类「框架政策，模型无权选择」的值，S7 收口时从
+ * `report/contracts.ts` 原值并入（唯一 owner 不收窄也不架空）；首版保守值，
+ * Phase 4 用本项目数据标定。
+ *
  * constrained / finalization reserve 比例与无进展周期数均为首版保守值，
  * Phase 4 用本项目数据标定；精确余额永不进入模型上下文（ADR §2.4 / D5）。
  */
@@ -72,7 +77,7 @@ export const RESEARCH_POLICY = {
   projectionItemMaxChars: 600,
 
   /**
-   * 成稿与抽样核验的单次模型调用预算（单次动作限制，不是研究深度上限）。
+   * 报告成稿与抽样核验的单次模型调用预算（单次动作限制，不是研究深度上限）。
    *
    * 成稿是长输出：span 数、摘录引用与六节结构都计入 token；核验是短输出（一个
    * 五值枚举）。慢模型上成稿需要比核验宽得多的时间预算——两者分别设定，
@@ -82,6 +87,26 @@ export const RESEARCH_POLICY = {
   reportModelTimeoutMs: 420_000,
   verifierModelMaxOutputTokens: 512,
   verifierModelTimeoutMs: 120_000,
+  /**
+   * 语义抽样核验默认样本量：每任务抽验的已覆盖问题数（设计草案 §8.4）。
+   *
+   * 抽样是测量不是闸门：产出「本任务引用支撑率」展示给用户并作回归指标，
+   * 不阻断发布（ADR §2.4 / D4）。
+   */
+  citationSampleQuestionsPerTask: 1,
+  /** 单个 span 正文上限：防模型把整节压成一句或无限拉长。 */
+  spanMaxChars: 4_000,
+  /** 单篇报告 span 总数上限。 */
+  maxSpans: 80,
+  /** verifier 输入里单条证据摘录的截断长度（与读取投影同一量级）。 */
+  verifierExcerptMaxChars: 1_200,
+  /**
+   * 内部标识泄漏判定的最小长度。
+   *
+   * 生产 ID 形如 `<prefix>-<uuid>`（约 40+ 字符）；短于该长度的字符串不视为可识别
+   * 的内部标识，避免把普通词误判成泄漏。
+   */
+  internalIdMinChars: 8,
   /**
    * 成稿模型调用的尝试次数：1 次首试 + 1 次重试。
    *

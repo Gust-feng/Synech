@@ -1,6 +1,6 @@
 import type { ResearchCitationVerdict, ResearchClaimType, ResearchLedger } from "../contracts.js";
+import { RESEARCH_POLICY } from "../research-policy.js";
 import {
-  RESEARCH_REPORT_POLICY,
   type ResearchCitationRemediation,
   type ResearchCitationSample,
   type ResearchCitationSampleItem,
@@ -52,7 +52,7 @@ export function buildResearchCitationSample(input: {
   readonly draft: ResearchReportDraft;
   readonly questionsPerTask?: number;
 }): ResearchCitationSample {
-  const perTask = input.questionsPerTask ?? RESEARCH_REPORT_POLICY.citationSampleQuestionsPerTask;
+  const perTask = input.questionsPerTask ?? RESEARCH_POLICY.citationSampleQuestionsPerTask;
   // 抽样对象是「已覆盖」问题（covered 只表示研究认为证据够用，不为真背书）；
   // 选取确定性：按 (createdAt, id) 排序取前 N 个，同一账本状态两次抽样相同。
   const covered = [...input.ledger.questions]
@@ -100,7 +100,7 @@ function buildVerifierInput(
   const cards = evidenceIds
     .map((evidenceId) => evidenceById.get(evidenceId))
     .filter((item) => item !== undefined)
-    .map((item) => `- 摘录（定位=${item.locator}，立场=${item.stance}）：${clip(item.excerpt, RESEARCH_REPORT_POLICY.verifierExcerptMaxChars)}`);
+    .map((item) => `- 摘录（定位=${item.locator}，立场=${item.stance}）：${clip(item.excerpt, RESEARCH_POLICY.verifierExcerptMaxChars)}`);
   return [
     "判断下面的报告段落是否被其主张（claim）的证据支撑。",
     "只回答以下五个值之一：supports / partially_supports / contradicts / does_not_support / insufficient_context。",

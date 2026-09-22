@@ -816,6 +816,41 @@ export type ResearchModelContentPayload = {
   readonly reasoningAvailable: boolean;
 };
 
+/**
+ * 每轮上下文投影的测量事实（评估插桩：只埋点不调参）。
+ *
+ * research-policy.ts 的 constrained 墙钟比例、finalization reserve、抽样比例都是
+ * 首版保守值，Phase 4 要用本项目实测数据标定；标定的前提是先有每轮投影到底装配
+ * 了多少 token 的测量。turn 序号是执行事实（轨迹 join 用），不是研究策略输入：
+ * 应用层不据它停止、不据它转向。
+ *
+ * 两条硬边界：
+ * 1. 落账渠道是 ledger_change 动作事件（action_event.kind 的 DDL CHECK 冻结，
+ *    不改 schema，按 payload version 解析；与 citation_support_rate 同一模式）；
+ * 2. 它是**用户可见面的用量事实**，永不进入模型上下文：投影器只装配账本实体与
+ *    ResourceState，never_enter.usage_totals 等注册在案的禁止项不受影响。
+ */
+export type ResearchContextProjectionUsagePayload = {
+  readonly version: 1;
+  /** 账本变更定位（与 citation_support_rate 同一模式；读取方按 entity/change 过滤）。 */
+  readonly entity: "context_projection";
+  readonly change: "turn_projection";
+  /** 执行内的 turn 序号（1 起，按投影装配顺序）。 */
+  readonly turn: number;
+  readonly projectorVersion: string;
+  /** token 计数身份（测量事实：固定通用编码，与用户实际模型不保证逐 token 一致）。 */
+  readonly tokenizer: {
+    readonly source: string;
+    readonly encoding: string;
+    readonly exactMatch: boolean;
+  };
+  readonly instructionTokens: number;
+  readonly stateTokens: number;
+  readonly totalTokens: number;
+  /** 本次投影实际装配的槽位数（never_enter 恒不计入）。 */
+  readonly slotsIncluded: number;
+};
+
 
 
 export type ResearchQuestionUpdate = {

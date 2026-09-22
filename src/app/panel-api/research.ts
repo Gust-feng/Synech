@@ -100,8 +100,8 @@ export type ResearchTaskDetailView = {
   readonly endedAt: number | null;
   readonly sources: readonly ResearchSourceView[];
   readonly queries: readonly ResearchQueryView[];
-  /** 观察面有界投影（状态树 + 动作事件流）：与 detail 其余字段同源权威快照。 */
-  readonly ledger: ResearchLedgerView;
+  /** 观察面完整投影（状态树 + 动作事件流 + 用户可见面）：与 detail 其余字段同源权威快照。 */
+  readonly ledger: ResearchObservationView;
 };
 
 /**
@@ -257,6 +257,391 @@ export type ResearchLedgerView = {
   readonly stateTree: ResearchStateTreeView;
   readonly events: readonly ResearchActionEventView[];
 };
+
+/**
+ * detail 的观察面完整投影：read-model 的状态树 + 事件流，叠加 S7 收口的
+ * 用户可见面（报告 / 发布判定 / 抽样核验摘要 / 用量区插桩）。
+ *
+ * 组合而不是扩展 ResearchLedgerView：read-model（panel-api/read-model/**）继续
+ * 只拥有状态树与事件流契约，用户可见面投影是 detail  authoritative 快照上的
+ * 同源派生（投影函数均为 client-safe 纯函数，路由组装时调用）。
+ */
+export type ResearchObservationView = ResearchLedgerView & {
+  /**
+   * 报告的用户可见投影（ADR 0001 §2.5）：标题 + 有界 span。
+   * 引用以人类可解析的来源指向（标题 + URL + access_level）呈现——
+   * evidenceId / sourceId 等内部标识不进用户可见产物（D13）。
+   */
+  readonly report: ResearchReportView | null;
+  /** 确定性硬门的发布判定（结构字段；失败码负责程序分支，不依赖展示文案）。 */
+  readonly reportGate: ResearchReportGateView;
+  /** 抽样核验摘要（测量，不阻断发布）：不含 verifier 输入/输出原文。 */
+  readonly citationChecks: readonly ResearchCitationCheckSummaryView[];
+  /**
+   * 用户可见用量区（评估插桩，S7）：turn / 每轮投影 token / 终态事实 / 支撑率。
+   * 这些数据只进用户面，不进模型上下文（投影器 never_enter.usage_totals 注册在案）。
+   */
+  readonly instrumentation: ResearchInstrumentationView;
+};
+
+// ---------------------------------------------------------------------------
+// 报告 / 发布判定 / 用量区投影（用户可见面）
+//
+// 输入用结构化 "Like" 形状：与账本读取形状同构，不依赖研究 Feature 实现，
+// 也不透传模型原始响应。所有投影函数是 client-safe 纯函数（无时钟/随机/IO），
+// 服务端路由组装 detail 权威快照时调用；Panel UI 只拿结果渲染。
+// ---------------------------------------------------------------------------
+
+/** 终态完成方式：normal=语义充分后成稿；forced=资源天花板强制收尾；incomplete=未能成稿。 */
+export type ResearchCompletionView = "normal" | "forced" | "incomplete";
+
+/** 触发的运行安全天花板（终态结构字段；展示层不得改写其语义）。 */
+export type ResearchCeilingKindView = "wall_clock" | "external_actions" | "no_progress";
+
+/** 报告引用（自包含指向：离开应用后仍成立，ADR §2.5）。 */
+export type ResearchReportCitationView = {
+  readonly title: string;
+  readonly url: string;
+  readonly accessLevel: ResearchAccessLevelView;
+};
+
+/** 一条报告 span 的用户可见投影：正文 + 归因类型 + 来源指向（不含内部 id）。 */
+export type ResearchReportSpanView = {
+  readonly ordinal: number;
+  readonly text: string;
+  /** source_statement / synthesis / inference（结构值；展示映射归 UI）。 */
+  readonly attributionType: string;
+  readonly citations: readonly ResearchReportCitationView[];
+};
+
+export type ResearchReportView = {
+  readonly title: string;
+  readonly spans: readonly ResearchReportSpanView[];
+};
+
+/** 发布判定：passed=报告已发布（硬门通过）；rejected=硬门拒绝（失败码结构清单）；not_reached=未到成稿判定。 */
+export type ResearchReportGateView = {
+  readonly outcome: "passed" | "rejected" | "not_reached";
+  readonly failureCodes: readonly string[];
+};
+
+/** 本任务引用支撑率（抽样测量；不阻断发布，作回归指标）。 */
+export type ResearchCitationSupportView = {
+  readonly sampled: number;
+  readonly supporting: number;
+  /** verifier 输出非五值枚举的条数：单列不计入支撑率分子分母。 */
+  readonly rejected: number;
+  /** (supports + partially_supports) / sampled；无抽样项为 null。 */
+  readonly supportRate: number | null;
+};
+
+/** 一条抽样核验摘要：span 序号是展示序，verdict 是结构值；内部 id 不外泄。 */
+export type ResearchCitationCheckSummaryView = {
+  readonly spanOrdinal: number;
+  readonly verdict: string;
+  readonly sampled: boolean;
+  readonly verifierModel: string | null;
+};
+
+/** 每轮投影 token 测量（评估插桩：只埋点不调参）。 */
+export type ResearchProjectionTurnView = {
+  readonly turn: number;
+  readonly projectorVersion: string;
+  readonly instructionTokens: number;
+  readonly stateTokens: number;
+  readonly totalTokens: number;
+  readonly slotsIncluded: number;
+};
+
+/** token 计数身份：固定通用编码的近似测量，与用户实际模型不保证逐 token 一致。 */
+export type ResearchTokenizerView = {
+  readonly source: string;
+  readonly encoding: string;
+  readonly exactMatch: boolean;
+};
+
+/**
+ * 用户可见用量区（ResearchTask 既有 usage/completion/ceilingHit 之上的派生投影）。
+ *
+ * 覆盖 Phase 4 标定要用的实测字段：每轮投影 token 量、turn 数、forced/incomplete
+ * 的终态事实与原因、检索/抓取/model 用量（usage）、抽样引用支撑率。
+ * 硬边界：全部只进用户面，不进模型上下文。
+ */
+export type ResearchInstrumentationView = {
+  readonly usage: ResearchUsageView;
+  /** 已装配投影的 turn 数（执行事实，不是研究策略输入）。 */
+  readonly turns: number;
+  readonly projectionTurns: readonly ResearchProjectionTurnView[];
+  /** 全部 turn 投影 token 合计。 */
+  readonly projectionTokens: number;
+  readonly tokenizer: ResearchTokenizerView | null;
+  readonly completion: ResearchCompletionView | null;
+  /** 终态原因结构值（如 provider_unavailable / report_gate_rejected）。 */
+  readonly reason: string | null;
+  readonly ceilingHit: ResearchCeilingKindView | null;
+  /** finalization_required 转换次数（从 ResourceState 转换事件派生）。 */
+  readonly ceilingTriggers: number;
+  readonly citationSupport: ResearchCitationSupportView | null;
+};
+
+/** 账本动作事件的 "Like" 输入：与本文件 DTO 同构，不依赖 Feature 实现。 */
+export type ResearchInstrumentationEventInput = {
+  readonly kind: string;
+  readonly payload: { readonly [key: string]: unknown };
+};
+
+/** 报告投影输入（结构 Like：账本 report + sources 的读取形状）。 */
+export type ResearchReportProjectionInput = {
+  readonly report: {
+    readonly title: string;
+    readonly spans: readonly {
+      readonly ordinal: number;
+      readonly text: string;
+      readonly attributionType: string;
+      readonly citationSourceIds: readonly string[];
+    }[];
+  } | null;
+  readonly sources: readonly {
+    readonly id: string;
+    readonly title: string;
+    readonly url: string;
+    readonly accessLevel: string;
+  }[];
+};
+
+const ATTRIBUTION_TYPES: ReadonlySet<string> = new Set([
+  "source_statement",
+  "synthesis",
+  "inference",
+]);
+
+const ACCESS_LEVELS: ReadonlySet<string> = new Set<ResearchAccessLevelView>([
+  "snippet",
+  "partial",
+  "fulltext",
+  "unavailable",
+]);
+
+function researchAccessLevel(value: unknown): ResearchAccessLevelView {
+  return typeof value === "string" && ACCESS_LEVELS.has(value)
+    ? (value as ResearchAccessLevelView)
+    : "snippet";
+}
+
+function attributionType(value: unknown): string {
+  return typeof value === "string" && ATTRIBUTION_TYPES.has(value) ? value : "inference";
+}
+
+function countOfEventPayload(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : undefined;
+}
+
+function eventString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+function eventStringList(value: unknown): readonly string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string");
+}
+
+function eventBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+/** 反向扫描事件：同一 (entity, change) 多次落账时取最新一条。 */
+function latestLedgerChange(
+  events: readonly ResearchInstrumentationEventInput[],
+  entity: string,
+  change: string,
+): { readonly [key: string]: unknown } | null {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event === undefined || event.kind !== "ledger_change") continue;
+    if (event.payload.entity === entity && event.payload.change === change) return event.payload;
+  }
+  return null;
+}
+
+function collectProjectionTurns(
+  events: readonly ResearchInstrumentationEventInput[],
+): readonly ResearchProjectionTurnView[] {
+  const turns: ResearchProjectionTurnView[] = [];
+  for (const event of events) {
+    if (event.kind !== "ledger_change") continue;
+    if (event.payload.entity !== "context_projection" || event.payload.change !== "turn_projection") continue;
+    const turn = countOfEventPayload(event.payload.turn);
+    const instructionTokens = countOfEventPayload(event.payload.instructionTokens);
+    const stateTokens = countOfEventPayload(event.payload.stateTokens);
+    const totalTokens = countOfEventPayload(event.payload.totalTokens);
+    if (turn === undefined || instructionTokens === undefined
+      || stateTokens === undefined || totalTokens === undefined) continue;
+    turns.push({
+      turn,
+      projectorVersion: eventString(event.payload.projectorVersion) ?? "",
+      instructionTokens,
+      stateTokens,
+      totalTokens,
+      slotsIncluded: countOfEventPayload(event.payload.slotsIncluded) ?? 0,
+    });
+  }
+  return turns.sort((left, right) => left.turn - right.turn);
+}
+
+/**
+ * 报告 → 用户可见投影：引用解析为人类可读来源指向（标题 + URL + access_level）。
+ * 找不到的来源（账本不一致）不渲染占位：不给用户不可解析的引用。
+ */
+export function projectResearchReportView(
+  input: ResearchReportProjectionInput,
+): ResearchReportView | null {
+  if (input.report === null) return null;
+  const sourcesById = new Map(input.sources.map((source) => [source.id, source]));
+  return {
+    title: input.report.title,
+    spans: input.report.spans.map((span) => ({
+      ordinal: span.ordinal,
+      text: span.text,
+      attributionType: attributionType(span.attributionType),
+      citations: span.citationSourceIds
+        .map((sourceId) => sourcesById.get(sourceId))
+        .filter((source): source is NonNullable<typeof source> => source !== undefined)
+        .map((source) => ({
+          title: source.title,
+          url: source.url,
+          accessLevel: researchAccessLevel(source.accessLevel),
+        })),
+    })),
+  };
+}
+
+/** 确定性硬门的发布判定：报告存在即通过；否则看拒绝事件（失败码结构清单）。 */
+export function projectResearchReportGateView(input: {
+  readonly hasReport: boolean;
+  readonly errorCode: string | null;
+  readonly events: readonly ResearchInstrumentationEventInput[];
+}): ResearchReportGateView {
+  if (input.hasReport) return { outcome: "passed", failureCodes: [] };
+  const rejected = latestLedgerChange(input.events, "report", "gate_rejected");
+  if (rejected !== null) {
+    return { outcome: "rejected", failureCodes: eventStringList(rejected.failureCodes) };
+  }
+  // 拒绝事件缺失（历史数据）时退回 errorCode：仍是结构分支，不从文案反推。
+  if (input.errorCode === "research_report_gate_rejected") {
+    return { outcome: "rejected", failureCodes: [] };
+  }
+  return { outcome: "not_reached", failureCodes: [] };
+}
+
+/** 抽样核验摘要：span 序号映射自报告；verifier 输入/输出等 bulky 字段不进 DTO。 */
+export function projectResearchCitationCheckSummary(input: {
+  readonly checks: readonly {
+    readonly reportSpanId: string;
+    readonly verdict: string;
+    readonly sampled: boolean;
+    readonly verifierModel: string | null;
+  }[];
+  readonly report: { readonly spans: readonly { readonly id: string; readonly ordinal: number }[] } | null;
+}): readonly ResearchCitationCheckSummaryView[] {
+  if (input.report === null) return [];
+  const ordinalBySpanId = new Map(input.report.spans.map((span) => [span.id, span.ordinal]));
+  const summaries: ResearchCitationCheckSummaryView[] = [];
+  for (const check of input.checks) {
+    const spanOrdinal = ordinalBySpanId.get(check.reportSpanId);
+    if (spanOrdinal === undefined) continue;
+    summaries.push({
+      spanOrdinal,
+      verdict: check.verdict,
+      sampled: check.sampled,
+      verifierModel: check.verifierModel,
+    });
+  }
+  return summaries;
+}
+
+/**
+ * 用户可见用量区投影：usage + turn/投影 token + 终态事实 + 支撑率。
+ *
+ * 全部从既有持久事实派生（task 终态字段 + 动作事件），不落第二份状态；
+ * 展示层不得从文案反推数字（结构字段负责程序分支）。
+ */
+export function projectResearchInstrumentationView(input: {
+  readonly usage: ResearchUsageView;
+  readonly completion: ResearchCompletionView | null;
+  readonly reason: string | null;
+  readonly ceilingHit: ResearchCeilingKindView | null;
+  readonly events: readonly ResearchInstrumentationEventInput[];
+}): ResearchInstrumentationView {
+  const projectionTurns = collectProjectionTurns(input.events);
+  const tokenizer = readProjectionTokenizer(input.events);
+  let ceilingTriggers = 0;
+  for (const event of input.events) {
+    if (event.kind !== "resource_state_change") continue;
+    if (event.payload.to === "finalization_required") ceilingTriggers += 1;
+  }
+  return {
+    usage: input.usage,
+    turns: projectionTurns.length,
+    projectionTurns,
+    projectionTokens: projectionTurns.reduce((total, turn) => total + turn.totalTokens, 0),
+    tokenizer,
+    completion: input.completion,
+    reason: input.reason,
+    ceilingHit: input.ceilingHit,
+    ceilingTriggers,
+    citationSupport: readCitationSupport(input.events),
+  };
+}
+
+function readProjectionTokenizer(
+  events: readonly ResearchInstrumentationEventInput[],
+): ResearchTokenizerView | null {
+  const latest = latestProjectionTurn(events);
+  if (latest === null) return null;
+  const tokenizer = latest.tokenizer;
+  return {
+    source: eventString(tokenizer.source) ?? "",
+    encoding: eventString(tokenizer.encoding) ?? "",
+    exactMatch: eventBoolean(tokenizer.exactMatch) ?? false,
+  };
+}
+
+function latestProjectionTurn(
+  events: readonly ResearchInstrumentationEventInput[],
+): { readonly tokenizer: { readonly [key: string]: unknown } } | null {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event === undefined || event.kind !== "ledger_change") continue;
+    if (event.payload.entity !== "context_projection" || event.payload.change !== "turn_projection") continue;
+    const tokenizer = event.payload.tokenizer;
+    if (typeof tokenizer === "object" && tokenizer !== null) {
+      return { tokenizer: tokenizer as { readonly [key: string]: unknown } };
+    }
+  }
+  return null;
+}
+
+/** 抽样支撑率：唯一事实源是成稿期落账的 citation_support_rate 事件。 */
+function readCitationSupport(
+  events: readonly ResearchInstrumentationEventInput[],
+): ResearchCitationSupportView | null {
+  const payload = latestLedgerChange(events, "citation_check", "citation_support_rate");
+  if (payload === null) return null;
+  const sampled = countOfEventPayload(payload.sampled);
+  const supporting = countOfEventPayload(payload.supporting);
+  const rejected = countOfEventPayload(payload.rejected);
+  if (sampled === undefined || supporting === undefined || rejected === undefined) return null;
+  return {
+    sampled,
+    supporting,
+    rejected,
+    supportRate: payload.supportRate === null
+      ? null
+      : (typeof payload.supportRate === "number" && Number.isFinite(payload.supportRate)
+        ? payload.supportRate
+        : null),
+  };
+}
 
 export type ResearchReadinessView = {
   readonly search: { readonly available: boolean; readonly reason?: string };

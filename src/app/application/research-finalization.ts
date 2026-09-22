@@ -21,6 +21,7 @@ import {
   type ResearchReportDraft,
 } from "../research/report/index.js";
 import { readLatestResearchStopAssessment } from "../research/persistence-schema.js";
+import { researchGateFailureCodes } from "./research-instrumentation.js";
 import type {
   ResearchFinalizationOutcome,
   ResearchFinalizationPort,
@@ -64,7 +65,7 @@ export type ResearchFinalizationDependencies = {
   readonly model: ResearchModelPort;
   /** verifier 模型标识（用户可见面的溯源事实；解析不到时为 null，不猜）。 */
   readonly describeVerifierModel?: () => Promise<string | null>;
-  /** 抽样问题数；缺省 RESEARCH_REPORT_POLICY.citationSampleQuestionsPerTask。 */
+  /** 抽样问题数；缺省 RESEARCH_POLICY.citationSampleQuestionsPerTask。 */
   readonly questionsPerTask?: number;
   readonly onDiagnostic?: (topic: string, error: unknown) => void;
 };
@@ -231,7 +232,7 @@ export function createResearchFinalization(
       if (ledger.brief === null) {
         // 未批准范围的任务根本不该进入执行（start 把范围批准与任务创建放同事务）；
         // 走到这里说明账本缺 brief，报告没有范围锚点，如实拒绝而不是写无锚点报告。
-        return { status: "rejected", reason: "brief_not_recorded" };
+        return { status: "rejected", reason: "brief_not_recorded", failureCodes: ["brief_not_recorded"] };
       }
 
       const written = await composeWithModel({
@@ -245,8 +246,10 @@ export function createResearchFinalization(
       const composition = written.composition;
       if (!composition.ok) {
         // 硬门（零保留来源、引用不落 content hash、内部标识泄漏……含解析契约失败后的
-        // 最终判定）不过即不出版：结构化失败码随 outcome.reason 上交。
-        return { status: "rejected", reason: gateRejectionReason(composition) };
+        // 最终判定）不过即不出版：结构化失败码随 outcome 上交（reason 串与 codes
+        // 数组同一处计算；应用层把 codes 落成用户可见的发布判定事件）。
+        const failureCodes = researchGateFailureCodes(readGateFailureCodes(composition));
+        return { status: "rejected", reason: failureCodes.join(","), failureCodes };
       }
 
       const verification = await runCitationSample({
@@ -350,12 +353,9 @@ function writingSpecOf(ledger: ResearchLedger, brief: ResearchBrief) {
   };
 }
 
-/** 结构化拒绝原因：硬门失败码（含零保留来源）去重后汇成一串；展示层不改写其语义。 */
-function gateRejectionReason(composition: ResearchReportComposition): string {
-  const codes = composition.gate.ok
-    ? []
-    : composition.gate.failures.map((failure) => failure.code);
-  return [...new Set(codes.length > 0 ? codes : ["model_output_invalid"])].join(",");
+/** 硬门失败码（含零保留来源）：解析契约失败后的最终判定也归到结构化码，展示层不改写其语义。 */
+function readGateFailureCodes(composition: ResearchReportComposition): readonly string[] {
+  return composition.gate.ok ? [] : composition.gate.failures.map((failure) => failure.code);
 }
 
 /**

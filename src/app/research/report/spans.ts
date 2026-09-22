@@ -1,6 +1,6 @@
 import type { ResearchAttributionType } from "../contracts.js";
+import { RESEARCH_POLICY } from "../research-policy.js";
 import {
-  RESEARCH_REPORT_POLICY,
   RESEARCH_REPORT_SECTIONS,
   type ResearchComposedSpan,
   type ResearchReportParseFailure,
@@ -97,11 +97,11 @@ function readSpans(
     failures.push({ field: "spans", code: "spans_missing", message: "报告正文 spans 缺失或为空。" });
     return undefined;
   }
-  if (value.length > RESEARCH_REPORT_POLICY.maxSpans) {
+  if (value.length > RESEARCH_POLICY.maxSpans) {
     failures.push({
       field: "spans",
       code: "span_count_over_limit",
-      message: `span 数量 ${value.length} 超过上限 ${RESEARCH_REPORT_POLICY.maxSpans}。`,
+      message: `span 数量 ${value.length} 超过上限 ${RESEARCH_POLICY.maxSpans}。`,
     });
     return undefined;
   }
@@ -135,11 +135,11 @@ function readSpan(
 
   if (text.length === 0) {
     failures.push({ field: `${field}.text`, code: "span_text_missing", message: "span 正文为空。" });
-  } else if (text.length > RESEARCH_REPORT_POLICY.spanMaxChars) {
+  } else if (text.length > RESEARCH_POLICY.spanMaxChars) {
     failures.push({
       field: `${field}.text`,
       code: "span_text_over_limit",
-      message: `span 正文 ${text.length} 字符超过上限 ${RESEARCH_REPORT_POLICY.spanMaxChars}。`,
+      message: `span 正文 ${text.length} 字符超过上限 ${RESEARCH_POLICY.spanMaxChars}。`,
     });
   } else if (MARKDOWN_LINK_PATTERN.test(text) || BARE_URL_PATTERN.test(text)) {
     failures.push({
@@ -164,7 +164,7 @@ function readSpan(
   }
 
   const valid = text.length > 0
-    && text.length <= RESEARCH_REPORT_POLICY.spanMaxChars
+    && text.length <= RESEARCH_POLICY.spanMaxChars
     && !MARKDOWN_LINK_PATTERN.test(text)
     && !BARE_URL_PATTERN.test(text)
     && typeof attribution === "string" && ATTRIBUTION_TYPES.has(attribution)

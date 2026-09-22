@@ -26,7 +26,7 @@ export type ResearchReportComposeInput = {
   readonly modelOutput: unknown;
   /** verifier 五值判定；缺省不产出支撑率（本切片不调 verifier 模型）。 */
   readonly verdicts?: readonly ResearchCitationVerdictInput[];
-  /** 抽样问题数；缺省 RESEARCH_REPORT_POLICY.citationSampleQuestionsPerTask。 */
+  /** 抽样问题数；缺省 RESEARCH_POLICY.citationSampleQuestionsPerTask。 */
   readonly questionsPerTask?: number;
 };
 

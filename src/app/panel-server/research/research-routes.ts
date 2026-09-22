@@ -10,13 +10,19 @@ import type {
   ResearchTaskDetailView,
   ResearchTaskSummaryView,
 } from "../../panel-api/research.js";
-import { ResearchError, type ResearchFeature } from "../../research/index.js";
-import { ResearchScopeGateError, readResearchScopeGate } from "../../research/scope-gate.js";
-import type { ResearchApplication } from "../../application/research-application.js";
+import {
+  projectResearchCitationCheckSummary,
+  projectResearchInstrumentationView,
+  projectResearchReportGateView,
+  projectResearchReportView,
+  type ResearchObservationView,
+} from "../../panel-api/research.js";
 import {
   projectResearchLedgerView,
-  type ResearchLedgerInput,
 } from "../../panel-api/read-model/research/research-ledger-view.js";
+import { ResearchError, type ResearchFeature, type ResearchLedger } from "../../research/index.js";
+import { ResearchScopeGateError, readResearchScopeGate } from "../../research/scope-gate.js";
+import type { ResearchApplication } from "../../application/research-application.js";
 import { PanelHttpError, readJsonBody, writeJson } from "../http-utils.js";
 
 /**
@@ -236,7 +242,46 @@ export function researchHttpError(error: ResearchError): PanelHttpError {
 
 type ResearchDetail = NonNullable<Awaited<ReturnType<ResearchFeature["queries"]["detail"]>>>;
 
-function toDetailView(detail: ResearchDetail, ledger: ResearchLedgerInput): ResearchTaskDetailView {
+/**
+ * 观察面组装：read-model 的状态树 + 事件流，叠加本切片新增的用户可见面
+ * （报告 / 发布判定 / 抽样核验摘要 / 用量区插桩）。
+ *
+ * 投影全部是 panel-api 的 client-safe 纯函数，输入是 detail 权威快照与账本读取
+ * 形状；路由不在这里做业务判定，只组装同源快照。
+ */
+function toResearchLedgerView(detail: ResearchDetail, ledger: ResearchLedger): ResearchObservationView {
+  const events = ledger.actionEvents;
+  return {
+    ...projectResearchLedgerView(ledger),
+    report: projectResearchReportView({
+      report: ledger.report,
+      sources: ledger.sources.map((source) => ({
+        id: source.id,
+        title: source.title,
+        url: source.canonicalUrl,
+        accessLevel: source.accessLevel,
+      })),
+    }),
+    reportGate: projectResearchReportGateView({
+      hasReport: ledger.report !== null,
+      errorCode: detail.task.errorCode,
+      events,
+    }),
+    citationChecks: projectResearchCitationCheckSummary({
+      checks: ledger.citationChecks,
+      report: ledger.report,
+    }),
+    instrumentation: projectResearchInstrumentationView({
+      usage: detail.task.usage,
+      completion: detail.task.completion,
+      reason: detail.task.reason,
+      ceilingHit: detail.task.ceilingHit,
+      events,
+    }),
+  };
+}
+
+function toDetailView(detail: ResearchDetail, ledger: ResearchLedger): ResearchTaskDetailView {
   return {
     id: detail.task.id,
     question: detail.task.question,
@@ -288,8 +333,8 @@ function toDetailView(detail: ResearchDetail, ledger: ResearchLedgerInput): Rese
       status: query.status,
       resultCount: query.resultCount,
     })),
-    // 观察面：状态树 + 动作事件流的有界投影（ADR §2.6）；DTO 已做有界截断，不含上下文炸弹。
-    ledger: projectResearchLedgerView(ledger),
+    // 观察面：状态树 + 动作事件流 + 用户可见面（报告/发布判定/核验摘要/用量区）的有界投影（ADR §2.6）；DTO 已做有界截断，不含上下文炸弹。
+    ledger: toResearchLedgerView(detail, ledger),
   };
 }
 

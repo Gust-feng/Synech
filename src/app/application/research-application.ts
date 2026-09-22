@@ -30,6 +30,10 @@ import {
   assertResearchScope,
 } from "../research/scope-gate.js";
 import { projectResearchContext, type ResearchContextProjection } from "./research-context-projector.js";
+import {
+  researchGateFailureCodes,
+  researchProjectionUsagePayload,
+} from "./research-instrumentation.js";
 
 /**
  * 深度研究编排（Application）：范围闸门 → turn 驱动的研究循环 → 成稿。
@@ -159,7 +163,7 @@ export type ResearchFinalizationOutcome =
       readonly spans: readonly ResearchReportSpanDraft[];
     }
   /** 确定性硬门拒绝：不得发布（研究事实已全部落账，账本不丢）。 */
-  | { readonly status: "rejected"; readonly reason: string }
+  | { readonly status: "rejected"; readonly reason: string; readonly failureCodes: readonly string[] }
   /** 模型/provider 不可用，无法保证成稿调用（ADR §11.2）。 */
   | { readonly status: "unavailable"; readonly reason: string };
 
@@ -385,6 +389,23 @@ async function runResearchTurns(run: ResearchTurnRun): Promise<void> {
       return;
     }
     if (outcome.status === "rejected") {
+      // 发布判定落账（用户可见面）：硬门失败码是结构事实，经 ledger_change 事件
+      // 持久化（终态只带 errorCode；不把码塞进展示文案，也不从文案反推码）。
+      await feature.commands.appendActionEvents({
+        taskId,
+        events: [{
+          kind: "ledger_change",
+          payload: {
+            version: 1,
+            entity: "report",
+            change: "gate_rejected",
+            completion: "incomplete",
+            failureCodes: researchGateFailureCodes(outcome.failureCodes ?? []),
+          },
+        }],
+      }).catch((error) => {
+        run.onDiagnostic(`research report gate rejection event failed for ${taskId}`, error);
+      });
       // 零保留来源、引用不落 content hash、内部标识泄漏、Gap/Conflict 引用不存在等
       // 确定性硬门失败一律不出版：账本完整保留，任务以未完成终止（ADR §2.4）。
       await finishTask({
@@ -427,6 +448,29 @@ async function runResearchTurns(run: ResearchTurnRun): Promise<void> {
   let resourceState: ResearchResourceState | null = null;
   let consecutiveNoProgress = 0;
   let signature = "";
+  /** 执行内的 turn 计数：只作评估插桩与轨迹 join，不是研究策略输入（不据此停止/转向）。 */
+  let turnCount = 0;
+
+  /** 每轮投影测量落账（ledger_change 事件；失败只进诊断，不改变 turn 结果）。 */
+  const recordTurnProjection = async (
+    projection: ResearchContextProjection,
+  ): Promise<void> => {
+    await feature.commands.appendActionEvents({
+      taskId,
+      events: [{
+        kind: "ledger_change",
+        payload: researchProjectionUsagePayload({
+          turn: turnCount,
+          projectorVersion: projection.projectorVersion,
+          instructions: projection.instructions,
+          stateMessage: projection.stateMessage,
+          slotsIncluded: projection.slots.filter((slot) => slot.included).length,
+        }),
+      }],
+    }).catch((error) => {
+      run.onDiagnostic(`research projection instrumentation failed for ${taskId}`, error);
+    });
+  };
 
   try {
     const initialLedger = await feature.queries.ledger(taskId);
@@ -490,6 +534,9 @@ async function runResearchTurns(run: ResearchTurnRun): Promise<void> {
 
       // 4. 投影器装配：模型可见内容的唯一 owner（确定性 + 可复现）。
       const projection = projectResearchContext({ ledger, resourceState: derived.resourceState });
+      // 评估插桩（只埋点不调参）：每轮投影 token 量落用户可见用量区，不进模型上下文。
+      turnCount += 1;
+      await recordTurnProjection(projection);
 
       // 5. 一个 turn：新 Session + provider binding；配置类不可用立即收敛。
       const opening = await dependencies.turns.openTurn({ taskId, signal });
