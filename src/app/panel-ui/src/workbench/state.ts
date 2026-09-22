@@ -23,5 +23,6 @@ export function createInitialAppState(): AppState {
     transcriptNodesByRunId: {},
     events: [],
     busy: false,
+    settledResearchScopeKeys: [],
   };
 }

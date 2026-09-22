@@ -166,6 +166,52 @@ export type ResearchScopeApproval = {
   readonly payloadHash: string;
   readonly approvedAt: number;
   readonly conversationRef: string;
+  /** 澄清期受限检索的披露事实：仅摘要级、不进入证据账本、不可被报告引用。 */
+  readonly scopeSearchDisclosure?: ResearchScopeSearchDisclosure;
+};
+
+/** 澄清期联网检索披露：用户批准范围时一并看到的摘要级检索次数（ADR 0001 §2.2）。 */
+export type ResearchScopeSearchDisclosure = {
+  readonly snippetSearches: number;
+};
+
+// ---------------------------------------------------------------------------
+// 范围闸门入参（ADR 0001 §2.2 / 设计草案 §8.1）
+//
+// 这是 `ResearchApplication.start` 的唯一公开入参形状：用户/Agent/HTTP 三个入口
+// 共用它，语义充分性由用户在范围卡上判定，框架只做结构完整性校验。
+// ---------------------------------------------------------------------------
+
+export type ResearchScopeBriefInput = {
+  readonly objective: string;
+  readonly inclusions: readonly string[];
+  readonly exclusions: readonly string[];
+  readonly audience: string;
+  readonly answerCriteria: string;
+};
+
+export type ResearchScopeQuestionInput = {
+  readonly text: string;
+  readonly priority: ResearchQuestionNodePriority;
+  readonly boundaryNote: string;
+};
+
+export type ResearchScopeApprovalInput = {
+  /**
+   * 批准载荷的 sha256 摘要；**可选**：框架按规范化 payload 自行计算并落账，
+   * 调用方（能就地计算同一摘要的一方）提供时必须与框架计算值一致，否则拒绝。
+   * 客户端自述的哈希不构成「确定后不能改」的可审计事实。
+   */
+  readonly payloadHash?: string;
+  readonly approvedAt: number;
+  readonly conversationRef: string;
+};
+
+export type ResearchScopeStartInput = {
+  readonly brief: ResearchScopeBriefInput;
+  readonly questions: readonly ResearchScopeQuestionInput[];
+  readonly approval: ResearchScopeApprovalInput;
+  readonly scopeSearchDisclosure?: ResearchScopeSearchDisclosure;
 };
 
 export type ResearchBrief = {
@@ -931,7 +977,10 @@ export type ResearchErrorCode =
   | "research_invalid_input"
   | "research_task_not_found"
   | "research_task_not_terminal"
-  | "research_repository_failure";
+  | "research_repository_failure"
+  | "research_scope_incomplete"
+  | "research_scope_approval_mismatch"
+  | "research_scope_approval_failed";
 
 export class ResearchError extends Error {
   readonly name = "ResearchError";

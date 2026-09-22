@@ -83,6 +83,9 @@ const scopeApprovalSchema = z.object({
   payloadHash: z.string().min(1),
   approvedAt: timestamp,
   conversationRef: z.string().min(1),
+  scopeSearchDisclosure: z.object({
+    snippetSearches: z.number().int().min(0),
+  }).strict().optional(),
 }).strict();
 
 const taskSchema = z.object({

@@ -34,6 +34,7 @@ import type { ModelProviderModelCatalog } from "@panel-api/config";
 import type { ContextAttachment } from "../contracts/context";
 import type { OrdinaryWorkView } from "../contracts/run";
 import type { McpServerCatalogItem } from "@panel-api/tools";
+import type { ResearchScopeGateFailureView } from "@panel-api/research";
 
 export type AppWorkbenchRuntimeOptions = {
   readonly app: AppState;
@@ -72,6 +73,10 @@ export type AppWorkbenchRuntime = {
   readonly pendingConfirmation?: OrdinaryWorkView["pendingConfirmation"];
   readonly pendingCount: number;
   readonly confirmationBusy: boolean;
+  /** 范围卡在途：与 confirmationBusy 同形态的单一在途门。 */
+  readonly researchScopeBusy: boolean;
+  /** 范围门拒绝时的结构化缺失字段清单；null 表示没有待补齐字段。 */
+  readonly researchScopeMissing: readonly ResearchScopeGateFailureView[] | null;
   readonly contextBusy: boolean;
   readonly pendingConversationIds: ReadonlySet<string>;
 
@@ -81,7 +86,13 @@ export type AppWorkbenchRuntime = {
   readonly savingTools: boolean;
   readonly runActions: Pick<
     ReturnType<typeof createAppRunController>,
-    "loadConversation" | "startTask" | "startNewConversation" | "cancelRun" | "decideConfirmation" | "resetChat"
+    | "loadConversation"
+    | "startTask"
+    | "startNewConversation"
+    | "cancelRun"
+    | "decideConfirmation"
+    | "decideResearchScope"
+    | "resetChat"
   >;
   readonly sidebarActions: Pick<
     ReturnType<typeof createAppSidebarConversationController>,
@@ -98,6 +109,10 @@ export function useAppWorkbenchRuntime(options: AppWorkbenchRuntimeOptions): App
   const mountedRef = useRef(true);
   const { state: bootstrap, retry: retryBootstrap } = useAppBootstrap({ mountedRef, setApp: options.setApp });
   const [confirmationBusy, setConfirmationBusy] = useState(false);
+  const [researchScopeBusy, setResearchScopeBusy] = useState(false);
+  const [researchScopeMissing, setResearchScopeMissing] = useState<
+    readonly ResearchScopeGateFailureView[] | null
+  >(null);
   const [contextBusy, setContextBusy] = useState(false);
   const [savingModel, setSavingModel] = useState(false);
   const [savingEnvironment, setSavingEnvironment] = useState(false);
@@ -196,6 +211,8 @@ export function useAppWorkbenchRuntime(options: AppWorkbenchRuntimeOptions): App
     selectedModelSupportsReasoningEffort: options.selectedModelSupportsReasoningEffort,
     confirmationBusy,
     setConfirmationBusy,
+    researchScopeBusy,
+    setResearchScopeBusy,
     mountedRef,
     pollTimer,
     streamRef,
@@ -209,6 +226,7 @@ export function useAppWorkbenchRuntime(options: AppWorkbenchRuntimeOptions): App
     refreshSpaceConversations: options.refreshSpaceConversations,
   }), [
     confirmationBusy,
+    researchScopeBusy,
     options.aiMode,
     options.app,
     options.attachments,
@@ -326,6 +344,8 @@ export function useAppWorkbenchRuntime(options: AppWorkbenchRuntimeOptions): App
     pendingConfirmation,
     pendingCount,
     confirmationBusy,
+    researchScopeBusy,
+    researchScopeMissing,
     contextBusy,
     pendingConversationIds,
 
@@ -339,6 +359,12 @@ export function useAppWorkbenchRuntime(options: AppWorkbenchRuntimeOptions): App
       startNewConversation: runController.startNewConversation,
       cancelRun: runController.cancelRun,
       decideConfirmation: runController.decideConfirmation,
+      decideResearchScope: (decision) =>
+        runController.decideResearchScope(decision).then((result) => {
+          // 范围门拒绝的缺失字段清单回收到这里：卡片据此继续显示要补的字段。
+          setResearchScopeMissing(result.missing);
+          return result;
+        }),
       resetChat: runController.resetChat,
     },
     sidebarActions: {

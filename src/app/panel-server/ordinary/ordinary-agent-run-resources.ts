@@ -31,6 +31,11 @@ import type {
   OrdinaryAgentLoopRunResourceAcquirer,
 } from "../../ordinary-agent/agent-loop-execution.js";
 import { buildOrdinaryAgentModelInput } from "../../ordinary-agent/model-input.js";
+import { researchScopeClarificationInstructions } from "../../ordinary-agent/research-scope-instructions.js";
+import {
+  RESEARCH_CLARIFICATION_MAX_SNIPPET_SEARCHES,
+  RESEARCH_CLARIFICATION_SEARCH_DEFAULT_ENABLED,
+} from "../../../domain/config/settings-store.js";
 import { attachOrdinaryFileInputsToModelMessages } from "../../ordinary-agent/model-input-attachments.js";
 import { ToolExecutionObservationGateway } from "../../ordinary-agent/tool-execution-observation-gateway.js";
 import { OrdinaryToolMetricsCollector } from "../../ordinary-agent/tool-runtime-metrics.js";
@@ -298,6 +303,12 @@ export function createOrdinaryAgentRunResourceAcquirer(
           skillContexts,
           ownerContext: input.birth.ownerContext,
           collaborationRulesContext: input.birth.collaborationRulesContext,
+          // 研究澄清角色落在主会话内（ADR 0001 §3 否决独立前置 agent 实体）：不建
+          // 第二 runtime，只把这段常驻说明追加进本次请求的上下文。澄清期检索开关
+          // 在资源装配时读取：默认关闭，开启时也只是摘要级、有上限、不进证据账本。
+          researchScopeInstructions: researchScopeClarificationInstructions(
+            await readResearchClarificationSetting(options.host.configCenter),
+          ),
         });
         const messagesWithAttachments = await attachOrdinaryFileInputsToModelMessages({
           messages: modelInput.messages,
@@ -376,6 +387,25 @@ export function createOrdinaryAgentRunResourceAcquirer(
         );
       }
     },
+  };
+}
+
+/**
+ * 读取澄清期检索开关；宿主未暴露该设置时按契约默认（关闭）生成。
+ *
+ * 默认关闭是安全方向：宁可少检索，也不在不明确时报绿灯。这里不做业务判断，
+ * 只把设置契约声明的默认值兜住。
+ */
+async function readResearchClarificationSetting(
+  configCenter: AgentRunResourceHost["configCenter"],
+): Promise<{
+  readonly scopeSearchEnabled: boolean
+  readonly maxSnippetSearches: number
+}> {
+  const config = await configCenter.getResearchClarificationConfig?.();
+  return {
+    scopeSearchEnabled: config?.scopeSearchEnabled ?? RESEARCH_CLARIFICATION_SEARCH_DEFAULT_ENABLED,
+    maxSnippetSearches: config?.maxSnippetSearches ?? RESEARCH_CLARIFICATION_MAX_SNIPPET_SEARCHES,
   };
 }
 

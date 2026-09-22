@@ -35,6 +35,8 @@ import { useConversationMode } from "../../workbench/use-conversation-mode";
 import { useWorkbenchEnvironment } from "../../workbench/use-workbench-environment";
 import { useWorkbenchLayout, type WorkbenchLayoutMode } from "../../workbench/use-workbench-layout";
 import { PreviewLayoutContext } from "../../workbench/preview-layout";
+import type { ResearchScopeGateFailureView } from "@panel-api/research";
+import type { ResearchScopeCardState } from "../../features/conversations/run/research-scope-card";
 
 export type PersonalWorkbenchProps = {
   readonly personalKnowledgePersistenceEnabled?: boolean;
@@ -56,6 +58,11 @@ export type PersonalWorkbenchProps = {
   readonly pendingConfirmation?: PendingConfirmation | NonNullable<CurrentRunProjection["workView"]>["pendingConfirmation"];
   readonly confirmationBusy: boolean;
   readonly onDecision: (decision: "approve_once" | "deny" | "guidance", guidance?: string) => void;
+  /** 范围卡在途门与结构化缺失字段清单（ADR 0001 §2.2）。 */
+  readonly researchScopeBusy?: boolean;
+  readonly researchScopeMissing?: readonly ResearchScopeGateFailureView[] | null;
+  readonly onApproveResearchScope?: (state: ResearchScopeCardState) => void;
+  readonly onDismissResearchScope?: (proposalKey: string) => void;
   readonly onStartNewConversation: (owner?: ConversationOwnerSelection) => Promise<boolean>;
   readonly onResetConversation: () => void;
   readonly onOpenConversation: (conversationId: string) => boolean | Promise<boolean>;
@@ -76,7 +83,10 @@ export type PersonalWorkbenchProps = {
   readonly spaceActions?: PersonalSpaceActions;
   readonly onOpenSettings?: (group?: SettingsGroup) => void;
   readonly settingsDialogProps?: WorkbenchSettingsDialogProps;
+  readonly settledResearchScopeKeys?: readonly string[];
 };
+
+const EMPTY_SCOPE_KEYS: readonly string[] = [];
 
 /** Reading navigation and the canonical conversation share one stable workbench layout. */
 export function PersonalWorkbench(props: PersonalWorkbenchProps) {
@@ -106,6 +116,8 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
   const navigationIntentRef = useRef(0);
   const viewRef = useRef(view);
   viewRef.current = view;
+  // 已被用户处理过的范围卡：同一提案不重复渲染（AppState 持有，刷新后依然生效）。
+  const settledResearchScopeKeys = props.settledResearchScopeKeys ?? EMPTY_SCOPE_KEYS;
   // 异步提交/打开会话的 .then 可能晚于本次 render 执行，这里始终镜像最新事实，
   // 避免闭包读到旧的 conversation / spaces / activeSpaceId。
   const conversationRef = useRef(props.conversation);
@@ -479,6 +491,11 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
                 developerModeEnabled={props.developerModeEnabled}
                 confirmationBusy={props.confirmationBusy}
                 onDecision={props.onDecision}
+                researchScopeBusy={props.researchScopeBusy}
+                researchScopeMissing={props.researchScopeMissing}
+                onApproveResearchScope={props.onApproveResearchScope}
+                onDismissResearchScope={props.onDismissResearchScope}
+                settledResearchScopeKeys={settledResearchScopeKeys}
                 focus={conversationMode === "focus"}
                 onExitFocus={() => setConversationMode("normal")}
               />

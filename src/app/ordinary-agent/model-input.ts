@@ -21,6 +21,13 @@ export type BuildOrdinaryAgentModelInputOptions = {
   readonly ownerContext?: string;
   /** User-authored standing rules; they remain overrideable by the current request. */
   readonly collaborationRulesContext?: string;
+  /**
+   * 主会话内的研究角色指令（澄清行为与结构化产出约定）。
+   *
+   * 这是 turn 级的常驻说明，不是 AgentDefinition 的一部分：冻结的 instructions
+   * 事实保持原样，模型可见的研究角色在这里显式追加，两侧不会互相冒充。
+   */
+  readonly researchScopeInstructions?: string;
 };
 
 /**
@@ -71,8 +78,11 @@ function currentUserMessageContent(input: BuildOrdinaryAgentModelInputOptions): 
   const collaborationRules = input.collaborationRulesContext === undefined || input.collaborationRulesContext.length === 0
     ? undefined
     : normalizeModelFacingText(input.collaborationRulesContext);
+  const researchScope = input.researchScopeInstructions === undefined || input.researchScopeInstructions.length === 0
+    ? undefined
+    : normalizeModelFacingText(input.researchScopeInstructions);
   if (skills.length === 0 && ownerReferences.length === 0 && attachments.length === 0 &&
-      owner === undefined && collaborationRules === undefined) {
+      owner === undefined && collaborationRules === undefined && researchScope === undefined) {
     return goal;
   }
   return [
@@ -83,6 +93,7 @@ function currentUserMessageContent(input: BuildOrdinaryAgentModelInputOptions): 
       : `[Conversation owner resources]\n${ownerReferences.join("\n")}`,
     attachments.length === 0 ? undefined : `[User-provided context]\n${attachments.join("\n")}`,
     collaborationRules,
+    researchScope,
     `[Current user request]\n${goal}`,
   ].filter(isString).join("\n\n");
 }

@@ -33,6 +33,13 @@ import type {
   UpdateWebSearchConfigInput,
   ToolStateSettings,
 } from "../../domain/config/index.js";
+// 澄清期检索设置是本切片新增的本地设置形状；其类型定义放在 domain/config 的
+// settings-store（同目录），这里直接从该文件引用，不走 index 再导出——
+// 避免为一个小设置改动 domain/config 的公共出口面。
+import type {
+  SanitizedResearchClarificationConfig,
+  UpdateResearchClarificationConfigInput,
+} from "../../domain/config/settings-store.js";
 import type { InformationAccessSettings } from "../../domain/config/index.js";
 import {
   ConfigSchemaValidationError,
@@ -59,6 +66,11 @@ import {
   toSanitizedOrdinaryAgentPromptConfig,
   toSanitizedWebSearchConfig,
 } from "./projections.js";
+import {
+  normalizeResearchClarificationSettings,
+  normalizeResearchClarificationUpdate,
+  toSanitizedResearchClarificationConfig,
+} from "./research-clarification-settings.js";
 import {
   activateModelProviderProfile as activateModelProviderProfileSettings,
   changeModelProviderOrder,
@@ -418,6 +430,37 @@ export class ConfigCenter {
       };
       await this.options.settingsStore.writeSettings(next);
       return toSanitizedSkillTriggerConfig(skillTrigger, { now });
+    });
+  }
+
+  async getResearchClarificationConfig(): Promise<SanitizedResearchClarificationConfig> {
+    const settings = await this.readOrCreateSettings();
+    return toSanitizedResearchClarificationConfig(settings.researchClarification, {
+      now: settings.updatedAt,
+    });
+  }
+
+  async updateResearchClarificationConfig(
+    input: UpdateResearchClarificationConfigInput,
+  ): Promise<SanitizedResearchClarificationConfig> {
+    return this.runMutation(async () => {
+      const current = await this.readOrCreateSettings();
+      const now = new Date().toISOString();
+      const researchClarification = normalizeResearchClarificationUpdate(
+        {
+          scopeSearchEnabled: input.scopeSearchEnabled ?? current.researchClarification?.scopeSearchEnabled,
+          maxSnippetSearches: input.maxSnippetSearches ?? current.researchClarification?.maxSnippetSearches,
+        },
+        now,
+      );
+      const next: LocalSettings = {
+        ...current,
+        version: 1,
+        researchClarification,
+        updatedAt: now,
+      };
+      await this.options.settingsStore.writeSettings(next);
+      return toSanitizedResearchClarificationConfig(researchClarification, { now });
     });
   }
 

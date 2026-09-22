@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle,
   ArrowLeft,
-  ArrowUp,
   BookOpen,
   Check,
   ChevronDown,
@@ -15,7 +14,6 @@ import {
   Globe,
   ListChecks,
   ListFilter,
-  LoaderCircle,
   PanelLeft,
   PanelRight,
   Plus,
@@ -234,17 +232,9 @@ export function ResearchPage({ explorerCollapsed: initialExplorerCollapsed = fal
     setHistoryCollapsedOverride(!isHistoryCollapsed)
   }
 
-  async function handleStart(): Promise<void> {
-    const question = draft.trim()
-    if (question.length === 0 || !searchReady || research.submitting) return
-    try {
-      await research.submit(question)
-      setDraft('')
-    } catch {
-      // 错误由 hook 暴露
-    }
-  }
-
+  // 深度研究的唯一启动路径是对话里的研究范围卡（ADR 0001 §2.2 / D3）：
+  // 本页只读研究记录，不再提供自由文本启动框——那是一条没有用户批准的
+  // 免确认入口，已随范围闸门一起移除。研究在对话中澄清、经范围卡确认后启动。
   function pickSeed(topic: string): void {
     setDraft(topic)
     requestAnimationFrame(() => {
@@ -335,23 +325,13 @@ export function ResearchPage({ explorerCollapsed: initialExplorerCollapsed = fal
                 <h1 className="ui-research-hero__title">深度研究</h1>
               </div>
 
-              {/* 提问输入卡 */}
+              {/* 启动入口已迁到对话里的研究范围卡：本页只读研究记录 */}
               <div className="ui-research-composer" data-focused={focused}>
-                <textarea
-                  ref={inputRef}
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                  onFocus={() => setFocused(true)}
-                  onBlur={() => setFocused(false)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-                      e.preventDefault()
-                      void handleStart()
-                    }
-                  }}
-                  placeholder="写下一个需要查证的研究主题…"
-                  className="ui-research-composer__input"
-                />
+                <p className="px-1 py-2 text-xs leading-6 text-[var(--ui-text-2,#57534e)]">
+                  研究在对话中开始：和我聊清楚目标、范围与「什么算答够了」，
+                  我会给出结构化研究范围，你在范围卡上点「开始研究」即启动。
+                  范围一旦批准即不可变更，研究启动后不可干预。
+                </p>
 
                 <div className="ui-research-composer__toolbar">
                   <div className="ui-research-composer__pills">
@@ -375,23 +355,6 @@ export function ResearchPage({ explorerCollapsed: initialExplorerCollapsed = fal
                         )}
                       </span>
                     )}
-                  </div>
-
-                  <div className="ui-research-composer__actions">
-                    <span className="ui-research-composer__hint">Enter 开始</span>
-                    <button
-                      type="button"
-                      disabled={draft.trim().length === 0 || !searchReady || research.submitting}
-                      onClick={() => void handleStart()}
-                      className="ui-research-composer__submit"
-                    >
-                      {research.submitting ? (
-                        <LoaderCircle size={14} className="animate-spin" />
-                      ) : (
-                        <ArrowUp size={14} strokeWidth={2.4} />
-                      )}
-                      <span>{research.submitting ? '启动中' : '开始研究'}</span>
-                    </button>
                   </div>
                 </div>
               </div>

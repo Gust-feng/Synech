@@ -34,6 +34,10 @@ import {
   parseSkillTriggerSettings,
 } from "./skill-trigger-settings.js";
 import {
+  normalizeResearchClarificationSettings,
+  parseResearchClarificationSettings,
+} from "./research-clarification-settings.js";
+import {
   createDefaultOrdinaryAgentPromptSettings,
   normalizeOrdinaryAgentPromptSettings,
   parseOrdinaryAgentPromptSettings,
@@ -220,6 +224,7 @@ export function parseLocalSettingsFile(raw: unknown): LocalSettings {
               updatedAt: optionalString(bing.updatedAt) ?? updatedAt,
             },
           },
+    researchClarification: parseResearchClarificationSettings(record.researchClarification, updatedAt),
     updatedAt,
   });
 }
@@ -240,6 +245,7 @@ export function createDefaultLocalSettings(now: string = new Date().toISOString(
     commandShell: normalizeCommandShellSettings(undefined, now),
     mcpServers: [],
     informationAccess: createDefaultInformationAccessSettings(now),
+    researchClarification: normalizeResearchClarificationSettings(undefined, now),
     updatedAt: now,
   };
 }
@@ -287,6 +293,7 @@ export function normalizeLocalSettings(settings: LocalSettings): LocalSettings {
     commandShell: normalizeCommandShellSettings(settings.commandShell, now),
     mcpServers: normalizeMcpServers(settings.mcpServers ?? [], now),
     informationAccess: normalizeInformationAccessSettings(settings.informationAccess, now),
+    researchClarification: normalizeResearchClarificationSettings(settings.researchClarification, now),
   };
 }
 

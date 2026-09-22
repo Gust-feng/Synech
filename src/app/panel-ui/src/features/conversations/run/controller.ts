@@ -10,6 +10,11 @@ import {
 import { shouldKeepRefreshing, stopLiveUpdates } from "./runtime-controls";
 import { loadConversationSession, resetConversationSession } from "../conversation-session";
 import { submitPanelTask } from "./task-submission";
+import { decideResearchScope as researchScopeDecisionHandler } from "./research-scope-decision-handler";
+import type {
+  ResearchScopeDecision,
+  ResearchScopeDecisionResult,
+} from "./research-scope-decision";
 import { invalidateUsageStatistics } from "../../../workbench/usage-statistics-query";
 import type { AppState } from "../../../workbench/state";
 import type { ContextAttachment } from "../../../contracts/context";
@@ -27,6 +32,7 @@ export type AppRunController = {
   readonly startLiveUpdates: (input: LiveRunSubscription) => void;
   readonly cancelRun: () => Promise<void>;
   readonly decideConfirmation: (decision: "approve_once" | "deny" | "guidance", guidance?: string) => Promise<void>;
+  readonly decideResearchScope: (decision: ResearchScopeDecision) => Promise<ResearchScopeDecisionResult>;
   readonly resetChat: () => void;
 };
 
@@ -44,6 +50,8 @@ export type AppRunControllerOptions = {
   readonly selectedModelSupportsReasoningEffort: boolean;
   readonly confirmationBusy: boolean;
   readonly setConfirmationBusy: React.Dispatch<React.SetStateAction<boolean>>;
+  readonly researchScopeBusy: boolean;
+  readonly setResearchScopeBusy: React.Dispatch<React.SetStateAction<boolean>>;
   readonly mountedRef: React.MutableRefObject<boolean>;
   readonly pollTimer: React.MutableRefObject<number | undefined>;
   readonly streamRef: React.MutableRefObject<EventSource | undefined>;
@@ -176,6 +184,17 @@ export function createAppRunController(options: AppRunControllerOptions): AppRun
     });
   }
 
+  async function decideResearchScope(decision: ResearchScopeDecision): Promise<ResearchScopeDecisionResult> {
+    return await researchScopeDecisionHandler({
+      decision,
+      conversationId: options.app.conversation?.conversationId,
+      researchScopeBusy: options.researchScopeBusy,
+      setResearchScopeBusy: options.setResearchScopeBusy,
+      setApp: options.setApp,
+      refreshConversations,
+    });
+  }
+
   function resetChat(): void {
     resetConversationSession({
       ...options,
@@ -195,6 +214,7 @@ export function createAppRunController(options: AppRunControllerOptions): AppRun
     startLiveUpdates: liveUpdates.startLiveUpdates,
     cancelRun,
     decideConfirmation,
+    decideResearchScope,
     resetChat,
   };
 }

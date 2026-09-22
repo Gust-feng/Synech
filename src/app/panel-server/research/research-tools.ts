@@ -1,5 +1,6 @@
 import type { ToolExecutor } from "../../../domain/tools/index.js";
-import type { ResearchFeature } from "../../research/index.js";
+import type { ResearchFeature, ResearchScopeStartInput } from "../../research/index.js";
+import { ResearchScopeGateError } from "../../research/scope-gate.js";
 import type { ResearchApplication } from "../../application/research-application.js";
 import type { AgentToolRegistryContribution } from "../../tool-center/factory.js";
 
@@ -7,8 +8,9 @@ import type { AgentToolRegistryContribution } from "../../tool-center/factory.js
  * 深度研究的 Agent 工具：Pi 在对话里发起研究与读取进度。
  *
  * 与其它 Host 工具一致：工具只调用应用命令，业务规则不在工具里。
- * 发起研究是长任务且有额度副作用，因此需要用户确认（medium / execute）；
- * 读取进度是只读操作，不需要确认。
+ * 发起研究是长任务且有额度副作用，且必须携带用户在范围卡上批准的结构化载荷
+ * （ADR 0001 §2.2）：工具自己不编排、不补全字段、不提供免确认路径，
+ * 结构缺口由范围门拒绝并把缺失字段清单带回对话侧。
  */
 
 export type ResearchToolOptions = {
@@ -30,35 +32,76 @@ export function createResearchToolRegistryContribution(
 export function createResearchStartTool(options: {
   readonly application: Pick<ResearchApplication, "start" | "readiness">;
   readonly noteQueued: () => void;
-}): ToolExecutor {  return {
+}): ToolExecutor {
+  const startSchema = {
+    type: "object",
+    properties: {
+      brief: {
+        type: "object",
+        description: "用户在范围卡上批准的研究范围（自然语言，不要替用户补齐）。",
+        properties: {
+          objective: { type: "string", minLength: 1, description: "研究目标：这次研究要回答什么。" },
+          inclusions: { type: "array", items: { type: "string" }, description: "纳入范围。" },
+          exclusions: { type: "array", items: { type: "string" }, description: "排除范围：明确不研究什么，至少一项。" },
+          audience: { type: "string", minLength: 1, description: "受众与输出期待。" },
+          answerCriteria: { type: "string", minLength: 1, description: "什么算答够了（自然语言，不拆清单）。" },
+        },
+        required: ["objective", "inclusions", "exclusions", "audience", "answerCriteria"],
+        additionalProperties: false,
+      },
+      questions: {
+        type: "array",
+        description: "初始问题树：每个问题都要说明边界（查到哪里算查完）。",
+        items: {
+          type: "object",
+          properties: {
+            text: { type: "string", minLength: 1, description: "子问题正文。" },
+            priority: { type: "string", enum: ["critical", "normal", "optional"], description: "优先级。" },
+            boundaryNote: { type: "string", minLength: 1, description: "这个问题的边界：查到哪里算查完。" },
+          },
+          required: ["text", "priority", "boundaryNote"],
+          additionalProperties: false,
+        },
+      },
+      approval: {
+        type: "object",
+        description: "用户批准事实：范围卡点击产生，不可由模型自行构造。",
+        properties: {
+          payloadHash: { type: "string", minLength: 1, description: "批准载荷的 sha256 摘要；省略时由框架计算。" },
+          approvedAt: { type: "number", description: "批准时间（毫秒时间戳）。" },
+          conversationRef: { type: "string", minLength: 1, description: "批准发生的会话引用。" },
+        },
+        required: ["approvedAt", "conversationRef"],
+        additionalProperties: false,
+      },
+      scopeSearchDisclosure: {
+        type: "object",
+        description: "澄清期摘要级检索披露（可选）：次数必须在策略上限内。",
+        properties: { snippetSearches: { type: "number", description: "澄清期执行的摘要级检索次数。" } },
+        required: ["snippetSearches"],
+        additionalProperties: false,
+      },
+    },
+    required: ["brief", "questions", "approval"],
+    additionalProperties: false,
+  } as const;
+
+  return {
     definition: {
       name: "ResearchStart",
       description:
-        "开始一次深度研究：拆解研究问题、多轮联网检索与正文取证，最终生成带来源引用的研究报告。研究在后台进行，立即返回研究任务标识；用 ResearchStatus 查看进度与结果。",
+        "开始一次深度研究：按用户在范围卡上批准的范围拆解问题、多轮联网检索与正文取证，最终生成带来源引用的研究报告。研究在后台进行，立即返回研究任务标识；用 ResearchStatus 查看进度与结果。入参必须是用户在范围卡上批准的结构化范围载荷；字段不齐时不要自行补齐，按返回的缺失字段清单向用户追问。",
       metadata: {
         category: "research",
         riskLevel: "medium",
         operationType: "execute",
         requiresConfirmation: true,
       },
-      inputSchema: {
-        type: "object",
-        properties: {
-          question: {
-            type: "string",
-            minLength: 1,
-            maxLength: 2_000,
-            description: "要研究的问题，写清范围与关注点。",
-          },
-        },
-        required: ["question"],
-        additionalProperties: false,
-      },
+      inputSchema: startSchema,
     },
     execute: async (input, context) => {
-      const question = readQuestion(input);
-      if (question === undefined) {
-        return { status: "invalid_input", message: "研究问题需要 1 至 2000 字。" };
+      if (context.abortSignal?.aborted === true) {
+        return { status: "cancelled", message: "研究请求已取消。" };
       }
       const readiness = await options.application.readiness();
       if (!readiness.search.available) {
@@ -67,10 +110,26 @@ export function createResearchStartTool(options: {
           message: "尚未配置联网搜索服务，无法开始研究。",
         };
       }
-      if (context.abortSignal?.aborted === true) {
-        return { status: "cancelled", message: "研究请求已取消。" };
+      let started: { readonly taskId: string };
+      try {
+        // 工具边界只有 unknown：真实结构校验由范围门在命令内完成（同一规则函数，
+        // 与 HTTP 侧 zod 预检是同一条规则的两个边界，不在这里复制第二份）。
+        started = await options.application.start(input as ResearchScopeStartInput);
+      } catch (error) {
+        if (error instanceof ResearchScopeGateError) {
+          return {
+            status: "invalid_input",
+            code: error.code,
+            missing: error.failures.map((failure) => ({
+              field: failure.field,
+              code: failure.code,
+              message: failure.message,
+            })),
+            message: error.message,
+          };
+        }
+        throw error;
       }
-      const started = await options.application.start({ question });
       options.noteQueued();
       return {
         status: "started",
@@ -158,15 +217,6 @@ export function createResearchStatusTool(options: {
       };
     },
   };
-}
-
-function readQuestion(input: unknown): string | undefined {
-  if (typeof input !== "object" || input === null) return undefined;
-  const value = (input as Record<string, unknown>).question;
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  if (trimmed.length === 0 || trimmed.length > 2_000) return undefined;
-  return trimmed;
 }
 
 function readTaskId(input: unknown): string | undefined {
