@@ -40,7 +40,7 @@ import {
   parseResearchFetchAttemptPayload,
   parseResearchSearchAttemptPayload,
   parseResearchSourceFetchPayload,
-  parseResearchStopAssessmentPayload,
+  readLatestResearchStopAssessment,
 } from "../../research/persistence-schema.js";
 
 /**
@@ -400,6 +400,7 @@ const OBSERVATION_SEGMENTS = [
   "newQuestions",
   "evidenceItems",
   "claimUpdates",
+  "newClaims",
   "newGaps",
   "newConflicts",
   "reopenQuestionIds",
@@ -412,7 +413,7 @@ export function createResearchApplyObservationsTool(options: {
     definition: {
       name: "research_apply_observations",
       description:
-        "研究状态的主要写入入口：把一个批量观察（问题更新/新问题/证据/主张更新/新缺口/新分歧/重开问题）作为一次原子状态变更提交。必须至少携带一个片段；结构校验与状态机由框架在事务内执行，任一片段不合法则整批拒绝且不落任何数据。证据草稿不得夹带 access_level：读取深度由框架按来源真实抓取结果派生。",
+        "研究状态的主要写入入口：把一个批量观察（问题更新/新问题/证据/主张更新/新主张/新缺口/新分歧/重开问题）作为一次原子状态变更提交。必须至少携带一个片段；结构校验与状态机由框架在事务内执行，任一片段不合法则整批拒绝且不落任何数据。证据草稿不得夹带 access_level：读取深度由框架按来源真实抓取结果派生。",
       metadata: writeMetadata,
       inputSchema: {
         type: "object",
@@ -505,6 +506,35 @@ export function createResearchApplyObservationsTool(options: {
               additionalProperties: false,
             },
           },
+          newClaims: {
+            type: "array",
+            description: "新主张：每个主张必须绑定已存在的证据（同批 evidenceItems 先落库，可被这里的 evidenceIds 引用）；初始状态缺省 provisional。",
+            items: {
+              type: "object",
+              properties: {
+                text: { type: "string", minLength: 1, description: "主张正文：一个可被证据支撑或反驳的陈述。" },
+                type: {
+                  type: "string",
+                  enum: ["sourced", "synthesis", "inference"],
+                  description: "sourced=来源直接给出；synthesis=多来源综合；inference=你自己的推断。",
+                },
+                evidenceIds: {
+                  type: "array",
+                  items: { type: "string", minLength: 1 },
+                  description: "绑定的证据 ID（必须已存在于账本或本批 evidenceItems 中）。",
+                },
+                scope: { type: "string", description: "适用范围。" },
+                qualifier: { type: "string", description: "限定条件。" },
+                status: {
+                  type: "string",
+                  enum: ["provisional", "supported", "disputed", "unsupported", "withdrawn"],
+                  description: "初始状态；缺省 provisional，且必须是 provisional 的合法迁移目标。",
+                },
+              },
+              required: ["text", "type", "evidenceIds"],
+              additionalProperties: false,
+            },
+          },
           newGaps: {
             type: "array",
             description: "新缺口：只有一边有证据的争议必须记为 Gap(possible_counterevidence)，不能建成 Conflict。",
@@ -594,7 +624,7 @@ export function createResearchApplyObservationsTool(options: {
       if (taskId === undefined) return missingTaskScope();
       const record = asRecord(input);
       if (!OBSERVATION_SEGMENTS.some((segment) => record[segment] !== undefined)) {
-        return invalidInput("批量观察必须至少携带一个片段（questionUpdates / newQuestions / evidenceItems / claimUpdates / newGaps / newConflicts / reopenQuestionIds）。");
+        return invalidInput("批量观察必须至少携带一个片段（questionUpdates / newQuestions / evidenceItems / claimUpdates / newClaims / newGaps / newConflicts / reopenQuestionIds）。");
       }
       // 形状与状态机校验整体交给 Feature 串行队列与仓储事务：工具不复制第二份规则，
       // 也不替模型补字段；模型输入越界在那里被明确拒绝。
@@ -1510,23 +1540,21 @@ function latestCheckpoint(events: readonly ResearchActionEvent[]): Record<string
 }
 
 function latestStopAssessment(events: readonly ResearchActionEvent[]): Record<string, unknown> | null {
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index];
-    if (event === undefined || event.kind !== "tool_result" || eventTool(event) !== "research_propose_stop") continue;
-    const payload = parseResearchStopAssessmentPayload(event.payload);
-    return {
-      id: event.id,
-      recommendation: payload.assessment.recommendation,
-      expectedInformationGain: payload.assessment.expectedInformationGain,
-      recentSearchYield: payload.assessment.recentSearchYield,
-      reason: cap(payload.assessment.reason),
-      unresolvedCriticalQuestionIds: payload.assessment.unresolvedCriticalQuestionIds,
-      unresolvedGapIds: payload.assessment.unresolvedGapIds,
-      unresolvedConflictIds: payload.assessment.unresolvedConflictIds,
-      createdAt: event.createdAt,
-    };
-  }
-  return null;
+  // 扫描与解析只有一份实现（persistence-schema.readLatestResearchStopAssessment）：
+  // 执行层、投影器与工具层看到同一个「最近一次停止评估」。
+  const record = readLatestResearchStopAssessment(events);
+  if (record === null) return null;
+  return {
+    id: record.eventId,
+    recommendation: record.payload.assessment.recommendation,
+    expectedInformationGain: record.payload.assessment.expectedInformationGain,
+    recentSearchYield: record.payload.assessment.recentSearchYield,
+    reason: cap(record.payload.assessment.reason),
+    unresolvedCriticalQuestionIds: record.payload.assessment.unresolvedCriticalQuestionIds,
+    unresolvedGapIds: record.payload.assessment.unresolvedGapIds,
+    unresolvedConflictIds: record.payload.assessment.unresolvedConflictIds,
+    createdAt: record.createdAt,
+  };
 }
 
 function latestSourceFetch(events: readonly ResearchActionEvent[], sourceId: string): Record<string, unknown> | null {

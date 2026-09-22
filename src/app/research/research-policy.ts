@@ -72,6 +72,27 @@ export const RESEARCH_POLICY = {
   projectionItemMaxChars: 600,
 
   /**
+   * 成稿与抽样核验的单次模型调用预算（单次动作限制，不是研究深度上限）。
+   *
+   * 成稿是长输出：span 数、摘录引用与六节结构都计入 token；核验是短输出（一个
+   * 五值枚举）。慢模型上成稿需要比核验宽得多的时间预算——两者分别设定，
+   * 不共用「一次模型调用」这一个值。
+   */
+  reportModelMaxOutputTokens: 12_000,
+  reportModelTimeoutMs: 420_000,
+  verifierModelMaxOutputTokens: 512,
+  verifierModelTimeoutMs: 120_000,
+  /**
+   * 成稿模型调用的尝试次数：1 次首试 + 1 次重试。
+   *
+   * 只在**输出契约失败**（JSON 信封/键名/枚举/六节缺失等解析层失败）时重试——
+   * 那是模型这次没按契约回答，换一次调用通常就好。硬门失败（引用不落 content hash、
+   * 内部标识泄漏、零保留来源）不重试：重发同样的账本会得到同样的发布判定。
+   * 传输类失败的重试在 research-model 适配层，不在这里叠第二层。
+   */
+  reportModelAttempts: 2,
+
+  /**
    * 传输抖动的重试：一次连接失败不该让整项研究在起步阶段就失败。
    * 只重试传输类失败（见 research-model 的判定），确定性的配置/鉴权问题不重试。
    * 这里是总尝试次数：1 次首试 + 1 次重试。每次尝试都计入 usage.modelRequests。

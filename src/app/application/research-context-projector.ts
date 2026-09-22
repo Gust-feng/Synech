@@ -14,7 +14,7 @@ import type {
 } from "../research/index.js";
 import {
   parseResearchCheckpointSummaryPayload,
-  parseResearchStopAssessmentPayload,
+  readLatestResearchStopAssessment,
 } from "../research/persistence-schema.js";
 import { buildResearchLoopInstructions } from "./research-prompts.js";
 
@@ -482,28 +482,21 @@ function latestStopAssessment(events: readonly ResearchActionEvent[]): {
   readonly unresolvedGapIds: readonly string[];
   readonly unresolvedConflictIds: readonly string[];
 } | null {
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index];
-    if (event === undefined || event.kind !== "tool_result") continue;
-    if (event.payload.tool !== "research_propose_stop") continue;
-    let payload;
-    try {
-      payload = parseResearchStopAssessmentPayload(event.payload);
-    } catch {
-      continue;
-    }
-    return {
-      id: event.id,
-      recommendation: payload.assessment.recommendation,
-      expectedInformationGain: payload.assessment.expectedInformationGain,
-      recentSearchYield: payload.assessment.recentSearchYield,
-      reason: payload.assessment.reason,
-      unresolvedCriticalQuestionIds: payload.assessment.unresolvedCriticalQuestionIds,
-      unresolvedGapIds: payload.assessment.unresolvedGapIds,
-      unresolvedConflictIds: payload.assessment.unresolvedConflictIds,
-    };
-  }
-  return null;
+  // 扫描与解析只有一份实现（persistence-schema.readLatestResearchStopAssessment）：
+  // 执行层、投影器、工具层与成稿层看到同一个「最近一次停止评估」。
+  const record = readLatestResearchStopAssessment(events);
+  if (record === null) return null;
+  const assessment = record.payload.assessment;
+  return {
+    id: record.eventId,
+    recommendation: assessment.recommendation,
+    expectedInformationGain: assessment.expectedInformationGain,
+    recentSearchYield: assessment.recentSearchYield,
+    reason: assessment.reason,
+    unresolvedCriticalQuestionIds: assessment.unresolvedCriticalQuestionIds,
+    unresolvedGapIds: assessment.unresolvedGapIds,
+    unresolvedConflictIds: assessment.unresolvedConflictIds,
+  };
 }
 
 function clip(text: string): string {

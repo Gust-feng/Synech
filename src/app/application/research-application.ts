@@ -21,9 +21,9 @@ import {
   type ResearchUsage,
 } from "../research/index.js";
 import {
+  hasRecordedResearchStopAssessment,
   parseResearchFetchAttemptPayload,
   parseResearchSearchAttemptPayload,
-  parseResearchStopAssessmentPayload,
 } from "../research/persistence-schema.js";
 import {
   RESEARCH_INITIAL_QUESTION_SCOPE_BASIS,
@@ -140,11 +140,17 @@ export type ResearchTurnPort = {
 };
 
 /**
- * 成稿端口（窄 seam，S5w 接线点）。
+ * 成稿端口（窄 seam，S5w 已接线）。
  *
  * propose_stop 已落账或天花板到线后进入成稿：报告库（`src/app/research/report/**`）
- * 经此端口接入。本层不内联第二套报告实现——报告提示词、span 解析、确定性渲染与
- * 硬门都归报告库；未接线前组合根提供如实「不可用」的承接实现。
+ * 经此端口接入（实现在 `research-finalization.ts`，组合根注入模型端口）。
+ * 本层不内联第二套报告实现——报告提示词、span 解析、确定性渲染与硬门都归报告库。
+ *
+ * `finalize` 的 outcome 契约（三条终态）自 S4a 起保持不变：
+ * completed{title,spans} | rejected{reason} | unavailable{reason}。
+ * `recordCitationChecks` 是成稿期的第二步：抽样核验在 finalize 内完成测量，但核验记录
+ * 指向 reportSpanId，而报告与终态由本层 finishTask 同事务写入——因此落账固定发生在
+ * 那次写入之后，由本层按固定顺序调用（端口不猜时序）。
  */
 export type ResearchFinalizationOutcome =
   | {
@@ -164,6 +170,8 @@ export type ResearchFinalizationPort = {
     readonly ceilingHit: ResearchCeilingKind | null;
     readonly signal: AbortSignal;
   }): Promise<ResearchFinalizationOutcome>;
+  /** 抽样核验落账：报告（span）已写入后调用；没有待落账事实时是 no-op。 */
+  recordCitationChecks(input: { readonly taskId: string }): Promise<void>;
 };
 
 export type ResearchReadiness = {
@@ -345,6 +353,11 @@ async function runResearchTurns(run: ResearchTurnRun): Promise<void> {
     completion: "normal" | "forced",
     ceilingHit: ResearchCeilingKind | null,
   ): Promise<void> => {
+    // 成稿前再确认一次取消：用户已要求停止时不烧成稿与核验的模型额度。
+    if (await isCancelled()) {
+      await finishCancelled();
+      return;
+    }
     const outcome = await dependencies.finalization.finalize({
       taskId,
       completion,
@@ -359,26 +372,55 @@ async function runResearchTurns(run: ResearchTurnRun): Promise<void> {
         ...(ceilingHit === null ? {} : { ceilingHit }),
         report: { title: outcome.title, spans: outcome.spans },
       });
+      // 抽样核验落账：report span 已与终态同事务写入，核验记录这才有挂靠点。
+      // 落账失败只进诊断，不改变已发布的报告（核验是测量，不是闸门）。
+      await dependencies.finalization.recordCitationChecks({ taskId }).catch((error) => {
+        run.onDiagnostic(`research citation check recording failed for ${taskId}`, error);
+      });
+      return;
+    }
+    // 成稿期被取消：中止优先于失败记账。
+    if (await isCancelled()) {
+      await finishCancelled();
       return;
     }
     if (outcome.status === "rejected") {
+      // 零保留来源、引用不落 content hash、内部标识泄漏、Gap/Conflict 引用不存在等
+      // 确定性硬门失败一律不出版：账本完整保留，任务以未完成终止（ADR §2.4）。
       await finishTask({
         id: taskId,
         status: "failed",
         errorCode: "research_report_gate_rejected",
-        errorMessage: `报告未通过确定性硬门：${outcome.reason}`,
+        errorMessage: reportGateRejectionMessage(outcome.reason),
         completion: "incomplete",
         reason: "report_gate_rejected",
       });
       return;
     }
+    // 成稿期模型不可用分两类：配置类（没配模型/缺 key/配置不完整）按 model_unavailable
+    // 收敛并给出可执行指引，不把配置问题说成暂时故障；provider 类归一为 provider_unavailable，
+    // 保持 S4a 的终态语义（incomplete + 账本已完整保存）。
+    if (classifyResearchModelFailure(outcome.reason) === "configuration") {
+      await finishTask({
+        id: taskId,
+        status: "failed",
+        errorCode: "research_model_unavailable",
+        errorMessage: describeModelFailure(outcome.reason),
+        completion: "incomplete",
+        reason: outcome.reason,
+      });
+      return;
+    }
+    const unavailableReason = classifyResearchModelFailure(outcome.reason) === "provider"
+      ? "provider_unavailable"
+      : outcome.reason;
     await finishTask({
       id: taskId,
       status: "failed",
       errorCode: "research_finalization_unavailable",
-      errorMessage: finalizationUnavailableMessage(outcome.reason),
+      errorMessage: finalizationUnavailableMessage(unavailableReason),
       completion: "incomplete",
-      reason: outcome.reason,
+      reason: unavailableReason,
     });
   };
 
@@ -681,16 +723,8 @@ function externalActionCounts(events: readonly ResearchActionEvent[]): { readonl
 
 /** propose_stop 是否已落账（工具只在校验通过后写 tool_result 事件）。 */
 function hasRecordedStopAssessment(events: readonly ResearchActionEvent[]): boolean {
-  for (const event of events) {
-    if (event.kind !== "tool_result" || event.payload.tool !== "research_propose_stop") continue;
-    try {
-      parseResearchStopAssessmentPayload(event.payload);
-      return true;
-    } catch { /* 形状不符的事件不构成停止提议 */ }
-  }
-  return false;
+  return hasRecordedResearchStopAssessment(events);
 }
-
 /**
  * 进展签名：账本实体的确定性摘要。相邻两个 turn 签名不变 = 这一轮没有产生任何
  * 持久研究进展（无推进/无声/无记忆），计入一次无进展周期。
@@ -714,11 +748,52 @@ function isProviderFailureCode(errorCode: string | undefined): boolean {
   return errorCode.startsWith("provider_") || errorCode === "context_overflow";
 }
 
+/** 模型配置类失败原因（缺这些不是「这次没成」，是「根本没配好」）。 */
+const MODEL_CONFIGURATION_FAILURE_REASONS: ReadonlySet<string> = new Set([
+  "model_provider_disabled",
+  "model_provider_not_configured",
+  "model_api_key_missing",
+]);
+
+/**
+ * 模型/provider 失败分类（唯一实现，turn 循环与成稿端口共用）。
+ *
+ * - configuration：模型根本没配好（未配置 / 停用 / 缺 key / 配置不完整）——要指名缺什么，
+ *   用户才知道去哪里补，且不该被说成暂时故障；
+ * - provider：provider/传输类不可用（含请求期异常与输出版本问题）——收敛为同一终态语义；
+ * - other：其余原因原样呈现，不冒充前两类。
+ */
+export function classifyResearchModelFailure(reason: string): "configuration" | "provider" | "other" {
+  if (MODEL_CONFIGURATION_FAILURE_REASONS.has(reason) || reason.startsWith("model_config_incomplete:")) {
+    return "configuration";
+  }
+  if (reason.startsWith("provider_")
+    || reason.startsWith("model_response_")
+    || reason.startsWith("model_request_")
+    || reason === "context_overflow") {
+    return "provider";
+  }
+  return "other";
+}
+
 function finalizationUnavailableMessage(reason: string): string {
   if (reason === "provider_unavailable") {
     return "模型服务在成稿阶段不可用，研究账本已完整保存；请检查模型配置后重新研究。";
   }
   return `报告未能生成（${reason}），研究账本已完整保存。`;
+}
+
+/**
+ * 确定性硬门拒绝的展示文案（message 只作展示，程序分支看 errorCode 与结构化 reason）。
+ *
+ * 零保留来源单独一条：ADR §2.4 规定此时不产出报告、任务未完成终止，终态说明要让用户
+ * 知道「没有可引用来源」这个结构事实，而不是一串闸门失败码。
+ */
+function reportGateRejectionMessage(reason: string): string {
+  if (reason.split(",").includes("report_no_citable_source")) {
+    return "本次研究没有保留任何可引用来源，无法生成报告；研究账本与用量已完整保存。";
+  }
+  return `报告未通过确定性硬门：${reason}`;
 }
 
 function emptyUsage(): ResearchUsage {

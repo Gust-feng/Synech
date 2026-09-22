@@ -613,6 +613,7 @@ const observationBatchSchema = z.object({
   newQuestions: z.array(questionNodeDraftSchema).optional(),
   evidenceItems: z.array(evidenceItemDraftSchema).optional(),
   claimUpdates: z.array(claimUpdateSchema).optional(),
+  newClaims: z.array(claimDraftSchema).optional(),
   newGaps: z.array(gapDraftSchema).optional(),
   newConflicts: z.array(conflictDraftSchema).optional(),
   reopenQuestionIds: z.array(id).optional(),
@@ -768,6 +769,40 @@ export function parseResearchModelContentPayload(value: unknown): ResearchModelC
 
 export function parseResearchObservationBatch(value: unknown): ResearchObservationBatch {
   return observationBatchSchema.parse(value);
+}
+
+/**
+ * 最近一次已落账的停止评估（后置实体：research_propose_stop 以 tool_result 事件持久化）。
+ *
+ * 事件顺序即落账顺序，倒序取第一条形状合法的即为当前停止评估。扫描只有这一份实现：
+ * 执行层（是否已提议停止 → 成稿）、投影器（stopAssessment 槽位与 inputEntityIds）、
+ * 工具层（get_state 投影）与成稿层（写作提示词的 StopAssessment 槽位）共用，
+ * 不各写一份倒序扫描。形状不符的事件不构成停止提议。
+ */
+export function readLatestResearchStopAssessment(
+  events: readonly ResearchActionEvent[],
+): { readonly eventId: string; readonly createdAt: number; readonly payload: ResearchStopAssessmentPayload } | null {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event === undefined) continue;
+    if (event.kind !== "tool_result") continue;
+    if (event.payload.tool !== "research_propose_stop") continue;
+    try {
+      return {
+        eventId: event.id,
+        createdAt: event.createdAt,
+        payload: parseResearchStopAssessmentPayload(event.payload),
+      };
+    } catch {
+      // 形状不符的事件不构成停止提议：继续向前找。
+    }
+  }
+  return null;
+}
+
+/** 是否已有停止评估落账（执行层据此机械判定进入成稿）。 */
+export function hasRecordedResearchStopAssessment(events: readonly ResearchActionEvent[]): boolean {
+  return readLatestResearchStopAssessment(events) !== null;
 }
 
 export function parseResearchObservationResult(value: unknown): ResearchObservationResult {

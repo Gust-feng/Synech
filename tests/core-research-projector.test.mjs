@@ -58,7 +58,10 @@ async function withLedger(run) {
   const application = createResearchApplication({
     feature,
     turns: { openTurn: async () => ({ status: "unavailable", reason: "unused" }) },
-    finalization: { finalize: async () => ({ status: "unavailable", reason: "unused" }) },
+    finalization: {
+      finalize: async () => ({ status: "unavailable", reason: "unused" }),
+      recordCitationChecks: async () => undefined,
+    },
     readiness: async () => ({ search: { available: true } }),
     now: () => clock,
   });
