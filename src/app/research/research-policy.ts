@@ -1,16 +1,21 @@
 /**
- * 深度研究的有界编排参数：轮数、额度、并发与超时的唯一 owner。
+ * 深度研究的有界参数唯一 owner：运行安全天花板、单次动作限制与工具契约。
  *
- * 研究是「一次请求内跑不完」的长任务，全部上界必须在一个地方说清楚，
- * 否则单次研究可能无界地消耗额度。取值按本地长驻进程的实际情况放宽
- * （对照：托管函数形态只能给到分钟级），但仍保留总预算以便用户等待可控。
+ * 研究是「一次请求内跑不完」的长任务。turn 驱动之后（ADR 0001 §2.3）不再有
+ * 固定轮次与「每轮查什么」的研究策略限制（设计草案 §4.1：那些上限是预算代理，
+ * 不是充分性度量，由模型按语义自行决定）；保留的是两类：
+ *
+ * 1. **运行安全天花板**（§4.3 / ADR §2.4）：墙钟、外部动作总数、连续无进展周期，
+ *    叠加受保护的 finalization reserve。触发即禁止新的外部调查，进入强制收尾
+ *    （completion=forced + 缺口清单），绝不静默截断；
+ * 2. **单次动作限制**（§4.2）：一次检索拿多少条、一次抓取读多少字符、单次外部
+ *    调用超时。它们是工具契约，不是研究深度上限。
+ *
+ * constrained / finalization reserve 比例与无进展周期数均为首版保守值，
+ * Phase 4 用本项目数据标定；精确余额永不进入模型上下文（ADR §2.4 / D5）。
  */
+
 export const RESEARCH_POLICY = {
-  /** 最多轮数：1 轮初始取证 + 最多 2 轮补查。 */
-  maxRounds: 3,
-  /** 拆题产出的子问题数上限（下限见 minQuestions）。 */
-  maxQuestions: 5,
-  minQuestions: 3,
   /**
    * 范围卡 objective 的最小长度。
    *
@@ -18,14 +23,14 @@ export const RESEARCH_POLICY = {
    * 首版保守值，Phase 4 用本项目数据标定；语义充分性仍由用户在范围卡上判定，框架不判。
    */
   scopeObjectiveMinChars: 8,
-  /** 整项研究的检索次数上限（跨轮累计）。 */
+  /** 拆题产出的子问题数上限（下限见 minQuestions）：范围结构门的界，不是研究深度上限。 */
+  maxQuestions: 5,
+  minQuestions: 3,
+
+  /** 整项研究的检索次数上限（跨 turn 累计；执行层面同时是外部动作天花板的一部分）。 */
   maxSearchRequests: 12,
-  /** 整项研究的正文抓取次数上限（跨轮累计）。 */
+  /** 整项研究的正文抓取次数上限（跨 turn 累计）。 */
   maxFetchRequests: 12,
-  /** 最终可引用来源条数上限。 */
-  maxSources: 24,
-  /** 单轮补查的查询数上限。 */
-  maxQueriesPerRound: 5,
   /**
    * 单次检索返回的结果条数上限。
    *
@@ -40,44 +45,49 @@ export const RESEARCH_POLICY = {
    * 上下文（设计草案 §7.3）。
    */
   readProjectionExcerptMaxChars: 1_200,
-  /** 总时间预算；到点后不再取证，直接用已有资料成稿。 */
+
+  /** 墙钟天花板：整项研究的总时间预算。 */
   totalBudgetMs: 15 * 60 * 1000,
-  /** 成稿预留：剩余时间低于该值时不再开始新一轮取证。 */
-  synthesisReserveMs: 4 * 60 * 1000,
-  /** 并发：检索与抓取各自的有界并发。 */
-  searchConcurrency: 3,
-  fetchConcurrency: 2,
+  /**
+   * constrained 的墙钟比例（首版保守值）：用时达到总预算的该比例后，投影器向模型
+   * 给出 constrained 状态（只改行动优先级，不得用于判定 covered）。
+   */
+  constrainedWallClockRatio: 0.7,
+  /**
+   * 受保护的 finalization reserve 比例（首版保守值）：剩余时间低于该比例时不再
+   * 开始新的外部调查，进入 finalization_required 并强制收尾。reserve 本身不参与
+   * 研究，模型也只看到状态、看不到比例。
+   */
+  finalizationReserveRatio: 0.15,
+  /** 连续无进展周期上限（首版保守值）：从账本状态派生，不落库。 */
+  maxNoProgressCycles: 3,
+
   /** 单次检索与单次抓取的超时。 */
   perSearchTimeoutMs: 15_000,
   perFetchTimeoutMs: 20_000,
-  /** 抓取正文进入提示词的截断长度。 */
+  /** 抓取正文进入工具返回与投影的截断长度。 */
   fetchContentChars: 8_000,
-  /** 送进提示词的检索摘要截断长度。 */
-  promptSnippetChars: 600,
-  /** 成稿模型输出上限。 */
-  reportMaxOutputTokens: 12_000,
-  /** 拆题/判断模型输出上限：结构化 JSON，不需要长正文。 */
-  planningMaxOutputTokens: 3_000,
-  /** 拆题与覆盖判断的单次模型调用超时：结构化小输出，不需要太久。 */
-  perModelTimeoutMs: 180_000,
-  /**
-   * 成稿的单次模型调用超时。
-   *
-   * 报告是多节长文（本策略允许 12000 输出 token），慢模型上远超拆题的耗时：
-   * 实测某个预览模型光拆题就要 40–50 秒，成稿在 180 秒处被掐断，用户拿到的
-   * 是「模型不可用」——但模型其实只是慢。给成稿单独放宽，且仍落在总预算内。
-   */
-  reportModelTimeoutMs: 420_000,
+
+  /** 投影器槽位内单条文本（问题/主张/缺口等）的截断长度：有界装配，不无限塞上下文。 */
+  projectionItemMaxChars: 600,
+
   /**
    * 传输抖动的重试：一次连接失败不该让整项研究在起步阶段就失败。
    * 只重试传输类失败（见 research-model 的判定），确定性的配置/鉴权问题不重试。
    * 这里是总尝试次数：1 次首试 + 1 次重试。每次尝试都计入 usage.modelRequests。
+   *
+   * 辅助单 shot 通道（Panel 设置等同链路）仍在用；研究 loop 的重试由 provider 层
+   * 承担，应用层不再另加一轮 turn 重试。
    */
   modelMaxAttempts: 2,
   /** 重试前的等待：给瞬时故障一个恢复窗口，同时不至于让用户等太久。 */
   modelRetryBackoffMs: 1_500,
-  /** 队列轮询间隔：worker 无到期任务时的唤醒周期。 */
+  /** 队列轮询间隔：worker 无到期任务时的唤醒周期（预留）。 */
   workerPollMs: 1_500,
 } as const;
 
 export type ResearchPolicy = typeof RESEARCH_POLICY;
+
+/** 外部动作总数天花板：检索与抓取各自的有界次数之和（框架政策，模型只看状态）。 */
+export const RESEARCH_EXTERNAL_ACTION_CEILING =
+  RESEARCH_POLICY.maxSearchRequests + RESEARCH_POLICY.maxFetchRequests;

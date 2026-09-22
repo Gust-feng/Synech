@@ -8,9 +8,14 @@ import type { ResearchApplication } from "../../application/research-application
  * 进程内唤醒只是触发器。
  * - 单并发：同时最多一项研究在跑；认领是 CAS，队列顺序即执行顺序；
  * - 每次唤醒现读队列，没有待处理任务就停下，由下一次入队事件重新唤醒；
- * - 取消：用户请求取消后中止在途执行（AbortController），编排在最接近的步骤边界收敛；
+ * - 取消：用户请求取消后中止在途执行（AbortController），编排在最接近的 turn/工具
+ *   边界收敛（execute 把同一 signal 透传给 loop.execute 与工具 context）；
  * - 启动恢复：running 残留标记 interrupted，绝不自动重放；
  * - release 后停止触发，在途执行收尾。
+ *
+ * turn 驱动后（ADR 0001 §2.3）worker 的机械语义不变：execute 内部是
+ * 「投影器装配 → 一个 turn → 机械判定」循环，每个 turn 结束时的账本即恢复点——
+ * 进程在 turn 之间死亡只会留下 running 残留，下次启动标记 interrupted，不重放。
  */
 
 export type ResearchWorker = {

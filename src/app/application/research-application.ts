@@ -1,44 +1,59 @@
+import type { ModelMessage, ModelUsage } from "../../domain/intelligence/index.js";
+import { createStableInvocationId } from "../../kernel/id.js";
 import type {
-  ResearchCoverageRound,
-  ResearchFeature,
-  ResearchPlan,
-  ResearchSourceDraft,
-  ResearchScopeStartInput,
-  ResearchStage,
-  ResearchUsage,
+  AgentLoop,
+  AgentLoopToolBoundary,
+  ModelContentBlockEvent,
+} from "../model-runtime/agent-loop.js";
+import {
+  RESEARCH_EXTERNAL_ACTION_CEILING,
+  RESEARCH_POLICY,
+  type ResearchActionEvent,
+  type ResearchCeilingKind,
+  type ResearchFeature,
+  type ResearchLedger,
+  type ResearchModelContentPayload,
+  type ResearchResourceState,
+  type ResearchResourceStateChangePayload,
+  type ResearchResourceStateChangeReason,
+  type ResearchReportSpanDraft,
+  type ResearchScopeStartInput,
+  type ResearchUsage,
 } from "../research/index.js";
-import { RESEARCH_POLICY } from "../research/index.js";
+import {
+  parseResearchFetchAttemptPayload,
+  parseResearchSearchAttemptPayload,
+  parseResearchStopAssessmentPayload,
+} from "../research/persistence-schema.js";
 import {
   RESEARCH_INITIAL_QUESTION_SCOPE_BASIS,
   assertResearchScope,
 } from "../research/scope-gate.js";
-import {
-  buildCoveragePrompt,
-  buildPlanPrompt,
-  buildReportPrompt,
-  parseJsonObject,
-  readCoverageDraft,
-  readPlanDraft,
-  readReportMarkdown,
-} from "./research-prompts.js";
+import { projectResearchContext, type ResearchContextProjection } from "./research-context-projector.js";
 
 /**
- * 深度研究编排（Application）：范围闸门 → 拆题 → 多轮检索取证 → 覆盖判断 → 成稿。
+ * 深度研究编排（Application）：范围闸门 → turn 驱动的研究循环 → 成稿。
  *
- * 与其他 Application 一样，本层拥有输入校验、流程顺序、取消与错误传播；
- * Feature 只保存事实，端口负责外部世界（模型、检索、正文抓取）。
+ * 循环形态（ADR 0001 §2.3 / D7）：研究执行由本层驱动中性 AgentLoop 逐步进行。
+ * 一次 `loop.execute` 是一个 turn，turn 内模型可多次工具调用，**turn 边界由模型自定**
+ * （停止调用工具即让出）。应用层只做机械判定：
+ * - propose_stop 已落账 → 成稿（completion=normal）；
+ * - ResourceState=finalization_required（天花板到线）→ 强制收尾（completion=forced）；
+ * - signal.aborted / cancel_requested → 中止收敛 cancelled；
+ * - 否则装配下一轮。
+ * 应用层不数轮次、不规定步骤内容、不复用 Ordinary 的 execution port / session writer。
  *
- * 范围闸门（ADR 0001 §2.2）是启动的唯一入口：结构化 scope payload 通过结构完整性
- * 校验后才创建任务，并同批落账 brief + scopeApproval + 初始问题树。
- *
- * 有界与降级（不整单失败的阶梯）：
- * - 轮数、检索/抓取次数、来源条数与总时间都由 research-policy 限定；
- * - 拆题两次解析失败 → 退回单轮取证（用原问题检索一次）后成稿；
- * - 覆盖判断失败 → 保留已得资料照样成稿；
- * - 时间预算到点 → 用已有资料成稿；
- * - 单次检索或抓取失败 → 只记账，报告在「缺口与限制」中如实反映；
- * - 取消请求在步骤边界读取，取消后写入终态 cancelled，不产出报告。
+ * 与 Feature 的分工保持不变：Feature 只保存事实（账本、终态、事件），端口负责外部
+ * 世界（本层的 turn 端口内部持有模型/检索/抓取与工具边界）。
  */
+
+// ---------------------------------------------------------------------------
+// 端口类型
+//
+// 检索/抓取/单 shot 模型端口类型保留在本模块：panel-server 的检索抓取适配器与辅助
+// 模型通道从这里 import（类型归属保持稳定）；turn 驱动后检索与抓取经研究工具层执行，
+// 单 shot 模型通道只服务其他辅助调用方。
+// ---------------------------------------------------------------------------
 
 export type ResearchModelPort = {
   /**
@@ -97,6 +112,60 @@ export type ResearchContentPort = {
   >;
 };
 
+/**
+ * 一个 turn 的执行回路打开结果。
+ *
+ * `ready`：新 Session（账本恢复语义，不重放 transcript）+ 研究 scope 工具边界
+ * （resourceScope 绑定 taskId，模型入参无法指定任务）。loop 只承担一个 execute，
+ * 调用方负责 release。
+ * `unavailable`：模型配置类不可用——应用层立即如实收敛，不烧任何检索/抓取额度。
+ */
+export type ResearchTurnOpening =
+  | {
+      readonly status: "ready";
+      readonly loop: AgentLoop;
+      readonly tools: AgentLoopToolBoundary;
+    }
+  | { readonly status: "unavailable"; readonly reason: string };
+
+/**
+ * turn 执行端口（组合根装配）。研究复用中性 loop，不复用 Ordinary 执行端口
+ * （ADR §2.3）：Session、provider binding 与工具中心都是研究自己的。
+ */
+export type ResearchTurnPort = {
+  openTurn(input: {
+    readonly taskId: string;
+    readonly signal: AbortSignal;
+  }): Promise<ResearchTurnOpening>;
+};
+
+/**
+ * 成稿端口（窄 seam，S5w 接线点）。
+ *
+ * propose_stop 已落账或天花板到线后进入成稿：报告库（`src/app/research/report/**`）
+ * 经此端口接入。本层不内联第二套报告实现——报告提示词、span 解析、确定性渲染与
+ * 硬门都归报告库；未接线前组合根提供如实「不可用」的承接实现。
+ */
+export type ResearchFinalizationOutcome =
+  | {
+      readonly status: "completed";
+      readonly title: string;
+      readonly spans: readonly ResearchReportSpanDraft[];
+    }
+  /** 确定性硬门拒绝：不得发布（研究事实已全部落账，账本不丢）。 */
+  | { readonly status: "rejected"; readonly reason: string }
+  /** 模型/provider 不可用，无法保证成稿调用（ADR §11.2）。 */
+  | { readonly status: "unavailable"; readonly reason: string };
+
+export type ResearchFinalizationPort = {
+  finalize(input: {
+    readonly taskId: string;
+    readonly completion: "normal" | "forced";
+    readonly ceilingHit: ResearchCeilingKind | null;
+    readonly signal: AbortSignal;
+  }): Promise<ResearchFinalizationOutcome>;
+};
+
 export type ResearchReadiness = {
   readonly search: { readonly available: boolean; readonly reason?: string };
 };
@@ -105,9 +174,8 @@ export type ResearchApplicationDependencies = {
   readonly feature: Pick<ResearchFeature, "commands" | "queries"> & {
     readonly cancel: ResearchFeature["cancel"];
   };
-  readonly model: ResearchModelPort;
-  readonly search: ResearchSearchPort;
-  readonly content: ResearchContentPort;
+  readonly turns: ResearchTurnPort;
+  readonly finalization: ResearchFinalizationPort;
   /** 检索可用性：未配置搜索服务时如实不可用，不用空结果冒充成功。 */
   readonly readiness: () => Promise<ResearchReadiness>;
   readonly now?: () => number;
@@ -184,397 +252,473 @@ export function createResearchApplication(input: ResearchApplicationDependencies
     },
 
     async execute(taskId, signal) {
-      const startedAt = now();
-      const deadline = startedAt + RESEARCH_POLICY.totalBudgetMs;
-      let usage: ResearchUsage = emptyUsage();
-      const elapsed = (): number => Math.max(0, now() - startedAt);
-      const snapshotUsage = (): ResearchUsage => ({ ...usage, elapsedMs: elapsed() });
-      const remainingMs = (): number => deadline - now();
-
-      const question = async (): Promise<string> =>
-        (await input.feature.queries.detail(taskId))?.task.question ?? "";
-
-      /** 取消与时间预算的统一检查点：每个步骤边界都过一遍。 */
-      const checkStop = async (): Promise<"cancelled" | "time" | null> => {
-        if (signal.aborted) return "cancelled";
-        if (await input.feature.queries.isCancelRequested(taskId)) return "cancelled";
-        if (remainingMs() <= RESEARCH_POLICY.synthesisReserveMs) return "time";
-        return null;
-      };
-
-      const stage = async (next: ResearchStage): Promise<void> => {
-        await input.feature.commands.updateProgress({ id: taskId, stage: next, usage: snapshotUsage() });
-      };
-
-      /**
-       * 最近一次模型不可用的原因；null 表示最近一次调用成功。
-       * 用于把「模型为什么没返回」如实带到失败原因里，而不是笼统说服务不可用。
-       */
-      let modelFailureReason: string | null = null;
-
-      /** 模型调用：统一记账与超时；返回 undefined 表示本次调用不可用。 */
-      const callModel = async (request: {
-        readonly system: string;
-        readonly user: string;
-        readonly format: "json_object" | "text";
-        readonly maxOutputTokens: number;
-        readonly timeoutMs: number;
-      }): Promise<string | undefined> => {
-        // 超时由适配器按「单次尝试」施加（见 ResearchModelPort 注释）；这里只传外层取消信号。
-        const response = await input.model.complete({ ...request, signal });
-        usage = { ...usage, modelRequests: usage.modelRequests + 1 };
-        if (response.status !== "completed") {
-          modelFailureReason = response.reason;
-          onDiagnostic(`model unavailable (${response.reason})`, new Error(response.reason));
-          return undefined;
-        }
-        modelFailureReason = null;
-        usage = {
-          ...usage,
-          inputTokens: addTokens(usage.inputTokens, response.usage.inputTokens),
-          outputTokens: addTokens(usage.outputTokens, response.usage.outputTokens),
-        };
-        return response.text;
-      };
-
-      /**
-       * 配置类失败：模型不是「这次没成」而是「根本没配好」。
-       * 这类问题重试与降级都无意义（没有模型就写不出报告），且用户能直接修，
-       * 因此立即如实收敛，不烧检索额度。
-       * 其余失败（输出不合规、传输抖动）保持设计中的降级阶梯。
-       */
-      const isModelMisconfigured = (): boolean => {
-        const reason = modelFailureReason;
-        if (reason === null) return false;
-        return reason === "model_provider_not_configured"
-          || reason === "model_provider_disabled"
-          || reason === "model_api_key_missing"
-          || reason.startsWith("model_config_incomplete:");
-      };
-
-      /** 模型不可用时的失败收敛：报告只能由模型写，没有模型就没有必要烧检索额度。 */
-      const finishModelUnavailable = async (): Promise<void> => {
-        const reason = modelFailureReason ?? "unknown";
-        await input.feature.commands.finishTask({
-          id: taskId,
-          status: "failed",
-          errorCode: "research_model_unavailable",
-          errorMessage: describeModelFailure(reason),
-          usage: snapshotUsage(),
-        }).catch(() => undefined);
-      };
-
-      try {
-        const researchQuestion = await question();
-
-        // ---- 拆题：两次尝试（含一次重试）；都失败则退回单轮取证 ----
-        await stage("planning");
-        let plan: ResearchPlan | null = null;
-        const planPrompt = buildPlanPrompt(researchQuestion);
-        for (let attempt = 0; attempt < 2 && plan === null; attempt += 1) {
-          if (signal.aborted) break;
-          const text = await callModel({
-            system: "你是深度研究的拆题员，只输出符合要求的 JSON 对象。",
-            user: planPrompt,
-            format: "json_object",
-            maxOutputTokens: RESEARCH_POLICY.planningMaxOutputTokens,
-            timeoutMs: RESEARCH_POLICY.perModelTimeoutMs,
-          });
-          if (text === undefined) continue;
-          const draft = parseJsonObject(text, readPlanDraft);
-          if (draft !== undefined) plan = toPlan(draft);
-        }
-        // 拆题阶段模型就没配好：此时既没有计划也没有资料，继续检索只会白耗额度
-        // （实测过：模型未配置时仍跑满 12 次检索，最后才失败）。直接如实收敛。
-        // 只对配置类失败这样做：「模型返回了但不符合要求」仍按设计降级为单轮取证，
-        // 那是输出质量问题，不是没法继续。
-        if (plan === null && isModelMisconfigured()) {
-          if (await checkStop() === "cancelled") {
-            await finishCancelled();
-            return;
-          }
-          await finishModelUnavailable();
-          return;
-        }
-        if (plan !== null) await input.feature.commands.savePlan({ id: taskId, plan });
-
-        // ---- 取证循环：有界轮数；取消或时间到点即转入成稿 ----
-        await stage("searching");
-        const coverage: ResearchCoverageRound[] = [];
-        let nextQueries: Array<{ questionId: string; query: string }> = [];
-        const maxRounds = plan === null ? 1 : RESEARCH_POLICY.maxRounds;
-        for (let round = 1; round <= maxRounds; round += 1) {
-          if (await checkStop() !== null) break;
-          const queries = round === 1
-            ? plan === null
-              ? [{ questionId: "", query: researchQuestion }]
-              : plan.questions.map((item) => ({ questionId: item.id, query: item.text }))
-            : nextQueries;
-          if (queries.length === 0) break;
-
-          usage = await runSearchRound({
-            taskId,
-            round,
-            queries,
-            usage,
-            feature: input.feature,
-            search: input.search,
-            signal,
-            remainingMs,
-            now,
-            onDiagnostic,
-          });
-
-          if (await checkStop() !== null) break;
-          await stage("reading");
-          usage = await runFetchRound({
-            taskId,
-            usage,
-            feature: input.feature,
-            content: input.content,
-            signal,
-            remainingMs,
-            onDiagnostic,
-          });
-
-          // 无计划（拆题降级）时没有子问题可判断，一轮取证后直接成稿。
-          if (plan === null) break;
-          if (await checkStop() !== null) break;
-
-          await stage("analyzing");
-          const collected = await input.feature.queries.detail(taskId);
-          const coverageText = await callModel({
-            system: "你是深度研究的取证判断员，只输出符合要求的 JSON 对象。",
-            user: buildCoveragePrompt({
-              question: researchQuestion,
-              plan,
-              sources: collected?.sources ?? [],
-              round,
-            }),
-            format: "json_object",
-            maxOutputTokens: RESEARCH_POLICY.planningMaxOutputTokens,
-            timeoutMs: RESEARCH_POLICY.perModelTimeoutMs,
-          });
-          const knownIds = new Set(plan.questions.map((item) => item.id));
-          const draft = coverageText === undefined
-            ? undefined
-            : parseJsonObject(coverageText, (value) => readCoverageDraft(value, knownIds));
-          // 覆盖判断失败：保留已得资料照样成稿，不丢整轮取证。
-          if (draft === undefined) break;
-          coverage.push({ round, answers: draft.answers });
-          await input.feature.commands.saveCoverage({ id: taskId, coverage });
-          nextQueries = draft.nextQueries.map((item) => ({ questionId: item.questionId, query: item.query }));
-          if (draft.stop) break;
-        }
-
-        // ---- 成稿：资料不足也照写，由「缺口与限制」如实说明 ----
-        if (await checkStop() === "cancelled") {
-          await finishCancelled();
-          return;
-        }
-        const collected = await input.feature.queries.detail(taskId);
-        const sources = collected?.sources ?? [];
-        // 抓取留下的 pending 来源（预算用尽）按失败收敛，不留下悬空状态。
-        for (const source of sources) {
-          if (source.contentStatus !== "pending") continue;
-          await input.feature.commands.markSourceContent({
-            taskId, sourceId: source.id, status: "skipped", contentText: null,
-          });
-        }
-        await stage("writing");
-        const reportText = await callModel({
-          system: "你是深度研究报告的撰写员，只输出 Markdown 正文。",
-          user: buildReportPrompt({
-            question: researchQuestion,
-            plan: plan ?? fallbackPlan(researchQuestion),
-            sources,
-          }),
-          format: "text",
-          maxOutputTokens: RESEARCH_POLICY.reportMaxOutputTokens,
-          // 成稿是长文，慢模型上需要比拆题宽得多的预算。
-          timeoutMs: RESEARCH_POLICY.reportModelTimeoutMs,
-        });
-        const markdown = reportText === undefined ? undefined : readReportMarkdown(reportText);
-        if (markdown === undefined) {
-          // 区分两种失败：模型压根没返回（服务不可用），还是返回了但正文不合规。
-          // 前者要用户检查模型配置或稍后重试，后者是输出质量问题——两者的处置完全不同。
-          if (reportText === undefined) {
-            await finishModelUnavailable();
-            return;
-          }
-          await input.feature.commands.finishTask({
-            id: taskId,
-            status: "failed",
-            errorCode: "research_report_invalid",
-            errorMessage: "模型返回的报告缺少必需的小节，未能保存为研究报告。",
-            usage: snapshotUsage(),
-          });
-          return;
-        }
-        await input.feature.commands.finishTask({
-          id: taskId,
-          status: "completed",
-          reportTitle: reportTitleOf(researchQuestion),
-          reportMarkdown: markdown,
-          usage: snapshotUsage(),
-        });
-      } catch (error) {
-        if (isAbortError(error) || signal.aborted) {
-          await finishCancelled();
-          return;
-        }
-        onDiagnostic(`research task ${taskId} failed`, error);
-        await input.feature.commands.finishTask({
-          id: taskId,
-          status: "failed",
-          errorCode: "research_failed",
-          errorMessage: error instanceof Error ? error.message.slice(0, 300) : "研究执行失败。",
-          usage: snapshotUsage(),
-        }).catch(() => undefined);
-      }
-
-      async function finishCancelled(): Promise<void> {
-        await input.feature.commands.finishTask({
-          id: taskId,
-          status: "cancelled",
-          errorCode: "research_cancelled",
-          errorMessage: "研究已停止。",
-          usage: snapshotUsage(),
-        }).catch(() => undefined);
-      }
+      await runResearchTurns({
+        taskId,
+        signal,
+        startedAt: now(),
+        dependencies: input,
+        now,
+        onDiagnostic,
+      });
     },
   };
 }
 
-/** 一轮检索：有界并发、逐次记账；失败只记录，不中断整项研究。 */
-async function runSearchRound(args: {
+type ResearchTurnRun = {
   readonly taskId: string;
-  readonly round: number;
-  readonly queries: readonly { readonly questionId: string; readonly query: string }[];
-  readonly usage: ResearchUsage;
-  readonly feature: ResearchApplicationDependencies["feature"];
-  readonly search: ResearchSearchPort;
   readonly signal: AbortSignal;
-  readonly remainingMs: () => number;
+  readonly startedAt: number;
+  readonly dependencies: ResearchApplicationDependencies;
   readonly now: () => number;
   readonly onDiagnostic: (topic: string, error: unknown) => void;
-}): Promise<ResearchUsage> {
-  const { taskId, round, queries, feature, search, signal, remainingMs, onDiagnostic } = args;
-  let usage = args.usage;
-  const records: Array<{
-    readonly id: string;
-    readonly round: number;
-    readonly text: string;
-    readonly status: "succeeded" | "failed";
-    readonly resultCount: number;
-    readonly createdAt: number;
-  }> = [];
-  // 已入列的来源条数：达到上限后本轮不再发起检索——继续检索只会拿到
-  // 入不了列的结果，白耗检索额度与时间。
-  let collectedSources = (await feature.queries.detail(taskId))?.sources.length ?? 0;
-  let cursor = 0;
-  const workers = Array.from({ length: Math.min(RESEARCH_POLICY.searchConcurrency, queries.length) }, async () => {
-    while (cursor < queries.length) {
-      const item = queries[cursor];
-      cursor += 1;
-      if (item === undefined) continue;
-      const query = item.query.trim();
-      if (query.length === 0) continue;
-      if (usage.searchRequests >= RESEARCH_POLICY.maxSearchRequests) break;
-      if (collectedSources >= RESEARCH_POLICY.maxSources) break;
-      if (signal.aborted || remainingMs() <= RESEARCH_POLICY.synthesisReserveMs) break;
-      usage = { ...usage, searchRequests: usage.searchRequests + 1 };
-      const createdAt = args.now();
-      // 记录 id 必须带 taskId：research_query.id 是整张表的主键，而这里的轮次与
-      // 检索计数器都是**任务内**的。只拼 `轮次-序号-查询词` 会让两个研究问同一个
-      // 问题时产生同一个 id（先写入的那条成功，后一个任务整轮检索记录因主键冲突
-      // 全部回滚）。取值范围与 research_source 的 `${taskId}:s${ordinal}` 一致。
-      const recordId = `${taskId}:q${usage.searchRequests}`;
-      const combined = AbortSignal.any([signal, AbortSignal.timeout(RESEARCH_POLICY.perSearchTimeoutMs)]);
-      try {
-        const result = await search.search({ query, limit: 6, signal: combined });
-        if (result.status === "failed") {
-          records.push({ id: recordId, round, text: query, status: "failed", resultCount: 0, createdAt });
-          continue;
-        }
-        const drafts: ResearchSourceDraft[] = [];
-        for (const entry of result.results) {
-          const title = entry.title.trim();
-          const url = entry.url.trim();
-          const snippet = entry.snippet.trim();
-          if (title.length === 0 || url.length === 0) continue;
-          drafts.push({
-            title,
-            url,
-            snippet,
-            ...(entry.publishedAt === undefined ? {} : { publishedAt: entry.publishedAt }),
-          });
-        }
-        // 编号由 Feature 按入列顺序分配；跨轮去重，重复结果不重复计数。
-        // 上限由策略给出并在事务内执行：来源条数直接决定成稿提示词的体量，
-        // 不设上限会让 12 次检索累积出几十条来源、把成稿拖成分钟级。
-        const accepted = await feature.commands.appendSources({
-          taskId,
-          drafts,
-          limit: RESEARCH_POLICY.maxSources,
-        });
-        collectedSources += accepted.length;
-        records.push({ id: recordId, round, text: query, status: "succeeded", resultCount: accepted.length, createdAt });
-      } catch (error) {
-        onDiagnostic(`search failed for query ${query}`, error);
-        records.push({ id: recordId, round, text: query, status: "failed", resultCount: 0, createdAt });
-      }
+};
+
+type ResearchTurnResult =
+  | { readonly status: "completed"; readonly usage: ModelUsage }
+  | { readonly status: "cancelled" }
+  | { readonly status: "failed"; readonly error: string; readonly errorCode?: string };
+
+/**
+ * 可逆 seam（ADR 0001 §2.3 点名 / D7）：逐步驱动形态。
+ *
+ * 实体、工具与状态机在「逐步驱动」与「长 loop + compaction」两种形态下相同；
+ * 若 Phase 4 实测不支持逐步驱动，只替换本函数。每个 turn 结束时的账本即恢复点：
+ * 进程在 turn 之间死亡 = 任务留 running，下次启动只标记 interrupted、绝不自动重放。
+ */
+async function runResearchTurns(run: ResearchTurnRun): Promise<void> {
+  const { dependencies, taskId, signal } = run;
+  const feature = dependencies.feature;
+  const elapsed = (): number => Math.max(0, run.now() - run.startedAt);
+
+  let modelRequests = 0;
+  let inputTokens: number | null = null;
+  let outputTokens: number | null = null;
+  /** 用量快照：模型计数跨 turn 累计；检索/抓取计数从账本动作事件派生（执行事实的唯一来源）。 */
+  const snapshotUsage = async (): Promise<ResearchUsage> => {
+    const ledger = await feature.queries.ledger(taskId);
+    const actions = ledger === undefined ? { search: 0, fetch: 0 } : externalActionCounts(ledger.actionEvents);
+    return {
+      searchRequests: actions.search,
+      fetchRequests: actions.fetch,
+      modelRequests,
+      inputTokens,
+      outputTokens,
+      elapsedMs: elapsed(),
+    };
+  };
+
+  const finishTask = async (
+    settle: Omit<Parameters<ResearchFeature["commands"]["finishTask"]>[0], "usage">,
+  ): Promise<void> => {
+    await feature.commands.finishTask({ ...settle, usage: await snapshotUsage() })
+      .catch(() => undefined);
+  };
+
+  const finishCancelled = async (): Promise<void> => {
+    await finishTask({
+      id: taskId,
+      status: "cancelled",
+      errorCode: "research_cancelled",
+      errorMessage: "研究已停止。",
+    });
+  };
+
+  /** 配置类失败：模型不是「这次没成」而是「根本没配好」。立即如实收敛，不烧额度。 */
+  const finishModelUnavailable = async (reason: string): Promise<void> => {
+    await finishTask({
+      id: taskId,
+      status: "failed",
+      errorCode: "research_model_unavailable",
+      errorMessage: describeModelFailure(reason),
+    });
+  };
+
+  const isCancelled = async (): Promise<boolean> =>
+    signal.aborted || await feature.queries.isCancelRequested(taskId);
+
+  /** 强制收尾：天花板到线，禁止新的外部调查；completion=forced + 缺口随账本呈现。 */
+  const finalizeForced = async (ceilingHit: ResearchCeilingKind): Promise<void> => {
+    await runFinalization("forced", ceilingHit);
+  };
+
+  const runFinalization = async (
+    completion: "normal" | "forced",
+    ceilingHit: ResearchCeilingKind | null,
+  ): Promise<void> => {
+    const outcome = await dependencies.finalization.finalize({
+      taskId,
+      completion,
+      ceilingHit,
+      signal,
+    });
+    if (outcome.status === "completed") {
+      await finishTask({
+        id: taskId,
+        status: "completed",
+        completion,
+        ...(ceilingHit === null ? {} : { ceilingHit }),
+        report: { title: outcome.title, spans: outcome.spans },
+      });
+      return;
     }
-  });
-  await Promise.all(workers);
-  if (records.length > 0) {
-    await feature.commands.appendQueries({ taskId, records });
+    if (outcome.status === "rejected") {
+      await finishTask({
+        id: taskId,
+        status: "failed",
+        errorCode: "research_report_gate_rejected",
+        errorMessage: `报告未通过确定性硬门：${outcome.reason}`,
+        completion: "incomplete",
+        reason: "report_gate_rejected",
+      });
+      return;
+    }
+    await finishTask({
+      id: taskId,
+      status: "failed",
+      errorCode: "research_finalization_unavailable",
+      errorMessage: finalizationUnavailableMessage(outcome.reason),
+      completion: "incomplete",
+      reason: outcome.reason,
+    });
+  };
+
+  let resourceState: ResearchResourceState | null = null;
+  let consecutiveNoProgress = 0;
+  let signature = "";
+
+  try {
+    const initialLedger = await feature.queries.ledger(taskId);
+    if (initialLedger === undefined) {
+      await finishTask({
+        id: taskId,
+        status: "failed",
+        errorCode: "research_task_not_found",
+        errorMessage: "研究任务不存在，无法执行。",
+      });
+      return;
+    }
+    signature = progressSignature(initialLedger);
+
+    // ---- turn 循环：投影器装配 → 一个 turn → 机械判定 → 继续/收敛 ----
+    while (true) {
+      // 1. 取消检查：turn 边界读取（用户取消 = 中止，不是转向）。
+      if (await isCancelled()) {
+        await finishCancelled();
+        return;
+      }
+
+      // 2. 账本快照与资源派生（每 turn 现读；ResourceState 转换落事件）。
+      const ledger = await feature.queries.ledger(taskId);
+      if (ledger === undefined) {
+        await finishTask({
+          id: taskId,
+          status: "failed",
+          errorCode: "research_task_not_found",
+          errorMessage: "研究任务不存在，无法执行。",
+        });
+        return;
+      }
+      const derived = deriveResourceState({
+        elapsedMs: elapsed(),
+        ...externalActionCounts(ledger.actionEvents),
+        consecutiveNoProgress,
+      });
+      if (derived.resourceState !== resourceState) {
+        await feature.commands.appendActionEvents({
+          taskId,
+          events: [{
+            kind: "resource_state_change",
+            payload: resourceStateChangePayload({
+              from: resourceState,
+              to: derived.resourceState,
+              reason: derived.reason,
+              elapsedMs: elapsed(),
+              consecutiveNoProgressCycles: consecutiveNoProgress,
+            }),
+          }],
+        });
+        resourceState = derived.resourceState;
+      }
+
+      // 3. 天花板到线：禁止新外部调查，强制收尾（三分停止之一，不与 propose_stop 互替）。
+      if (derived.resourceState === "finalization_required") {
+        await finalizeForced(derived.ceiling ?? "wall_clock");
+        return;
+      }
+
+      // 4. 投影器装配：模型可见内容的唯一 owner（确定性 + 可复现）。
+      const projection = projectResearchContext({ ledger, resourceState: derived.resourceState });
+
+      // 5. 一个 turn：新 Session + provider binding；配置类不可用立即收敛。
+      const opening = await dependencies.turns.openTurn({ taskId, signal });
+      if (opening.status === "unavailable") {
+        await finishModelUnavailable(opening.reason);
+        return;
+      }
+      const turnResult = await executeResearchTurn({
+        run,
+        opening,
+        projection,
+        onModelUsage: (usage) => {
+          modelRequests += usage.requestCount ?? 0;
+          inputTokens = addTokens(inputTokens, usage.inputTokens ?? null);
+          outputTokens = addTokens(outputTokens, usage.outputTokens ?? null);
+        },
+      });
+      await feature.commands.updateProgress({ id: taskId, usage: await snapshotUsage() });
+
+      // 6. turn 结果机械判定。
+      if (turnResult.status === "cancelled" || await isCancelled()) {
+        await finishCancelled();
+        return;
+      }
+      if (turnResult.status === "failed") {
+        if (isProviderFailureCode(turnResult.errorCode)) {
+          await finishTask({
+            id: taskId,
+            status: "failed",
+            errorCode: "research_provider_unavailable",
+            errorMessage: finalizationUnavailableMessage("provider_unavailable"),
+            completion: "incomplete",
+            reason: "provider_unavailable",
+          });
+          return;
+        }
+        await finishTask({
+          id: taskId,
+          status: "failed",
+          errorCode: "research_turn_failed",
+          errorMessage: `研究回合未能完成：${turnResult.errorCode ?? "agent_loop_failed"}：${turnResult.error}`,
+        });
+        return;
+      }
+
+      // 7. propose_stop 已落账 → 成稿（completion=normal；未到线就没有 forced）。
+      const afterTurn = await feature.queries.ledger(taskId);
+      if (afterTurn !== undefined && hasRecordedStopAssessment(afterTurn.actionEvents)) {
+        await runFinalization("normal", null);
+        return;
+      }
+
+      // 8. 无进展周期：从账本状态派生（不落库）；达到上限由下一轮顶部的天花板派生消费。
+      const nextSignature = afterTurn === undefined ? signature : progressSignature(afterTurn);
+      consecutiveNoProgress = nextSignature === signature ? consecutiveNoProgress + 1 : 0;
+      signature = nextSignature;
+    }
+  } catch (error) {
+    if (isAbortError(error) || signal.aborted) {
+      await finishCancelled();
+      return;
+    }
+    run.onDiagnostic(`research task ${taskId} failed`, error);
+    await finishTask({
+      id: taskId,
+      status: "failed",
+      errorCode: "research_failed",
+      errorMessage: error instanceof Error ? error.message.slice(0, 300) : "研究执行失败。",
+    });
   }
-  return usage;
 }
 
-/** 一轮正文抓取：只处理 pending 来源；失败按 failed 收敛，证据退回摘要。 */
-async function runFetchRound(args: {
-  readonly taskId: string;
-  readonly usage: ResearchUsage;
-  readonly feature: ResearchApplicationDependencies["feature"];
-  readonly content: ResearchContentPort;
-  readonly signal: AbortSignal;
-  readonly remainingMs: () => number;
-  readonly onDiagnostic: (topic: string, error: unknown) => void;
-}): Promise<ResearchUsage> {
-  const { taskId, feature, content, signal, remainingMs, onDiagnostic } = args;
-  let usage = args.usage;
-  const collected = await feature.queries.detail(taskId);
-  const pending = (collected?.sources ?? []).filter((source) => source.contentStatus === "pending");
-  let cursor = 0;
-  const workers = Array.from({ length: Math.min(RESEARCH_POLICY.fetchConcurrency, pending.length) }, async () => {
-    while (cursor < pending.length) {
-      const source = pending[cursor];
-      cursor += 1;
-      if (source === undefined) continue;
-      if (usage.fetchRequests >= RESEARCH_POLICY.maxFetchRequests) break;
-      if (signal.aborted || remainingMs() <= RESEARCH_POLICY.synthesisReserveMs) break;
-      usage = { ...usage, fetchRequests: usage.fetchRequests + 1 };
-      const combined = AbortSignal.any([signal, AbortSignal.timeout(RESEARCH_POLICY.perFetchTimeoutMs)]);
+/** 驱动一个 turn：新 Session 上的机械 model-tool-model 循环；usage 与内容块经回调交还。 */
+async function executeResearchTurn(input: {
+  readonly run: ResearchTurnRun;
+  readonly opening: Extract<ResearchTurnOpening, { readonly status: "ready" }>;
+  readonly projection: ResearchContextProjection;
+  readonly onModelUsage: (usage: ModelUsage) => void;
+}): Promise<ResearchTurnResult> {
+  const { run, opening } = input;
+  const blocks: { contentIndex: number; kind: "text" | "thinking"; content: string }[] = [];
+  let reasoningAvailable = false;
+  let result: Awaited<ReturnType<AgentLoop["execute"]>>;
+  try {
+    result = await opening.loop.execute({
+      instructions: input.projection.instructions,
+      messages: [{ role: "user", content: input.projection.stateMessage } satisfies ModelMessage],
+      tools: opening.tools,
+      abortSignal: run.signal,
+      // 研究自己的调用身份绑定表：每 turn 新建，不持久化（Session 本就是每 turn 新的）。
+      acceptToolInvocations: async (calls) => calls.map((call) => ({
+        ...call,
+        invocationId: createStableInvocationId({
+          runId: `research:${run.taskId}`,
+          roundId: call.roundId,
+          providerCallId: call.providerCallId,
+        }),
+      })),
+      acceptNestedToolInvocations: async (calls) => calls.map((call) => {
+        const parentInvocationId = call.parentInvocationId;
+        if (parentInvocationId === undefined) {
+          throw new Error("研究 loop 收到没有父调用的嵌套工具批次。");
+        }
+        return {
+          ...call,
+          invocationId: createStableInvocationId({
+            runId: `research:${run.taskId}`,
+            roundId: call.roundId,
+            parentInvocationId,
+            providerCallId: call.providerCallId,
+          }),
+        };
+      }),
+      // 模型内容块落账（ADR §2.6）：只记 completed 块；推理内容仅在端点返回时捕获。
+      onModelContent: (event: ModelContentBlockEvent) => {
+        if (event.phase !== "completed") return;
+        if (event.kind === "thinking") reasoningAvailable = true;
+        blocks.push({ contentIndex: event.contentIndex, kind: event.kind, content: event.content });
+      },
+    });
+  } finally {
+    await opening.loop.release().catch((error) => {
+      input.run.onDiagnostic(`research turn loop release failed for ${run.taskId}`, error);
+    });
+  }
+  input.onModelUsage(result.usage);
+
+  if (blocks.length > 0) {
+    await run.dependencies.feature.commands.appendActionEvents({
+      taskId: run.taskId,
+      events: [{
+        kind: "model_content",
+        payload: {
+          version: 1,
+          blocks,
+          reasoningAvailable,
+        } satisfies ResearchModelContentPayload,
+      }],
+    }).catch((error) => {
+      // 观察面落账失败不改变 turn 结果；诊断保留原因。
+      run.onDiagnostic(`research model_content event failed for ${run.taskId}`, error);
+    });
+  }
+
+  if (result.status === "cancelled" || run.signal.aborted) return { status: "cancelled" };
+  if (result.status === "approval_required") {
+    // 研究 loop 的工具全部免确认；出现确认请求说明装配越界，如实失败而不是挂起。
+    return {
+      status: "failed",
+      error: "研究 loop 出现未预期的工具确认请求。",
+      errorCode: "research_unexpected_approval",
+    };
+  }
+  if (result.status === "failed") {
+    return { status: "failed", error: result.error, ...(result.errorCode === undefined ? {} : { errorCode: result.errorCode }) };
+  }
+  return { status: "completed", usage: result.usage };
+}
+
+// ---------------------------------------------------------------------------
+// 运行事实派生（全部从账本现读；不落库、不持有第二份状态）
+// ---------------------------------------------------------------------------
+
+/** ResourceState 与天花板派生（ADR §2.4）：墙钟 reserve、外部动作总数、连续无进展。 */
+function deriveResourceState(input: {
+  readonly elapsedMs: number;
+  readonly search: number;
+  readonly fetch: number;
+  readonly consecutiveNoProgress: number;
+}): {
+  readonly resourceState: ResearchResourceState;
+  readonly ceiling: ResearchCeilingKind | null;
+  readonly reason: ResearchResourceStateChangeReason;
+} {
+  const budget = RESEARCH_POLICY.totalBudgetMs;
+  const reserveMs = budget * RESEARCH_POLICY.finalizationReserveRatio;
+  if (input.elapsedMs >= budget - reserveMs) {
+    return { resourceState: "finalization_required", ceiling: "wall_clock", reason: "wall_clock_reserve" };
+  }
+  if (input.search + input.fetch >= RESEARCH_EXTERNAL_ACTION_CEILING) {
+    return { resourceState: "finalization_required", ceiling: "external_actions", reason: "external_actions_ceiling" };
+  }
+  if (input.consecutiveNoProgress >= RESEARCH_POLICY.maxNoProgressCycles) {
+    return { resourceState: "finalization_required", ceiling: "no_progress", reason: "no_progress_ceiling" };
+  }
+  if (input.elapsedMs >= budget * RESEARCH_POLICY.constrainedWallClockRatio) {
+    return { resourceState: "constrained", ceiling: null, reason: "wall_clock_constrained" };
+  }
+  return { resourceState: "normal", ceiling: null, reason: "initial" };
+}
+
+function resourceStateChangePayload(input: {
+  readonly from: ResearchResourceState | null;
+  readonly to: ResearchResourceState;
+  readonly reason: ResearchResourceStateChangeReason;
+  readonly elapsedMs: number;
+  readonly consecutiveNoProgressCycles: number;
+}): ResearchResourceStateChangePayload {
+  return {
+    version: 1,
+    from: input.from,
+    to: input.to,
+    reason: input.reason,
+    elapsedMs: input.elapsedMs,
+    consecutiveNoProgressCycles: input.consecutiveNoProgressCycles,
+  };
+}
+
+/**
+ * 已真正发出的外部动作次数：重复跳过与策略上界不烧外部调用，也不计入
+ * （与工具层的判定同一口径，从动作事件派生）。
+ */
+function externalActionCounts(events: readonly ResearchActionEvent[]): { readonly search: number; readonly fetch: number } {
+  let search = 0;
+  let fetch = 0;
+  for (const event of events) {
+    if (event.kind !== "tool_call") continue;
+    const tool = event.payload.tool;
+    if (tool === "research_search") {
       try {
-        const result = await content.fetch({ url: source.url, signal: combined });
-        await feature.commands.markSourceContent({
-          taskId,
-          sourceId: source.id,
-          status: result.status === "completed" ? "ready" : "failed",
-          contentText: result.status === "completed" ? result.text.slice(0, RESEARCH_POLICY.fetchContentChars) : null,
-        });
-      } catch (error) {
-        onDiagnostic(`content fetch failed for ${source.url}`, error);
-        await feature.commands.markSourceContent({
-          taskId, sourceId: source.id, status: "failed", contentText: null,
-        }).catch(() => undefined);
-      }
+        if (parseResearchSearchAttemptPayload(event.payload).executed) search += 1;
+      } catch { /* 非本形状的事件不计入 */ }
+    } else if (tool === "research_fetch") {
+      try {
+        if (parseResearchFetchAttemptPayload(event.payload).executed) fetch += 1;
+      } catch { /* 非本形状的事件不计入 */ }
     }
-  });
-  await Promise.all(workers);
-  return usage;
+  }
+  return { search, fetch };
+}
+
+/** propose_stop 是否已落账（工具只在校验通过后写 tool_result 事件）。 */
+function hasRecordedStopAssessment(events: readonly ResearchActionEvent[]): boolean {
+  for (const event of events) {
+    if (event.kind !== "tool_result" || event.payload.tool !== "research_propose_stop") continue;
+    try {
+      parseResearchStopAssessmentPayload(event.payload);
+      return true;
+    } catch { /* 形状不符的事件不构成停止提议 */ }
+  }
+  return false;
+}
+
+/**
+ * 进展签名：账本实体的确定性摘要。相邻两个 turn 签名不变 = 这一轮没有产生任何
+ * 持久研究进展（无推进/无声/无记忆），计入一次无进展周期。
+ */
+function progressSignature(ledger: ResearchLedger): string {
+  const investigated = ledger.questions.filter((question) => question.status !== "open").length;
+  return [
+    ledger.questions.length,
+    investigated,
+    ledger.sources.length,
+    ledger.evidence.length,
+    ledger.claims.length,
+    ledger.gaps.length,
+    ledger.conflicts.length,
+  ].join(":");
+}
+
+/** loop 失败码中的 provider 类：按稳定 errorCode 分支，不按错误文案猜测。 */
+function isProviderFailureCode(errorCode: string | undefined): boolean {
+  if (errorCode === undefined) return false;
+  return errorCode.startsWith("provider_") || errorCode === "context_overflow";
+}
+
+function finalizationUnavailableMessage(reason: string): string {
+  if (reason === "provider_unavailable") {
+    return "模型服务在成稿阶段不可用，研究账本已完整保存；请检查模型配置后重新研究。";
+  }
+  return `报告未能生成（${reason}），研究账本已完整保存。`;
 }
 
 function emptyUsage(): ResearchUsage {
@@ -591,28 +735,6 @@ function emptyUsage(): ResearchUsage {
 /** 启动期失败记账：还没有任何调用发生，额度如实为零。 */
 function emptyTaskUsage(): ResearchUsage {
   return emptyUsage();
-}
-
-function toPlan(draft: {
-  readonly objective: string;
-  readonly questions: readonly { readonly text: string; readonly priority: "high" | "normal" }[];
-}): ResearchPlan {
-  return {
-    objective: draft.objective,
-    questions: draft.questions.map((item, index) => ({
-      id: `q${index + 1}`,
-      text: item.text,
-      priority: item.priority,
-    })),
-  };
-}
-
-/** 拆题降级时的占位计划：只用于成稿提示词，不写回任务。 */
-function fallbackPlan(question: string): ResearchPlan {
-  return {
-    objective: question,
-    questions: [{ id: "q1", text: question, priority: "high" }],
-  };
 }
 
 /**
@@ -639,30 +761,10 @@ function describeModelFailure(reason: string): string {
   return `模型服务暂时不可用（${reason}），请稍后重新研究。`;
 }
 
-function reportTitleOf(question: string): string {
-  const trimmed = question.trim();
-  return trimmed.length > 60 ? `${trimmed.slice(0, 60)}…` : trimmed;
-}
-
 function addTokens(current: number | null, value: number | null): number | null {
   if (value === null) return current;
   return (current ?? 0) + value;
 }
-
-/**
- * 关于请求信号的实测备注，避免后人重复踩坑。
- *
- * 2026-09-19 曾观察到模型调用以 `Connection error` 失败，一度判断是
- * `AbortSignal.any([...])` 组合信号的问题。后续对照实验证伪了这个结论：
- * 同一台机器、同一份配置下，原生 fetch 用组合信号 12/12 成功，
- * 生产模型适配器用组合信号连续 8 次调用也全部成功；而当时的失败既出现在
- * 组合信号下、也出现在不传信号的对照下（首次调用失败、后续成功），
- * 是短时上游/网络抖动，不是写法差异。因此这里继续使用 `AbortSignal.any`。
- *
- * 真正需要防的是抖动的后果：适配层对传输类失败做了一次有界重试
- * （见 panel-server/research/research-model.ts）。不要再按「信号写法」
- * 去改这段代码，除非有可复现的对照证据。
- */
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError");
