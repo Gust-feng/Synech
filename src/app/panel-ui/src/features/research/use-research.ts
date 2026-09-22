@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import type { ResearchReadinessView, ResearchTaskDetailView, ResearchTaskSummaryView } from '@panel-api/research'
+import type {
+  ResearchReadinessView,
+  ResearchScopeGateFailureView,
+  ResearchStartPayload,
+  ResearchTaskDetailView,
+  ResearchTaskSummaryView,
+} from '@panel-api/research'
 import { ApiError } from '../../api'
 import {
   cancelResearchTask,
@@ -8,6 +14,7 @@ import {
   fetchResearchDetail,
   fetchResearchList,
   isResearchActive,
+  ResearchScopeRejected,
 } from './research-client'
 
 /**
@@ -17,6 +24,10 @@ import {
  * - HTTP snapshot 是唯一权威；这里不推断进度、不按定时器演算阶段；
  * - 只有进行中的研究才轮询（终态不再变化），页签不可见时跳过请求；
  * - 命令一律「提交 → 重读权威快照」，不本地拼接终态。
+ *
+ * `submit` 只接受范围卡批准过的结构化载荷（brief + questions + approval）：
+ * 范围卡是唯一启动路径；范围门拒绝时把结构化缺失字段清单交给调用方，
+ * 由对话侧继续追问，不在这里替用户补齐任何字段。
  */
 
 const POLL_INTERVAL_MS = 2_000
@@ -30,8 +41,10 @@ export type ResearchState = {
   readonly cancelling: boolean
   readonly error: string | null
   readonly errorCode: string | null
+  /** 范围门拒绝时的结构化缺失字段清单；null 表示当前没有待补齐字段。 */
+  readonly missingFields: readonly ResearchScopeGateFailureView[] | null
   select(taskId: string | null): void
-  submit(question: string): Promise<void>
+  submit(payload: ResearchStartPayload): Promise<void>
   cancel(): Promise<void>
   refresh(): Promise<void>
 }
@@ -46,6 +59,7 @@ export function useResearch(): ResearchState {
   const [cancelling, setCancelling] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [errorCode, setErrorCode] = useState<string | null>(null)
+  const [missingFields, setMissingFields] = useState<readonly ResearchScopeGateFailureView[] | null>(null)
   const selectedRef = useRef<string | null>(null)
   selectedRef.current = selectedId
 
@@ -63,10 +77,12 @@ export function useResearch(): ResearchState {
       if (options.silent !== true) {
         setError(null)
         setErrorCode(null)
+        setMissingFields(null)
       }
     } catch (reason) {
       setError(messageOf(reason))
       setErrorCode(reason instanceof ApiError ? (reason.code ?? null) : null)
+      setMissingFields(missingFieldsOf(reason))
     } finally {
       setLoading(false)
     }
@@ -123,17 +139,21 @@ export function useResearch(): ResearchState {
     setSelectedId(taskId)
   }, [])
 
-  const submit = useCallback(async (question: string): Promise<void> => {
+  const submit = useCallback(async (payload: ResearchStartPayload): Promise<void> => {
     setSubmitting(true)
     setError(null)
     setErrorCode(null)
+    setMissingFields(null)
     try {
-      const created = await createResearchTask(question)
+      const created = await createResearchTask(payload)
       setSelectedId(created.id)
       await load()
     } catch (reason) {
       setError(messageOf(reason))
       setErrorCode(reason instanceof ApiError ? (reason.code ?? null) : null)
+      setMissingFields(missingFieldsOf(reason))
+      // 失败一律原样上抛（与收紧入参前的契约一致）：调用方自行决定如何呈现。
+      // 范围门拒绝额外带上结构化缺失字段清单，调用方据此回到「继续追问」状态。
       throw reason
     } finally {
       setSubmitting(false)
@@ -165,11 +185,16 @@ export function useResearch(): ResearchState {
     cancelling,
     error,
     errorCode,
+    missingFields,
     select,
     submit,
     cancel,
     refresh: async () => await load(),
   }
+}
+
+function missingFieldsOf(reason: unknown): readonly ResearchScopeGateFailureView[] | null {
+  return reason instanceof ResearchScopeRejected ? reason.failures : null
 }
 
 function messageOf(reason: unknown): string {

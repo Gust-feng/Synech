@@ -8,6 +8,19 @@ import { ConversationTranscript } from "./ConversationTranscript";
 import { SurfaceErrorBoundary } from "./SurfaceErrorBoundary";
 import type { ConfirmationProjection } from "./ConfirmationCard";
 import type { ConversationSurfaceProjection, LiveConversationState } from "./conversation-surface-state";
+import type { ResearchScopeCardState } from "../../../../features/conversations/run/research-scope-card";
+import type { ResearchScopeGateFailureView } from "@panel-api/research";
+
+/** 范围卡在 run 视图里的可用输入：三个来源都缺省时卡片不渲染。 */
+export type ConversationResearchScopeInput = {
+  readonly busy: boolean;
+  readonly missing: readonly ResearchScopeGateFailureView[] | null;
+  readonly settledKeys?: readonly string[];
+  readonly onApprove?: (state: ResearchScopeCardState) => void;
+  readonly onDismiss?: (proposalKey: string) => void;
+};
+
+const EMPTY_SCOPE_KEYS: readonly string[] = [];
 
 export type ConversationSurfaceProps = {
   readonly conversation?: Conversation;
@@ -19,6 +32,12 @@ export type ConversationSurfaceProps = {
   readonly developerModeEnabled: boolean;
   readonly confirmationBusy: boolean;
   readonly onDecision: (decision: "approve_once" | "deny" | "guidance", guidance?: string) => void;
+  /** 范围卡（ADR 0001 §2.2）：在途门、缺失字段清单与两个用户决定。 */
+  readonly researchScopeBusy?: boolean;
+  readonly researchScopeMissing?: readonly ResearchScopeGateFailureView[] | null;
+  readonly onApproveResearchScope?: (state: ResearchScopeCardState) => void;
+  readonly onDismissResearchScope?: (proposalKey: string) => void;
+  readonly settledResearchScopeKeys?: readonly string[];
   readonly focus?: boolean;
   readonly onExitFocus?: () => void;
 };
@@ -59,6 +78,13 @@ export function ConversationSurface(props: ConversationSurfaceProps): ReactEleme
         selectedModelId={props.input.selectedModelId}
         onDecision={props.onDecision}
         confirmationBusy={props.confirmationBusy}
+        researchScope={{
+          busy: props.researchScopeBusy === true,
+          missing: props.researchScopeMissing ?? null,
+          settledKeys: props.settledResearchScopeKeys ?? EMPTY_SCOPE_KEYS,
+          onApprove: props.onApproveResearchScope,
+          onDismiss: props.onDismissResearchScope,
+        }}
       />
     </SurfaceErrorBoundary>
   ) : undefined;

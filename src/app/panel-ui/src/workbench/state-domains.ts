@@ -40,4 +40,9 @@ export type AppRunObservationState = {
   readonly detail?: OrdinaryRunDetail;
   readonly busy: boolean;
   readonly error?: string;
+  /**
+   * 已被用户处理过的研究范围卡标识（批准或驳回）。范围卡是唯一启动路径；
+   * 同一提案处理过一次就不再重复渲染，避免刷新后再次弹出同一张卡。
+   */
+  readonly settledResearchScopeKeys: readonly string[];
 };

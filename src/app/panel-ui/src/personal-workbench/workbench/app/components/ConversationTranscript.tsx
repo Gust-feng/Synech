@@ -56,6 +56,9 @@ import {
   selectedComposerModel,
   type ConversationModelBadge,
 } from "./conversation-model-badge";
+import { readResearchScopeCardState, stripResearchScopeProposalBlock } from "@ui/features/conversations/run/research-scope-card";
+import { ResearchScopeCard } from "@ui/features/conversations/run/ResearchScopeCard";
+import type { ConversationResearchScopeInput } from "./ConversationSurface";
 
 /* ─── 主入口 ─── */
 
@@ -77,6 +80,8 @@ export type ConversationTranscriptProps = {
   readonly selectedModelId: string;
   readonly onDecision: (decision: "approve_once" | "deny" | "guidance", guidance?: string) => void;
   readonly confirmationBusy: boolean;
+  /** 范围卡（ADR 0001 §2.2）：结构化提案 → 可确认卡片。 */
+  readonly researchScope?: ConversationResearchScopeInput;
 };
 
 export function ConversationTranscript(props: ConversationTranscriptProps): React.ReactElement | null {
@@ -115,6 +120,7 @@ export function ConversationTranscript(props: ConversationTranscriptProps): Reac
             developerModeEnabled={props.developerModeEnabled}
             onDecision={props.onDecision}
             confirmationBusy={item.hasPendingConfirmation && props.confirmationBusy}
+            researchScope={props.researchScope}
           />
         );
       })}
@@ -180,11 +186,23 @@ function ConversationAssistantMessage(props: {
   readonly developerModeEnabled: boolean;
   readonly onDecision?: (decision: "approve_once" | "deny" | "guidance", guidance?: string) => void;
   readonly confirmationBusy?: boolean;
+  readonly researchScope?: ConversationResearchScopeInput;
 }) {
   const workflow = props.workflow;
   if (workflow === undefined) {
     return <ConversationPendingDots />;
   }
+  // 范围卡从本轮回答正文里解析结构化提案（同一份数据，不另建第二事实源）。
+  const researchScopeState = readResearchScopeCardState(workflow.copyText);
+  const researchScope = props.researchScope;
+  const researchScopeVisible = researchScopeState !== undefined
+    && researchScope !== undefined
+    && researchScope.onApprove !== undefined
+    && !(researchScope.settledKeys ?? []).includes(researchScopeState.proposalKey);
+  // 有提案时正文不再重复显示信封原文：卡片渲染它。
+  const answerText = researchScopeVisible
+    ? stripResearchScopeProposalBlock(workflow.copyText)
+    : workflow.copyText;
   return (
     <div className="ui-conversation-turn ui-conversation-turn--assistant space-y-3">
       <ConversationModelLabel model={props.model} />
@@ -212,7 +230,15 @@ function ConversationAssistantMessage(props: {
           />
         );
       })}
-      <ConversationAnswerActions text={workflow.copyText} visible={workflow.showCopyActions} />
+      {researchScopeVisible && researchScopeState !== undefined && (
+        <ResearchScopeCard
+          state={researchScopeState}
+          busy={researchScope.busy}
+          missing={researchScope.missing}
+          onApprove={() => researchScope.onApprove?.(researchScopeState)}
+        />
+      )}
+      <ConversationAnswerActions text={answerText} visible={workflow.showCopyActions} />
     </div>
   );
 }

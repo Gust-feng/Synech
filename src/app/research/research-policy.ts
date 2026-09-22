@@ -11,6 +11,13 @@ export const RESEARCH_POLICY = {
   /** 拆题产出的子问题数上限（下限见 minQuestions）。 */
   maxQuestions: 5,
   minQuestions: 3,
+  /**
+   * 范围卡 objective 的最小长度。
+   *
+   * 「目标非平凡」是结构校验门的一条（ADR 0001 §2.2）：短于此值视为没有写清研究目标。
+   * 首版保守值，Phase 4 用本项目数据标定；语义充分性仍由用户在范围卡上判定，框架不判。
+   */
+  scopeObjectiveMinChars: 8,
   /** 整项研究的检索次数上限（跨轮累计）。 */
   maxSearchRequests: 12,
   /** 整项研究的正文抓取次数上限（跨轮累计）。 */

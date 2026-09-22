@@ -98,6 +98,8 @@ export function App(): React.ReactElement {
     modelResponding,
     pendingConfirmation,
     confirmationBusy,
+    researchScopeBusy,
+    researchScopeMissing,
     contextBusy,
     pendingConversationIds,
     savingModel,
@@ -113,6 +115,7 @@ export function App(): React.ReactElement {
     startTask,
     cancelRun,
     decideConfirmation,
+    decideResearchScope,
   } = runActions;
   const {
     selectInputModel,
@@ -241,6 +244,11 @@ export function App(): React.ReactElement {
       pendingConfirmation={pendingConfirmation}
       confirmationBusy={confirmationBusy}
       onDecision={(decision, guidance) => void decideConfirmation(decision, guidance)}
+      researchScopeBusy={researchScopeBusy}
+      researchScopeMissing={researchScopeMissing}
+      onApproveResearchScope={(state) => void decideResearchScope({ kind: "approve", state })}
+      onDismissResearchScope={(proposalKey) => void decideResearchScope({ kind: "reject", proposalKey })}
+      settledResearchScopeKeys={app.settledResearchScopeKeys}
       onStartNewConversation={startNewConversation}
       onResetConversation={resetConversation}
       onOpenConversation={openConversation}

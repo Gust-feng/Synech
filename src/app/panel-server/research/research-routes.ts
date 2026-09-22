@@ -6,22 +6,46 @@ import type {
   ResearchDetailResponse,
   ResearchListResponse,
   ResearchSourceContentResponse,
+  ResearchStartRejectedResponse,
   ResearchTaskDetailView,
   ResearchTaskSummaryView,
 } from "../../panel-api/research.js";
 import { ResearchError, type ResearchFeature } from "../../research/index.js";
+import { ResearchScopeGateError, readResearchScopeGate } from "../../research/scope-gate.js";
 import type { ResearchApplication } from "../../application/research-application.js";
 import { PanelHttpError, readJsonBody, writeJson } from "../http-utils.js";
 
 /**
  * 深度研究路由：只解析 HTTP、调用一个 Application/Feature 入口、映射错误。
  * 不编排流程、不访问 Repository：研究的执行由 Host worker 承接。
+ *
+ * 启动载荷是结构化 scope payload（ADR 0001 §2.2）：结构完整性由 Application 的
+ * 范围门判定，这里只把它的结构化缺失字段清单映射为 400 响应体。
  */
 
 const id = z.string().trim().min(1).max(512);
 
-const createTaskSchema = z.object({
-  question: z.string().trim().min(1).max(2_000),
+const createScopeSchema = z.object({
+  brief: z.object({
+    objective: z.string(),
+    inclusions: z.array(z.string()),
+    exclusions: z.array(z.string()),
+    audience: z.string(),
+    answerCriteria: z.string(),
+  }).strict(),
+  questions: z.array(z.object({
+    text: z.string(),
+    priority: z.enum(["critical", "normal", "optional"]),
+    boundaryNote: z.string(),
+  }).strict()).min(1),
+  approval: z.object({
+    payloadHash: z.string().optional(),
+    approvedAt: z.number(),
+    conversationRef: z.string(),
+  }).strict(),
+  scopeSearchDisclosure: z.object({
+    snippetSearches: z.number().int().min(0),
+  }).strict().optional(),
 }).strict();
 
 export type ResearchRouteDependencies = {
@@ -53,9 +77,9 @@ export async function handlePanelResearchRoute(
   }
 
   if (url.pathname === "/api/research" && request.method === "POST") {
-    const parsed = createTaskSchema.safeParse(await readJsonBody(request));
+    const parsed = createScopeSchema.safeParse(await readJsonBody(request));
     if (!parsed.success) {
-      throw new PanelHttpError(400, "invalid_research_input", "研究问题需要 1 至 2000 字。");
+      throw new PanelHttpError(400, "invalid_research_scope", "研究启动载荷不是有效的范围卡数据。");
     }
     const readiness = await dependencies.application.readiness();
     if (!readiness.search.available) {
@@ -65,7 +89,27 @@ export async function handlePanelResearchRoute(
         "尚未配置联网搜索服务，无法开始研究。请在设置中配置搜索服务后重试。",
       );
     }
-    const started = await dependencies.application.start({ question: parsed.data.question });
+    let started: { readonly taskId: string };
+    try {
+      started = await dependencies.application.start(parsed.data);
+    } catch (error) {
+      // 范围门拒绝：结构化缺失字段清单必须原样回到调用方（对话侧据此继续追问）。
+      if (error instanceof ResearchScopeGateError) {
+        const body: ResearchStartRejectedResponse = {
+          ok: false,
+          status: "failed",
+          error: { code: error.code, message: error.message },
+          missing: error.failures.map((failure) => ({
+            field: failure.field,
+            code: failure.code,
+            message: failure.message,
+          })),
+        };
+        writeJson(response, 400, body);
+        return true;
+      }
+      throw error;
+    }
     dependencies.noteQueued();
     const detail = await dependencies.feature.queries.detail(started.taskId);
     if (detail === undefined) {
@@ -168,6 +212,12 @@ export function researchHttpError(error: ResearchError): PanelHttpError {
       return new PanelHttpError(404, "research_task_not_found", error.message);
     case "research_task_not_terminal":
       return new PanelHttpError(409, "research_task_not_terminal", error.message);
+    case "research_scope_incomplete":
+      return new PanelHttpError(400, "invalid_research_scope", error.message);
+    case "research_scope_approval_mismatch":
+      return new PanelHttpError(400, "research_scope_approval_mismatch", error.message);
+    case "research_scope_approval_failed":
+      return new PanelHttpError(500, "research_scope_approval_failed", error.message);
     case "research_repository_failure":
       return new PanelHttpError(500, "research_storage_failed", "研究数据读写失败。");
   }

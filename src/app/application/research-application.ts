@@ -3,10 +3,15 @@ import type {
   ResearchFeature,
   ResearchPlan,
   ResearchSourceDraft,
+  ResearchScopeStartInput,
   ResearchStage,
   ResearchUsage,
 } from "../research/index.js";
 import { RESEARCH_POLICY } from "../research/index.js";
+import {
+  RESEARCH_INITIAL_QUESTION_SCOPE_BASIS,
+  assertResearchScope,
+} from "../research/scope-gate.js";
 import {
   buildCoveragePrompt,
   buildPlanPrompt,
@@ -18,10 +23,13 @@ import {
 } from "./research-prompts.js";
 
 /**
- * 深度研究编排（Application）：拆题 → 多轮检索取证 → 覆盖判断 → 成稿。
+ * 深度研究编排（Application）：范围闸门 → 拆题 → 多轮检索取证 → 覆盖判断 → 成稿。
  *
  * 与其他 Application 一样，本层拥有输入校验、流程顺序、取消与错误传播；
  * Feature 只保存事实，端口负责外部世界（模型、检索、正文抓取）。
+ *
+ * 范围闸门（ADR 0001 §2.2）是启动的唯一入口：结构化 scope payload 通过结构完整性
+ * 校验后才创建任务，并同批落账 brief + scopeApproval + 初始问题树。
  *
  * 有界与降级（不整单失败的阶梯）：
  * - 轮数、检索/抓取次数、来源条数与总时间都由 research-policy 限定；
@@ -107,7 +115,15 @@ export type ResearchApplicationDependencies = {
 };
 
 export type ResearchApplication = {
-  start(input: { readonly question: string }): Promise<{ readonly taskId: string }>;
+  /**
+   * 启动一次深度研究：结构化 scope payload 进，`{taskId}` 出。
+   *
+   * 唯一入口（ADR 0001 §2.2）：用户经范围卡点击、Agent 工具、Panel HTTP 三个
+   * 调用方都走这一个命令，入口唯一性与范围门不变量只在这里实现一次。
+   * 内部顺序固定：结构校验门 → createTask → approveScope → appendQuestions。
+   * 无 approval 不得创建任务，不存在免确认路径。
+   */
+  start(input: ResearchScopeStartInput): Promise<{ readonly taskId: string }>;
   /** 执行一项已领取的任务；signal 由 worker 提供，取消时中止在途调用。 */
   execute(taskId: string, signal: AbortSignal): Promise<void>;
   cancel(taskId: string): Promise<{ readonly cancelled: boolean; readonly reason?: string }>;
@@ -120,7 +136,37 @@ export function createResearchApplication(input: ResearchApplicationDependencies
 
   return {
     async start(request) {
-      const task = await input.feature.commands.createTask({ question: request.question });
+      // ---- 结构校验门：字段不齐即拒绝入队，未过门前不创建任何任务 ----
+      const scope = assertResearchScope(request);
+
+      const task = await input.feature.commands.createTask({ question: scope.brief.objective });
+      try {
+        // brief 与 scopeApproval 同事务（范围已批准即不可变）；初始问题树随任务落库。
+        await input.feature.commands.approveScope({
+          taskId: task.id,
+          approval: scope.approval,
+          brief: scope.brief,
+        });
+        await input.feature.commands.appendQuestions({
+          taskId: task.id,
+          questions: scope.questions.map((question) => ({
+            text: question.text,
+            priority: question.priority,
+            boundaryNote: question.boundaryNote,
+            origin: { kind: "brief", scopeBasis: RESEARCH_INITIAL_QUESTION_SCOPE_BASIS },
+          })),
+        });
+      } catch (error) {
+        // createTask 之后落账失败：不留一个「排队中但没有批准范围」的任务。
+        await input.feature.commands.finishTask({
+          id: task.id,
+          status: "failed",
+          errorCode: "research_scope_approval_failed",
+          errorMessage: "研究范围未能落账，任务未入队执行。",
+          usage: emptyTaskUsage(),
+        }).catch(() => undefined);
+        throw error;
+      }
       return { taskId: task.id };
     },
 
@@ -540,6 +586,11 @@ function emptyUsage(): ResearchUsage {
     outputTokens: null,
     elapsedMs: 0,
   };
+}
+
+/** 启动期失败记账：还没有任何调用发生，额度如实为零。 */
+function emptyTaskUsage(): ResearchUsage {
+  return emptyUsage();
 }
 
 function toPlan(draft: {
