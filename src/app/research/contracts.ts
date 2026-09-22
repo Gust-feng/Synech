@@ -17,7 +17,27 @@ export type ResearchTaskStatus =
   | "interrupted"
   | "cancelled";
 
+/**
+ * 旧流水线的阶段列（DDL CHECK 冻结的 legacy 五阶段）。
+ *
+ * turn 驱动后研究没有对应 stage 语义：应用层不再更新该列，认领与终态都写 NULL。
+ * 列与类型随冻结 DDL 保留，不为此改 schema。
+ */
 export type ResearchStage = "planning" | "searching" | "reading" | "analyzing" | "writing";
+
+/**
+ * 资源状态（ADR 0001 §2.4 / D5）：投影器注册槽位，粗粒度三档。
+ *
+ * - normal：外部调查可按语义需要继续；
+ * - constrained：运行资源接近限制；只改变行动优先级与可用动作；
+ * - finalization_required：不再允许新的外部调查，必须基于已持久化状态成稿。
+ *
+ * 硬规则：本状态**不得**用于判定 covered、不得推导剩余额度、不得作为停止理由。
+ */
+export type ResearchResourceState = "normal" | "constrained" | "finalization_required";
+
+/** 运行安全天花板的种类（终态 ceiling_hit 的结构值；展示文本不承担分支）。 */
+export type ResearchCeilingKind = "wall_clock" | "external_actions" | "no_progress";
 
 export type ResearchQuestionPriority = "high" | "normal";
 
@@ -118,7 +138,7 @@ export type ResearchTask = {
   /** 终态原因的结构字段，如 provider_unavailable；展示层不得改写其语义。 */
   readonly reason: string | null;
   /** 触发的运行安全天花板标识；未触发为 null。 */
-  readonly ceilingHit: string | null;
+  readonly ceilingHit: ResearchCeilingKind | null;
   /** 用户批准范围的事实（payload 哈希 + 时间 + 会话引用）；未批准为 null。 */
   readonly scopeApproval: ResearchScopeApproval | null;
   /** 关联的 ResearchBrief id；未落账为 null。 */
@@ -750,6 +770,45 @@ export type ResearchFetchOutcomePayload = {
   readonly failure: ResearchActionFailure | null;
 };
 
+/** ResourceState 转换原因：程序分支看结构值，展示文本另行映射。 */
+export type ResearchResourceStateChangeReason =
+  | "initial"
+  | "wall_clock_constrained"
+  | "wall_clock_reserve"
+  | "external_actions_ceiling"
+  | "no_progress_ceiling";
+
+/**
+ * ResourceState 转换的版本化 JSON 形状（ADR §2.6）。
+ *
+ * 转换是持久化的运行事实（观察面可 Join），但投影器只把**状态档位**给模型：
+ * 精确余额、墙钟比例与无进展计数永不进入模型上下文。
+ */
+export type ResearchResourceStateChangePayload = {
+  readonly version: 1;
+  readonly from: ResearchResourceState | null;
+  readonly to: ResearchResourceState;
+  readonly reason: ResearchResourceStateChangeReason;
+  readonly elapsedMs: number;
+  readonly consecutiveNoProgressCycles: number;
+};
+
+/**
+ * 模型内容块的版本化 JSON 形状（ADR §2.6）。
+ *
+ * 只在端点返回内容块时落账（completed 阶段，不落 delta 噪音）；
+ * `reasoningAvailable` 记录本次任务是否拿到推理内容，UI 不得在无推理内容时渲染空白区。
+ */
+export type ResearchModelContentPayload = {
+  readonly version: 1;
+  readonly blocks: readonly {
+    readonly contentIndex: number;
+    readonly kind: "text" | "thinking";
+    readonly content: string;
+  }[];
+  readonly reasoningAvailable: boolean;
+};
+
 
 
 export type ResearchQuestionUpdate = {
@@ -826,43 +885,24 @@ export interface ResearchRepository {
   claimNextQueued(input: { readonly startedAt: number }): Promise<ResearchTask | undefined>;
   /** 队列是否有待处理任务：worker 据此决定是否继续轮询。 */
   hasQueuedTasks(): Promise<boolean>;
+  /**
+   * 进度（用量）持久化。stage 可选：turn 驱动后研究没有对应 stage 语义，
+   * 应用层不更新阶段列（DDL CHECK 冻结的 legacy 五阶段不为此改变）。
+   */
   updateProgress(input: {
     readonly id: string;
-    readonly stage: ResearchStage;
+    readonly stage?: ResearchStage;
     readonly usage: ResearchUsage;
   }): Promise<void>;
-  savePlan(input: { readonly id: string; readonly plan: ResearchPlan }): Promise<void>;
-  saveCoverage(input: {
-    readonly id: string;
-    readonly coverage: readonly ResearchCoverageRound[];
-  }): Promise<void>;
-  /**
-   * 入列来源：按 canonicalUrl 去重，为新来源分配递增 ordinal；达到 limit 即停止。
-   * 返回本次真正入列的来源（含编号）；已存在的重复项不返回。
-   * limit 由应用层给值（策略归应用层），仓储在事务内执行，保证不越过上限。
-   */
-  appendSources(input: {
-    readonly taskId: string;
-    readonly drafts: readonly ResearchSourceDraft[];
-    readonly retrievedAt: number;
-    readonly limit: number;
-  }): Promise<readonly ResearchSource[]>;
-  markSourceContent(input: {
-    readonly taskId: string;
-    readonly sourceId: string;
-    readonly status: ResearchSourceStatus;
-    readonly contentText: string | null;
-  }): Promise<void>;
+  /** 旧流水线来源表的只读残留（DDL 冻结保留；新写入只进账本段来源表）。 */
   listSources(taskId: string): Promise<readonly ResearchSource[]>;
-  appendQueries(input: {
-    readonly taskId: string;
-    readonly records: readonly Omit<ResearchQueryRecord, "taskId">[];
-  }): Promise<void>;
+  /** 旧流水线检索记录表的只读残留（DDL 冻结保留；turn 驱动后无写入方）。 */
   listQueries(taskId: string): Promise<readonly ResearchQueryRecord[]>;
   /**
    * 完成：报告（Report+ReportSpan，新账本形状）与终态在同一事务内写入，
    * 重复提交不覆盖已有终态。completion/reason/ceilingHit 是终态事实；
-   * 旧流水线的 reportTitle/reportMarkdown 列在 S4 移除前继续可用。
+   * reportTitle/reportMarkdown 列随冻结 DDL 保留，turn 驱动后不再写入
+   * （报告只经 report spans 与确定性渲染器产生，M9）。
    */
   finishTask(input: {
     readonly id: string;
@@ -875,7 +915,7 @@ export interface ResearchRepository {
     readonly endedAt: number;
     readonly completion?: ResearchCompletion | null;
     readonly reason?: string | null;
-    readonly ceilingHit?: string | null;
+    readonly ceilingHit?: ResearchCeilingKind | null;
     readonly report?: {
       readonly title: string;
       readonly spans: readonly ResearchReportSpanDraft[];
@@ -985,28 +1025,8 @@ export type ResearchFeature = {
     claimNextQueued(input?: { readonly startedAt?: number }): Promise<ResearchTask | undefined>;
     updateProgress(input: {
       readonly id: string;
-      readonly stage: ResearchStage;
+      readonly stage?: ResearchStage;
       readonly usage: ResearchUsage;
-    }): Promise<void>;
-    savePlan(input: { readonly id: string; readonly plan: ResearchPlan }): Promise<void>;
-    saveCoverage(input: {
-      readonly id: string;
-      readonly coverage: readonly ResearchCoverageRound[];
-    }): Promise<void>;
-    appendSources(input: {
-      readonly taskId: string;
-      readonly drafts: readonly ResearchSourceDraft[];
-      readonly limit: number;
-    }): Promise<readonly ResearchSource[]>;
-    markSourceContent(input: {
-      readonly taskId: string;
-      readonly sourceId: string;
-      readonly status: ResearchSourceStatus;
-      readonly contentText: string | null;
-    }): Promise<void>;
-    appendQueries(input: {
-      readonly taskId: string;
-      readonly records: readonly Omit<ResearchQueryRecord, "taskId">[];
     }): Promise<void>;
     finishTask(input: {
       readonly id: string;
@@ -1018,7 +1038,7 @@ export type ResearchFeature = {
       readonly usage: ResearchUsage;
       readonly completion?: ResearchCompletion | null;
       readonly reason?: string | null;
-      readonly ceilingHit?: string | null;
+      readonly ceilingHit?: ResearchCeilingKind | null;
       readonly report?: {
         readonly title: string;
         readonly spans: readonly ResearchReportSpanDraft[];

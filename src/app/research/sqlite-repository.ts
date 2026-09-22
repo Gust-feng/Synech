@@ -12,6 +12,7 @@ import {
   type ResearchActionEventDraft,
   type ResearchBrief,
   type ResearchBriefDraft,
+  type ResearchCeilingKind,
   type ResearchCitationCheck,
   type ResearchCitationCheckDraft,
   type ResearchClaim,
@@ -31,7 +32,6 @@ import {
   type ResearchLedger,
   type ResearchObservationBatch,
   type ResearchObservationResult,
-  type ResearchPlan,
   type ResearchQuestionEdge,
   type ResearchQuestionEdgeDraft,
   type ResearchQuestionNode,
@@ -48,7 +48,6 @@ import {
   type ResearchSourceEntryDraft,
   type ResearchSourceProvenanceStatus,
   type ResearchSource,
-  type ResearchSourceStatus,
   type ResearchStage,
   type ResearchTask,
   type ResearchTaskStatus,
@@ -122,8 +121,10 @@ import { canonicalizeUrl } from "./canonical-url.js";
  * 即目标形态。旧开发库与新 schema 不兼容是既定语义：启动不得静默删除重建，
  * 用户显式 reset。
  *
- * 与并存期旧流水线的关系：plan/coverage JSON 列、research_source、research_query
- * 是旧流水线的存储，随 S4 移除；新写入只进新表。
+ * 与旧流水线存储的关系：plan/coverage JSON 列与 research_source、research_query 是
+ * 已退役固定流水线的存储。DDL 冻结保留（不为退役改 research/1 schema 与基线），但
+ * 写入路径已随 turn 驱动移除：新写入只进账本段表，旧表只剩只读残留
+ * （detail/DTO 仍读它们，v1.0.1 升级 fixture 仍清空它们）。
  */
 const MIGRATIONS = [{
   version: 1,
@@ -1353,7 +1354,7 @@ export function createSqliteResearchRepository(database: SqliteRuntimeDatabase):
           if (candidate === undefined) return undefined;
           const taskId = String(candidate.id);
           const claimed = database.connection.prepare(`
-            UPDATE research_task SET status = 'running', stage = 'planning', started_at = ?
+            UPDATE research_task SET status = 'running', stage = NULL, started_at = ?
             WHERE id = ? AND status = 'queued'
           `).run(input.startedAt, taskId);
           if (Number(claimed.changes) === 0) return undefined;
@@ -1377,10 +1378,17 @@ export function createSqliteResearchRepository(database: SqliteRuntimeDatabase):
 
     async updateProgress(input: {
       readonly id: string;
-      readonly stage: ResearchStage;
+      readonly stage?: ResearchStage;
       readonly usage: ResearchUsage;
     }): Promise<void> {
       try {
+        // turn 驱动后应用层不传 stage：阶段列保持 NULL，不为旧五阶段伪造过程语义。
+        if (input.stage === undefined) {
+          database.connection.prepare(
+            "UPDATE research_task SET usage_json = ? WHERE id = ? AND status = 'running'",
+          ).run(JSON.stringify(input.usage), input.id);
+          return;
+        }
         database.connection.prepare(
           "UPDATE research_task SET stage = ?, usage_json = ? WHERE id = ? AND status = 'running'",
         ).run(input.stage, JSON.stringify(input.usage), input.id);
@@ -1389,103 +1397,7 @@ export function createSqliteResearchRepository(database: SqliteRuntimeDatabase):
       }
     },
 
-    async savePlan(input: { readonly id: string; readonly plan: ResearchPlan }): Promise<void> {
-      try {
-        database.connection.prepare(
-          "UPDATE research_task SET plan_json = ? WHERE id = ? AND status = 'running'",
-        ).run(JSON.stringify(input.plan), input.id);
-      } catch (error) {
-        throw repositoryError("Could not save the research plan to SQLite.", error);
-      }
-    },
-
-    async saveCoverage(input: {
-      readonly id: string;
-      readonly coverage: readonly ResearchCoverageRound[];
-    }): Promise<void> {
-      try {
-        database.connection.prepare(
-          "UPDATE research_task SET coverage_json = ? WHERE id = ? AND status = 'running'",
-        ).run(JSON.stringify(input.coverage), input.id);
-      } catch (error) {
-        throw repositoryError("Could not save the research coverage to SQLite.", error);
-      }
-    },
-
-    async appendSources(input: {
-      readonly taskId: string;
-      readonly drafts: readonly {
-        readonly title: string;
-        readonly url: string;
-        readonly snippet: string;
-        readonly publishedAt?: string;
-      }[];
-      readonly retrievedAt: number;
-      /** 任务允许的来源条数上限；达到后不再入列。由调用方给值（策略归应用层）。 */
-      readonly limit: number;
-    }): Promise<readonly ResearchSource[]> {
-      try {
-        return database.transaction(() => {
-          const existing = database.connection.prepare(
-            "SELECT canonical_url AS canonicalUrl, ordinal FROM research_source WHERE task_id = ?",
-          ).all(input.taskId) as Record<string, SQLInputValue>[];
-          const seen = new Set(existing.map((row) => String(row.canonicalUrl)));
-          let ordinal = existing.reduce((max, row) => Math.max(max, Number(row.ordinal)), 0);
-          const insert = database.connection.prepare(`
-            INSERT INTO research_source(
-              id, task_id, ordinal, title, url, canonical_url, snippet, content_text,
-              content_status, published_at, retrieved_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 'pending', ?, ?)
-          `);
-          const accepted: ResearchSource[] = [];
-          for (const draft of input.drafts) {
-            if (accepted.length + existing.length >= input.limit) break;
-            const canonicalUrl = canonicalizeUrl(draft.url);
-            if (canonicalUrl === undefined || seen.has(canonicalUrl)) continue;
-            seen.add(canonicalUrl);
-            ordinal += 1;
-            const source: ResearchSource = parseResearchSource({
-              id: `${input.taskId}:s${ordinal}`,
-              taskId: input.taskId,
-              ordinal,
-              title: draft.title,
-              url: draft.url,
-              canonicalUrl,
-              snippet: draft.snippet,
-              contentText: null,
-              contentStatus: "pending",
-              publishedAt: draft.publishedAt ?? null,
-              retrievedAt: input.retrievedAt,
-            });
-            insert.run(
-              source.id, source.taskId, source.ordinal, source.title, source.url, source.canonicalUrl,
-              source.snippet, source.publishedAt, source.retrievedAt,
-            );
-            accepted.push(source);
-          }
-          return accepted;
-        });
-      } catch (error) {
-        if (error instanceof ResearchError) throw error;
-        throw repositoryError("Could not append research sources to SQLite.", error);
-      }
-    },
-
-    async markSourceContent(input: {
-      readonly taskId: string;
-      readonly sourceId: string;
-      readonly status: ResearchSourceStatus;
-      readonly contentText: string | null;
-    }): Promise<void> {
-      try {
-        database.connection.prepare(
-          "UPDATE research_source SET content_status = ?, content_text = ? WHERE task_id = ? AND id = ?",
-        ).run(input.status, input.contentText, input.taskId, input.sourceId);
-      } catch (error) {
-        throw repositoryError("Could not update the research source content in SQLite.", error);
-      }
-    },
-
+    /** 旧流水线来源表的只读残留（DDL 冻结保留；turn 驱动后无写入方）。 */
     async listSources(taskId: string): Promise<readonly ResearchSource[]> {
       try {
         const rows = database.connection.prepare(`
@@ -1512,28 +1424,7 @@ export function createSqliteResearchRepository(database: SqliteRuntimeDatabase):
       }
     },
 
-    async appendQueries(input: {
-      readonly taskId: string;
-      readonly records: readonly Omit<ResearchQueryRecord, "taskId">[];
-    }): Promise<void> {
-      try {
-        database.transaction(() => {
-          const insert = database.connection.prepare(`
-            INSERT INTO research_query(id, task_id, round, text, status, result_count, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-          `);
-          for (const record of input.records) {
-            insert.run(
-              record.id, input.taskId, record.round, record.text, record.status,
-              record.resultCount, record.createdAt,
-            );
-          }
-        });
-      } catch (error) {
-        throw repositoryError("Could not append research queries to SQLite.", error);
-      }
-    },
-
+    /** 旧流水线检索记录表的只读残留（DDL 冻结保留；turn 驱动后无写入方）。 */
     async listQueries(taskId: string): Promise<readonly ResearchQueryRecord[]> {
       try {
         const rows = database.connection.prepare(`
@@ -1566,7 +1457,7 @@ export function createSqliteResearchRepository(database: SqliteRuntimeDatabase):
       readonly endedAt: number;
       readonly completion?: ResearchCompletion | null;
       readonly reason?: string | null;
-      readonly ceilingHit?: string | null;
+      readonly ceilingHit?: ResearchCeilingKind | null;
       readonly report?: {
         readonly title: string;
         readonly spans: readonly ResearchReportSpanDraft[];

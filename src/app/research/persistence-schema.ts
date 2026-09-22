@@ -20,6 +20,7 @@ import type {
   ResearchFetchAttemptPayload,
   ResearchGap,
   ResearchGapDraft,
+  ResearchModelContentPayload,
   ResearchObservationBatch,
   ResearchObservationResult,
   ResearchPlan,
@@ -32,6 +33,7 @@ import type {
   ResearchReport,
   ResearchReportSpan,
   ResearchReportSpanDraft,
+  ResearchResourceStateChangePayload,
   ResearchScopeApproval,
   ResearchSearchAttemptPayload,
   ResearchSearchOutcomePayload,
@@ -109,7 +111,7 @@ const taskSchema = z.object({
   endedAt: timestamp.nullable(),
   completion: z.enum(["normal", "forced", "incomplete"]).nullable(),
   reason: z.string().nullable(),
-  ceilingHit: z.string().nullable(),
+  ceilingHit: z.enum(["wall_clock", "external_actions", "no_progress"]).nullable(),
   scopeApproval: scopeApprovalSchema.nullable(),
   briefId: id.nullable(),
 }).strict();
@@ -566,6 +568,31 @@ const stopAssessmentPayloadSchema = z.object({
   recordedAt: timestamp,
 }).strict();
 
+const resourceStateChangePayloadSchema = z.object({
+  version: z.literal(1),
+  from: z.enum(["normal", "constrained", "finalization_required"]).nullable(),
+  to: z.enum(["normal", "constrained", "finalization_required"]),
+  reason: z.enum([
+    "initial",
+    "wall_clock_constrained",
+    "wall_clock_reserve",
+    "external_actions_ceiling",
+    "no_progress_ceiling",
+  ]),
+  elapsedMs: z.number().int().min(0),
+  consecutiveNoProgressCycles: z.number().int().min(0),
+}).strict();
+
+const modelContentPayloadSchema = z.object({
+  version: z.literal(1),
+  blocks: z.array(z.object({
+    contentIndex: z.number().int().min(0),
+    kind: z.enum(["text", "thinking"]),
+    content: z.string(),
+  }).strict()),
+  reasoningAvailable: z.boolean(),
+}).strict();
+
 const questionUpdateSchema = z.object({
   questionId: id,
   status: z.enum(["open", "investigating", "covered", "disputed", "blocked", "abandoned"]).optional(),
@@ -729,6 +756,14 @@ export function parseResearchFetchAttemptPayload(value: unknown): ResearchFetchA
 
 export function parseResearchStopAssessmentPayload(value: unknown): ResearchStopAssessmentPayload {
   return stopAssessmentPayloadSchema.parse(value);
+}
+
+export function parseResearchResourceStateChangePayload(value: unknown): ResearchResourceStateChangePayload {
+  return resourceStateChangePayloadSchema.parse(value);
+}
+
+export function parseResearchModelContentPayload(value: unknown): ResearchModelContentPayload {
+  return modelContentPayloadSchema.parse(value);
 }
 
 export function parseResearchObservationBatch(value: unknown): ResearchObservationBatch {

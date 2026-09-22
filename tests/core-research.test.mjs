@@ -11,13 +11,17 @@ import {
 } from "../dist/app/research/index.js";
 
 /**
- * 研究能力的最小不变量验证（数据、并发、恢复三类，按 AGENTS.md 规则 11）。
+ * 研究队列与终态的最小不变量验证（数据、并发、恢复三类，按 AGENTS.md 规则 11）。
  *
  * 只保护长期必须成立的事实，不追踪实现细节：
  * 1. 队列认领是 CAS：同一任务不会被领取两次；
  * 2. 重启只把 running 标记 interrupted，绝不自动重放；
  * 3. 报告与终态同事务写入，且已终态的任务不接受再次写入（幂等保存）；
  * 4. 取消只置标记，不改变终态。
+ *
+ * turn 驱动后（ADR 0001 §2.3）执行层不再写固定流水线的中间表：plan/coverage JSON 列、
+ * research_source、research_query 的写入路径已退役（DDL 冻结保留、只读残留），
+ * 旧流水线中间态的测试由 tests/core-research-turn.test.mjs 的 turn 测试取代。
  */
 
 async function withFeature(run) {
@@ -73,6 +77,8 @@ test("research queue claim is single-assignment and recovery only marks interrup
     const claimed = await first.commands.claimNextQueued({ startedAt: 2_000 });
     assert.equal(claimed?.id, created.id);
     assert.equal(claimed?.status, "running");
+    // turn 驱动后阶段列保持 NULL：研究没有对应 stage 语义，不伪造过程阶段。
+    assert.equal(claimed?.stage, null);
     const second = await first.commands.claimNextQueued({ startedAt: 3_000 });
     assert.equal(second, undefined);
     await first.release();
@@ -104,40 +110,34 @@ test("research finish writes report and terminal status atomically and never ove
   await withFeature(async ({ feature }) => {
     const task = await feature.commands.createTask({ question: "长上下文与 RAG 各自适合什么？" });
     await feature.commands.claimNextQueued({ startedAt: 2_000 });
-    await feature.commands.savePlan({
-      id: task.id,
-      plan: {
-        objective: "判断两种方案的适用条件",
-        questions: [{ id: "q1", text: "长上下文的成本结构如何？", priority: "high" }],
-      },
-    });
-    await feature.commands.saveCoverage({
-      id: task.id,
-      coverage: [{ round: 1, answers: [{ questionId: "q1", coverage: "partial", text: "只有部分依据", gaps: ["缺少成本数据"] }] }],
-    });
 
-    const sources = await feature.commands.appendSources({
+    // 账本段来源入列后，报告 span 才能引用真实 sourceId（引用存在性在事务内校验）。
+    const [source] = await feature.commands.appendSourceEntries({
       taskId: task.id,
-      drafts: [
-        { title: "长上下文成本", url: "https://example.com/a?utm_source=x", snippet: "摘要一" },
-        // 同一规范化 URL 只入列一次，编号跨轮稳定。
-        { title: "重复项", url: "https://example.com/a", snippet: "摘要二" },
-        { title: "非法链接", url: "not-a-url", snippet: "摘要三" },
-      ],
-      limit: 24,
+      drafts: [{ title: "成本对比", url: "https://example.com/a?utm_source=x", snippet: "摘要一" }],
     });
-    assert.equal(sources.length, 1);
-    assert.equal(sources[0].ordinal, 1);
 
     const finished = await feature.commands.finishTask({
       id: task.id,
       status: "completed",
-      reportTitle: "研究报告",
-      reportMarkdown: "# 报告",
       usage: usage(),
+      completion: "normal",
+      report: {
+        title: "研究报告",
+        spans: [{
+          text: "综合判断：两种方案的适用条件不同。",
+          claimIds: [],
+          attributionType: "synthesis",
+          citationSourceIds: [source.id],
+        }],
+      },
     });
     assert.equal(finished?.status, "completed");
     assert.equal(finished?.stage, null);
+
+    const ledger = await feature.queries.ledger(task.id);
+    assert.equal(ledger?.report?.spans.length, 1);
+    assert.equal(ledger?.report?.spans[0]?.citationSourceIds[0], source.id);
 
     // 重复提交是空操作：已进入终态的任务不被覆盖。
     const replayed = await feature.commands.finishTask({
@@ -150,7 +150,6 @@ test("research finish writes report and terminal status atomically and never ove
     assert.equal(replayed, undefined);
     const detail = await feature.queries.detail(task.id);
     assert.equal(detail?.task.status, "completed");
-    assert.equal(detail?.task.reportMarkdown, "# 报告");
     assert.equal(detail?.task.usage.modelRequests, 2);
   });
 });
@@ -167,83 +166,14 @@ test("research cancel records intent without forcing a terminal state", async ()
   });
 });
 
-test("research queries stay unique when two tasks ask the same question", async () => {
+test("research update progress persists usage without a stage", async () => {
   await withFeature(async ({ feature }) => {
-    // 两个研究问同一个问题、都在第 1 轮检索：检索记录 id 曾经只拼「轮次-序号-查询词」，
-    // 与任务无关，于是第二个任务的整轮记录会撞主键冲突并整批回滚。
-    const first = await feature.commands.createTask({ question: "什么是爱情" });
-    await feature.commands.claimNextQueued({ startedAt: 1_000 });
-    await feature.commands.appendQueries({
-      taskId: first.id,
-      records: [{ id: `${first.id}:q1`, round: 1, text: "什么是爱情", status: "failed", resultCount: 0, createdAt: 1_000 }],
-    });
-
-    const second = await feature.commands.createTask({ question: "什么是爱情" });
+    const task = await feature.commands.createTask({ question: "问题" });
     await feature.commands.claimNextQueued({ startedAt: 2_000 });
-    await feature.commands.appendQueries({
-      taskId: second.id,
-      records: [{ id: `${second.id}:q1`, round: 1, text: "什么是爱情", status: "failed", resultCount: 0, createdAt: 2_000 }],
-    });
-
-    const firstDetail = await feature.queries.detail(first.id);
-    const secondDetail = await feature.queries.detail(second.id);
-    assert.equal(firstDetail?.queries.length, 1);
-    assert.equal(secondDetail?.queries.length, 1);
-    assert.notEqual(firstDetail?.queries[0]?.id, secondDetail?.queries[0]?.id);
-  });
-});
-
-test("research sources stop at the requested limit", async () => {
-  await withFeature(async ({ feature }) => {
-    const task = await feature.commands.createTask({ question: "问题" });
-    const draft = (n) => ({ title: `标题${n}`, url: `https://example.com/${n}`, snippet: `摘要${n}` });
-
-    const first = await feature.commands.appendSources({
-      taskId: task.id,
-      drafts: [draft(1), draft(2), draft(3)],
-      limit: 3,
-    });
-    assert.equal(first.length, 3);
-
-    // 已达上限：后续检索结果不再入列（编号也不递增）。
-    const second = await feature.commands.appendSources({
-      taskId: task.id,
-      drafts: [draft(4), draft(5)],
-      limit: 3,
-    });
-    assert.equal(second.length, 0);
+    await feature.commands.updateProgress({ id: task.id, usage: usage() });
     const detail = await feature.queries.detail(task.id);
-    assert.equal(detail?.sources.length, 3);
-    assert.deepEqual(detail?.sources.map((s) => s.ordinal), [1, 2, 3]);
-  });
-});
-
-test("research source content status reflects what was actually read", async () => {
-  await withFeature(async ({ feature }) => {
-    const task = await feature.commands.createTask({ question: "问题" });
-    const [source] = await feature.commands.appendSources({
-      taskId: task.id,
-      drafts: [{ title: "标题", url: "https://example.com/page", snippet: "摘要" }],
-      limit: 24,
-    });
-    assert.equal(source?.contentStatus, "pending");
-    assert.equal(source?.contentText, null);
-
-    await feature.commands.markSourceContent({
-      taskId: task.id,
-      sourceId: source.id,
-      status: "ready",
-      contentText: "抓到的正文",
-    });
-    await feature.commands.appendQueries({
-      taskId: task.id,
-      records: [{ id: "q1", round: 1, text: "检索词", status: "succeeded", resultCount: 3, createdAt: 1_000 }],
-    });
-
-    const detail = await feature.queries.detail(task.id);
-    assert.equal(detail?.sources[0]?.contentStatus, "ready");
-    assert.equal(detail?.sources[0]?.contentText, "抓到的正文");
-    assert.equal(detail?.queries.length, 1);
-    assert.equal(detail?.queries[0]?.resultCount, 3);
+    assert.equal(detail?.task.usage.modelRequests, 2);
+    // turn 驱动后应用层不写 stage：阶段列保持认领时的 NULL。
+    assert.equal(detail?.task.stage, null);
   });
 });

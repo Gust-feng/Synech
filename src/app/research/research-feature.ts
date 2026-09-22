@@ -9,7 +9,6 @@ import {
   type ResearchFeature,
   type ResearchLedger,
   type ResearchObservationResult,
-  type ResearchPlan,
   type ResearchQuestionNode,
   type ResearchRepository,
   type ResearchStage,
@@ -137,53 +136,12 @@ export function createResearchFeature(options: {
 
       async updateProgress(input: {
         readonly id: string;
-        readonly stage: ResearchStage;
+        readonly stage?: ResearchStage;
         readonly usage: ResearchUsage;
       }): Promise<void> {
         await run(async () => {
           await options.repository.updateProgress(input);
           publish(input.id, "running");
-        });
-      },
-
-      async savePlan(input: { readonly id: string; readonly plan: ResearchPlan }): Promise<void> {
-        await run(async () => {
-          await options.repository.savePlan(input);
-          publish(input.id, "running");
-        });
-      },
-
-      async saveCoverage(input): Promise<void> {
-        await run(async () => {
-          await options.repository.saveCoverage(input);
-          publish(input.id, "running");
-        });
-      },
-
-      async appendSources(input) {
-        return await run(async () => {
-          const accepted = await options.repository.appendSources({
-            taskId: input.taskId,
-            drafts: input.drafts,
-            limit: input.limit,
-            retrievedAt: now(),
-          });
-          if (accepted.length > 0) publish(input.taskId, "running");
-          return accepted;
-        });
-      },
-
-      async markSourceContent(input): Promise<void> {
-        await run(async () => {
-          await options.repository.markSourceContent(input);
-          publish(input.taskId, "running");
-        });
-      },
-
-      async appendQueries(input): Promise<void> {
-        await run(async () => {
-          await options.repository.appendQueries(input);
-          publish(input.taskId, "running");
         });
       },
 
