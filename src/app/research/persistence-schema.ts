@@ -17,6 +17,7 @@ import type {
   ResearchEvidenceItem,
   ResearchEvidenceItemDraft,
   ResearchEvidenceItemRead,
+  ResearchFetchAttemptPayload,
   ResearchGap,
   ResearchGapDraft,
   ResearchObservationBatch,
@@ -32,10 +33,13 @@ import type {
   ResearchReportSpan,
   ResearchReportSpanDraft,
   ResearchScopeApproval,
+  ResearchSearchAttemptPayload,
+  ResearchSearchOutcomePayload,
   ResearchSourceEntry,
   ResearchSourceEntryDraft,
   ResearchSourceFetchPayload,
   ResearchSource,
+  ResearchStopAssessmentPayload,
   ResearchTask,
   ResearchTaskSummary,
   ResearchUsage,
@@ -502,6 +506,66 @@ const checkpointSummaryPayloadSchema = z.object({
   supersedesCheckpointId: id.nullable(),
 }).strict();
 
+const actionFailureSchema = z.object({
+  class: z.enum(["not_configured", "invalid_input", "timeout", "http_error", "parse_error", "cancelled"]),
+  retryable: z.boolean(),
+  detail: z.string(),
+}).strict();
+
+const searchAttemptPayloadSchema = z.object({
+  version: z.literal(1),
+  tool: z.literal("research_search"),
+  query: z.string(),
+  questionRefs: z.array(id),
+  requestedAt: timestamp,
+  executed: z.boolean(),
+  duplicateQuery: z.object({ previousEventId: id }).strict().nullable(),
+  overrideDuplicateQuery: z.boolean(),
+}).strict();
+
+const searchOutcomePayloadSchema = z.object({
+  version: z.literal(1),
+  tool: z.literal("research_search"),
+  status: z.enum(["completed", "failed", "duplicate_skipped", "policy_ceiling"]),
+  requestedAt: timestamp,
+  completedAt: timestamp,
+  appendedSourceIds: z.array(id),
+  duplicateSourceIds: z.array(id),
+  failure: actionFailureSchema.nullable(),
+}).strict();
+
+const fetchAttemptPayloadSchema = z.object({
+  version: z.literal(1),
+  tool: z.literal("research_fetch"),
+  sourceId: id,
+  url: z.string(),
+  questionRefs: z.array(id),
+  requestedAt: timestamp,
+  executed: z.boolean(),
+  duplicateContentHash: z.object({
+    contentHash: z.string(),
+    accessLevel: accessLevelSchema,
+  }).strict().nullable(),
+  overrideDuplicateRead: z.boolean(),
+}).strict();
+
+const stopAssessmentPayloadSchema = z.object({
+  version: z.literal(1),
+  tool: z.literal("research_propose_stop"),
+  assessment: z.object({
+    unresolvedCriticalQuestionIds: z.array(id),
+    unresolvedGapIds: z.array(id),
+    unresolvedConflictIds: z.array(id),
+    strongestConclusionAtRisk: z.string(),
+    nextBestAction: z.string().nullable(),
+    expectedInformationGain: z.enum(["high", "medium", "low"]),
+    recentSearchYield: z.enum(["material", "marginal", "none"]),
+    recommendation: z.enum(["continue", "stop"]),
+    reason: z.string(),
+  }).strict(),
+  recordedAt: timestamp,
+}).strict();
+
 const questionUpdateSchema = z.object({
   questionId: id,
   status: z.enum(["open", "investigating", "covered", "disputed", "blocked", "abandoned"]).optional(),
@@ -649,6 +713,22 @@ export function parseResearchSourceFetchPayload(value: unknown): ResearchSourceF
 
 export function parseResearchCheckpointSummaryPayload(value: unknown): ResearchCheckpointSummaryPayload {
   return checkpointSummaryPayloadSchema.parse(value);
+}
+
+export function parseResearchSearchAttemptPayload(value: unknown): ResearchSearchAttemptPayload {
+  return searchAttemptPayloadSchema.parse(value);
+}
+
+export function parseResearchSearchOutcomePayload(value: unknown): ResearchSearchOutcomePayload {
+  return searchOutcomePayloadSchema.parse(value);
+}
+
+export function parseResearchFetchAttemptPayload(value: unknown): ResearchFetchAttemptPayload {
+  return fetchAttemptPayloadSchema.parse(value);
+}
+
+export function parseResearchStopAssessmentPayload(value: unknown): ResearchStopAssessmentPayload {
+  return stopAssessmentPayloadSchema.parse(value);
 }
 
 export function parseResearchObservationBatch(value: unknown): ResearchObservationBatch {

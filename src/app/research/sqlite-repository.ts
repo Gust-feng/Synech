@@ -95,6 +95,7 @@ import {
   parseResearchTaskSummary,
   parseResearchUsage,
 } from "./persistence-schema.js";
+import { canonicalizeUrl } from "./canonical-url.js";
 
 /**
  * 研究事实的 SQLite 持久化。
@@ -420,6 +421,56 @@ const ACTION_EVENT_PAYLOAD_PARSERS: Partial<
   source_fetch: parseResearchSourceFetchPayload,
   checkpoint_summary: parseResearchCheckpointSummaryPayload,
 };
+
+/**
+ * CheckpointSummary 的实体回指必须落在任务内。
+ *
+ * checkpoint 是模型生成的工作记忆，不是账本的第二事实源：回指断了就再也回不到原
+ * 实体，压缩后的上下文会把同一批主张/缺口重新发现一遍。规则与 questionRefs 同一
+ * 层（port 边界结构校验），不依赖调用方自觉。
+ */
+function assertCheckpointBackReferences(
+  database: SqliteRuntimeDatabase,
+  taskId: string,
+  drafts: readonly ResearchActionEventDraft[],
+): void {
+  const checkpoints = drafts.filter((draft) => draft.kind === "checkpoint_summary");
+  if (checkpoints.length === 0) return;
+  const knownClaimIds = new Set(existingIds(database, "research_claim", taskId));
+  const knownGapIds = new Set(existingIds(database, "research_gap", taskId));
+  const knownConflictIds = new Set(existingIds(database, "research_conflict", taskId));
+  const knownSourceIds = new Set(existingIds(database, "research_source_entry", taskId));
+  const knownCheckpointIds = new Set(
+    database.connection.prepare(
+      "SELECT id FROM research_action_event WHERE task_id = ? AND kind = 'checkpoint_summary'",
+    ).all(taskId).map((row) => String((row as Record<string, SQLInputValue>).id)),
+  );
+  for (const draft of checkpoints) {
+    const payload = parseResearchCheckpointSummaryPayload(draft.payload);
+    const references: readonly (readonly [string, ReadonlySet<string>, readonly string[]])[] = [
+      ["主张", knownClaimIds, payload.retainedClaimIds],
+      ["缺口", knownGapIds, payload.retainedGapIds],
+      ["分歧", knownConflictIds, payload.retainedConflictIds],
+      ["来源", knownSourceIds, payload.sourceIds],
+    ];
+    for (const [label, known, values] of references) {
+      for (const value of values) {
+        if (!known.has(value)) {
+          throw new ResearchError(
+            "research_invalid_input",
+            `检查点回引了不存在的${label} ${value}。`,
+          );
+        }
+      }
+    }
+    if (payload.supersedesCheckpointId !== null && !knownCheckpointIds.has(payload.supersedesCheckpointId)) {
+      throw new ResearchError(
+        "research_invalid_input",
+        `检查点回引了不存在的上一个检查点 ${payload.supersedesCheckpointId}。`,
+      );
+    }
+  }
+}
 
 export function createSqliteResearchRepository(database: SqliteRuntimeDatabase): ResearchRepository {
   database.migrate("research", MIGRATIONS);
@@ -1933,6 +1984,7 @@ export function createSqliteResearchRepository(database: SqliteRuntimeDatabase):
               }
             }
           }
+          assertCheckpointBackReferences(database, input.taskId, drafts);
           const now = Date.now();
           const ids = allocateIds(
             input.taskId, "ev", existingIds(database, "research_action_event", input.taskId), drafts.length,
@@ -2109,21 +2161,7 @@ function countPlanQuestions(planJson: SQLInputValue | undefined): number {
   }
 }
 
-/** 去重键：忽略协议/主机大小写、hash 与 utm 参数；无法解析的 URL 不入列。 */
-function canonicalizeUrl(rawUrl: string): string | undefined {
-  try {
-    const url = new URL(rawUrl);
-    if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
-    url.hash = "";
-    for (const key of [...url.searchParams.keys()]) {
-      if (key.startsWith("utm_")) url.searchParams.delete(key);
-    }
-    return url.toString();
-  } catch {
-    return undefined;
-  }
-}
-
+/** 来源域名：只用于展示分组，不参与去重（去重键是 canonical URL）。 */
 function domainOf(canonicalUrl: string): string {
   try {
     return new URL(canonicalUrl).hostname;
