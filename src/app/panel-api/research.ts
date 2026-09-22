@@ -100,6 +100,162 @@ export type ResearchTaskDetailView = {
   readonly endedAt: number | null;
   readonly sources: readonly ResearchSourceView[];
   readonly queries: readonly ResearchQueryView[];
+  /** 观察面有界投影（状态树 + 动作事件流）：与 detail 其余字段同源权威快照。 */
+  readonly ledger: ResearchLedgerView;
+};
+
+/**
+ * 观察面：动作事件流与研究状态树（ADR 0001 §2.6 / 设计草案 §7.5）
+ *
+ * 动作事件（模型内容块含推理字段、工具调用及完整参数、工具结果与失败分类、
+ * 账本变更、ResourceState 转换）由研究账本持久化，经 questionRefs 可 Join
+ * 问题树。这里只放【有界投影】：工具调用参数是结构化意图但可能是上下文炸弹，
+ * 绝不原样透传 payload，只保留长度受限的关键字段；reasoning 仅在端点返回推理
+ * 内容时出现，无推理内容时消费者不渲染空白区（reasoning_available 是任务事实）。
+ * kind / status / failureClass / resourceState 等结构字段负责程序分支，
+ * label / summary 只负责展示。
+ */
+
+/** 事件种类（负责程序分支）：与账本 action_event.kind 同集合。 */
+export type ResearchActionEventKindView =
+  | "model_content"
+  | "tool_call"
+  | "tool_result"
+  | "ledger_change"
+  | "resource_state_change"
+  | "source_fetch"
+  | "checkpoint_summary";
+
+/** 外部动作失败分类（负责程序分支）：框架按真实失败原因归类，failureDetail 只作展示。 */
+export type ResearchActionFailureClassView =
+  | "not_configured"
+  | "invalid_input"
+  | "timeout"
+  | "http_error"
+  | "parse_error"
+  | "cancelled";
+
+/** ResourceState 三档（投影器注册槽位，ADR §2.4）：只改变行动优先级，不等于研究充分度。 */
+export type ResearchResourceStateView = "normal" | "constrained" | "finalization_required";
+
+/** 读取深度（框架按真实抓取结果写入）：摘要、部分正文、完整正文、抓取失败。 */
+export type ResearchAccessLevelView = "snippet" | "partial" | "fulltext" | "unavailable";
+
+/**
+ * 单条动作事件的有界投影（上下文炸弹防线）。
+ *
+ * query / reason / excerpt / summary 全部长度截断，绝不原样透传工具全参数；
+ * 工具调用参数只保留派生后的有界字段，完整入参留在账本内按 ID 诊断读取。
+ */
+export type ResearchActionEventView = {
+  readonly id: string;
+  readonly taskId: string;
+  readonly kind: ResearchActionEventKindView;
+  readonly createdAt: number;
+  readonly questionRefs: readonly string[];
+  /** 有界标题：由 kind + 关键字段派生，只作展示。 */
+  readonly label: string;
+  /** 有界摘要：工具名 / 查询 / 来源 / 失败分类等关键字段的截断呈现，只作展示。 */
+  readonly summary: string;
+  /** 工具类事件的研究工具标识（research_search / research_fetch / …）。 */
+  readonly tool?: string;
+  /** 工具结果 / 抓取的结果状态（结构）。 */
+  readonly status?: string;
+  /** 检索类调用的查询文本（有界截断）。 */
+  readonly query?: string;
+  /** 抓取类调用的来源 ID（结构）。 */
+  readonly sourceId?: string;
+  /** 抓取读取深度（框架事实）。 */
+  readonly accessLevel?: ResearchAccessLevelView;
+  /** 本次调用是否真的发出外部动作（重复 / 策略上界时框架跳过）。 */
+  readonly executed?: boolean;
+  /** 工具结果 / 抓取的失败分类（结构）。 */
+  readonly failureClass?: ResearchActionFailureClassView;
+  /** 「这类失败值不值得再试」是框架策略事实。 */
+  readonly failureRetryable?: boolean;
+  /** 适配器原始失败 code：展示与诊断用，不承担程序分支（有界截断）。 */
+  readonly failureDetail?: string;
+  /** resource_state_change 的目标档位（结构）。 */
+  readonly resourceState?: ResearchResourceStateView;
+  /** 模型内容块的推理文本（有界截断）：仅在端点返回推理内容时出现。 */
+  readonly reasoning?: string;
+};
+
+/** 问题树节点（状态树第一层）。 */
+export type ResearchQuestionTreeNode = {
+  readonly id: string;
+  readonly text: string;
+  readonly status: string;
+  readonly priority: string;
+  readonly boundaryNote: string;
+  readonly evidenceCount: number;
+  readonly evidenceStatus: string;
+  readonly reopenedCount: number;
+};
+
+/** 证据摘要（状态树；全文摘录按来源按需读取，这里只给有界 excerpt）。 */
+export type ResearchEvidenceNode = {
+  readonly id: string;
+  readonly sourceId: string;
+  readonly stance: string;
+  readonly accessLevel: ResearchAccessLevelView;
+  readonly questionIds: readonly string[];
+  readonly excerpt: string;
+};
+
+/** 缺口（状态树；「向用户展示缺口」是硬要求，不折叠）。 */
+export type ResearchGapNode = {
+  readonly id: string;
+  readonly questionId: string;
+  readonly description: string;
+  readonly importance: string;
+  readonly origin: string;
+  readonly status: string;
+};
+
+/** 分歧（状态树；双边证据约束是结构事实，evidenceSides 供呈现）。 */
+export type ResearchConflictNode = {
+  readonly id: string;
+  readonly questionIds: readonly string[];
+  readonly nature: string;
+  readonly status: string;
+  readonly resolutionNote: string;
+  readonly evidenceAIds: readonly string[];
+  readonly evidenceBIds: readonly string[];
+};
+
+/**
+ * 状态树（第一屏设计视图）：问题 / 证据计数 / 缺口 / 分歧 / ResourceState + 任务事实。
+ *
+ * resourceState 取账本内最近一次 resource_state_change 的目标档位，无转换时 normal。
+ * reasoningAvailable 是任务事实（是否捕获到推理内容）：为 false 时消费者不得渲染
+ * 空白推理区；本字段是观察面对该事实的只读投影。
+ */
+export type ResearchStateTreeView = {
+  readonly questions: readonly ResearchQuestionTreeNode[];
+  readonly evidence: readonly ResearchEvidenceNode[];
+  readonly gaps: readonly ResearchGapNode[];
+  readonly conflicts: readonly ResearchConflictNode[];
+  readonly resourceState: ResearchResourceStateView;
+  readonly reasoningAvailable: boolean;
+  readonly counts: {
+    readonly questions: number;
+    readonly evidence: number;
+    readonly claims: number;
+    readonly sources: number;
+    readonly gaps: number;
+    readonly conflicts: number;
+    readonly events: number;
+  };
+};
+
+/**
+ * 研究账本的 UI 有界投影（facade 输出）：状态树 + 动作事件流。
+ * 这是 detail 内新增字段，随 detail 的权威快照一起刷新。
+ */
+export type ResearchLedgerView = {
+  readonly stateTree: ResearchStateTreeView;
+  readonly events: readonly ResearchActionEventView[];
 };
 
 export type ResearchReadinessView = {

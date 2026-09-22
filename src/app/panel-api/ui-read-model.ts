@@ -75,3 +75,22 @@ export {
 } from "./read-model/assistant/panel-assistant-failure.js";
 export type { AssistantFailureParts, AssistantTerminalStatus } from "./read-model/assistant/panel-assistant-failure.js";
 export { cleanConfirmationSummary } from "../text-projection/confirmation-copy.js";
+
+export {
+  filterResearchEventsByQuestion,
+  projectResearchActionEvent,
+  projectResearchLedgerView,
+} from "./read-model/research/research-ledger-view.js";
+export type {
+  ResearchActionEventInput,
+  ResearchActionEventKindView,
+  ResearchActionEventView,
+  ResearchConflictNode,
+  ResearchEvidenceNode,
+  ResearchGapNode,
+  ResearchLedgerInput,
+  ResearchLedgerView,
+  ResearchQuestionTreeNode,
+  ResearchResourceStateView,
+  ResearchStateTreeView,
+} from "./read-model/research/research-ledger-view.js";

@@ -33,6 +33,7 @@ import type {
 import { RichText } from '@ui/components/rich-text'
 import { useResearch } from '../../../../features/research/use-research'
 import { fetchResearchSourceContent } from '../../../../features/research/research-client'
+import { ResearchWorkflowPanel } from '../../../../features/research/ResearchWorkflowPanel'
 import { WorkbenchExplorer } from './WorkbenchExplorer'
 import type { SettingsGroup } from '../../../../features/settings/components/types'
 import './research-page.css'
@@ -757,6 +758,7 @@ function ResearchDetailView({
               </div>
             </section>
           )}
+          <ResearchWorkflowPanel ledger={task.ledger} active={active} />
         </div>
       </div>
 
