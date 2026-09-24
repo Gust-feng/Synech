@@ -113,6 +113,8 @@ import {
 import type { SkillRootInput, SkillStateStore } from "../skills/index.js";
 import type { SubAgentRootInput } from "../sub-agents/sub-agent-loader.js";
 import type { ToolOutputStore } from "../tool-center/tool-output-store.js";
+import { declareHostBrowserAutomation } from "../tool-center/adapters/browser-tool.js";
+import type { BrowserAutomation } from "../tool-center/adapters/browser-tool.js";
 import type {
   PanelContextAttachmentMediaEntry,
   PanelContextAttachmentSelection,
@@ -264,9 +266,14 @@ type PanelSubAgentRootsInput = {
 
 export type PanelHostOptions = Omit<PanelServerOptions, "host" | "port" | "productHome"> & {
   readonly productPaths: ProductPaths;
+  /** 宿主注入的浏览器能力（桌面端为 Electron 自带 Chromium 的隐藏窗口实现）。 */
+  readonly browserAutomation?: BrowserAutomation;
 };
 
 export function createPanelHost(options: PanelHostOptions): PanelHost {
+  // 组合根是本进程唯一的浏览器能力 owner：工具注册表（能力目录、每个 run 的
+  // run 级注册表）在宿主之后按需创建，只能从这一处读取「本进程有没有浏览器能力」。
+  declareHostBrowserAutomation(options.browserAutomation);
   const agentDefinitionCatalog = createRuntimeAgentDefinitionCatalog({
     ordinaryAgentDefinition: options.ordinaryAgentDefinition,
     additionalDefinitions: options.agentDefinitions,
@@ -274,6 +281,7 @@ export function createPanelHost(options: PanelHostOptions): PanelHost {
   if (options.configCenter !== undefined) {
     return assemblePanelHost({
       configCenter: options.configCenter,
+      browserAutomation: options.browserAutomation,
       ordinaryAgentDefinition: agentDefinitionCatalog.ordinaryAgentDefinition,
       agentDefinitions: agentDefinitionCatalog.registry,
       configDirectory: options.productPaths.configDirectory,
@@ -295,6 +303,7 @@ export function createPanelHost(options: PanelHostOptions): PanelHost {
   const local = createLocalConfigCenter({ configDirectory: options.productPaths.configDirectory });
   return assemblePanelHost({
     configCenter: local.configCenter,
+    browserAutomation: options.browserAutomation,
     ordinaryAgentDefinition: agentDefinitionCatalog.ordinaryAgentDefinition,
     agentDefinitions: agentDefinitionCatalog.registry,
     configDirectory: local.configDirectory,
@@ -316,6 +325,8 @@ export function createPanelHost(options: PanelHostOptions): PanelHost {
 
 function assemblePanelHost(input: {
   readonly configCenter: ConfigCenter;
+  /** 宿主浏览器能力：声明给 WebFetch 等浏览器工具；工具侧由组合根登记后按需读取。 */
+  readonly browserAutomation?: BrowserAutomation;
   readonly ordinaryAgentDefinition: AgentDefinition;
   readonly agentDefinitions: AgentDefinitionRegistry;
   readonly configDirectory: string;

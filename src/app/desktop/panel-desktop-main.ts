@@ -14,6 +14,7 @@ import { stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parsePanelDesktopArgs } from "../panel-server/panel-launch-args.js";
+import { createElectronBrowserAutomation } from "./panel-desktop-browser-automation.js";
 import { createDesktopLocalPreferenceStore, type DesktopLocalPreferenceStore } from "./panel-desktop-local-preferences.js";
 import {
   createPanelDesktopWindowOptions,
@@ -99,6 +100,9 @@ async function main(): Promise<void> {
   try {
     const session = await startPanelDesktopSession(args, {
       startPanelServer: startLocalPanelServer,
+      // 桌面端自带 Chromium：网页抓取（WebFetch）用它，
+      // 不引入 Playwright、不增加安装包体积。
+      browserAutomation: createElectronBrowserAutomation(),
       configureAppStoragePaths: (productHome) => {
         configureDesktopAppStoragePaths(resolveProductPaths({ productHome }));
       },

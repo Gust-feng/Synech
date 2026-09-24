@@ -16,6 +16,7 @@ import {
 import { handlePanelConfigRoute } from "./settings/config-routes.js";
 import { handlePanelContextRoute } from "./workbench/context-routes.js";
 import type { PanelServerOptions, StartedPanelServer } from "./types.js";
+import type { BrowserAutomation } from "../tool-center/adapters/browser-tool.js";
 import { parseSkillStateRequest } from "./request-parsers.js";
 import {
   cleanupPanelHostOwnedProcesses,
@@ -67,6 +68,17 @@ import {
 } from "./product-home-runtime-lease.js";
 export type { PanelModelCatalogFetch, PanelProviderFetch, PanelServerOptions, StartedPanelServer } from "./types.js";
 
+/**
+ * 宿主浏览器能力的注入位。
+ *
+ * 它不属于 `PanelServerOptions`：浏览器能力是宿主进程的事（桌面端是 Electron 自带
+ * Chromium），浏览器模式（`pnpm panel`）没有实现也不应假装有。不传时工具层保持
+ * 「WebFetch 不可用」并给出原因，与引入该能力之前一致。
+ */
+export type PanelServerStartOptions = PanelServerOptions & {
+  readonly browserAutomation?: BrowserAutomation;
+};
+
 const PANEL_REQUEST_DRAIN_TIMEOUT_MS = 1_000;
 const PANEL_RUNTIME_SHUTDOWN_TIMEOUT_MS = 30_000;
 
@@ -93,7 +105,7 @@ export class PanelNonLoopbackHostError extends Error {
   }
 }
 
-export async function startLocalPanelServer(options: PanelServerOptions = {}): Promise<StartedPanelServer> {
+export async function startLocalPanelServer(options: PanelServerStartOptions = {}): Promise<StartedPanelServer> {
   const host = normalizeLoopbackHost(options.host ?? "127.0.0.1");
   const productPaths = resolveProductPaths({ productHome: options.productHome });
   let runtime: PanelHost | undefined;
@@ -104,6 +116,7 @@ export async function startLocalPanelServer(options: PanelServerOptions = {}): P
     await preparePanelStorageForStartup(productPaths);
     const createdRuntime = createPanelHost({
       configCenter: options.configCenter,
+      browserAutomation: options.browserAutomation,
       providerFetch: options.providerFetch,
       modelCatalogFetch: options.modelCatalogFetch,
       directoryPicker: options.directoryPicker,

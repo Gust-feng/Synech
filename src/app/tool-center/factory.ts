@@ -10,6 +10,7 @@ import {
   createAgentToolRegistry,
   type ToolRegistryFetchLike,
 } from "./builtin-tool-runtime.js";
+import type { BrowserAutomation } from "./adapters/browser-tool.js";
 import type { ToolRegistryScope } from "./tool-registry.js";
 import type { ConfigCenter } from "../config-center/index.js";
 import { ToolRegistry, type ToolRegistryEntry } from "./tool-registry.js";
@@ -36,6 +37,8 @@ export type CreateAgentToolCenterOptions = {
   readonly workspaceRoot?: string;
   readonly commandLogDirectory?: string;
   readonly playwrightAvailable?: boolean;
+  /** 宿主注入的浏览器能力（与 `CreateAgentToolRegistryOptions` 同一接缝）。 */
+  readonly browserAutomation?: BrowserAutomation;
   readonly toolStates?: readonly ToolStateSettings[];
   readonly toolCatalogNames?: readonly string[];
   readonly toolCatalogAvailability?: readonly CapabilityToolAvailability[];

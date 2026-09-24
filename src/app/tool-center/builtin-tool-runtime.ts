@@ -10,7 +10,9 @@ import type { ToolCategory, ToolExecutor } from "../../domain/tools/index.js";
 import type { ProcessTerminator } from "../runtime-guard/index.js";
 import {
   createBrowserSnapshotTool,
+  resolveWebFetchAvailability,
 } from "./adapters/browser-tool.js";
+import type { BrowserAutomation } from "./adapters/browser-tool.js";
 import {
   createContextAttachmentTools,
 } from "./adapters/context-attachment-tools.js";
@@ -54,7 +56,13 @@ export type CreateAgentToolRegistryOptions = {
   readonly workspaceRoot?: string;
   /** Product-owned command-log directory for local shell execution. */
   readonly commandLogDirectory?: string;
+  /** 宿主已解析好的「Playwright 可解析」登记值；省略时由能力 owner 自行探测。 */
   readonly playwrightAvailable?: boolean;
+  /**
+   * 宿主注入的浏览器能力。显式传入时优先于宿主登记值与 Playwright 回退，
+   * 也直接决定 WebFetch 可用（不再要求 Playwright）。
+   */
+  readonly browserAutomation?: BrowserAutomation;
   readonly toolStates?: readonly ToolStateSettings[];
   readonly toolCatalogNames?: readonly string[];
   readonly toolCatalogAvailability?: readonly CapabilityToolAvailability[];
@@ -106,7 +114,15 @@ export function createAgentToolRegistry(
   const sandboxPolicy = createLocalWorkspaceSandboxPolicy();
   const mutationCoordinator = options.fileMutationCoordinator ?? new InMemoryLocalWorkspaceMutationCoordinator();
   const commandShell = options.commandShell ?? createDefaultCommandShellConfig(process.platform, env);
-  const playwrightAvailable = options.playwrightAvailable ?? isPackageResolvable("playwright");
+  const playwrightAvailable = options.playwrightAvailable;
+  // 浏览器能力可用性只有一份实现（能力 owner：tool-center/adapters/browser-tool）：
+  // 注册表不再自己算「注入的自动化存在 || Playwright 可解析」，只读取同一个结论——
+  // 研究侧要标同一件事实，两处各算一份就会出现「WebFetch 说能用、research_fetch
+  // 说不能用」这类不一致。
+  const webFetchAvailability = resolveWebFetchAvailability({
+    ...(options.browserAutomation === undefined ? {} : { browserAutomation: options.browserAutomation }),
+    ...(playwrightAvailable === undefined ? {} : { playwrightAvailable }),
+  });
   const baseToolScopes = options.baseToolScopes ?? ["agent-basic"];
   const executors: readonly ToolExecutor[] = [
     createLocalReadFileTool(workspaceRoot, { sandboxPolicy, outputTokenCounter: options.outputTokenCounter, pathAuthorization: options.workspacePathAuthorization }),
@@ -124,7 +140,10 @@ export function createAgentToolRegistry(
     ...managedProcessExecutors(options, workspaceRoot, sandboxPolicy, commandShell),
     ...contextAttachmentExecutors(options, workspaceRoot),
     createHttpRequestTool({ outputStore: options.toolOutputStore }),
-    createBrowserSnapshotTool({ outputStore: options.toolOutputStore }),
+    createBrowserSnapshotTool({
+      ...(options.browserAutomation === undefined ? {} : { automation: options.browserAutomation }),
+      outputStore: options.toolOutputStore,
+    }),
     ...(options.webSearch === undefined ? [] : [createWebSearchTool({
       ...options.webSearch,
       fetch: options.fetch,
@@ -144,8 +163,8 @@ export function createAgentToolRegistry(
     const enabledByDefault = state?.enabled ?? true;
     const frozenAvailability = toolCatalogAvailability.get(executor.definition.name);
     const currentAvailability =
-      executor.definition.name === "WebFetch" && !playwrightAvailable
-        ? { status: "unavailable" as const, disabledReason: "Playwright is not installed in this workspace." }
+      executor.definition.name === "WebFetch" && !webFetchAvailability.available
+        ? { status: "unavailable" as const, disabledReason: webFetchAvailability.reason }
         : executor.definition.name === "AttachmentReadImage" && options.modelCapabilities?.supportsVisionInput === false
           ? { status: "unavailable" as const, disabledReason: "Current model does not support vision input." }
           : { status: "available" as const };
@@ -239,13 +258,4 @@ function toolScopeFor(category: ToolCategory | undefined): ToolRegistryScope {
     return "workspace";
   }
   return "agent-basic";
-}
-
-function isPackageResolvable(specifier: string): boolean {
-  try {
-    import.meta.resolve(specifier);
-    return true;
-  } catch {
-    return false;
-  }
 }

@@ -24,8 +24,65 @@ export type BrowserToolOptions = {
 const DEFAULT_BROWSER_TEXT_CHARS = 64_000;
 const MAX_BROWSER_TEXT_CHARS = 128_000;
 
+/**
+ * 「没有浏览器能力」的原因文案（既有文案，逐字保留）：它已经出现在能力目录快照与
+ * run 级注册表的 disabledReason 里，改字会让两处宿主登记值对不上。
+ */
+const WEB_FETCH_UNAVAILABLE_REASON = "Playwright is not installed in this workspace.";
+
+/**
+ * 宿主声明的浏览器能力（进程级，唯一 owner 是 Panel 组合根）。
+ *
+ * 浏览器能力属于宿主进程：桌面端由 Electron 自带 Chromium 提供，浏览器模式下没有
+ * 任何可用实现。但工具注册表在宿主之后按需创建（能力目录快照、每个 run 的 run 级
+ * 注册表），无法逐个把实例传下去，因此「本进程有没有浏览器能力」这个事实由组合根
+ * 登记一次，注册表按需读取。
+ *
+ * 显式传入的 `automation` 仍然优先——注入接缝没有改变，这里只是补上宿主默认值。
+ */
+let hostBrowserAutomation: BrowserAutomation | undefined;
+
+export function declareHostBrowserAutomation(automation: BrowserAutomation | undefined): void {
+  hostBrowserAutomation = automation;
+}
+
+export function resolveHostBrowserAutomation(): BrowserAutomation | undefined {
+  return hostBrowserAutomation;
+}
+
+/**
+ * 「本进程有没有网页抓取能力」的唯一判定：WebFetch 工具的能力可用性只看这里。
+ *
+ * 判定链与 `resolveBrowserAutomation` 的执行回退链逐条对应：显式注入的自动化 →
+ * 宿主登记的自动化（桌面端为 Electron 自带 Chromium）→ Playwright 是否可解析。
+ * 这个事实只能有一处实现：调用方若各算一份，就可能注册出一个「看起来能用、一调就
+ * 失败」的工具（正是本轮要收口的问题）。
+ *
+ * `playwrightAvailable` 是调用方已解析好的宿主登记值（能力目录快照 / run 级注册表
+ * 从冻结目录读到的结论）：传了就按它算，不再重复探测。
+ */
+export function resolveWebFetchAvailability(input: {
+  readonly browserAutomation?: BrowserAutomation;
+  readonly playwrightAvailable?: boolean;
+} = {}): WebFetchAvailability {
+  const automation = input.browserAutomation ?? resolveHostBrowserAutomation();
+  const playwright = input.playwrightAvailable ?? isPackageResolvable("playwright");
+  return automation !== undefined || playwright
+    ? { available: true }
+    : { available: false, reason: WEB_FETCH_UNAVAILABLE_REASON };
+}
+
+export type WebFetchAvailability =
+  | { readonly available: true }
+  | { readonly available: false; readonly reason: string };
+
+/** 显式注入 → 宿主登记 → Playwright 回退（未安装时抛出带原因的失败）。 */
+function resolveBrowserAutomation(injected: BrowserAutomation | undefined): BrowserAutomation {
+  return injected ?? hostBrowserAutomation ?? createPlaywrightBrowserAutomation();
+}
+
 export function createBrowserSnapshotTool(options: BrowserToolOptions = {}): ToolExecutor {
-  const automation = options.automation ?? createPlaywrightBrowserAutomation();
+  const automation = resolveBrowserAutomation(options.automation);
   return {
     definition: {
       name: "WebFetch",
@@ -197,6 +254,21 @@ type PlaywrightModule = {
     }>;
   };
 };
+
+/**
+ * 「Playwright 这个包在当前工作区能否被解析」——宿主未登记该能力时的回退探测。
+ *
+ * 探测（而不是猜）是刻意的：Playwright 是可选的运行时依赖，装了就仍然算可用，
+ * 这与改造前的既有行为一致；桌面宿主走的是注入的 Electron 能力，不经过这里。
+ */
+function isPackageResolvable(specifier: string): boolean {
+  try {
+    import.meta.resolve(specifier);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function requireHttpUrl(value: unknown): string {
   if (typeof value !== "string") {

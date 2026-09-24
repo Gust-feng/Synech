@@ -1,8 +1,10 @@
 import { resolvePanelDesktopIconPath } from "../panel-server/panel-assets.js";
 import { DESKTOP_APP_NAME, PRODUCT_CHROMIUM_PARTITION } from "./panel-desktop-identity.js";
 import type { PanelLaunchArgs } from "../panel-server/panel-launch-args.js";
+import type { PanelServerStartOptions } from "../panel-server/request-handler.js";
 import { DESKTOP_WORKBENCH_HEIGHT, DESKTOP_WORKBENCH_WIDTH } from "./panel-desktop-window-geometry.js";
-import type { PanelContextAttachmentSelection, PanelExternalResourceTarget, PanelServerOptions, StartedPanelServer } from "../panel-server/index.js";
+import type { PanelContextAttachmentSelection, PanelExternalResourceTarget, StartedPanelServer } from "../panel-server/index.js";
+import type { BrowserAutomation } from "../tool-center/adapters/browser-tool.js";
 
 export type PanelDesktopWindowOptions = {
   readonly title: string;
@@ -66,7 +68,13 @@ export function panelLaunchUrl(
 }
 
 export type PanelDesktopDependencies = {
-  readonly startPanelServer: (options: PanelServerOptions) => Promise<StartedPanelServer>;
+  readonly startPanelServer: (options: PanelServerStartOptions) => Promise<StartedPanelServer>;
+  /**
+   * 桌面宿主的浏览器能力（Electron 自带 Chromium 的隐藏窗口实现）。
+   * 桌面端必须提供：面板服务器与 WebFetch 共用它。
+   * 浏览器模式（`pnpm panel`）没有这个依赖，WebFetch 如实标不可用。
+   */
+  readonly browserAutomation: BrowserAutomation;
   readonly configureAppStoragePaths?: (productHome: string) => void | Promise<void>;
   readonly createWindow: (options: PanelDesktopWindowOptions) => PanelDesktopWindowHandle;
   readonly selectDirectory?: () => Promise<string | undefined>;
@@ -89,6 +97,7 @@ export async function startPanelDesktopSession(
     host: args.host,
     port: args.port,
     productHome: args.productHome,
+    browserAutomation: dependencies.browserAutomation,
     directoryPicker: args.smoke ? undefined : dependencies.selectDirectory,
     contextAttachmentPicker: args.smoke ? undefined : dependencies.selectContextAttachment,
     restorePicker: args.smoke ? undefined : dependencies.selectRestore,
