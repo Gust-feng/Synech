@@ -23,6 +23,7 @@ import {
   FolderOpen,
   Bot,
   Wrench,
+  Sparkles,
 } from "lucide-react";
 import type { ConversationTurn, ConversationTurnAttachment } from "@ui/contracts/conversation";
 import type { OrdinaryRun, OrdinaryWorkView, TranscriptNode } from "@ui/contracts/run";
@@ -204,10 +205,14 @@ function ConversationAssistantMessage(props: {
         if (segment.kind === "awaiting") {
           return <ConversationPendingDots key={`awaiting-${index}`} />;
         }
+        const rawText = segment.text;
+        if (rawText.trim().length === 0) {
+          return null;
+        }
         return (
           <ConversationAnswerBlock
             key={segment.segmentKey}
-            text={segment.text}
+            text={rawText}
             live={props.live === true && index === workflow.segments.length - 1}
           />
         );

@@ -1,5 +1,5 @@
 import type { ModelMessage } from "../../domain/intelligence/index.js";
-import type { ToolCallResult, ToolFactValue } from "../../domain/tools/index.js";
+import type { ToolFactValue } from "../../domain/tools/index.js";
 import type { ModelToolCall } from "../../domain/intelligence/contracts.js";
 import { copyToolModelAttachments } from "../../domain/tools/index.js";
 
@@ -17,20 +17,6 @@ export function cloneModelToolCall(request: ModelToolCall): ModelToolCall {
   return {
     ...request,
     input: cloneToolFact(request.input),
-  };
-}
-
-export function cloneToolResults(results: readonly ToolCallResult[]): ToolCallResult[] {
-  return results.map(cloneToolResult);
-}
-
-export function cloneToolResult(result: ToolCallResult): ToolCallResult {
-  return {
-    ...result,
-    input: cloneToolFact(result.input),
-    output: cloneToolFact(result.output),
-    confirmationRequest:
-      result.confirmationRequest === undefined ? undefined : globalThis.structuredClone(result.confirmationRequest),
   };
 }
 

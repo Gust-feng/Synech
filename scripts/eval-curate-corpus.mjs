@@ -81,7 +81,7 @@ function scanPrivacy(text) {
   return { hits, sensitive };
 }
 
-// 手册 17.2 评测场景的潜力启发式（粗标，供后续 60–80 查询人工标注选料；后三类需人工构造负例）。
+// 评测场景的潜力启发式（粗标，供后续 60–80 查询人工标注选料；后三类需人工构造负例）。
 const EVAL_POTENTIAL = [
   ["decide_then_reject", /改回|换成|不要这个|否决|之前的方案(不|没)|还是用|放弃|推翻|改用|不再用|换个(方案|思路)/],
   ["rename_continuity", /改名|重命名|rename|名字改|更名为|叫.*改成/],
@@ -236,7 +236,7 @@ function selectCurated(scored, { target, minScore }) {
     if (pick) take(pick, "tasktype_coverage");
   }
 
-  // 2.5) 评测场景广度保底：每种手册 17.2 潜力标签至少保 2 个，为后续 60–80 查询标注备料。
+  // 2.5) 评测场景广度保底：每种潜力标签至少保 2 个，为后续 60–80 查询标注备料。
   const POTENTIAL_FLOOR = 2;
   const byPotential = new Map();
   for (const s of eligible) for (const tag of s.evalPotential) {

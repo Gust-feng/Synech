@@ -5,7 +5,10 @@ import {
   type AgentTool,
   type Session,
 } from "@earendil-works/pi-agent-core";
-import { Type } from "@earendil-works/pi-ai";
+import {
+  Type,
+  type AssistantMessage,
+} from "@earendil-works/pi-ai";
 import type {
   AgentLoopAgentTool,
   AgentLoopAgentToolInvocation,
@@ -32,6 +35,8 @@ import {
   assistantText,
   modelMessageFromAssistant,
   modelUsageFromProvider,
+  providerFailureFromAssistant,
+  providerRefusalFromAssistant,
 } from "../provider-result-projection.js";
 import {
   createToolVisibilitySession,
@@ -290,12 +295,12 @@ async function runDelegatedAgent(input: {
       );
     }
     if (assistant.stopReason !== "stop") {
-      return delegatedAgentFailure(
+      return delegatedAgentProjectedFailure(
+        assistant,
         input.request,
-        assistant.errorMessage ?? `Delegated agent stopped with ${assistant.stopReason}.`,
-        false,
         input.startedAt,
         metrics,
+        harness.getModel().contextWindow,
       );
     }
     return {
@@ -337,7 +342,11 @@ function attachDelegatedHarnessHooks(input: {
       abortSignal: input.abortSignal,
       ...(input.options.compactionSettings === undefined ? {} : { compactionSettings: input.options.compactionSettings }),
     });
-    if (compaction.status === "failed") throw new Error(compaction.error);
+    if (compaction.status === "failed") {
+      // 压缩层的结构码（context_overflow / context_compaction_images_unsupported /
+      // context_compaction_failed）挂在错误上一起走，消费方按 code 分支，不从文案猜。
+      throw Object.assign(new Error(compaction.error), { code: compaction.code });
+    }
     return compaction.status === "compacted"
       ? { messages: [...compaction.compactedContextMessages] }
       : { messages: [...messages] };
@@ -520,6 +529,7 @@ function delegatedAgentFailure(
   cancelled: boolean,
   startedAt: number,
   metrics?: DelegatedAgentExecutionMetrics,
+  failureCode?: string,
 ): ToolCallResult {
   return {
     ...request,
@@ -529,10 +539,81 @@ function delegatedAgentFailure(
       ? `Delegated agent was cancelled: ${abortMessage(error)}`
       : `Delegated agent failed: ${errorMessage(error)}`,
     errorDomain: cancelled ? "runtime_error" : "model_error",
-    errorFacts: { code: cancelled ? "sub_agent_cancelled" : "sub_agent_execution_failed" },
+    // 结构码来自显式投影（鉴权/拒答/溢出/截断）或错误对象上的 code（压缩失败），
+    // 只有都拿不到时才落通用的执行失败码；取消恒定是取消码，不读中止原因的 code。
+    errorFacts: {
+      code: cancelled
+        ? "sub_agent_cancelled"
+        : failureCode ?? errorFactsCode(error) ?? "sub_agent_execution_failed",
+    },
     ...(metrics === undefined ? {} : { delegatedExecution: delegatedExecutionMetadata(metrics) }),
     durationMs: Math.max(0, Date.now() - startedAt),
   };
+}
+
+/** 错误对象携带的结构码（如压缩失败的 context_overflow）；没有则返回 undefined。 */
+function errorFactsCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const code = (error as { readonly code?: unknown }).code;
+  return typeof code === "string" && code.length > 0 ? code : undefined;
+}
+
+/**
+ * 子 agent 与根 loop 共用同一套 provider 失败投影（根侧见 agent-session-loop.ts
+ * 的 finalResult）：鉴权失败、拒答、上下文溢出与长度截断都落在结构化
+ * errorFacts.code 上，不再压成一句 "Delegated agent stopped with X"。
+ */
+function delegatedAgentProjectedFailure(
+  assistant: AssistantMessage,
+  request: ToolCallRequest,
+  startedAt: number,
+  metrics: DelegatedAgentExecutionMetrics,
+  contextWindow: number,
+): ToolCallResult {
+  const refusal = providerRefusalFromAssistant(assistant);
+  if (refusal !== undefined) {
+    return delegatedAgentFailure(
+      request,
+      refusal.length === 0
+        ? "The delegated model refused the request without an explanation."
+        : `The delegated model refused the request: ${refusal}`,
+      false,
+      startedAt,
+      metrics,
+      "model_refusal",
+    );
+  }
+  const providerFailure = providerFailureFromAssistant(assistant, contextWindow);
+  if (providerFailure !== undefined) {
+    return delegatedAgentFailure(
+      request,
+      providerFailure.error,
+      false,
+      startedAt,
+      metrics,
+      providerFailure.errorCode,
+    );
+  }
+  if (assistant.stopReason === "length") {
+    const incompleteReason = assistant.providerMetadata?.incompleteReason?.trim();
+    return delegatedAgentFailure(
+      request,
+      incompleteReason === undefined || incompleteReason.length === 0
+        ? "The delegated model stopped before completing its response."
+        : `The delegated model response was incomplete: ${incompleteReason}.`,
+      false,
+      startedAt,
+      metrics,
+      incompleteReason === "content_filter" ? "content_filtered" : "output_truncated",
+    );
+  }
+  return delegatedAgentFailure(
+    request,
+    assistant.errorMessage ?? `Delegated agent stopped with ${assistant.stopReason}.`,
+    false,
+    startedAt,
+    metrics,
+  );
 }
 
 function delegatedExecutionMetadata(metrics: DelegatedAgentExecutionMetrics) {

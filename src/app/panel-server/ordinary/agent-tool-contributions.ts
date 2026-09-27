@@ -131,8 +131,7 @@ export function createHostAgentToolContributions(input: {
   readonly providerFetch?: AgentToolProviderFetch;
   readonly featureContributions?: readonly AgentToolRegistryContribution[];
 }): readonly AgentToolRegistryContribution[] {
-  // Research is an optional feature, not part of the local Ordinary baseline
-  // baseline. Feature-owned contributions are already selected by the Host
+  // Feature-owned contributions are already selected by the Host
   // composition root and remain the only entries added at this boundary.
   return input.featureContributions ?? [];
 }

@@ -11,6 +11,8 @@ import {
   SqliteRuntimeDatabase,
 } from "../dist/adapters/runtime-storage/index.js";
 import { startLocalPanelServer } from "../dist/app/panel-server/request-handler.js";
+import { openPanelStorage } from "../dist/app/panel-server/storage/panel-storage.js";
+import { resolveProductPaths } from "../dist/platform/storage/index.js";
 
 const RELEASED_V101_LEDGER = [
   ["conversation-lifecycle", 1, "ca7ecb9854e63dae1438816b573cb57eceb9625167f690dad50b975202ce7a2a"],
@@ -41,7 +43,7 @@ test("the exact released v1.0.1 database upgrades atomically to frozen v1", asyn
   const temporaryRoot = path.resolve(os.tmpdir());
   const root = await mkdtemp(path.join(temporaryRoot, "synech-v101-upgrade-"));
   try {
-    const filePath = await createReleasedV101Fixture(root);
+    const { filePath, productHome } = await createReleasedV101Fixture(root);
     const database = new SqliteRuntimeDatabase(filePath);
     try {
       assert.equal(database.connection.prepare("SELECT enabled FROM memory_policy WHERE policy_key = ?")
@@ -50,8 +52,29 @@ test("the exact released v1.0.1 database upgrades atomically to frozen v1", asyn
         .get("conversation-fixture").processed_fragment_end, 23);
       assert.equal(database.connection.prepare("SELECT web_metadata_json FROM space_references WHERE id = ?")
         .get("reference-child").web_metadata_json, '{"url":"https://example.test"}');
+      // The adoption transaction may only normalize the released ledger. The
+      // real v1.0.1 database has no research tables, so claiming research/1
+      // here would make the startup migration pass skip creating them.
+      const adoptedLedger = database.connection.prepare(
+        "SELECT owner FROM schema_migrations ORDER BY owner, version",
+      ).all();
+      assert.ok(!adoptedLedger.some((entry) => entry.owner === "research"));
     } finally {
       database.close();
+    }
+
+    // Owners added after v1.0.1 arrive through the ordinary migration pass that
+    // every PanelHost startup runs on the adopted database.
+    const storage = openPanelStorage(resolveProductPaths({ productHome }));
+    try {
+      assert.equal(storage.database.connection.prepare("SELECT enabled FROM memory_policy WHERE policy_key = ?")
+        .get("global_consent").enabled, 1);
+      assert.equal(storage.database.connection.prepare("SELECT processed_fragment_end FROM memory_capture_progress WHERE conversation_id = ?")
+        .get("conversation-fixture").processed_fragment_end, 23);
+      assert.equal(storage.database.connection.prepare("SELECT web_metadata_json FROM space_references WHERE id = ?")
+        .get("reference-child").web_metadata_json, '{"url":"https://example.test"}');
+    } finally {
+      storage.database.close();
     }
 
     const baseline = JSON.parse(await readFile("docs/architecture/data-baseline.json", "utf8"));
@@ -73,7 +96,7 @@ test("partial v1.0.1 ledgers remain rejected and unchanged", async () => {
   const temporaryRoot = path.resolve(os.tmpdir());
   const root = await mkdtemp(path.join(temporaryRoot, "synech-v101-rejection-"));
   try {
-    const filePath = await createReleasedV101Fixture(root);
+    const { filePath } = await createReleasedV101Fixture(root);
     const mutator = new DatabaseSync(filePath);
     try {
       mutator.prepare("DELETE FROM schema_migrations WHERE owner = ? AND version = ?").run("memory", 6);
@@ -105,7 +128,7 @@ test("a malformed v1.0.1 layout rolls back every upgrade write", async () => {
   const temporaryRoot = path.resolve(os.tmpdir());
   const root = await mkdtemp(path.join(temporaryRoot, "synech-v101-rollback-"));
   try {
-    const filePath = await createReleasedV101Fixture(root);
+    const { filePath } = await createReleasedV101Fixture(root);
     const mutator = new DatabaseSync(filePath);
     try {
       mutator.exec("DROP TABLE memory_capture_progress");
@@ -186,6 +209,16 @@ async function createReleasedV101Fixture(root) {
       CREATE INDEX space_references_space_idx ON space_references(space_id);
       ALTER TABLE space_references ADD COLUMN web_metadata_json TEXT;
     `);
+    // The real v1.0.1 database predates the research owner, so the simulated
+    // fixture must leave no research tables behind for the ordinary startup
+    // migration to collide with. The current build owns this table family, so
+    // discover it from sqlite_master instead of naming tables by hand.
+    const researchTables = database.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'research%'",
+    ).all();
+    for (const { name } of researchTables) {
+      database.exec(`DROP TABLE "${name}"`);
+    }
     database.prepare(`
       INSERT INTO memory_policy(policy_key, policy_kind, scope_owner_key, enabled, revision, updated_at)
       VALUES (?, ?, ?, ?, ?, ?)
@@ -228,7 +261,7 @@ async function createReleasedV101Fixture(root) {
   } finally {
     database.close();
   }
-  return filePath;
+  return { filePath, productHome };
 }
 
 async function removeTemporaryRoot(root, temporaryRoot, prefix) {

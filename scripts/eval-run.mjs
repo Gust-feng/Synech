@@ -2,9 +2,9 @@
 /**
  * Eval retrieval runner (T11) — FTS5-only lexical baseline over a lane
  * directory built by eval-build-lanes.mjs. This is the Phase 2 baseline the
- * handbook's vector/hybrid gates are measured against (《手册》16.1/17.5).
+ * handbook's vector/hybrid gates are measured against.
  *
- * 中文检索按《手册》16.2 采用 CJK bigram + 拉丁词标准化的 lexical projection
+ * 中文检索采用 CJK bigram + 拉丁词标准化的 lexical projection
  * （unicode61 分词器下直接存原文等于整句 token，无法匹配）。投影只存在于本次
  * 运行的临时内存 FTS5 表，不落盘、不进 Product schema。
  *
@@ -42,7 +42,7 @@ function parseArgs(argv) {
   return args;
 }
 
-/** 《手册》16.2：CJK bigram + 拉丁词标准化的 lexical projection。 */
+/** CJK bigram + 拉丁词标准化的 lexical projection。 */
 export function lexicalProjection(text) {
   const tokens = new Set();
   for (const word of text.match(/[A-Za-z0-9_]+/g) ?? []) tokens.add(word.toLowerCase());

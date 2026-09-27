@@ -514,8 +514,7 @@ async function handlePanelRequest(
   if (await handlePanelDataRoute({
     dataMaintenance: runtime.dataMaintenance,
   }, request, response, url)) {
-    return;
-  }
+    return;  }
 
   if (request.method === "GET" && url.pathname === "/api/skills") {
     writeJson(response, 200, {

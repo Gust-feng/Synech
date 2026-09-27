@@ -9,6 +9,7 @@ import {
   createSqliteMemoryControlRepository,
 } from "../../memory/index.js";
 import { createSqlitePersonalKnowledgeRepository } from "../../personal-knowledge/index.js";
+import { migrateResearchSchema } from "../../research/research-schema-fossil.js";
 import {
   createFileSystemSpaceReferenceDeletionJournal,
   createSpaceFeature,
@@ -80,6 +81,10 @@ export async function preparePanelStorageForStartup(productPaths: ProductPaths):
 
 export function openPanelStorage(productPaths: ProductPaths) {
   const database = new SqliteRuntimeDatabase(productPaths.data.database);
+  // 深度研究已移除（ADR 0006）：research owner 的 DDL 是 synech/v1 冻结 schema 的
+  // 化石，启动时照常施加以保证 data-baseline fingerprint 与既有库 migrate 校验不变；
+  // 没有任何读写方再接触这些表。
+  migrateResearchSchema(database);
   try {
     return {
       database,

@@ -1,6 +1,5 @@
 import type { ToolDisplayProjection } from "../../tool-display.js";
 import type { ToolCallRequest, ToolFactValue } from "../../../../domain/tools/index.js";
-import { toolDisplayName } from "../../../../domain/tools/index.js";
 import { commandProgramFromToolResult, commandTextFromToolResult } from "./command-text.js";
 import {
   normalizeToolDisplayForOperation,
@@ -8,9 +7,7 @@ import {
 } from "./tool-display-normalization.js";
 import {
   asRecord,
-  isString,
   numberOrUndefined,
-  readErrorMessageFromOutput,
   searchMessageFromOutput,
   stringArray,
   stringOrUndefined,
@@ -28,7 +25,7 @@ export function projectToolDisplay(request: ToolCallRequest, output: ToolFactVal
 function projectToolDisplayCore(request: ToolCallRequest, output: ToolFactValue | undefined): ToolDisplayProjection {
   const record = asRecord(output);
   const input = asRecord(request.input);
-  if (request.toolName === "ResearchSearch" || request.toolName === "WebSearch") {
+  if (request.toolName === "WebSearch") {
     const results = (Array.isArray(record.results) ? record.results : [])
       .slice(0, SEARCH_DISPLAY_RESULTS_LIMIT)
       .map(projectSearchDisplayItem)
@@ -38,28 +35,6 @@ function projectToolDisplayCore(request: ToolCallRequest, output: ToolFactValue 
       query: stringOrUndefined(record.query) ?? stringOrUndefined(input.query),
       message: stringOrUndefined(searchMessageFromOutput(record)),
       results,
-    };
-  }
-  if (request.toolName === "ResearchRead" && Array.isArray(record.items)) {
-    return {
-      kind: "generic_tool_summary",
-      category: "read",
-      action: toolDisplayName(request.toolName),
-      summary: `${record.items.length} 个来源`,
-      items: record.items.slice(0, 8).map(batchReadDisplayItem).filter(isString),
-    };
-  }
-  if (request.toolName === "ResearchRead") {
-    const error = readErrorMessageFromOutput(record);
-    const uri = stringOrUndefined(record.uri) ?? stringOrUndefined(input.uri) ?? stringOrUndefined(input.ref);
-    const url = httpUrl(uri);
-    return {
-      kind: "read_result",
-      title: stringOrUndefined(record.title) ?? stringOrUndefined(input.title),
-      url,
-      uri,
-      contentPreview: url === undefined ? stringOrUndefined(record.contentPreview) : undefined,
-      error,
     };
   }
   const knowledgeDisplay = projectKnowledgeDisplay(request.toolName, input, record);
@@ -162,18 +137,6 @@ function isContentReadTool(toolName: string): boolean {
 
 function isAgentTaskTool(toolName: string): boolean {
   return toolName === "Agent" || toolName === "AgentSpawn";
-}
-
-function batchReadDisplayItem(value: unknown): string | undefined {
-  const item = asRecord(value);
-  const ref = stringOrUndefined(item.ref);
-  const title = stringOrUndefined(item.title);
-  const error = stringOrUndefined(item.error);
-  const headline = title ?? ref;
-  if (headline === undefined) {
-    return error;
-  }
-  return error === undefined ? headline : `${headline} · ${error}`;
 }
 
 export function projectSearchDisplayItem(value: unknown): Extract<ToolDisplayProjection, { readonly kind: "search_results" }>["results"][number] | undefined {

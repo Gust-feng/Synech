@@ -81,7 +81,12 @@ export type AppWorkbenchRuntime = {
   readonly savingTools: boolean;
   readonly runActions: Pick<
     ReturnType<typeof createAppRunController>,
-    "loadConversation" | "startTask" | "startNewConversation" | "cancelRun" | "decideConfirmation" | "resetChat"
+    | "loadConversation"
+    | "startTask"
+    | "startNewConversation"
+    | "cancelRun"
+    | "decideConfirmation"
+    | "resetChat"
   >;
   readonly sidebarActions: Pick<
     ReturnType<typeof createAppSidebarConversationController>,

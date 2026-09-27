@@ -13,5 +13,5 @@
     "sourceMap": true
   },
   "include": ["src/**/*.ts", "src/**/*.cts"],
-  "exclude": ["dist", "node_modules", "src/app/panel-ui/src"]
+  "exclude": ["dist", "node_modules", "src/app/panel-ui/src", "src/app/panel-demo"]
 }

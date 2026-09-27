@@ -11,6 +11,7 @@ import { workbenchInputPropsFrom } from "./features/conversations/composer-input
 import { createInitialAppState } from "./workbench/state";
 import { useSpaceProjection } from "./features/spaces/state";
 import type { MemorySettingsScope } from "./features/memory/MemorySettingsPanel";
+import type { SettingsGroup } from "./features/settings/components/types";
 
 export function App(): React.ReactElement {
   const [app, setApp] = useState(createInitialAppState);
@@ -267,7 +268,7 @@ export function App(): React.ReactElement {
         reconnectWorkspace: spaceProjection.reconnectWorkspace,
         removeReference: spaceProjection.removeReference,
       }}
-      onOpenSettings={() => openSettings("models")}
+      onOpenSettings={(group) => openSettings(group ?? "models")}
       settingsDialogProps={settingsDialogProps}
     />
   );

@@ -248,12 +248,14 @@ export type ModelFailureKind =
   | "provider_config"
   | "provider_auth"
   | "provider_rate_limit"
+  | "provider_quota"
   | "provider_timeout"
   | "provider_network"
   | "provider_response"
   | "content_filtered"
   | "output_truncated"
-  | "output_validation";
+  | "output_validation"
+  | "context_overflow";
 
 export type ModelFailure = {
   readonly kind: ModelFailureKind;

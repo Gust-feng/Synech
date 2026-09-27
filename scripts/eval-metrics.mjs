@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Eval metrics (T10) — group-level retrieval metrics (《手册》17.5).
+ * Eval metrics (T10) — group-level retrieval metrics.
  *
  * Candidates from any lane are folded onto canonical evidence groups
  * (conversationId + ordinal range) before scoring: 同源重复项折叠（保留最优

@@ -26,8 +26,16 @@ local-assets/
 .opencode/
 .claude/
 .agents/
+.box-agent/
+.box-agent-scratch/
+.tower/
 .playwright-mcp/
 .playwright-cli/
+
+# Local machine helpers (not shared)
+launch-desktop.bat
+tsconfig.review.json
+eval/
 
 # Standalone frontend prototype template
 panel-template/

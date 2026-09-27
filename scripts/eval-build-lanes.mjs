@@ -2,9 +2,9 @@
 /**
  * Eval lane builder (T9) — builds retrieval lanes from a corpus directory
  * (produced by eval-export-corpus.mjs on real data, or eval-seed-corpus.mjs
- * for toolchain validation; 沟通笔记 §5 项 3).
+ * for toolchain validation).
  *
- * Lanes (《手册》17.1):
+ * Lanes:
  * - chunk:  conversation turns concatenated, split into ~200–300 token chunks
  *           with small overlap (model-token counting via the product's
  *           js-tiktoken).

@@ -7,7 +7,10 @@ import {
   type OpenAIModelRuntimeMode,
   type ResolvedOpenAIModelRuntimeConfig,
 } from "../../model-runtime/openai-runtime-config.js";
-import { createOpenAIAuxiliaryModelChannel } from "../settings/model-provider-adapter.js";
+import {
+  createOpenAIAuxiliaryModelChannel,
+  createConfigCenterApiKeyResolver,
+} from "../settings/model-provider-adapter.js";
 import type { OrdinaryConversationTitleGenerator, OrdinaryRunBirth } from "../../ordinary-agent/index.js";
 
 /** 标题输出上限极小：只承载列表摘要字段，不承载任何模型正文职责。 */
@@ -38,13 +41,12 @@ export function createOrdinaryConversationTitleGenerator(input: {
     const channel = createModelChannel({
       resolved,
       profileId: birth.config.profileId,
-      resolveApiKey: async () => {
-        const current = await input.configCenter.createModelRuntimeEnvironment({
-          modelProvider: birth.config,
-          informationAccess: birth.informationAccess,
-        });
-        return resolveRuntimeConfig({ mode, environment: current, birth })?.apiKey;
-      },
+      resolveApiKey: createConfigCenterApiKeyResolver({
+        configCenter: input.configCenter,
+        provider: birth.config,
+        mode,
+        informationAccess: birth.informationAccess,
+      }),
       supportsVisionInput: birth.capabilitySnapshot.modelCapabilities.supportsVisionInput === true,
       supportsReasoningOutput: birth.capabilitySnapshot.modelCapabilities.supportsReasoningOutput === true,
       contextWindow: birth.capabilitySnapshot.modelCapabilities.contextWindowTokens,

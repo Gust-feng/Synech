@@ -10,7 +10,7 @@ type EvidenceRunQueries = Pick<OrdinaryAgentFeature["queries"], "listStableEvide
 /**
  * 把 Ordinary 侧的稳定 run 投影适配成 Memory Capture 需要的连续证据窗。
  *
- * 归属与纪律（《手册》9.3）：
+ * 归属与纪律：
  * - 适配在 panel-server 层，Memory Feature 不直接 import Ordinary 仓储；
  * - 只接受从 fromOrdinal 起「连续无洞」的稳定 run：一旦中间某 ordinal 缺失
  *   （该轮尚未稳定/被隐藏），立即停止，游标只推进到连续块末端，绝不跳过缺口

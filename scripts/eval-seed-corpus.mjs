@@ -4,11 +4,11 @@
  * used ONLY to validate the offline evaluation toolchain (T9–T11) and to
  * pre-calibrate parameters before real usage data exists.
  *
- * 用户决策（沟通笔记 §5 项 3，方案 c）：种子语料不用于"是否推进复杂度"的硬门
+ * 用户决策：种子语料不用于"是否推进复杂度"的硬门
  * 判断；正式 corpus 必须来自真实使用数据并单独冻结。输出目录与真实导出
  * （eval-export-corpus.mjs）分离。
  *
- * 场景覆盖（《手册》17.2 八类）：decision_reversal / rename_continuity /
+ * 场景覆盖（八类）：decision_reversal / rename_continuity /
  * open_loop_completion / old_decision_recall / stable_preference /
  * unanswerable / cross_space_negative / post_clear。
  *

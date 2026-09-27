@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Freeze a real offline-evaluation corpus after validating its hard shape
- * requirements (《手册》17.2). This never treats the seed corpus as a release
+ * requirements. This never treats the seed corpus as a release
  * corpus: the seed has fewer than 60 queries and is intentionally rejected.
  *
  * Usage:

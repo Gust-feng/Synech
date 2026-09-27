@@ -227,7 +227,7 @@ export function createMemoryAdminApplication(
     async setSpaceParticipation({ spaceId, enabled }) {
       // SpaceAdmission 锁内：admit 期间同一 spaceId 的删除 workflow 必须串行
       // （workbench-coordination-runtime 的 withSpaceAdmission 模式），在 admit
-      // 内重读 space 仍存在才允许写 participation（手册 6.5）。
+      // 内重读 space 仍存在才允许写 participation。
       return await spaceAdmission.admit(spaceId, async () => {
         const available = await ownerExistsQuery.isSpaceAvailable(spaceId);
         if (!available) {

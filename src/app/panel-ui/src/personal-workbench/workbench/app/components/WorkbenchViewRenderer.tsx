@@ -11,6 +11,7 @@ import type {
   ConversationOwnerSelection,
   WorkbenchView,
 } from "../../../../workbench/navigation-state";
+import type { SettingsGroup } from "../../../../features/settings/components/types";
 
 export type WorkbenchViewRendererProps = {
   readonly view: WorkbenchView;
@@ -34,6 +35,7 @@ export type WorkbenchViewRendererProps = {
   readonly onBrainSelect: (id: string | null) => void;
   readonly navigate: (view: WorkbenchView) => void;
   readonly onOpenInSpace: (spaceId: string, id: string) => void;
+  readonly onOpenSettings?: (group?: SettingsGroup) => void;
 };
 
 export function WorkbenchViewRenderer(input: WorkbenchViewRendererProps): React.ReactElement | null {

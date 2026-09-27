@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Eval corpus exporter (T6/T17) — read-only toolchain validation for the offline
- * evaluation harness (docs/memory-system/离线评测调研.md, 《手册》17 章).
+ * evaluation harness.
  *
  * Exports Ordinary's durably settled facts (conversation control + terminal run
  * snapshots) as JSONL through Ordinary's own zod-validated repository layer, so
@@ -19,7 +19,7 @@
  * assistantMessage field).
  *
  * Not a product fact consumer: eval data lives outside the target schema and is
- * explicitly deletable (《手册》17.1).
+ * explicitly deletable.
  *
  * Usage: node scripts/eval-export-corpus.mjs [--home <ProductHome>] [--out <dir>] [--with-sessions] [--with-memory]
  */

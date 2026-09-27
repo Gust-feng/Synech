@@ -1,5 +1,5 @@
 /**
- * Lexical projection（《手册》16.2）：汉字 bigram + 拉丁词标准化。
+ * Lexical projection：汉字 bigram + 拉丁词标准化。
  *
  * 与离线评测工具链同源：算法与 `scripts/eval-run.mjs` 的 `lexicalProjection`
  * 逐行一致（T11 检索基线验证过的实现）。unicode61 分词器下直接存中文原文

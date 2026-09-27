@@ -8,6 +8,7 @@ import type { Conversation, ConversationSummary } from "../../contracts/conversa
 import type { PendingConfirmation } from "../../contracts/run";
 import type { PersonalSpaceActions, PersonalSpaceProjection } from "../space";
 import { useWorkspaceProjection } from "../../features/spaces/workspace-state";
+import type { SettingsGroup } from "../../features/settings/components/types";
 
 import { SurfaceErrorBoundary } from "./app/components/SurfaceErrorBoundary";
 
@@ -73,7 +74,7 @@ export type PersonalWorkbenchProps = {
   readonly onOpenSpaceItem?: (spaceId: string, itemId: string) => void | Promise<void>;
   readonly onCreateSpace?: (title: string) => void | Promise<void>;
   readonly spaceActions?: PersonalSpaceActions;
-  readonly onOpenSettings: () => void;
+  readonly onOpenSettings?: (group?: SettingsGroup) => void;
   readonly settingsDialogProps?: WorkbenchSettingsDialogProps;
 };
 
@@ -229,11 +230,8 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
       const intent = navigationIntentRef.current;
       void props.onStartNewConversation(homeOwnerSelection ?? undefined).then((started) => {
         if (navigationIntentRef.current !== intent) return;
-        if (started) {
-          revealConversation(homeOwnerSelection ?? undefined);
-        } else if (viewRef.current === "home") {
-          focusHomeInput();
-        }
+        if (started) revealConversation(homeOwnerSelection ?? undefined);
+        else if (viewRef.current === "home") focusHomeInput();
       });
     },
   }), [view, homeOwnerSelection, props.inputProps, props.onStartNewConversation, revealConversation, focusHomeInput]);
@@ -271,6 +269,22 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
     props.onResetConversation();
     layout.showConversation();
   };
+
+  const conversationSurface = (
+    <ConversationSurface
+      conversation={visibleConversation}
+      projection={conversationProjection}
+      state={conversationState}
+      input={conversationInput}
+      currentRun={props.currentRun}
+      showModelUsage={props.showModelUsage}
+      developerModeEnabled={props.developerModeEnabled}
+      confirmationBusy={props.confirmationBusy}
+      onDecision={props.onDecision}
+      focus={conversationMode === "focus"}
+      onExitFocus={() => setConversationMode("normal")}
+    />
+  );
   const changeLayout = (mode: WorkbenchLayoutMode): void => {
     if (mode === "split" && layout.compact) return;
     if (mode === (layout.splitEnabled ? "split" : layoutMode)) return;
@@ -382,7 +396,7 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
           ? undefined
           : (spaceId, title) => props.spaceActions?.rename?.({ kind: "space", id: spaceId }, title)}
         onDeleteSpace={props.spaceActions?.deleteSpace}
-        onOpenSettings={props.onOpenSettings}
+        onOpenSettings={props.onOpenSettings ? () => props.onOpenSettings?.() : () => undefined}
       />
 
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
@@ -448,6 +462,7 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
                       setSpaceTarget(id);
                       openReadingPreview();
                     }}
+                    onOpenSettings={props.onOpenSettings}
                   />
               </SurfaceErrorBoundary>
             )}
@@ -467,19 +482,7 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
               onClose={layout.splitEnabled ? () => changeLayout("reading") : undefined}
               onEnterFocus={() => setConversationMode("focus")}
             >
-              <ConversationSurface
-                conversation={visibleConversation}
-                projection={conversationProjection}
-                state={conversationState}
-                input={conversationInput}
-                currentRun={props.currentRun}
-                showModelUsage={props.showModelUsage}
-                developerModeEnabled={props.developerModeEnabled}
-                confirmationBusy={props.confirmationBusy}
-                onDecision={props.onDecision}
-                focus={conversationMode === "focus"}
-                onExitFocus={() => setConversationMode("normal")}
-              />
+              {conversationSurface}
             </WorkbenchConversationPane>}
           />
         </main>

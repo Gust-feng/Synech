@@ -27,14 +27,6 @@ export type CommandTextLike = {
 };
 
 const BUILTIN_TOOL_PRESENTATION: Readonly<Record<string, ToolPresentationSeed>> = {
-  ResearchSearch: {
-    displayName: "资料搜索",
-    displayDescription: "在已配置的信息源中检索资料，返回可引用的资料摘要。",
-  },
-  ResearchRead: {
-    displayName: "资料读取",
-    displayDescription: "读取检索结果或资料引用内容，用于补充上下文。",
-  },
   WebSearch: {
     displayName: "网页搜索",
     displayDescription: "通过已配置的搜索服务获取外部网页资料摘要。",

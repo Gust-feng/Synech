@@ -43,7 +43,10 @@ export type WebSearchToolOutput = {
 const TAVILY_SEARCH_ENDPOINT = "https://api.tavily.com/search";
 const EXA_SEARCH_ENDPOINT = "https://api.exa.ai/search";
 const ZAI_SEARCH_ENDPOINT = "https://api.z.ai/api/paas/v4/web_search";
-const METASO_SEARCH_ENDPOINT = "https://metaso.cn/api/open/search/v2";
+// 秘塔开放平台的检索接口。文档（https://metaso.cn/search-api/playground）标注为
+// POST /api/v1/search：请求体用 `q` 传检索词，响应体是 { credits, searchParameters, webpages, total }。
+// 成功响应不带 errCode；失败时 HTTP 仍是 200，错误在 errCode/errMsg 里（见 searchMetaso 的判定）。
+const METASO_SEARCH_ENDPOINT = "https://metaso.cn/api/v1/search";
 const GOOGLE_CUSTOM_SEARCH_ENDPOINT = "https://www.googleapis.com/customsearch/v1";
 const BING_WEB_SEARCH_ENDPOINT = "https://api.bing.microsoft.com/v7.0/search";
 const DEFAULT_MAX_RESULTS = 5;
@@ -242,7 +245,8 @@ async function searchMetaso(input: ProviderSearchInput): Promise<WebSearchToolOu
       "content-type": "application/json",
     },
     body: JSON.stringify({
-      question: input.query,
+      // 秘塔的检索词字段是 q（不是 question），写错会拿到参数错误而不是检索结果。
+      q: input.query,
       lang: "zh",
     }),
     signal: input.signal,
@@ -251,6 +255,12 @@ async function searchMetaso(input: ProviderSearchInput): Promise<WebSearchToolOu
     return providerFailed(input, response.status);
   }
   const raw = await response.json();
+  // 秘塔用 HTTP 200 承载业务错误（errCode/errMsg），HTTP 状态码本身是成功的。
+  // 不识别它就会把「密钥无效」当成「检索成功但没有结果」——等于用空结果冒充成功。
+  const metasoError = metasoErrorCode(raw);
+  if (metasoError !== undefined) {
+    return providerFailed(input, metasoError);
+  }
   return {
     provider: input.provider,
     status: "completed",
@@ -258,6 +268,14 @@ async function searchMetaso(input: ProviderSearchInput): Promise<WebSearchToolOu
     query: input.query,
     results: resultsFromMetaso(raw).slice(0, input.maxResults),
   };
+}
+
+/** 读取秘塔业务错误码；0 或缺失表示没有业务错误。 */
+function metasoErrorCode(raw: unknown): number | undefined {
+  const record = asOptionalRecord(raw);
+  const code = record?.errCode ?? record?.errcode ?? record?.code;
+  if (typeof code !== "number" || code === 0) return undefined;
+  return code;
 }
 
 async function searchGoogle(input: ProviderSearchInput): Promise<WebSearchToolOutput> {

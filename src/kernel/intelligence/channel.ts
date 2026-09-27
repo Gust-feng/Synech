@@ -137,7 +137,9 @@ function normalizeValidatedResponse(
   return {
     ...response,
     status: "failed",
-    finishReason: "error",
+    // Keep the provider stop fact (notably `length`) for the owning adapter's
+    // recovery path. Validation still fails closed; this only preserves diagnosis.
+    finishReason: response.finishReason ?? "error",
     validation,
     failure: {
       kind: "output_validation",

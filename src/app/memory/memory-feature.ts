@@ -11,7 +11,7 @@
  * facade 不把它们伪装成可由 Route 直接组合的 Repository。
  *
  * 不变量：
- * - facade 不缓存任何 policy 状态；每次调用都转交 admin 重算（手册 7.1）；
+ * - facade 不缓存任何 policy 状态；每次调用都转交 admin 重算；
  * - facade 不引入 owner admission：admission 与 owner 存在性已经在 admin 层
  *   完成，facade 不再"包一层 serialize"。
  */

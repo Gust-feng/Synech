@@ -24,8 +24,6 @@ import type {
 
 } from "./tool-settings.js";
 
-
-
 export type LocalSettings = {
   readonly version: 1;
   readonly activeModelProfileId: string;

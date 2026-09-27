@@ -4,7 +4,6 @@ import type { ExecutionEnv, Session } from "@earendil-works/pi-agent-core";
 import {
   createAgentSessionLoop,
   createModelCollectionChannel,
-  createModelProviderBinding,
   type AgentSessionToolDefinitionMetrics,
 } from "../../../adapters/intelligence/index.js";
 import type { AgentSessionEntryRef, AgentSessionRef } from "../../model-runtime/agent-session.js";
@@ -55,6 +54,10 @@ import {
   createHostAgentToolContributions,
   type HostFeatureAgentToolContributionResolver,
 } from "./agent-tool-contributions.js";
+import {
+  createConfigCenterApiKeyResolver,
+  createFrozenProviderBinding,
+} from "../settings/model-provider-adapter.js";
 
 export type OrdinaryAgentDefinitionResolver = (
   input: {
@@ -123,7 +126,13 @@ type OrdinaryAgentRunResourceAcquirerDependencies = {
     },
   ) => Promise<AgentHostRunResources<AcquireOrdinaryAgentLoopRunResourcesInput["birth"]["capabilitySnapshot"]>>;
   readonly createSessionLoop?: typeof createAgentSessionLoop;
-  readonly createProviderBinding?: typeof createModelProviderBinding;
+  /**
+   * 可注入的冻结 provider binding 配方（默认 Host-owned 实现）。
+   *
+   * 配方本体由 `settings/model-provider-adapter` 拥有；这里只保留注入点，装配参数
+   * 不会在各个 run 装配处重写。
+   */
+  readonly createProviderBinding?: typeof createFrozenProviderBinding;
   readonly createExecutionEnvironment?: (cwd: string) => ExecutionEnv;
   readonly createTokenCounter?: (model?: string) => AgentLoopTokenCounter;
   readonly resolveToolBoundary?: typeof resolveRunToolBoundary;
@@ -409,32 +418,17 @@ async function createCustomProviderBindingForRun(
     env: environment,
     modelProvider: input.birth.config,
   });
-  return (dependencies.createProviderBinding ?? createModelProviderBinding)({
-    protocol: resolvedProvider.protocol,
-    baseUrl: resolvedProvider.baseUrl,
-    model: resolvedProvider.model,
+  return (dependencies.createProviderBinding ?? createFrozenProviderBinding)({
+    resolved: resolvedProvider,
     profileId: input.birth.config.profileId,
+    capabilities: input.birth.capabilitySnapshot.modelCapabilities,
     apiKey: resolvedProvider.apiKey,
-    resolveApiKey: async () => {
-      const currentEnvironment = await options.host.configCenter.createModelRuntimeEnvironment({
-        modelProvider: input.birth.config,
-        informationAccess: input.birth.informationAccess,
-      });
-      return resolveOpenAIModelRuntimeConfig({
-        mode,
-        env: currentEnvironment,
-        modelProvider: input.birth.config,
-      }).apiKey;
-    },
-    providerProfileId: resolvedProvider.providerProfileId,
-    requestSettings: resolvedProvider.requestSettings,
-    enableWebSearch: resolvedProvider.enableWebSearch,
-    supportsVisionInput:
-      input.birth.capabilitySnapshot.modelCapabilities.supportsVisionInput === true,
-    supportsReasoningOutput:
-      input.birth.capabilitySnapshot.modelCapabilities.supportsReasoningOutput === true,
-    contextWindow: input.birth.capabilitySnapshot.modelCapabilities.contextWindowTokens,
-    maxOutputTokens: input.birth.capabilitySnapshot.modelCapabilities.maxOutputTokens,
+    resolveApiKey: createConfigCenterApiKeyResolver({
+      configCenter: options.host.configCenter,
+      provider: input.birth.config,
+      mode,
+      informationAccess: input.birth.informationAccess,
+    }),
   });
 }
 

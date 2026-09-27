@@ -1,5 +1,6 @@
 import type { SpaceReference, SpaceTree, SpaceTreeEntry } from "@panel-api/spaces"
 import type { PersonalSpaceItemProjection, PersonalSpaceProjection } from "../../personal-workbench/space"
+import { formatRelativeTime } from "../../workbench/relative-time"
 
 export type SpaceConversationSummary = {
   readonly conversationId: string
@@ -97,11 +98,7 @@ function itemDetail(reference: SpaceReference): string | undefined {
 function relativeTimeLabel(value: string, now: number): string | undefined {
   const timestamp = Date.parse(value)
   if (!Number.isFinite(timestamp)) return undefined
-  const elapsed = now - timestamp
-  if (elapsed < 60_000) return "刚刚"
-  if (elapsed < 3_600_000) return `${Math.max(1, Math.floor(elapsed / 60_000))} 分钟前`
-  if (elapsed < 86_400_000) return `${Math.floor(elapsed / 3_600_000)} 小时前`
-  return new Date(timestamp).toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" })
+  return formatRelativeTime(timestamp, now)
 }
 
 function colorFor(id: string): string {

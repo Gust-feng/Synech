@@ -1,4 +1,4 @@
-import type { ReactElement } from "react";
+import { type ReactElement } from "react";
 import type { ChatInputProps } from "../../../../contracts/composer";
 import type { Conversation } from "../../../../contracts/conversation";
 import type { CurrentRunProjection } from "../../../../features/conversations/run/projection";

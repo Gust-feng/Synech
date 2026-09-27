@@ -1,3 +1,20 @@
+/**
+ * 内置模型能力表（contextWindowTokens / maxOutputTokens 等）是**能力事实**的
+ * 唯一来源，供 `resolveModelCapabilities` 与用户的能力覆写合并。
+ *
+ * 注意：表里的 `maxOutputTokens` 不是一次请求的最终可用输出上限。真实可用输出
+ * 由三层钳制取最小：
+ *
+ * 1. 能力表（含 ConfigCenter 覆写）的 `maxOutputTokens`；
+ * 2. Pi SDK 的上下文钳制：`contextWindow − 本次输入 tokens − 4096`（安全余量，
+ *    见 pi-ai `clampMaxTokensToContext`）；
+ * 3. 应用层为输出预留的输入预算：`conservativeInputBudget` 从输入侧预留
+ *    `min(maxOutputTokens, 25% × contextWindow)`（至少 512）。
+ *
+ * 因此调表里的数值只是改第一层，不能绕过 2、3 层；反过来，表值偏大时真实输出
+ * 会被 SDK/预算层静默压低——数值调整属于产品决策，改前先确认三层后的实际值。
+ */
+
 import type {
   ConfiguredModelProtocolKind,
   ConfiguredModelProviderKind,

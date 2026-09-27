@@ -18,9 +18,13 @@ import { createId, nowIso } from "../../kernel/id.js";
 import {
   createFailedModelResponse,
   createFailedModelResponseFromError,
+  isRetryableModelFailure,
+  modelFailureDetailWithCode,
+  modelFailureKindFromFacts,
 } from "../../kernel/intelligence/failures.js";
 import { NativeIntelligenceChannel } from "../../kernel/intelligence/channel.js";
 import { pendingModelOutputValidation } from "../../kernel/intelligence/validation.js";
+import { modelUsageFromProvider } from "./provider-result-projection.js";
 import type { ModelProviderPayloadTransformer } from "./model-provider-binding.js";
 
 export type ModelCollectionChannelOptions = {
@@ -87,12 +91,16 @@ class ModelCollectionProvider implements ModelProvider {
       });
     }
 
+    const attempt = attemptLatencyAbort({
+      callerSignal: requestOptions.abortSignal,
+      maxLatencyMs: request.budget.maxLatencyMs,
+    });
     try {
       const assistant = await this.options.modelRegistry.completeSimple(
         this.options.selectedModel,
         context.value,
         {
-          signal: requestOptions.abortSignal,
+          signal: attempt.signal,
           maxTokens: Math.min(
             request.budget.maxOutputTokens ?? this.options.selectedModel.maxTokens,
             this.options.selectedModel.maxTokens,
@@ -117,11 +125,16 @@ class ModelCollectionProvider implements ModelProvider {
         providerKind: this.providerKind,
         protocolKind: this.protocolKind,
         model: this.model,
-        aborted: requestOptions.abortSignal?.aborted === true,
+        cancelledByCaller: attempt.cancelledByCaller(),
+        timedOut: attempt.timedOut(),
+        maxLatencyMs: request.budget.maxLatencyMs,
       });
     } catch (error) {
-      if (requestOptions.abortSignal?.aborted === true) {
-      return cancelledResponse(request, this.providerId, this.providerKind, this.protocolKind, this.model);
+      if (attempt.cancelledByCaller()) {
+        return cancelledResponse(request, this.providerId, this.providerKind, this.protocolKind, this.model);
+      }
+      if (attempt.timedOut()) {
+        return timedOutResponse(request, this.providerId, this.providerKind, this.protocolKind, this.model, request.budget.maxLatencyMs);
       }
       return createFailedModelResponseFromError({
         requestId: request.requestId,
@@ -192,12 +205,33 @@ function responseFromAssistant(input: {
   readonly providerKind: ModelProviderKind;
   readonly protocolKind: ModelProvider["protocolKind"];
   readonly model: string;
-  readonly aborted: boolean;
+  readonly cancelledByCaller: boolean;
+  readonly timedOut: boolean;
+  readonly maxLatencyMs: number | undefined;
 }): ModelResponse {
-  if (input.aborted || input.assistant.stopReason === "aborted") {
+  if (input.cancelledByCaller) {
+    return cancelledResponse(input.request, input.providerId, input.providerKind, input.protocolKind, input.model);
+  }
+  if (input.timedOut) {
+    return timedOutResponse(
+      input.request,
+      input.providerId,
+      input.providerKind,
+      input.protocolKind,
+      input.model,
+      input.maxLatencyMs,
+    );
+  }
+  if (input.assistant.stopReason === "aborted") {
     return cancelledResponse(input.request, input.providerId, input.providerKind, input.protocolKind, input.model);
   }
   if (input.assistant.stopReason === "error") {
+    // Pi 把 provider 失败收进 assistant 消息（errorMessage + diagnostics）而不是抛出：
+    // 失败分类按共享层的结构化事实推导（HTTP 状态 / 错误码 / 错误名），retryable
+    // 显式给出。消费方（如研究的重试判定）只读 response.failure 的结构字段，
+    // 不按错误文案自行判定。
+    const facts = assistantFailureFacts(input.assistant);
+    const failureKind = modelFailureKindFromFacts(facts);
     return createFailedModelResponse({
       requestId: input.request.requestId,
       providerId: input.providerId,
@@ -205,8 +239,14 @@ function responseFromAssistant(input: {
       protocolKind: input.protocolKind,
       model: input.model,
       outputKind: input.request.outputContract.outputKind,
-      failureKind: "provider_response",
-      message: input.assistant.errorMessage ?? "Pi model collection request failed.",
+      failureKind,
+      retryable: isRetryableModelFailure(failureKind),
+      // 429 等状态位判定之后，原始 code 仍要留在诊断详情里（账户级/项目级限额
+      // 与普通限流的区别只在 code 中）。
+      message: modelFailureDetailWithCode(
+        input.assistant.errorMessage ?? "Pi model collection request failed.",
+        facts.code,
+      ),
     });
   }
   if (input.assistant.content.some((block) => block.type === "toolCall")) {
@@ -247,22 +287,98 @@ function responseFromAssistant(input: {
       ? {}
       : { reasoningOutput: { source: "provider_reasoning_content" as const, content: thinkingOutput, truncated: false } }),
     assistantMessage: { role: "assistant", content: textOutput },
-    usage: {
-      requestCount: 1,
-      inputTokens: input.assistant.usage.input,
-      outputTokens: input.assistant.usage.output,
-      totalTokens: input.assistant.usage.totalTokens,
-      cachedInputTokens: input.assistant.usage.cacheRead,
-      cacheWriteInputTokens: input.assistant.usage.cacheWrite,
-      uncachedInputTokens: input.assistant.usage.input,
-      ...(input.assistant.usage.reasoning === undefined
-        ? {}
-        : { reasoningOutputTokens: input.assistant.usage.reasoning }),
-    },
+    // 用量口径与 loop 侧共用同一份共享转换（inputTokens 含 cacheRead），
+    // 不在这里维护第二份组装规则。
+    usage: modelUsageFromProvider(input.assistant.usage),
     finishReason: input.assistant.stopReason === "length" ? "length" : "stop",
     validation: pendingModelOutputValidation(),
     completedAt: nowIso(),
   };
+}
+
+/**
+ * Pi 失败诊断中的结构化事实：`details.status` 是 provider 返回的 HTTP 状态，
+ * `error` 携带原始错误的 code / name。没有可用诊断时返回空事实，共享分类落到
+ * `provider_response` 兜底——与透传前的硬编码相同，但 `retryable` 现在由共享
+ * 策略显式决定，消费方不再需要按错误文案补偿。
+ */
+function assistantFailureFacts(assistant: AssistantMessage): {
+  readonly status?: number;
+  readonly code?: string | number;
+  readonly name?: string | number;
+} {
+  const diagnostic = (assistant.diagnostics ?? []).find(
+    (entry) => entry.error !== undefined || typeof entry.details?.status === "number",
+  );
+  if (diagnostic === undefined) return {};
+  const status = diagnostic.details?.status;
+  return {
+    ...(typeof status === "number" && Number.isFinite(status) ? { status: Math.trunc(status) } : {}),
+    ...(diagnostic.error?.code === undefined ? {} : { code: diagnostic.error.code }),
+    ...(diagnostic.error?.name === undefined ? {} : { name: diagnostic.error.name }),
+  };
+}
+
+/**
+ * Merges this attempt's latency budget into its abort signal and keeps the two
+ * abort causes apart.
+ *
+ * Pi's `timeoutMs` rejects the request without touching the caller's signal, so
+ * before this merge a timed-out attempt left `abortSignal.aborted === false`,
+ * looked like a retryable `provider_timeout`, and every retry spent another
+ * full budget. Callers that already merged their own timeout into the signal
+ * they pass (research) keep their semantics: whichever timeout fires first
+ * aborts, and a caller-side timeout still settles as a cancellation.
+ */
+function attemptLatencyAbort(input: {
+  readonly callerSignal: AbortSignal | undefined;
+  readonly maxLatencyMs: number | undefined;
+}): {
+  readonly signal: AbortSignal | undefined;
+  readonly cancelledByCaller: () => boolean;
+  readonly timedOut: () => boolean;
+} {
+  if (input.maxLatencyMs === undefined) {
+    return {
+      signal: input.callerSignal,
+      cancelledByCaller: () => input.callerSignal?.aborted === true,
+      timedOut: () => false,
+    };
+  }
+  const timeoutSignal = AbortSignal.timeout(input.maxLatencyMs);
+  let timedOut = false;
+  timeoutSignal.addEventListener("abort", () => { timedOut = true; }, { once: true });
+  return {
+    signal: input.callerSignal === undefined
+      ? timeoutSignal
+      : AbortSignal.any([input.callerSignal, timeoutSignal]),
+    cancelledByCaller: () => input.callerSignal?.aborted === true,
+    timedOut: () => timedOut,
+  };
+}
+
+function timedOutResponse(
+  request: ModelRequest,
+  providerId: string,
+  providerKind: ModelProviderKind,
+  protocolKind: ModelProvider["protocolKind"],
+  model: string,
+  maxLatencyMs: number | undefined,
+): ModelResponse {
+  return createFailedModelResponse({
+    requestId: request.requestId,
+    providerId,
+    providerKind,
+    protocolKind,
+    model,
+    outputKind: request.outputContract.outputKind,
+    failureKind: "provider_timeout",
+    // Our own latency budget firing is terminal for the whole request: the same
+    // request would need the same time again, so retrying only multiplies the
+    // user's wait instead of recovering anything.
+    retryable: false,
+    message: `Pi model collection request exceeded the ${maxLatencyMs ?? "configured"} ms latency budget and was aborted.`,
+  });
 }
 
 function cancelledResponse(
@@ -279,16 +395,13 @@ function cancelledResponse(
     providerKind,
     protocolKind,
     model,
+    // Cancellation is a structured response status, not a provider failure.
+    // The previous `provider_network` failure block made a user cancel look
+    // like a network fault in failure statistics.
     status: "cancelled",
     outputKind: request.outputContract.outputKind,
     finishReason: "error",
     validation: pendingModelOutputValidation(),
-    failure: {
-      kind: "provider_network",
-      retryable: false,
-      message: "Pi model collection request was cancelled.",
-      sanitizedErrorRef: "model-error:cancelled",
-    },
     completedAt: nowIso(),
   };
 }

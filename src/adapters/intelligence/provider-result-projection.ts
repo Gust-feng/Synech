@@ -85,7 +85,10 @@ export function providerFailureFromAssistant(
   const diagnostic = [...(assistant.diagnostics ?? [])].reverse().find((item) =>
     item.type === "provider_transport_failure" || item.type === "pi_messages_response_failure");
   const status = finiteInteger(diagnostic?.details?.status);
-  const code = diagnostic?.error?.code ?? stringOrNumber(diagnostic?.details?.code);
+  // SDK errors carry the account-level code inside the response body, not on the
+  // error object, so the body is the structured source for codes such as
+  // `insufficient_quota`.
+  const code = structuredProviderErrorCode(diagnostic) ?? stringOrNumber(diagnostic?.details?.code);
   const incompleteReason = assistant.providerMetadata?.incompleteReason;
   return {
     error,
@@ -99,9 +102,40 @@ export function providerFailureFromAssistant(
 }
 
 function finiteInteger(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : undefined;
+  if (typeof value === "number" && Number.isFinite(value)) return Math.trunc(value);
+  if (typeof value === "string" && /^\d+$/.test(value.trim())) return Number.parseInt(value.trim(), 10);
+  return undefined;
 }
 
 function stringOrNumber(value: unknown): string | number | undefined {
   return typeof value === "string" || typeof value === "number" ? value : undefined;
+}
+
+function parseJsonObject(text: string): Record<string, unknown> | undefined {
+  try {
+    return asRecordValue(JSON.parse(text));
+  } catch {
+    return undefined;
+  }
+}
+
+function asRecordValue(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : undefined;
+}
+
+function codeFromProviderErrorBody(body: unknown): string | undefined {
+  const parsed = typeof body === "string" ? parseJsonObject(body) : asRecordValue(body);
+  const envelope = parsed === undefined ? undefined : asRecordValue(parsed.error) ?? parsed;
+  const code = envelope?.code ?? envelope?.type;
+  return typeof code === "string" && code.trim() !== "" ? code.trim() : undefined;
+}
+
+function structuredProviderErrorCode(diagnostic: {
+  readonly error?: { readonly code?: string | number };
+  readonly details?: Record<string, unknown>;
+} | undefined): string | number | undefined {
+  if (diagnostic === undefined) return undefined;
+  const direct = stringOrNumber(diagnostic.error?.code);
+  if (direct !== undefined) return direct;
+  return codeFromProviderErrorBody(diagnostic.details?.body);
 }
