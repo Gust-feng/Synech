@@ -195,7 +195,8 @@ export type OrdinaryPanelWorkView = {
 };
 
 export type OrdinaryPanelCapabilityResolution = {
-  readonly modelContextWindowTokens: number;
+  /** 未确认模型没有事实窗口，此处为 undefined（不得用猜测值填充）。 */
+  readonly modelContextWindowTokens?: number;
 };
 
 export type OrdinaryPanelReplayCursor = {

@@ -390,6 +390,7 @@ function mergeSavedModelForm(
     logoDataUrl: savedProfile.logoDataUrl ?? "",
     baseUrl: savedProfile.baseUrl ?? submitted.baseUrl,
     protocolKind: savedProfile.protocolKind ?? submitted.protocolKind,
+    piProviderId: savedProfile.piProviderId ?? submitted.piProviderId,
     model: savedProfile.model ?? "",
     apiKey: submitted.apiKeyCleared ? "" : current.apiKey,
     apiKeyCleared: false,

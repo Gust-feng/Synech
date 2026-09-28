@@ -18,7 +18,6 @@ import {
 } from "lucide-react";
 import type {
   ConfigResponse,
-  ModelCapabilities,
   ModelProviderModelCatalog,
   SkillTriggerMode,
 } from "@panel-api/config";
@@ -26,6 +25,7 @@ import type { ConversationFollowUpMode } from "../../../contracts/composer";
 import type { SkillDefinition } from "../../../contracts/skills";
 import type { SubAgentDefinition } from "../../../contracts/sub-agents";
 import type { McpEnvironmentCheckResponse, McpReferenceResponse, ToolsResponse } from "@panel-api/tools";
+import type { ModelCapabilityUpdateForm } from "../config-actions";
 import { AppearanceSettings } from "./appearance";
 import { ModelProviderManager } from "../model/provider-manager";
 import type { McpServerForm, ModelForm, SettingsGroup, ToolForm } from "./types";
@@ -72,12 +72,7 @@ export function SettingsDialog(props: {
   readonly onDeleteModelProvider: (profileId: string, fallbackProfileId?: string) => Promise<void>;
   readonly onFetchModels: (profileId?: string) => Promise<ModelProviderModelCatalog | undefined>;
   readonly onSaveModelCatalog: (profileId: string, catalog: ModelProviderModelCatalog) => Promise<void>;
-  readonly onSaveModelCapabilities: (form: {
-    readonly profileId: string;
-    readonly providerKind?: string;
-    readonly model: string;
-    readonly capabilities: ModelCapabilities;
-  }) => Promise<void>;
+  readonly onSaveModelCapabilities: (form: ModelCapabilityUpdateForm) => Promise<void>;
   readonly onRevealModelApiKey: (profileId: string) => Promise<string | undefined>;
   readonly modelCatalogs?: Readonly<Record<string, ModelProviderModelCatalog>>;
   readonly skills: readonly SkillDefinition[];

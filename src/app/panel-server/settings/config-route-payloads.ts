@@ -2,6 +2,7 @@ import {
   listBuiltinModelProviderPresets,
   listBuiltinProviderProtocolProfiles,
   type ModelProviderModelCatalog,
+  type ResolvedModelCapabilities,
   type SanitizedModelProviderConfig,
 } from "../../../domain/config/index.js";
 import type { ModelCapabilityProfile, ProductInfo } from "../../panel-api/config.js";
@@ -10,8 +11,8 @@ import { readProductPackageVersion } from "../../../platform/product-version.js"
 import { PRODUCT_DISPLAY_NAME } from "../../../platform/product-identity.js";
 import type { ProductPaths } from "../../../platform/storage/index.js";
 import { CapabilityCenter } from "../../capability/capability-center.js";
+import { resolveModelCapabilitiesForProfile } from "./model-facts.js";
 import { ConfigCenter, ConfigCenterValidationError } from "../../config-center/index.js";
-import { resolveModelCapabilities } from "../../model-runtime/model-capability-registry.js";
 import type { ToolCatalogSnapshot } from "../../tool-center/index.js";
 import { PanelHttpError } from "../http-utils.js";
 import type { PanelModelCatalogFetch } from "../types.js";
@@ -49,7 +50,7 @@ export function productInfoPayload(runtime: PanelConfigRouteRuntime): ProductInf
 
 export async function modelCapabilitiesPayload(runtime: PanelConfigRouteRuntime): Promise<{
   readonly activeModel: SanitizedModelProviderConfig;
-  readonly modelCapabilities: ReturnType<typeof resolveModelCapabilities>;
+  readonly modelCapabilities: ResolvedModelCapabilities;
   readonly warnings: readonly string[];
 }> {
   const [activeModel, overrides] = await Promise.all([
@@ -58,7 +59,7 @@ export async function modelCapabilitiesPayload(runtime: PanelConfigRouteRuntime)
   ]);
   return {
     activeModel,
-    modelCapabilities: resolveModelCapabilities({ profile: activeModel, overrides }),
+    modelCapabilities: resolveModelCapabilitiesForProfile({ profile: activeModel, overrides }),
     warnings: modelCapabilityWarnings(activeModel),
   };
 }
@@ -85,7 +86,7 @@ export async function modelCapabilityProfilesPayload(
         providerKind: profile.providerKind,
         protocolKind: profile.protocolKind,
         model,
-        capabilities: resolveModelCapabilities({ profile: { ...profile, model }, overrides }),
+        capabilities: resolveModelCapabilitiesForProfile({ profile: { ...profile, model }, overrides }),
       });
     }
   }

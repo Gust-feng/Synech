@@ -1,4 +1,5 @@
 import type { AgentCapabilitySnapshot } from "../../domain/config/index.js";
+import { resolvedContextWindowTokens, resolvedSupportsStrictToolSchemas } from "../../domain/config/index.js";
 import {
   modelVisibleToolDescription,
   type ToolDefinition,
@@ -9,6 +10,7 @@ import type { AgentLoopToolVisibilityPlan } from "../model-runtime/agent-loop.js
 import {
   isProgressiveToolVisibilityCostEffective,
   progressiveToolVisibilityCostGate,
+  toolDefinitionSerializationApiForProtocol,
   type ModelVisibleToolDefinitionTokenCounter,
 } from "../model-runtime/tool-definition-visibility-cost.js";
 import {
@@ -99,14 +101,10 @@ export function resolveMcpFirstToolVisibilityPlan(input: {
   const searchControl = searchMcpToolsDefinition();
   const loadControl = loadMcpToolsDefinition();
   const costGate = progressiveToolVisibilityCostGate(
-    input.snapshot.modelCapabilities.contextWindowTokens,
+    resolvedContextWindowTokens(input.snapshot.modelCapabilities),
     {
-      api: input.snapshot.activeModel.protocolKind === "openai_compatible_chat_completions"
-        ? "openai-completions"
-        : "openai-responses",
-      includeStrict: input.snapshot.modelCapabilities.protocolProfileId !== "deepseek" &&
-        input.snapshot.modelCapabilities.protocolProfileId !== "moonshot" &&
-        input.snapshot.modelCapabilities.protocolProfileId !== "minimax",
+      api: toolDefinitionSerializationApiForProtocol(input.snapshot.activeModel.protocolKind),
+      includeStrict: resolvedSupportsStrictToolSchemas(input.snapshot.modelCapabilities),
     },
   );
   if (input.toolDefinitionTokenCounter === undefined || costGate === undefined || !isProgressiveToolVisibilityCostEffective({

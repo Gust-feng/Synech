@@ -1,3 +1,4 @@
+import type { ConfiguredModelProtocolKind } from "../../domain/config/index.js";
 import {
   modelVisibleToolDescription,
   type ToolDefinition,
@@ -11,6 +12,21 @@ export type ModelVisibleToolDefinitionSerialization = {
   readonly includeStrict: boolean;
 };
 
+export function toolDefinitionSerializationApiForProtocol(
+  protocolKind: ConfiguredModelProtocolKind,
+): ModelVisibleToolDefinitionSerialization["api"] {
+  switch (protocolKind) {
+    case "openai_compatible_chat_completions":
+      return "openai-completions";
+    case "openai_responses":
+      return "openai-responses";
+    default: {
+      const unsupportedProtocolKind: never = protocolKind;
+      throw new Error(`Model visible tool definitions do not support protocol kind ${JSON.stringify(unsupportedProtocolKind)}.`);
+    }
+  }
+}
+
 const MAX_DIRECT_TOOL_DEFINITION_CONTEXT_SHARE = 0.1;
 const MAX_DIRECT_TOOL_DEFINITION_TOKENS = 20_000;
 const MIN_NET_SAVINGS_CONTEXT_SHARE = 0.0025;
@@ -23,11 +39,16 @@ export type ProgressiveToolVisibilityCostGate = {
   readonly definitionSerialization: ModelVisibleToolDefinitionSerialization;
 };
 
+/**
+ * Progressive tool visibility is only an optimization; without a confirmed
+ * context window there is no honest threshold, so the gate is disabled instead
+ * of guessing one.
+ */
 export function progressiveToolVisibilityCostGate(
-  contextWindowTokens: number,
+  contextWindowTokens: number | undefined,
   definitionSerialization: ModelVisibleToolDefinitionSerialization,
 ): ProgressiveToolVisibilityCostGate | undefined {
-  if (!Number.isSafeInteger(contextWindowTokens) || contextWindowTokens <= 0) return undefined;
+  if (contextWindowTokens === undefined || !Number.isSafeInteger(contextWindowTokens) || contextWindowTokens <= 0) return undefined;
   return {
     minimumDeferredDefinitionTokens: Math.min(
       MAX_DIRECT_TOOL_DEFINITION_TOKENS,
@@ -53,6 +74,7 @@ export function serializeModelVisibleToolDefinitions(
   definitions: readonly ToolDefinition[],
   serialization: ModelVisibleToolDefinitionSerialization,
 ): readonly Readonly<Record<string, unknown>>[] {
+  assertSupportedDefinitionSerializationApi(serialization.api);
   if (serialization.api === "openai-completions") {
     return definitions.map((definition) => ({
       type: "function",
@@ -116,13 +138,26 @@ export function isProgressiveToolVisibilityCostEffective(input: {
 }
 
 function validCostGate(gate: ProgressiveToolVisibilityCostGate): boolean {
+  assertSupportedDefinitionSerializationApi(gate.definitionSerialization.api);
   return Number.isSafeInteger(gate.minimumDeferredDefinitionTokens) &&
     gate.minimumDeferredDefinitionTokens >= 0 &&
     Number.isSafeInteger(gate.minimumNetDefinitionSavingsTokens) &&
     gate.minimumNetDefinitionSavingsTokens >= 0 &&
-    (gate.definitionSerialization.api === "openai-completions" ||
-      gate.definitionSerialization.api === "openai-responses") &&
     typeof gate.definitionSerialization.includeStrict === "boolean";
+}
+
+function assertSupportedDefinitionSerializationApi(
+  api: ModelVisibleToolDefinitionSerialization["api"],
+): void {
+  switch (api) {
+    case "openai-completions":
+    case "openai-responses":
+      return;
+    default: {
+      const unsupportedApi: never = api;
+      throw new Error(`Model visible tool definitions do not support api ${JSON.stringify(unsupportedApi)}.`);
+    }
+  }
 }
 
 function countDefinitionSetTokens(

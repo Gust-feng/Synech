@@ -8,9 +8,6 @@ overrides:
   hono: 4.12.30
   qs: 6.15.3
 
-patchedDependencies:
-  '@earendil-works/pi-ai@0.80.10': 1863eb9059f3449cebd3549a2620a0ab9e2e7675909795609fe4e6b785f12668
-
 importers:
 
   .:
@@ -20,7 +17,7 @@ importers:
         version: 0.80.10(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.21.0)(zod@4.4.3)
       '@earendil-works/pi-ai':
         specifier: 0.80.10
-        version: 0.80.10(patch_hash=1863eb9059f3449cebd3549a2620a0ab9e2e7675909795609fe4e6b785f12668)(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.21.0)(zod@4.4.3)
+        version: 0.80.10(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.21.0)(zod@4.4.3)
       '@lottiefiles/dotlottie-web':
         specifier: 0.80.0
         version: 0.80.0
@@ -3283,7 +3280,7 @@ snapshots:
 
   '@earendil-works/pi-agent-core@0.80.10(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.21.0)(zod@4.4.3)':
     dependencies:
-      '@earendil-works/pi-ai': 0.80.10(patch_hash=1863eb9059f3449cebd3549a2620a0ab9e2e7675909795609fe4e6b785f12668)(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.21.0)(zod@4.4.3)
+      '@earendil-works/pi-ai': 0.80.10(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.21.0)(zod@4.4.3)
       ignore: 7.0.5
       typebox: 1.1.38
       yaml: 2.9.0
@@ -3295,7 +3292,7 @@ snapshots:
       - ws
       - zod
 
-  '@earendil-works/pi-ai@0.80.10(patch_hash=1863eb9059f3449cebd3549a2620a0ab9e2e7675909795609fe4e6b785f12668)(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.21.0)(zod@4.4.3)':
+  '@earendil-works/pi-ai@0.80.10(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.21.0)(zod@4.4.3)':
     dependencies:
       '@anthropic-ai/sdk': 0.91.1(zod@4.4.3)
       '@aws-sdk/client-bedrock-runtime': 3.1048.0

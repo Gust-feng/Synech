@@ -57,6 +57,8 @@ export type AgentSessionWriteCheckpoint = { readonly sessionId: string } & (
       readonly kind: "compaction_entry_committed";
       readonly compactionEntryRef: AgentSessionEntryRef;
       readonly tokensBefore: number;
+      /** Image blocks replaced with text placeholders before this compaction summarized them. */
+      readonly replacedImageBlocks: number;
     }
 );
 

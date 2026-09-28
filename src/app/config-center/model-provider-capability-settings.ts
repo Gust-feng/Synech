@@ -1,7 +1,7 @@
 import type {
   LocalSettings,
-  ModelCapabilities,
   ModelCapabilityOverrideSettings,
+  ModelCapabilityOverrideValues,
   ModelProviderProfileSettings,
 } from "../../domain/config/index.js";
 import {
@@ -57,7 +57,7 @@ export function normalizeModelCapabilityOverrides(
   }));
 }
 
-export function sanitizeCapabilityOverride(capabilities: Partial<ModelCapabilities>): Partial<ModelCapabilities> {
+export function sanitizeCapabilityOverride(capabilities: ModelCapabilityOverrideValues): ModelCapabilityOverrideValues {
   return {
     contextWindowTokens: normalizePositiveInteger(capabilities.contextWindowTokens),
     maxOutputTokens: normalizePositiveInteger(capabilities.maxOutputTokens),
@@ -91,7 +91,7 @@ function parsePartialCapabilities(record: Record<string, unknown>): NonNullable<
   });
 }
 
-function normalizePreferredApiStyle(value: ModelCapabilities["preferredApiStyle"] | undefined): ModelCapabilities["preferredApiStyle"] | undefined {
+function normalizePreferredApiStyle(value: ModelCapabilityOverrideValues["preferredApiStyle"] | undefined): ModelCapabilityOverrideValues["preferredApiStyle"] | undefined {
   return value === "chat_completions" ||
     value === "responses" ||
     value === "openai_compatible"
@@ -99,7 +99,7 @@ function normalizePreferredApiStyle(value: ModelCapabilities["preferredApiStyle"
     : undefined;
 }
 
-function normalizeModelStability(value: ModelCapabilities["stability"] | undefined): ModelCapabilities["stability"] | undefined {
+function normalizeModelStability(value: ModelCapabilityOverrideValues["stability"] | undefined): ModelCapabilityOverrideValues["stability"] | undefined {
   return value === "stable" || value === "preview" || value === "deprecated" || value === "unknown"
     ? value
     : undefined;

@@ -6,10 +6,11 @@ import {
   type VisibleAiMode,
 } from "./config-projection";
 import type { McpServerForm, ModelForm, ToolForm } from "./components/types";
-import type { CommandShellKind, ConfigResponse, ModelCapabilities, ModelProviderModelCatalog, SkillTriggerMode } from "@panel-api/config";
+import type { CommandShellKind, ConfigResponse, ModelProviderModelCatalog, SkillTriggerMode } from "@panel-api/config";
 import type { SkillDefinition } from "../../contracts/skills";
 import type { SubAgentDefinition } from "../../contracts/sub-agents";
 import type { McpEnvironmentCheckResponse, McpReferenceResponse, McpServerPreset, ToolsResponse } from "@panel-api/tools";
+import type { ModelCapabilityOverride } from "./model/capability-display";
 import { parseModelOptionId } from "./model/options";
 
 export async function saveModelProviderConfig(input: {
@@ -29,6 +30,7 @@ export async function saveModelProviderConfig(input: {
       clearLogoDataUrl: input.form.logoCleared,
       providerKind: preset.providerKind,
       protocolKind: input.form.protocolKind || preset.protocolKind,
+      piProviderId: input.form.piProviderId.trim() || preset.piProviderId,
       baseUrl: input.form.baseUrl || preset.baseUrl,
       model: input.form.model,
       clearModel: input.form.model.trim().length === 0,
@@ -48,6 +50,8 @@ export async function saveModelProviderConfig(input: {
     clearLogoDataUrl: input.form.logoCleared,
     baseUrl: input.form.baseUrl,
     protocolKind: input.form.protocolKind,
+    piProviderId: input.form.piProviderId.trim(),
+    clearPiProviderId: input.form.piProviderId.trim().length === 0,
     model: input.form.model,
     clearModel: input.form.model.trim().length === 0,
     apiKey: input.form.apiKeyCleared ? undefined : input.form.apiKey,
@@ -74,6 +78,7 @@ export async function createCustomModelProviderProfile(input: {
     clearLogoDataUrl: input.form.logoCleared,
     providerKind: "openai_compatible",
     protocolKind: input.form.protocolKind || "openai_compatible_chat_completions",
+    piProviderId: input.form.piProviderId.trim(),
     baseUrl: input.form.baseUrl,
     model: input.form.model,
     clearModel: input.form.model.trim().length === 0,
@@ -155,6 +160,7 @@ export async function selectModelProviderModel(input: {
       logoCleared: false,
       baseUrl: profile.baseUrl ?? "",
       protocolKind: profile.protocolKind ?? "openai_compatible_chat_completions",
+      piProviderId: profile.piProviderId ?? "",
       model: parsed.modelId,
       apiKey: "",
       apiKeyCleared: false,
@@ -203,7 +209,7 @@ export type ModelCapabilityUpdateForm = {
   readonly profileId: string;
   readonly providerKind?: string;
   readonly model: string;
-  readonly capabilities: ModelCapabilities;
+  readonly capabilities: ModelCapabilityOverride;
 };
 
 export async function saveModelCapabilityConfig(input: ModelCapabilityUpdateForm): Promise<ConfigResponse> {

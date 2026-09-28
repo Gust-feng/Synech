@@ -34,13 +34,13 @@ import type {
 
 import type {
 
-  ModelCapabilities,
-
   ProtocolToolCallCapabilities,
 
   SanitizedModelProviderConfig,
 
 } from "./model-settings.js";
+
+import type { ResolvedModelCapabilities } from "./model-facts.js";
 
 import type { SanitizedCommandShellConfig, SanitizedToolConfirmationConfig } from "./tool-settings.js";
 
@@ -216,7 +216,7 @@ export type AgentCapabilitySnapshot = {
   readonly snapshotId: string;
   readonly createdAt: string;
   readonly activeModel: SanitizedModelProviderConfig;
-  readonly modelCapabilities: ModelCapabilities;
+  readonly modelCapabilities: ResolvedModelCapabilities;
   readonly toolCatalog: {
     readonly scope: "agent-basic";
     readonly tools: readonly CapabilityToolCatalogItem[];
@@ -307,7 +307,7 @@ export type RunCapabilityResolution = {
 
 export type RunCapabilityPlan = {
   readonly protocolToolCallCapabilities: ProtocolToolCallCapabilities;
-  readonly modelCapabilities: ModelCapabilities;
+  readonly modelCapabilities: ResolvedModelCapabilities;
   readonly canExposeModelTools: boolean;
 };
 

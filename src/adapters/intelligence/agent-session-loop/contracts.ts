@@ -21,6 +21,11 @@ export type AgentSessionLoopOptions = {
   readonly onProviderToolDefinitionMetrics?: AgentSessionToolDefinitionMetricsObserver;
   readonly compactionSettings?: CompactionSettings;
   /**
+   * 已确认的上下文窗口（真实 Pi Model.contextWindow 的产品投影）。未确认模型没有
+   * 事实窗口时传 undefined——压缩不得按 adapter 的 transport 常量猜测阈值触发。
+   */
+  readonly confirmedContextWindowTokens?: number;
+  /**
    * 每次冻结前的记忆背景供给复核（0.6.0 正式设计 §9.3）。返回 undefined 表示当前
    * 无可供给背景（未绑定/被撤销/关闭）；返回文本时作为独立临时 contribution 插入
    * provider 上下文，不写入 Session 持久化。

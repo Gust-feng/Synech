@@ -3,7 +3,7 @@ import type {
   CreateModelProviderProfileInput,
   LocalDevSecretStore,
   LocalSettings,
-  ModelCapabilities,
+  ModelCapabilityOverrideValues,
   ModelCapabilityOverrideSettings,
   ModelProviderModelCatalog,
   ModelProviderProfileSettings,
@@ -104,7 +104,8 @@ export function upsertModelProviderModelCatalog(
         updatedAt: now,
       })
     : normalized;
-  const settings = normalizeLocalSettings(clearProfileModelOutsideCatalog(withoutEmptyCatalog, saved, now));
+  // 保存远程发现的目录只是缓存发现事实：用户在目录外手动配置的模型 ID 必须保留。
+  const settings = normalizeLocalSettings(withoutEmptyCatalog);
   const result = settings.modelCatalogs?.find((item) => item.profileId === profileId);
   if (result === undefined && saved.models.length !== 0) {
     throw new ConfigCenterValidationError(`Model catalog could not be saved: ${profileId}`);
@@ -229,6 +230,7 @@ export async function updateModelProviderConfig(
       ? {}
       : { label: protectedBuiltInProfile.label, logoDataUrl: undefined }),
     ...(effectiveInput.clearModel === true ? { model: undefined } : {}),
+    ...(effectiveInput.clearPiProviderId === true ? { piProviderId: undefined } : {}),
     ...(effectiveInput.clearLogoDataUrl === true ? { logoDataUrl: undefined } : {}),
   };
   const settings = normalizeLocalSettings({
@@ -259,7 +261,7 @@ export function updateModelCapabilityOverride(
     readonly profileId?: string;
     readonly model: string;
     readonly providerKind?: ConfiguredModelProviderKind;
-    readonly capabilities: Partial<ModelCapabilities>;
+    readonly capabilities: ModelCapabilityOverrideValues;
   },
   now: string,
 ): SettingsChange<readonly ModelCapabilityOverrideSettings[]> {
@@ -307,20 +309,6 @@ function builtinPresetForProtectedProfile(
   profile: Pick<ModelProviderProfileSettings, "profileId">,
 ): ReturnType<typeof listBuiltinModelProviderPresets>[number] | undefined {
   return builtinPresetForProfileId(profile.profileId);
-}
-
-function clearProfileModelOutsideCatalog(
-  settings: LocalSettings,
-  catalog: ModelProviderModelCatalog,
-  now: string,
-): LocalSettings {
-  const savedModelIds = new Set(catalog.models.map((model) => model.id));
-  const modelProfiles = settings.modelProfiles.map((profile) =>
-    profile.profileId === catalog.profileId && profile.model !== undefined && !savedModelIds.has(profile.model)
-      ? { ...profile, model: undefined, updatedAt: now }
-      : profile
-  );
-  return { ...settings, modelProfiles, updatedAt: now };
 }
 
 function sameCapabilityOverrideScope(

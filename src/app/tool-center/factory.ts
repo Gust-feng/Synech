@@ -1,6 +1,6 @@
 import type {
   CapabilityToolAvailability,
-  ModelCapabilities,
+  ResolvedModelCapabilities,
   SanitizedCommandShellConfig,
   ToolStateSettings,
   WebSearchRuntimeConfig,
@@ -49,7 +49,7 @@ export type CreateAgentToolCenterOptions = {
   readonly processTerminator?: ProcessTerminator;
   readonly contributions?: readonly AgentToolRegistryContribution[];
   readonly runContext?: ContextAttachmentRunContext;
-  readonly modelCapabilities?: ModelCapabilities;
+  readonly modelCapabilities?: ResolvedModelCapabilities;
   readonly toolOutputStore?: ToolOutputStore;
   readonly outputTokenCounter?: ToolOutputTokenCounter;
   readonly metricsSink?: ToolExecutionMetricsSink;

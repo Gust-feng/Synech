@@ -40,6 +40,7 @@ export async function toSanitizedModelProfile(input: {
     baseUrl: normalizeBaseUrl(input.profile.baseUrl) ?? DEFAULT_MODEL_PROVIDER_BASE_URL,
     model: input.profile.model,
     openAI: input.profile.openAI,
+    ...(input.profile.piProviderId === undefined ? {} : { piProviderId: input.profile.piProviderId }),
     defaultAiMode: input.profile.defaultAiMode,
     secretRef: input.profile.secretRef,
     enabled: input.profile.enabled,

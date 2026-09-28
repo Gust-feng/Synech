@@ -1,6 +1,6 @@
 import type {
   ConfiguredCommandShellKind,
-  ModelCapabilities as DomainModelCapabilities,
+  ResolvedModelCapabilities,
   ModelProviderModelCatalog as DomainModelProviderModelCatalog,
   ModelProviderPreset as DomainModelProviderPreset,
   OrdinaryCapabilitySnapshot,
@@ -37,7 +37,8 @@ export type ConfigResponse = {
 };
 
 export type ModelProviderProfile = Partial<SanitizedModelProviderConfig>;
-export type ModelCapabilities = Partial<DomainModelCapabilities>;
+/** 产品层二态能力投影（Pi 已知事实 / 未确认）；字段可选化由面板读侧负责。 */
+export type ModelCapabilities = Partial<ResolvedModelCapabilities>;
 export type ModelProviderModelCatalog = DomainModelProviderModelCatalog;
 export type ModelProviderPreset = DomainModelProviderPreset;
 export type ToolConfirmationPolicy = DomainToolConfirmationPolicy;
@@ -47,7 +48,7 @@ export type ModelCapabilityProfile = {
   readonly providerKind: SanitizedModelProviderConfig["providerKind"];
   readonly protocolKind: SanitizedModelProviderConfig["protocolKind"];
   readonly model: string;
-  readonly capabilities: DomainModelCapabilities;
+  readonly capabilities: ResolvedModelCapabilities;
 };
 
 export type ModelProviderMarket = {

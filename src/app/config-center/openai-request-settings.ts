@@ -16,7 +16,6 @@ export function normalizeOpenAIModelRequestSettings(
     textVerbosity: normalizeOpenAITextVerbosity(value.textVerbosity),
     serviceTier: normalizeOpenAIServiceTier(value.serviceTier),
     truncation: normalizeOpenAITruncation(value.truncation),
-    stream: booleanOrUndefined(value.stream),
     parallelToolCalls: booleanOrUndefined(value.parallelToolCalls),
     store: booleanOrUndefined(value.store),
   };
@@ -37,7 +36,6 @@ export function parseOpenAIModelRequestSettings(value: unknown): OpenAIModelRequ
     textVerbosity: parseOpenAITextVerbosity(record.textVerbosity),
     serviceTier: parseOpenAIServiceTier(record.serviceTier),
     truncation: parseOpenAITruncation(record.truncation),
-    stream: booleanFromUnknown(record.stream),
     parallelToolCalls: booleanFromUnknown(record.parallelToolCalls),
     store: booleanFromUnknown(record.store),
   });

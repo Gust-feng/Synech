@@ -129,6 +129,7 @@ export function profileFromModelForm(
     logoDataUrl: logoDataUrlFromModelForm(form),
     providerKind: "openai_compatible",
     protocolKind: form.protocolKind || "openai_compatible_chat_completions",
+    piProviderId: form.piProviderId.trim() || undefined,
     baseUrl: form.baseUrl,
     model: form.model,
     defaultAiMode,
@@ -149,6 +150,7 @@ export function profileDraftFromModelForm(
     logoDataUrl: item.protectedBuiltin ? item.logoDataUrl : logoDataUrlFromModelForm(form),
     providerKind: fallback?.providerKind ?? item.preset?.providerKind ?? "openai_compatible",
     protocolKind: form.protocolKind || fallback?.protocolKind || item.protocolKind,
+    piProviderId: form.piProviderId.trim() || fallback?.piProviderId,
     baseUrl: form.baseUrl || fallback?.baseUrl || item.baseUrl,
     model: form.model,
     defaultAiMode: fallback?.defaultAiMode,
@@ -216,6 +218,7 @@ function sameProjectedProfile(left: ModelProviderProfileItem, right: ModelProvid
     left.logoDataUrl === right.logoDataUrl &&
     left.providerKind === right.providerKind &&
     left.protocolKind === right.protocolKind &&
+    left.piProviderId === right.piProviderId &&
     left.baseUrl === right.baseUrl &&
     left.model === right.model &&
     left.defaultAiMode === right.defaultAiMode;

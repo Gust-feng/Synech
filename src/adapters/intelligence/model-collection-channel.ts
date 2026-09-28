@@ -181,13 +181,13 @@ function contextFromRequest(request: ModelRequest): {
   const messages: Array<{ readonly role: "user"; readonly content: string; readonly timestamp: number }> = [];
   for (const message of request.sanitizedMessages) {
     if (message.role === "system" && systemPrompt === undefined) {
-      if (message.attachments !== undefined || message.protocolExtensions !== undefined) {
-        return { error: "Pi model collection channel cannot carry system message attachments or protocol extensions." };
+      if (message.attachments !== undefined) {
+        return { error: "Pi model collection channel cannot carry system message attachments." };
       }
       systemPrompt = message.content;
       continue;
     }
-    if (message.role !== "user" || message.attachments !== undefined || message.protocolExtensions !== undefined) {
+    if (message.role !== "user" || message.attachments !== undefined) {
       return { error: "Pi model collection channel only accepts text system and user messages." };
     }
     messages.push({ role: "user", content: message.content, timestamp: Date.now() });

@@ -9,7 +9,7 @@ import type {
   LocalDevSecretStore,
   McpServerSecretValueInput,
   McpServerSettings,
-  ModelCapabilities,
+  ModelCapabilityOverrideValues,
   ModelCapabilityOverrideSettings,
   ModelProviderModelCatalog,
   SettingsStore,
@@ -227,7 +227,7 @@ export class ConfigCenter {
     readonly profileId?: string;
     readonly model: string;
     readonly providerKind?: ConfiguredModelProviderKind;
-    readonly capabilities: Partial<ModelCapabilities>;
+    readonly capabilities: ModelCapabilityOverrideValues;
   }): Promise<readonly ModelCapabilityOverrideSettings[]> {
     return this.runMutation(async () => {
       const current = await this.readOrCreateSettings();

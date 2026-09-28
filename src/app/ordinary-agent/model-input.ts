@@ -232,14 +232,10 @@ function cloneModelMessage(message: ModelMessage): ModelMessage {
     ...call,
     input: globalThis.structuredClone(call.input),
   }));
-  const protocolExtensions = message.protocolExtensions === undefined
-    ? undefined
-    : globalThis.structuredClone(message.protocolExtensions);
   return {
     ...message,
     ...(attachments === undefined ? {} : { attachments }),
     ...(toolCalls === undefined ? {} : { toolCalls }),
-    ...(protocolExtensions === undefined ? {} : { protocolExtensions }),
   };
 }
 

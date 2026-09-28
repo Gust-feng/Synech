@@ -63,13 +63,6 @@ export function modelUsageFromProvider(usage: Usage): ModelUsage {
   };
 }
 
-export function providerRefusalFromAssistant(assistant: AssistantMessage): string | undefined {
-  const diagnostic = assistant.diagnostics?.find((item) => item.type === "provider_refusal");
-  if (diagnostic === undefined) return undefined;
-  const refusal = diagnostic.details?.refusal;
-  return typeof refusal === "string" ? refusal.trim() : "";
-}
-
 export function providerFailureFromAssistant(
   assistant: AssistantMessage,
   contextWindow: number,
@@ -85,15 +78,12 @@ export function providerFailureFromAssistant(
   const diagnostic = [...(assistant.diagnostics ?? [])].reverse().find((item) =>
     item.type === "provider_transport_failure" || item.type === "pi_messages_response_failure");
   const status = finiteInteger(diagnostic?.details?.status);
-  // SDK errors carry the account-level code inside the response body, not on the
-  // error object, so the body is the structured source for codes such as
-  // `insufficient_quota`.
+  // SDK errors carry the account-level and policy codes inside the response
+  // body, not on the error object, so the body is the structured source.
   const code = structuredProviderErrorCode(diagnostic) ?? stringOrNumber(diagnostic?.details?.code);
-  const incompleteReason = assistant.providerMetadata?.incompleteReason;
   return {
     error,
     errorCode: modelFailureKindFromFacts({
-      ...(incompleteReason === "content_filter" ? { explicitKind: "content_filtered" as const } : {}),
       ...(status === undefined ? {} : { status }),
       ...(code === undefined ? {} : { code }),
       ...(diagnostic?.error?.name === undefined ? {} : { name: diagnostic.error.name }),

@@ -9,7 +9,8 @@ import type { AppState } from "../../workbench/state";
 import type { ChatModelOption } from "../../contracts/composer";
 import type { McpServerForm, ModelForm, ToolForm } from "./components/types";
 import type { ModelProviderModelCatalog } from "@panel-api/config";
-import { modelOptionSupportsReasoningEffort, modelOptionsFromConfig, selectedModelOptionId } from "./model/options";
+import { modelOptionRunReasoningLevels, modelOptionSupportsReasoningEffort, modelOptionsFromConfig, selectedModelOptionId } from "./model/options";
+import { modelContextWindowTokens } from "./model/capability-display";
 
 export type AppWorkbenchConfigState = {
   readonly aiMode: VisibleAiMode;
@@ -45,6 +46,7 @@ export function useAppWorkbenchConfigState(app: AppState): AppWorkbenchConfigSta
     logoCleared: false,
     baseUrl: "",
     protocolKind: "openai_compatible_chat_completions",
+    piProviderId: "",
     model: "",
     apiKey: "",
     apiKeyCleared: false,
@@ -102,8 +104,12 @@ export function useAppWorkbenchConfigState(app: AppState): AppWorkbenchConfigSta
     () => modelOptionSupportsReasoningEffort(app.config, selectedModelId),
     [app.config, selectedModelId],
   );
+  const selectedModelRunReasoningLevels = useMemo(
+    () => modelOptionRunReasoningLevels(app.config, selectedModelId),
+    [app.config, selectedModelId],
+  );
   const selectedModelContextWindowTokens = useMemo(
-    () => modelOptions.find((model) => model.id === selectedModelId)?.capabilities?.contextWindowTokens,
+    () => modelContextWindowTokens(modelOptions.find((model) => model.id === selectedModelId)?.capabilities),
     [modelOptions, selectedModelId],
   );
 
@@ -121,7 +127,7 @@ export function useAppWorkbenchConfigState(app: AppState): AppWorkbenchConfigSta
     persistedSelectedModelId,
     modelOptions,
     composerReasoningEffort,
-    selectedModelSupportsReasoningEffort,
+    selectedModelRunReasoningLevels,
     setComposerReasoningEffort,
   });
 

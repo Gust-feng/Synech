@@ -7,6 +7,7 @@ import type {
 } from "../../panel-api/ordinary-agent.js";
 import type { OrdinaryRunActivityCursor, OrdinaryRunState } from "../../ordinary-agent/contracts.js";
 import { parseContextReference } from "../../../domain/ordinary/index.js";
+import { resolvedContextWindowTokens } from "../../../domain/config/index.js";
 import type {
   OrdinaryPanelCapabilityResolution,
   OrdinaryPanelRun,
@@ -19,7 +20,9 @@ export function projectCapabilityResolution(
 ): OrdinaryPanelCapabilityResolution | undefined {
   if (resolution === undefined) return undefined;
   return {
-    modelContextWindowTokens: resolution.capabilityPlan.modelCapabilities.contextWindowTokens,
+    ...(resolvedContextWindowTokens(resolution.capabilityPlan.modelCapabilities) === undefined
+      ? {}
+      : { modelContextWindowTokens: resolvedContextWindowTokens(resolution.capabilityPlan.modelCapabilities) }),
   };
 }
 

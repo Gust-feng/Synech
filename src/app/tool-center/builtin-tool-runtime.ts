@@ -1,10 +1,11 @@
 import type {
   CapabilityToolAvailability,
-  ModelCapabilities,
+  ResolvedModelCapabilities,
   SanitizedCommandShellConfig,
   ToolStateSettings,
   WebSearchRuntimeConfig,
 } from "../../domain/config/index.js";
+import { resolvedSupportsVisionInput } from "../../domain/config/index.js";
 import type { ContextAttachmentRunContext } from "./adapters/context-attachment-access.js";
 import type { ToolCategory, ToolExecutor } from "../../domain/tools/index.js";
 import type { ProcessTerminator } from "../runtime-guard/index.js";
@@ -71,7 +72,7 @@ export type CreateAgentToolRegistryOptions = {
   readonly processRegistry?: LocalCommandProcessRegistry;
   readonly processTerminator?: ProcessTerminator;
   readonly runContext?: ContextAttachmentRunContext;
-  readonly modelCapabilities?: ModelCapabilities;
+  readonly modelCapabilities?: ResolvedModelCapabilities;
   readonly toolOutputStore?: ToolOutputStore;
   readonly outputTokenCounter?: ToolOutputTokenCounter;
   readonly metricsSink?: ToolExecutionMetricsSink;
@@ -165,7 +166,8 @@ export function createAgentToolRegistry(
     const currentAvailability =
       executor.definition.name === "WebFetch" && !webFetchAvailability.available
         ? { status: "unavailable" as const, disabledReason: webFetchAvailability.reason }
-        : executor.definition.name === "AttachmentReadImage" && options.modelCapabilities?.supportsVisionInput === false
+        : executor.definition.name === "AttachmentReadImage" && options.modelCapabilities !== undefined &&
+            resolvedSupportsVisionInput(options.modelCapabilities) !== true
           ? { status: "unavailable" as const, disabledReason: "Current model does not support vision input." }
           : { status: "available" as const };
     targetRegistry.register({
@@ -198,7 +200,9 @@ function contextAttachmentExecutors(
   return createContextAttachmentTools({
     runContext: options.runContext,
     workspaceRoot,
-    supportsVisionInput: options.modelCapabilities?.supportsVisionInput,
+    supportsVisionInput: options.modelCapabilities === undefined
+      ? undefined
+      : resolvedSupportsVisionInput(options.modelCapabilities) === true,
     resolveManagedAttachmentPath: options.resolveManagedAttachmentPath,
     readAuthorization: options.contextAttachmentReadAuthorization,
   });

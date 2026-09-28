@@ -1,4 +1,4 @@
-import { friendlyFailureCopy, friendlyModelFailureKindCopy } from "./failure-copy.js";
+import { friendlyFailureCopy } from "./failure-copy.js";
 
 export function sanitizeAssistantVisibleText(
   value: string,
@@ -40,14 +40,11 @@ export function friendlyUserFacingFailureText(message: string | undefined): stri
 export function friendlyUserFacingModelFailureText(
   payload: Readonly<Record<string, unknown>>
 ): string {
-  const failureKind = typeof payload.failureKind === "string" ? payload.failureKind : undefined;
   const message = optionalFriendlyFailureMessage(
     typeof payload.failureMessage === "string" ? payload.failureMessage : undefined
   );
-  if (failureKind === "provider_response" && message !== undefined) {
-    return message;
-  }
-  return friendlyModelFailureKindCopy(failureKind) ?? message ?? "没有返回可用结果。";
+  // 厂商返回什么就显示什么；没返回就空着。
+  return message ?? "";
 }
 
 function optionalFriendlyFailureMessage(message: string | undefined): string | undefined {

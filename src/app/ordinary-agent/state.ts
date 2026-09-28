@@ -1045,6 +1045,7 @@ function eventForTransition(
             type: "context.compaction.completed",
             compactionEntryRef: cloneJson(transition.checkpoint.compactionEntryRef),
             tokensBefore: transition.checkpoint.tokensBefore,
+            replacedImageBlocks: transition.checkpoint.replacedImageBlocks,
           };
       }
       if ((transition.checkpoint.kind === "assistant_tool_call_entry_committed" ||

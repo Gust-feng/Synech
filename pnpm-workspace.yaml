@@ -11,6 +11,3 @@ minimumReleaseAgeExclude:
 overrides:
   hono: 4.12.30
   qs: 6.15.3
-
-patchedDependencies:
-  '@earendil-works/pi-ai@0.80.10': patches/@earendil-works__pi-ai@0.80.10.patch

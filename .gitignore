@@ -46,3 +46,6 @@ panel-template-upload50/
 panel-template-export.zip
 scripts/eval-*.mjs
 scripts/tmp-*.py
+
+# Generated at build time from the @earendil-works/pi-ai model catalog.
+src/app/model-runtime/model-capability-definitions.generated.ts

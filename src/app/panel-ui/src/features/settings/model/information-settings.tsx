@@ -5,6 +5,15 @@ import type { ChatModelOption } from "../../../contracts/composer";
 import { modelOptionsFromConfig } from "./options";
 import { ModelOptionPicker } from "./option-picker";
 import { CapabilitySettingsSection } from "../components/capability-section";
+import {
+  formatTokenWindow,
+  isConfirmedModelFacts,
+  modelContextWindowTokens,
+  modelMaxOutputTokens,
+  modelSupportsReasoningEffort,
+  modelSupportsVisionInput,
+  type ModelCapabilityOverride,
+} from "./capability-display";
 
 type ModelCapabilityTarget = {
   readonly key: string;
@@ -13,7 +22,6 @@ type ModelCapabilityTarget = {
   readonly providerKind?: string;
   readonly model: string;
   readonly effectiveCapabilities?: ModelCapabilities;
-  readonly overrideCapabilities?: ModelCapabilities;
 };
 
 type ModelCapabilityDraft = {
@@ -35,7 +43,7 @@ export function ModelInformationSettings(props: {
     readonly profileId: string;
     readonly providerKind?: string;
     readonly model: string;
-    readonly capabilities: ModelCapabilities;
+    readonly capabilities: ModelCapabilityOverride;
   }) => Promise<void>;
 }): React.ReactElement {
   const targets = React.useMemo(
@@ -64,10 +72,7 @@ export function ModelInformationSettings(props: {
     setDraft(modelCapabilityDraftFrom(selectedTarget?.effectiveCapabilities));
   }, [
     selectedTarget?.key,
-    selectedTarget?.effectiveCapabilities?.contextWindowTokens,
-    selectedTarget?.effectiveCapabilities?.maxOutputTokens,
-    selectedTarget?.effectiveCapabilities?.supportsVisionInput,
-    selectedTarget?.effectiveCapabilities?.supportsReasoningEffort,
+    selectedTarget?.effectiveCapabilities,
   ]);
 
   const updateDraft = (patch: Partial<ModelCapabilityDraft>): void => {
@@ -82,7 +87,7 @@ export function ModelInformationSettings(props: {
       profileId: selectedTarget.profileId,
       providerKind: selectedTarget.providerKind,
       model: selectedTarget.model,
-      capabilities: modelCapabilitiesFromDraft(draft, selectedTarget.overrideCapabilities),
+      capabilities: modelCapabilityOverrideFromDraft(draft, selectedTarget.effectiveCapabilities?.override),
     });
   };
 
@@ -120,6 +125,9 @@ export function ModelInformationSettings(props: {
                 placement="top"
               />
             </div>
+          </div>
+          <ModelFactsSummary capabilities={selectedTarget.effectiveCapabilities} />
+          <div className="model-info-grid">
             <label className="model-info-field">
               上下文窗口
               <input
@@ -153,6 +161,9 @@ export function ModelInformationSettings(props: {
               />
             </label>
           </div>
+          <p className="model-info-override-hint">
+            以下为你的显式声明，可覆盖 Pi 事实；Pi 未识别的模型只能由这里声明能力。
+          </p>
           <div className="model-info-toggle-grid" aria-label="模型信息开关">
             {MODEL_CAPABILITY_TOGGLES.map((item) => (
               <div className="model-info-toggle-row" key={item.key}>
@@ -171,6 +182,46 @@ export function ModelInformationSettings(props: {
         </>
       )}
     </CapabilitySettingsSection>
+  );
+}
+
+/** Pi 事实投影：已知模型展示真实事实，未确认模型不展示任何未确认能力信息。 */
+function ModelFactsSummary(props: { readonly capabilities?: ModelCapabilities }): React.ReactElement {
+  const facts = props.capabilities?.facts;
+  if (!isConfirmedModelFacts(facts)) {
+    return (
+      <div className="capability-empty">
+        远程发现的模型，Pi 未识别：不展示上下文窗口、视觉与推理等未确认信息。
+      </div>
+    );
+  }
+  const contextWindow = formatTokenWindow(facts.contextWindowTokens);
+  const maxOutput = formatTokenWindow(facts.maxOutputTokens);
+  return (
+    <div className="model-info-grid" aria-label="Pi 模型事实">
+      <div className="model-info-field">
+        <span>Pi Provider</span>
+        <strong>{facts.piProviderId}</strong>
+      </div>
+      <div className="model-info-field">
+        <span>上下文窗口</span>
+        <strong>{contextWindow ?? "未提供"}</strong>
+      </div>
+      <div className="model-info-field">
+        <span>最大输出</span>
+        <strong>{maxOutput ?? "未提供"}</strong>
+      </div>
+      <div className="model-info-field">
+        <span>视觉输入</span>
+        <strong>{facts.supportsVisionInput ? "支持" : "不支持"}</strong>
+      </div>
+      <div className="model-info-field model-info-field-wide">
+        <span>推理档位</span>
+        <strong>
+          {facts.thinkingLevels.length === 0 ? "未提供" : facts.thinkingLevels.join(" / ")}
+        </strong>
+      </div>
+    </div>
   );
 }
 
@@ -195,7 +246,6 @@ function modelCapabilityTargets(
   }
   return modelOptionsFromConfig(config, modelCatalogs ?? {}, { includeCapabilityProfileModels: true }).map((option) => {
     const providerKind = providers.get(option.profileId)?.providerKind;
-    const overrideCapabilities = modelCapabilityOverrideForTarget(config, option.profileId, option.modelId);
     return {
       key: option.id,
       option,
@@ -203,34 +253,25 @@ function modelCapabilityTargets(
       model: option.modelId,
       ...(providerKind === undefined ? {} : { providerKind }),
       ...(option.capabilities === undefined ? {} : { effectiveCapabilities: option.capabilities }),
-      ...(overrideCapabilities === undefined ? {} : { overrideCapabilities }),
     };
   });
 }
 
-function modelCapabilityOverrideForTarget(
-  config: ConfigResponse | undefined,
-  profileId: string,
-  model: string
-): ModelCapabilities | undefined {
-  return config?.modelCapabilityProfiles?.find((item) => item.profileId === profileId && item.model === model)?.capabilities;
-}
-
 function modelCapabilityDraftFrom(capabilities: ModelCapabilities | undefined): ModelCapabilityDraft {
   return {
-    contextWindowTokens: stringFromPositiveInteger(capabilities?.contextWindowTokens),
-    maxOutputTokens: stringFromPositiveInteger(capabilities?.maxOutputTokens),
-    supportsVisionInput: capabilities?.supportsVisionInput === true,
-    supportsReasoningEffort: capabilities?.supportsReasoningEffort === true,
+    contextWindowTokens: stringFromPositiveInteger(modelContextWindowTokens(capabilities)),
+    maxOutputTokens: stringFromPositiveInteger(modelMaxOutputTokens(capabilities)),
+    supportsVisionInput: modelSupportsVisionInput(capabilities) === true,
+    supportsReasoningEffort: modelSupportsReasoningEffort(capabilities) === true,
   };
 }
 
-function modelCapabilitiesFromDraft(
+function modelCapabilityOverrideFromDraft(
   draft: ModelCapabilityDraft,
-  baseCapabilities: ModelCapabilities | undefined
-): ModelCapabilities {
+  baseOverride: ModelCapabilityOverride | undefined
+): ModelCapabilityOverride {
   return {
-    ...baseCapabilities,
+    ...baseOverride,
     contextWindowTokens: positiveIntegerFromString(draft.contextWindowTokens),
     maxOutputTokens: positiveIntegerFromString(draft.maxOutputTokens),
     supportsVisionInput: draft.supportsVisionInput,
@@ -243,10 +284,10 @@ function modelCapabilityDraftChanged(
   capabilities: ModelCapabilities | undefined
 ): boolean {
   return (
-    draft.contextWindowTokens !== stringFromPositiveInteger(capabilities?.contextWindowTokens) ||
-    draft.maxOutputTokens !== stringFromPositiveInteger(capabilities?.maxOutputTokens) ||
-    draft.supportsVisionInput !== (capabilities?.supportsVisionInput === true) ||
-    draft.supportsReasoningEffort !== (capabilities?.supportsReasoningEffort === true)
+    draft.contextWindowTokens !== stringFromPositiveInteger(modelContextWindowTokens(capabilities)) ||
+    draft.maxOutputTokens !== stringFromPositiveInteger(modelMaxOutputTokens(capabilities)) ||
+    draft.supportsVisionInput !== (modelSupportsVisionInput(capabilities) === true) ||
+    draft.supportsReasoningEffort !== (modelSupportsReasoningEffort(capabilities) === true)
   );
 }
 

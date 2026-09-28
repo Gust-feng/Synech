@@ -4,7 +4,7 @@ import type {
   CreateModelProviderProfileInput,
   McpConfirmationMode,
   McpServerTransportKind,
-  ModelCapabilities,
+  ModelCapabilityOverrideValues,
   ModelRunReasoningEffort,
   ModelProviderModelCatalogItem,
   OpenAIModelRequestSettings,
@@ -72,7 +72,7 @@ export type ModelCapabilityUpdateInput = {
   readonly profileId?: string;
   readonly model?: string;
   readonly providerKind?: ConfiguredModelProviderKind;
-  readonly capabilities: Partial<ModelCapabilities>;
+  readonly capabilities: ModelCapabilityOverrideValues;
 };
 
 type ConversationRollbackInput = {
@@ -185,13 +185,17 @@ export function parseConfigUpdate(raw: unknown): UpdateModelProviderConfigInput 
     enabled: booleanOrUndefined(record.enabled),
     apiKey: optionalString(record.apiKey),
     clearApiKey: booleanOrUndefined(record.clearApiKey),
+    clearPiProviderId: booleanOrUndefined(record.clearPiProviderId),
   };
-  return "openAI" in record
-    ? {
-        ...update,
-        openAI: parseOpenAIModelRequestSettings(record.openAI),
-      }
-    : update;
+  return {
+    ...update,
+    // piProviderId 只在请求真实带该字段时传递：config-center 会把空串归一为
+    // undefined（显式清空），但请求没提的字段不能变成 undefined 清掉既有声明。
+    ...("piProviderId" in record ? { piProviderId: optionalString(record.piProviderId) } : {}),
+    ...("openAI" in record
+      ? { openAI: parseOpenAIModelRequestSettings(record.openAI) }
+      : {}),
+  };
 }
 
 export function parseCreateModelProfile(raw: unknown): CreateModelProviderProfileInput {
@@ -281,11 +285,11 @@ function positiveIntegerOrUndefined(value: unknown, message: string): number | u
   return Math.floor(value);
 }
 
-function parseOptionalPreferredApiStyle(value: unknown): ModelCapabilities["preferredApiStyle"] | undefined {
+function parseOptionalPreferredApiStyle(value: unknown): ModelCapabilityOverrideValues["preferredApiStyle"] | undefined {
   return parseOptionalEnum(preferredApiStyleSchema, value, "invalid_model_capability", "模型 API 风格无效。");
 }
 
-function parseOptionalModelStability(value: unknown): ModelCapabilities["stability"] | undefined {
+function parseOptionalModelStability(value: unknown): ModelCapabilityOverrideValues["stability"] | undefined {
   return parseOptionalEnum(modelStabilitySchema, value, "invalid_model_capability", "模型稳定性无效。");
 }
 
@@ -737,7 +741,6 @@ function parseOpenAIModelRequestSettings(value: unknown): OpenAIModelRequestSett
     textVerbosity: parseOptionalOpenAITextVerbosity(record.textVerbosity),
     serviceTier: parseOptionalOpenAIServiceTier(record.serviceTier),
     truncation: parseOptionalOpenAITruncation(record.truncation),
-    stream: booleanOrUndefined(record.stream),
     parallelToolCalls: booleanOrUndefined(record.parallelToolCalls),
     store: booleanOrUndefined(record.store),
   };

@@ -1,3 +1,5 @@
+import type { ModelCapabilityOverrideValues, ResolvedModelCapabilities } from "./model-facts.js";
+
 export type ConfiguredModelRuntimeMode = "none" | "openai-compatible" | "openai-responses";
 
 export type ConfiguredModelProviderKind = "openai_compatible";
@@ -14,20 +16,31 @@ export type ProviderProtocolProfileId =
   | "minimax"
   | "openai_compatible";
 
-export type ModelReasoningControlKind =
-  | "none"
-  | "openai_responses_reasoning_effort"
-  | "openai_chat_reasoning_effort"
-  | "deepseek_reasoning_effort"
-  | "kimi_k3_reasoning_effort"
-  | "thinking_enabled_disabled"
-  | "thinking_disabled"
-  | "reasoning_split";
-
 export type ModelPreferredApiStyle =
   | "chat_completions"
   | "responses"
   | "openai_compatible";
+
+/** 协议层工具调用能力事实（与具体模型无关，由 protocolKind 决定）。 */
+export type ProtocolToolCallCapabilities = {
+  readonly protocolKind: ConfiguredModelProtocolKind;
+  readonly canSendToolDefinitions: boolean;
+  readonly canReceiveToolCalls: boolean;
+  readonly canRoundTripToolResults: boolean;
+};
+
+export type ProviderProtocolProfile = {
+  readonly profileId: ProviderProtocolProfileId;
+  readonly label: string;
+  readonly providerKind: ConfiguredModelProviderKind;
+  readonly recommendedProtocolKind: ConfiguredModelProtocolKind;
+  readonly supportedProtocolKinds: readonly ConfiguredModelProtocolKind[];
+  readonly defaultBaseUrl: string;
+  readonly modelsPath: string;
+  readonly unsupportedParams: readonly string[];
+  readonly ignoredParams: readonly string[];
+  readonly dangerousParams: readonly string[];
+};
 
 export type ModelStability = "stable" | "preview" | "deprecated" | "unknown";
 
@@ -52,7 +65,6 @@ export type OpenAIModelRequestSettings = {
   readonly textVerbosity?: OpenAITextVerbosity;
   readonly serviceTier?: OpenAIServiceTier;
   readonly truncation?: OpenAITruncationMode;
-  readonly stream?: boolean;
   readonly parallelToolCalls?: boolean;
   readonly store?: boolean;
 };
@@ -70,6 +82,12 @@ export type ModelProviderPreset = {
   readonly defaultModel?: string;
   readonly regionLabel?: string;
   readonly docsUrl?: string;
+  /**
+   * 该预置端点对应的 pi-ai 真实 provider id（如 `openai` / `moonshotai-cn`）。
+   * 已知模型的运行事实按此显式声明在 pi 真实目录中精确匹配；未声明（如通用
+   * OpenAI 兼容端点）时，该连接的全部模型都按「远程发现、Pi 未识别」处理。
+   */
+  readonly piProviderId?: string;
 };
 
 export type ModelProviderModelCatalogItem = {
@@ -88,68 +106,19 @@ export type ModelProviderModelCatalog = {
   readonly models: readonly ModelProviderModelCatalogItem[];
 };
 
-export type ModelCapabilities = {
-  readonly contextWindowTokens: number;
-  readonly maxOutputTokens: number;
-  readonly supportsToolCalling: boolean;
-  readonly supportsParallelToolCalls: boolean;
-  readonly supportsStructuredOutputs: boolean;
-  readonly supportsStreaming: boolean;
-  readonly supportsVisionInput: boolean;
-  /** Provenance-rich image capability fact; Pi model.input remains final transport authority. */
-  readonly imageInput?: {
-    readonly status: "supported" | "unsupported" | "unknown";
-    readonly source: "registry" | "override" | "protocol_default";
-    readonly verifiedAt?: string;
-  };
-  readonly supportsReasoningEffort: boolean;
-  readonly supportsReasoningOutput?: boolean;
-  readonly preferredApiStyle: ModelPreferredApiStyle;
-  readonly stability: ModelStability;
-  readonly protocolProfileId?: ProviderProtocolProfileId;
-  readonly reasoningControl?: ModelReasoningControlKind;
-  readonly lastVerifiedAt?: string;
-};
-
-export type ProtocolToolCallCapabilities = {
-  readonly protocolKind: ConfiguredModelProtocolKind;
-  readonly canSendToolDefinitions: boolean;
-  readonly canReceiveToolCalls: boolean;
-  readonly canRoundTripToolResults: boolean;
-};
-
-export type ProviderProtocolProfile = {
-  readonly profileId: ProviderProtocolProfileId;
-  readonly label: string;
-  readonly providerKind: ConfiguredModelProviderKind;
-  readonly recommendedProtocolKind: ConfiguredModelProtocolKind;
-  readonly supportedProtocolKinds: readonly ConfiguredModelProtocolKind[];
-  readonly defaultBaseUrl: string;
-  readonly modelsPath: string;
-  readonly reasoningControl: ModelReasoningControlKind;
-  readonly unsupportedParams: readonly string[];
-  readonly ignoredParams: readonly string[];
-  readonly dangerousParams: readonly string[];
-};
-
 export type ModelCapabilityProfile = {
-  readonly providerProfileId: ProviderProtocolProfileId;
+  readonly profileId: string;
   readonly providerKind: ConfiguredModelProviderKind;
   readonly protocolKind: ConfiguredModelProtocolKind;
-  readonly modelPattern: string;
-  readonly label: string;
-  readonly capabilities: ModelCapabilities;
-  readonly reasoningControl: ModelReasoningControlKind;
-  readonly unsupportedParams: readonly string[];
-  readonly ignoredParams: readonly string[];
-  readonly dangerousParams: readonly string[];
+  readonly model: string;
+  readonly capabilities: ResolvedModelCapabilities;
 };
 
 export type ModelCapabilityOverrideSettings = {
   readonly profileId?: string;
   readonly providerKind?: ConfiguredModelProviderKind;
   readonly model: string;
-  readonly capabilities: Partial<ModelCapabilities>;
+  readonly capabilities: ModelCapabilityOverrideValues;
   readonly updatedAt: string;
 };
 
@@ -162,6 +131,11 @@ export type ModelProviderProfileSettings = {
   readonly baseUrl?: string;
   readonly model?: string;
   readonly openAI?: OpenAIModelRequestSettings;
+  /**
+   * 连接显式声明的 pi-ai provider id。非空时，已知模型按此 provider 在 pi 真实
+   * 目录中精确匹配 modelId；为空时该连接的全部模型按未知发现模型处理。
+   */
+  readonly piProviderId?: string;
   readonly defaultAiMode: ConfiguredModelRuntimeMode;
   readonly secretRef: string;
   readonly enabled: boolean;
@@ -177,6 +151,7 @@ export type SanitizedModelProviderConfig = {
   readonly baseUrl: string;
   readonly model?: string;
   readonly openAI?: OpenAIModelRequestSettings;
+  readonly piProviderId?: string;
   readonly defaultAiMode: ConfiguredModelRuntimeMode;
   readonly secretRef: string;
   readonly enabled?: boolean;
@@ -195,6 +170,8 @@ export type UpdateModelProviderConfigInput = {
   readonly baseUrl?: string;
   readonly model?: string;
   readonly openAI?: OpenAIModelRequestSettings;
+  readonly piProviderId?: string;
+  readonly clearPiProviderId?: boolean;
   readonly clearModel?: boolean;
   readonly defaultAiMode?: ConfiguredModelRuntimeMode;
   readonly enabled?: boolean;

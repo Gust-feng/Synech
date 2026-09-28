@@ -17,19 +17,9 @@ const MODEL_CONFIG = {
   updatedAt: "2026-09-02T00:00:00.000Z",
 };
 
-const MODEL_CAPABILITIES = {
-  contextWindowTokens: 32_000,
-  maxOutputTokens: 1_024,
-  supportsToolCalling: false,
-  supportsParallelToolCalls: false,
-  supportsStructuredOutputs: false,
-  supportsStreaming: true,
-  supportsVisionInput: false,
-  supportsReasoningEffort: false,
-  preferredApiStyle: "openai_compatible",
-  stability: "stable",
-  protocolProfileId: "openai",
-};
+// The test model lives on an example.invalid endpoint with no declared pi
+// provider, so its capability projection is the unconfirmed two-state fact.
+const MODEL_CAPABILITIES = { facts: { status: "unconfirmed", modelId: "test-model" } };
 
 function frozenDefinition() {
   return {

@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { CodedExecutionError } from "../execution-errors/index.js";
 import { imageMimeTypeForPath } from "../local-filesystem/index.js";
-import type { ModelCapabilities } from "../../domain/config/index.js";
+import { resolvedSupportsVisionInput, type ResolvedModelCapabilities } from "../../domain/config/index.js";
 import type { ModelInputAttachment, ModelMessage } from "../../domain/intelligence/index.js";
 import {
   managedAttachmentId,
@@ -19,7 +19,7 @@ const MAX_IMAGE_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 export async function attachOrdinaryFileInputsToModelMessages(input: {
   readonly messages: readonly ModelMessage[];
   readonly runContext: OrdinaryRunContext;
-  readonly modelCapabilities?: ModelCapabilities;
+  readonly modelCapabilities?: ResolvedModelCapabilities;
   readonly workspaceRoot?: string;
   readonly resolveManagedAttachmentPath?: (attachmentId: string) => Promise<string | undefined>;
   readonly readAuthorization?: {
@@ -38,7 +38,7 @@ export async function attachOrdinaryFileInputsToModelMessages(input: {
       "This run contains image attachments, but the frozen model capability is unknown.",
     );
   }
-  if (input.modelCapabilities.supportsVisionInput !== true) {
+  if (resolvedSupportsVisionInput(input.modelCapabilities) !== true) {
     // A text-only model cannot consume the images right now, but the bytes
     // must still be resolved and attached: they enter the Pi durable Session
     // so a later vision-capable model in the same conversation can rebuild

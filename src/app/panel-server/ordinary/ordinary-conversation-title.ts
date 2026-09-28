@@ -47,12 +47,9 @@ export function createOrdinaryConversationTitleGenerator(input: {
         mode,
         informationAccess: birth.informationAccess,
       }),
-      supportsVisionInput: birth.capabilitySnapshot.modelCapabilities.supportsVisionInput === true,
-      supportsReasoningOutput: birth.capabilitySnapshot.modelCapabilities.supportsReasoningOutput === true,
-      contextWindow: birth.capabilitySnapshot.modelCapabilities.contextWindowTokens,
-      maxOutputTokens: birth.capabilitySnapshot.modelCapabilities.maxOutputTokens,
       providerKind: birth.config.providerKind,
       supportedPurposes: ["conversation_title"],
+      ...(birth.config.piProviderId === undefined ? {} : { piProviderId: birth.config.piProviderId }),
     });
     const requestId = createId("model-request");
     const response = await channel.request({

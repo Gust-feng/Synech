@@ -3,7 +3,6 @@ export type {
   ConfiguredModelProviderKind,
   ConfiguredModelProtocolKind,
   ProviderProtocolProfileId,
-  ModelReasoningControlKind,
   ModelPreferredApiStyle,
   ModelStability,
   OpenAIReasoningEffort,
@@ -16,7 +15,6 @@ export type {
   ModelProviderPreset,
   ModelProviderModelCatalogItem,
   ModelProviderModelCatalog,
-  ModelCapabilities,
   ProtocolToolCallCapabilities,
   ProviderProtocolProfile,
   ModelCapabilityProfile,
@@ -26,6 +24,26 @@ export type {
   UpdateModelProviderConfigInput,
   CreateModelProviderProfileInput,
 } from "./model-settings.js";
+export type {
+  ModelTransportKind,
+  ModelThinkingLevelName,
+  ConfirmedModelFacts,
+  UnconfirmedModelFacts,
+  ModelFacts,
+  ModelCapabilityOverrideValues,
+  ResolvedModelCapabilities,
+} from "./model-facts.js";
+export {
+  isConfirmedModelFacts,
+  confirmedModelSupportsReasoningEffort,
+  resolvedContextWindowTokens,
+  resolvedMaxOutputTokens,
+  resolvedSupportsVisionInput,
+  resolvedSupportsReasoningEffort,
+  resolvedThinkingLevels,
+  resolvedSupportsStrictToolSchemas,
+  resolvedSupportsParallelToolCalls,
+} from "./model-facts.js";
 export type {
   ToolStateSettings,
   ConfiguredCommandShellKind,

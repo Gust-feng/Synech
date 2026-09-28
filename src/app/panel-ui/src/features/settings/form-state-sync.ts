@@ -9,6 +9,7 @@ import {
   type ComposerToolConfirmationPolicy,
   type VisibleAiMode,
 } from "./config-projection";
+import type { RunReasoningEffortLevel } from "./model/capability-display";
 import type { AppState } from "../../workbench/state";
 import type { McpServerForm, ModelForm, ToolForm } from "./components/types";
 import type { ModelProviderModelCatalog } from "@panel-api/config";
@@ -31,7 +32,7 @@ export type AppFormStateSyncOptions = {
   readonly persistedSelectedModelId: string;
   readonly modelOptions: readonly ModelOptionRef[];
   readonly composerReasoningEffort: ComposerReasoningEffort;
-  readonly selectedModelSupportsReasoningEffort: boolean;
+  readonly selectedModelRunReasoningLevels: readonly RunReasoningEffortLevel[];
   readonly setComposerReasoningEffort: Dispatch<SetStateAction<ComposerReasoningEffort>>;
 };
 
@@ -54,6 +55,7 @@ export function useAppFormStateSync(options: AppFormStateSyncOptions): void {
           logoCleared: false,
           baseUrl: visibleConfigBaseUrl(options.app.config!.config!),
           protocolKind: options.app.config!.config!.protocolKind ?? "openai_compatible_chat_completions",
+          piProviderId: options.app.config!.config!.piProviderId ?? "",
           model: options.app.config!.config!.model ?? "",
           apiKey: "",
           apiKeyCleared: false,
@@ -134,12 +136,16 @@ export function useAppFormStateSync(options: AppFormStateSyncOptions): void {
   ]);
 
   useEffect(() => {
-    if (!options.selectedModelSupportsReasoningEffort && options.composerReasoningEffort !== "") {
-      options.setComposerReasoningEffort("");
-    }
+    // 档位随所选模型的 Pi 可用档位变化：未确认模型没有任何已确认档位，
+    // 已选档位若不在该模型实际可用集合内就必须回到「自动」。
+    const effort = options.composerReasoningEffort;
+    if (effort.length === 0) return;
+    const available: readonly string[] = options.selectedModelRunReasoningLevels;
+    if (available.includes(effort)) return;
+    options.setComposerReasoningEffort("");
   }, [
     options.composerReasoningEffort,
-    options.selectedModelSupportsReasoningEffort,
+    options.selectedModelRunReasoningLevels,
     options.setComposerReasoningEffort,
   ]);
 }

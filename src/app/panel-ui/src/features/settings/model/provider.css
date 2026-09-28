@@ -611,6 +611,13 @@
   padding: 0 10px;
 }
 
+.provider-field-hint {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: var(--weight-body);
+  line-height: 1.45;
+}
+
 .api-key-field input {
   padding-right: 56px;
 }

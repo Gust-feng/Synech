@@ -33,6 +33,8 @@ export function createDefaultModelProviderProfile(now: string): ModelProviderPro
     providerKind: "openai_compatible",
     protocolKind: "openai_responses",
     baseUrl: DEFAULT_MODEL_PROVIDER_BASE_URL,
+    // 默认槽位就是 openai 预置：pi provider 显式声明，后续归一化按预置管理。
+    piProviderId: builtinPresetForProfileId(DEFAULT_MODEL_PROFILE_ID)?.piProviderId,
     defaultAiMode: "openai-responses",
     secretRef: MODEL_PROVIDER_SECRET_REF,
     enabled: true,
@@ -65,6 +67,7 @@ export function parseModelProfile(
     baseUrl,
     model: optionalString(record.model),
     openAI: parseOpenAIModelRequestSettings(record.openAI),
+    piProviderId: optionalString(record.piProviderId),
     defaultAiMode: normalizeProfileAiModeForProtocol(protocolKind),
     secretRef: optionalString(record.secretRef) ?? fallbacks.fallbackSecretRef,
     enabled: typeof record.enabled === "boolean" ? record.enabled : true,
@@ -101,6 +104,8 @@ export function normalizeModelProfile(
     protocolKind: normalizedProtocolKind,
     baseUrl: normalizeBaseUrl(input.baseUrl) ?? fallback.baseUrl,
     model: normalizeOptionalString(input.model) ?? fallback.model,
+    // piProviderId 永远显式声明：不从其它 profile（含默认 profile）继承。
+    piProviderId: normalizeOptionalString(input.piProviderId),
     openAI,
     defaultAiMode: normalizeProfileAiModeForProtocol(normalizedProtocolKind),
     secretRef: normalizeOptionalString(input.secretRef) ?? secretRefForProfile(input.profileId ?? fallback.profileId),
@@ -133,6 +138,9 @@ export function normalizeBuiltInModelProviderProfiles(
       protocolKind,
       baseUrl,
       model,
+      // 内置槽位的 pi provider 由预置声明（与 protocolKind 同一管理方式）：预置
+      // 未声明（如 MiniMax）时为空，该连接的全部模型按未知发现模型处理。
+      piProviderId: preset.piProviderId,
       defaultAiMode,
     };
     return sameModelProfile(profile, next) ? profile : { ...next, updatedAt: now };
@@ -261,6 +269,7 @@ function sameModelProfile(left: ModelProviderProfileSettings, right: ModelProvid
     left.baseUrl === right.baseUrl &&
     left.model === right.model &&
     JSON.stringify(left.openAI ?? {}) === JSON.stringify(right.openAI ?? {}) &&
+    left.piProviderId === right.piProviderId &&
     left.defaultAiMode === right.defaultAiMode &&
     left.secretRef === right.secretRef &&
     left.enabled === right.enabled;

@@ -3,12 +3,14 @@ import path from "node:path";
 import type { ConversationOwner } from "../../domain/execution-scope/index.js";
 import type {
   CapabilityMcpCatalogItem,
+  ModelCapabilityOverrideSettings,
   OrdinaryCapabilitySnapshot,
+  ResolvedModelCapabilities,
   SanitizedInformationAccessConfig,
+  SanitizedModelProviderConfig,
 } from "../../domain/config/index.js";
 import { createId, nowIso } from "../../kernel/id.js";
 import type { ConfigCenter } from "../config-center/index.js";
-import { resolveModelCapabilities } from "../model-runtime/model-capability-registry.js";
 import type { SkillDefinition } from "../skills/contracts.js";
 import { discoverSkills, type SkillRootInput } from "../skills/skill-loader.js";
 import { createReadSkillResourceTool } from "../skills/skill-resource-tool.js";
@@ -64,7 +66,15 @@ export type CapabilityCenterOptions = {
   readonly resolveToolContributions?: (
     input: CapabilityToolContributionsInput,
   ) => readonly AgentToolRegistryContribution[];
-  readonly resolveModelCapabilities?: typeof resolveModelCapabilities;
+  /**
+   * Host-owned capability resolution. `app/capability` must not depend on the
+   * pi adapter itself (architecture baseline), so the Host injects the resolver
+   * that performs the exact pi catalog lookup and the user-override merge.
+   */
+  readonly resolveModelCapabilities: (input: {
+    readonly profile: SanitizedModelProviderConfig;
+    readonly overrides?: readonly ModelCapabilityOverrideSettings[];
+  }) => ResolvedModelCapabilities;
 };
 
 export type CapabilityCenterSnapshotInput = {
@@ -162,9 +172,9 @@ export class CapabilityCenter {
       this.listSkills({ executionRoot }),
       this.listSubAgents({ executionRoot }),
     ]);
-    const modelCapabilities = (this.options.resolveModelCapabilities ?? resolveModelCapabilities)({
+    const modelCapabilities = this.options.resolveModelCapabilities({
       profile: activeModel,
-      overrides,
+      ...(overrides === undefined ? {} : { overrides }),
     });
     const subAgentRoots = this.subAgentRootsFor({ executionRoot });
     const registry = new ToolRegistry({ toolCenter: { outputStore: this.options.toolOutputStore } });

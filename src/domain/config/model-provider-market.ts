@@ -14,7 +14,6 @@ export const BUILTIN_PROVIDER_PROTOCOL_PROFILES: readonly ProviderProtocolProfil
     supportedProtocolKinds: ["openai_responses", "openai_compatible_chat_completions"],
     defaultBaseUrl: "https://api.openai.com/v1",
     modelsPath: "/models",
-    reasoningControl: "openai_responses_reasoning_effort",
     unsupportedParams: [],
     ignoredParams: [],
     dangerousParams: [],
@@ -27,7 +26,6 @@ export const BUILTIN_PROVIDER_PROTOCOL_PROFILES: readonly ProviderProtocolProfil
     supportedProtocolKinds: ["openai_compatible_chat_completions"],
     defaultBaseUrl: "https://api.deepseek.com",
     modelsPath: "/models",
-    reasoningControl: "deepseek_reasoning_effort",
     unsupportedParams: ["openai_responses.input", "openai_responses.previous_response_id"],
     ignoredParams: ["temperature_when_thinking", "top_p_when_thinking"],
     dangerousParams: ["tool_choice_when_thinking"],
@@ -40,7 +38,6 @@ export const BUILTIN_PROVIDER_PROTOCOL_PROFILES: readonly ProviderProtocolProfil
     supportedProtocolKinds: ["openai_compatible_chat_completions"],
     defaultBaseUrl: "https://api.moonshot.cn/v1",
     modelsPath: "/models",
-    reasoningControl: "thinking_enabled_disabled",
     unsupportedParams: ["openai_responses.input", "openai_responses.previous_response_id"],
     ignoredParams: [],
     dangerousParams: [],
@@ -53,7 +50,6 @@ export const BUILTIN_PROVIDER_PROTOCOL_PROFILES: readonly ProviderProtocolProfil
     supportedProtocolKinds: ["openai_compatible_chat_completions"],
     defaultBaseUrl: "https://open.bigmodel.cn/api/paas/v4",
     modelsPath: "/models",
-    reasoningControl: "thinking_disabled",
     unsupportedParams: ["openai_responses.input", "openai_responses.previous_response_id"],
     ignoredParams: [],
     dangerousParams: [],
@@ -66,7 +62,6 @@ export const BUILTIN_PROVIDER_PROTOCOL_PROFILES: readonly ProviderProtocolProfil
     supportedProtocolKinds: ["openai_compatible_chat_completions"],
     defaultBaseUrl: "https://api.minimaxi.com/v1",
     modelsPath: "/models",
-    reasoningControl: "reasoning_split",
     unsupportedParams: ["openai_responses.input", "openai_responses.previous_response_id"],
     ignoredParams: ["presence_penalty", "frequency_penalty", "logit_bias"],
     dangerousParams: [],
@@ -79,7 +74,6 @@ export const BUILTIN_PROVIDER_PROTOCOL_PROFILES: readonly ProviderProtocolProfil
     supportedProtocolKinds: ["openai_compatible_chat_completions", "openai_responses"],
     defaultBaseUrl: "https://api.example.com/v1",
     modelsPath: "/models",
-    reasoningControl: "none",
     unsupportedParams: [],
     ignoredParams: [],
     dangerousParams: [],
@@ -100,6 +94,7 @@ export const BUILTIN_MODEL_PROVIDER_PRESETS: readonly ModelProviderPreset[] = [
     supportedProtocolKinds: ["openai_responses", "openai_compatible_chat_completions"],
     regionLabel: "全球",
     docsUrl: "https://platform.openai.com/docs",
+    piProviderId: "openai",
   },
   {
     presetId: "deepseek",
@@ -115,6 +110,7 @@ export const BUILTIN_MODEL_PROVIDER_PRESETS: readonly ModelProviderPreset[] = [
     defaultModel: "deepseek-v4-pro",
     regionLabel: "全球",
     docsUrl: "https://api-docs.deepseek.com/",
+    piProviderId: "deepseek",
   },
   {
     presetId: "moonshot",
@@ -130,6 +126,7 @@ export const BUILTIN_MODEL_PROVIDER_PRESETS: readonly ModelProviderPreset[] = [
     defaultModel: "kimi-k3",
     regionLabel: "国内",
     docsUrl: "https://platform.moonshot.cn/docs/guide/start-using-kimi-api",
+    piProviderId: "moonshotai-cn",
   },
   {
     presetId: "glm",
@@ -145,6 +142,7 @@ export const BUILTIN_MODEL_PROVIDER_PRESETS: readonly ModelProviderPreset[] = [
     defaultModel: "glm-5.1",
     regionLabel: "国内",
     docsUrl: "https://docs.bigmodel.cn/",
+    piProviderId: "zai-coding-cn",
   },
   {
     presetId: "minimax",
@@ -160,6 +158,10 @@ export const BUILTIN_MODEL_PROVIDER_PRESETS: readonly ModelProviderPreset[] = [
     defaultModel: "MiniMax-M2.7",
     regionLabel: "国内",
     docsUrl: "https://platform.minimax.io/docs/api-reference/text-chat-openai",
+    // 不声明 piProviderId：pi 的 minimax 目录条目 api 全是 anthropic-messages
+    // （pi 的 MiniMax provider 指向 Anthropic 端点），与本预置的 OpenAI 兼容
+    // transport 不是同一语义。强行映射会让已知模型的 api 与本连接矛盾，因此
+    // MiniMax 模型全部按未知发现模型处理：连接默认 transport、ID 原样、不伪造能力。
   },
 ];
 

@@ -1,3 +1,4 @@
+import { resolvedContextWindowTokens, resolvedSupportsVisionInput } from "../../../domain/config/index.js";
 import type { OrdinaryRunContext } from "../../../domain/ordinary/index.js";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import type { ExecutionEnv, Session } from "@earendil-works/pi-agent-core";
@@ -80,6 +81,12 @@ export type OrdinaryAgentSkillContextResolver = (input: {
 
 export type CreateOrdinaryAgentRunResourceAcquirerInput = {
   readonly host: AgentRunResourceHost;
+  /**
+   * 宿主按 root 共享的 pi ExecutionEnv 工厂（Synech 只用其 FileSystem 部分）。
+   * panel-host 注入共享实例，run 收尾不清理（关闭时机归宿主）；未注入时按 root
+   * 构造 run 自有实例，由 run 收尾清理。
+   */
+  readonly createExecutionEnvironment?: (root: string) => ExecutionEnv;
   readonly sessionRepository: {
     acquire(ref: AgentSessionRef): Promise<AgentSessionWriterLease>;
   };
@@ -133,9 +140,16 @@ type OrdinaryAgentRunResourceAcquirerDependencies = {
    * 不会在各个 run 装配处重写。
    */
   readonly createProviderBinding?: typeof createFrozenProviderBinding;
+  /** 测试注入的 run 级执行环境；宿主持有的共享工厂走 options.createExecutionEnvironment。 */
   readonly createExecutionEnvironment?: (cwd: string) => ExecutionEnv;
   readonly createTokenCounter?: (model?: string) => AgentLoopTokenCounter;
   readonly resolveToolBoundary?: typeof resolveRunToolBoundary;
+};
+
+/** run 取用的执行环境及其归属：run 自有实例随 run 收尾清理，宿主共享实例不得提前 cleanup。 */
+type OrdinaryRunExecutionEnvironment = {
+  readonly env: ExecutionEnv;
+  readonly runScoped: boolean;
 };
 
 /**
@@ -167,7 +181,7 @@ export function createOrdinaryAgentRunResourceAcquirer(
       });
       let loop: AgentLoop | undefined;
       let sessionLease: AgentSessionWriterLease | undefined;
-      let executionEnvironment: ExecutionEnv | undefined;
+      let executionEnvironment: OrdinaryRunExecutionEnvironment | undefined;
       try {
         const runContext = createOrdinaryRunContextFromInput({
           goal: input.runInput.userMessage,
@@ -207,8 +221,10 @@ export function createOrdinaryAgentRunResourceAcquirer(
         const tokenCounter = (dependencies.createTokenCounter ?? createOpenAITokenCounter)(
           input.birth.config.model,
         );
+        // 只有连接显式指向 pi 的 openai provider 时，模型 id 才可能命中 OpenAI
+        // tokenizer；未声明 provider 的连接不猜测模型归属。
         const toolDefinitionTokenCounter =
-          input.birth.capabilitySnapshot.modelCapabilities.protocolProfileId === "openai" &&
+          input.birth.config.piProviderId === "openai" &&
           tokenCounter.tokenizerMatch === "model"
             ? tokenCounter.countText
             : undefined;
@@ -316,14 +332,13 @@ export function createOrdinaryAgentRunResourceAcquirer(
           resolveManagedAttachmentPath: resources.resolveManagedAttachmentPath,
           readAuthorization: options.contextAttachmentReadAuthorization,
         });
-        executionEnvironment = (dependencies.createExecutionEnvironment ??
-          ((cwd: string) => new NodeExecutionEnv({ cwd })))(resources.workspaceRoot);
+        executionEnvironment = acquireExecutionEnvironment(options, dependencies, resources.workspaceRoot);
         sessionLease = await options.sessionRepository.acquire(input.sessionRef);
         loop = (dependencies.createSessionLoop ?? createAgentSessionLoop)({
-          executionEnvironment,
+          executionEnvironment: executionEnvironment.env,
           modelRegistry: providerBinding.modelRegistry,
           selectedModel: providerBinding.selectedModel,
-          supportsVisionInput: resources.capabilitySnapshot.modelCapabilities.supportsVisionInput,
+          supportsVisionInput: resolvedSupportsVisionInput(resources.capabilitySnapshot.modelCapabilities) === true,
           thinkingLevel: providerBinding.thinkingLevel,
           transformProviderPayload: providerBinding.transformProviderPayload,
           toolDefinitionTokenCounter: tokenCounter.countText,
@@ -331,6 +346,9 @@ export function createOrdinaryAgentRunResourceAcquirer(
             recordProviderToolDefinitionMetrics(toolMetrics, metrics);
           },
           agentSession: sessionLease.session,
+          ...(resolvedContextWindowTokens(resources.capabilitySnapshot.modelCapabilities) === undefined
+            ? {}
+            : { confirmedContextWindowTokens: resolvedContextWindowTokens(resources.capabilitySnapshot.modelCapabilities) }),
           // 每次冻结前复核背景供给（撤销/清除/关闭后不再注入，不自动换绑）。
           ...(memoryBackground?.resolvePerFreeze === undefined
             ? {}
@@ -349,7 +367,9 @@ export function createOrdinaryAgentRunResourceAcquirer(
                 input.runId,
                 processTerminator,
               ).then(() => undefined)]),
-          () => ownedExecutionEnvironment.cleanup(),
+          ...(ownedExecutionEnvironment !== undefined && ownedExecutionEnvironment.runScoped
+            ? [() => ownedExecutionEnvironment.env.cleanup()]
+            : []),
         ]);
         return {
           loop,
@@ -421,7 +441,9 @@ async function createCustomProviderBindingForRun(
   return (dependencies.createProviderBinding ?? createFrozenProviderBinding)({
     resolved: resolvedProvider,
     profileId: input.birth.config.profileId,
-    capabilities: input.birth.capabilitySnapshot.modelCapabilities,
+    ...(input.birth.config.piProviderId === undefined
+      ? {}
+      : { piProviderId: input.birth.config.piProviderId }),
     apiKey: resolvedProvider.apiKey,
     resolveApiKey: createConfigCenterApiKeyResolver({
       configCenter: options.host.configCenter,
@@ -535,15 +557,36 @@ async function releaseAll(
 async function releaseAfterAcquireFailure(
   loop: AgentLoop | undefined,
   sessionLease: AgentSessionWriterLease | undefined,
-  executionEnvironment: ExecutionEnv | undefined,
+  executionEnvironment: OrdinaryRunExecutionEnvironment | undefined,
   releaseHostResources: () => Promise<void>,
 ): Promise<void> {
   await releaseAll([
     ...(loop === undefined ? [] : [() => loop.release()]),
     ...(sessionLease === undefined ? [] : [sessionLease.release]),
     releaseHostResources,
-    ...(executionEnvironment === undefined ? [] : [() => executionEnvironment.cleanup()]),
+    ...(executionEnvironment !== undefined && executionEnvironment.runScoped
+      ? [() => executionEnvironment.env.cleanup()]
+      : []),
   ]).catch(() => undefined);
+}
+
+/**
+ * 解析本次 run 的执行环境及其归属。
+ *
+ * 优先测试注入（run 级，run 收尾清理，与既有装配测试契约一致）；其次宿主的按
+ * root 共享工厂（共享实例，run 收尾不 cleanup，关闭时机归宿主）；都没有时按
+ * workspaceRoot 构造 run 自有实例。
+ */
+function acquireExecutionEnvironment(
+  options: CreateOrdinaryAgentRunResourceAcquirerInput,
+  dependencies: OrdinaryAgentRunResourceAcquirerDependencies,
+  workspaceRoot: string,
+): OrdinaryRunExecutionEnvironment {
+  const injected = dependencies.createExecutionEnvironment;
+  if (injected !== undefined) return { env: injected(workspaceRoot), runScoped: true };
+  const shared = options.createExecutionEnvironment;
+  if (shared !== undefined) return { env: shared(workspaceRoot), runScoped: false };
+  return { env: new NodeExecutionEnv({ cwd: workspaceRoot }), runScoped: true };
 }
 
 function requireOpenAIModelRuntimeMode(

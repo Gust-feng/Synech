@@ -12,7 +12,7 @@ import {
 } from "@earendil-works/pi-agent-core";
 import type { Api, Model, Models } from "@earendil-works/pi-ai";
 import type { AgentSessionEntryRef } from "../../app/model-runtime/agent-session.js";
-import { replaceUnsupportedImageBlocks } from "./session-image-placeholder.js";
+import { COMPACTION_IMAGE_PLACEHOLDER, replaceImageBlocks } from "./session-image-placeholder.js";
 
 export type SessionContextCompactionResult =
   | { readonly status: "unchanged" }
@@ -21,10 +21,12 @@ export type SessionContextCompactionResult =
       readonly compactedContextMessages: readonly AgentMessage[];
       readonly compactionEntryRef: AgentSessionEntryRef;
       readonly tokensBefore: number;
+      /** Image blocks this compaction replaced with text placeholders before summarizing. */
+      readonly replacedImageBlocks: number;
     }
   | {
       readonly status: "failed";
-      readonly code: "context_compaction_failed" | "context_overflow" | "context_compaction_images_unsupported";
+      readonly code: "context_compaction_failed" | "context_overflow";
       readonly error: string;
     };
 
@@ -33,6 +35,11 @@ export type SessionContextCompactionInput = {
   readonly activeContextMessages: readonly AgentMessage[];
   readonly modelRegistry: Models;
   readonly selectedModel: Model<Api>;
+  /**
+   * 已确认的上下文窗口（真实 Pi Model.contextWindow）。未确认模型没有事实窗口，
+   * 传 undefined：不得按 adapter 内部的 transport 常量猜测阈值触发压缩。
+   */
+  readonly confirmedContextWindowTokens?: number;
   /** Pi's frozen reasoning setting must also govern compaction summaries. */
   readonly thinkingLevel?: ThinkingLevel;
   readonly abortSignal: AbortSignal;
@@ -52,8 +59,13 @@ export async function compactSessionContextIfNeeded(
 ): Promise<SessionContextCompactionResult> {
   const compactionSettings = input.compactionSettings ?? DEFAULT_COMPACTION_SETTINGS;
   if (!compactionSettings.enabled) return { status: "unchanged" };
+  const contextWindowTokens = input.confirmedContextWindowTokens;
+  if (contextWindowTokens === undefined) {
+    // 未确认窗口：不按猜测值触发压缩，交由真实上游在上下文超限时如实报告。
+    return { status: "unchanged" };
+  }
   const contextTokens = estimateContextTokens([...input.activeContextMessages]).tokens;
-  if (!shouldCompact(contextTokens, input.selectedModel.contextWindow, compactionSettings)) {
+  if (!shouldCompact(contextTokens, contextWindowTokens, compactionSettings)) {
     return { status: "unchanged" };
   }
   const prepared = prepareCompaction(await input.agentSession.getBranch(), compactionSettings);
@@ -67,24 +79,20 @@ export async function compactSessionContextIfNeeded(
       error: "The active session context exceeds the model window but has no safe compaction cut point.",
     };
   }
+  let replacedImageBlocks = 0;
   if (prepared.value.messagesToSummarize.some(containsImageContent) ||
       prepared.value.turnPrefixMessages.some(containsImageContent)) {
-    // Pi has no image-aware compaction, so a summary cannot preserve image
-    // content. A vision-capable model must fail rather than silently lose
-    // the images; a text-only model substitutes an observable text notice so
-    // the run keeps working without faking or summarizing the pixels.
-    const modelInputSupportsImage = input.selectedModel.input.includes("image");
-    if (modelInputSupportsImage) {
-      return {
-        status: "failed",
-        code: "context_compaction_images_unsupported",
-        error: "The active Session contains image content in the compaction prefix; Pi image-aware request-boundary compaction is required.",
-      };
-    }
+    // Pi has no image-aware compaction, so the summarizer would silently drop
+    // image blocks. Vision-capable and text-only models alike degrade to an
+    // observable text placeholder: the run keeps going and the replacement
+    // count reports exactly what was lost.
+    const summarized = replaceImageBlocks(prepared.value.messagesToSummarize, COMPACTION_IMAGE_PLACEHOLDER);
+    const prefix = replaceImageBlocks(prepared.value.turnPrefixMessages, COMPACTION_IMAGE_PLACEHOLDER);
+    replacedImageBlocks = summarized.replacedImageBlocks + prefix.replacedImageBlocks;
     prepared.value = {
       ...prepared.value,
-      messagesToSummarize: [...replaceUnsupportedImageBlocks(prepared.value.messagesToSummarize, modelInputSupportsImage)],
-      turnPrefixMessages: [...replaceUnsupportedImageBlocks(prepared.value.turnPrefixMessages, modelInputSupportsImage)],
+      messagesToSummarize: [...summarized.messages],
+      turnPrefixMessages: [...prefix.messages],
     };
   }
   const compacted = await compact(
@@ -113,7 +121,7 @@ export async function compactSessionContextIfNeeded(
   );
   if (shouldCompact(
     compactedContextTokens,
-    input.selectedModel.contextWindow,
+    contextWindowTokens,
     compactionSettings,
   )) {
     return {
@@ -128,6 +136,7 @@ export async function compactSessionContextIfNeeded(
     compactedContextMessages,
     compactionEntryRef: { sessionId, entryId: compactionEntryId },
     tokensBefore: compacted.value.tokensBefore,
+    replacedImageBlocks,
   };
 }
 

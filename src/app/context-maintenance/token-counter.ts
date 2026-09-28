@@ -41,7 +41,6 @@ function messageTokenCount(encoding: Tiktoken, message: ModelMessage): number {
     toolCallId: message.toolCallId,
     toolName: message.toolName,
     toolCalls: message.toolCalls,
-    protocolExtensions: message.protocolExtensions,
     attachments: message.attachments?.map(attachmentMetadata),
   });
   return encoding.encode(serialized).length +

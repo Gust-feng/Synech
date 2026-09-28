@@ -17,6 +17,7 @@ export type ModelForm = {
   readonly logoCleared: boolean;
   readonly baseUrl: string;
   readonly protocolKind: ModelProtocolKind;
+  readonly piProviderId: string;
   readonly model: string;
   readonly apiKey: string;
   readonly apiKeyCleared: boolean;
@@ -34,6 +35,7 @@ export type ModelProviderListItem = {
   readonly model: string;
   readonly baseUrl: string;
   readonly protocolKind: ModelProtocolKind;
+  readonly piProviderId?: string;
   readonly profileId?: string;
   readonly profile?: ModelProviderProfileItem;
   readonly presetId?: string;
@@ -99,6 +101,7 @@ export function modelProviderItems(
       model: configuredModel,
       baseUrl: profile === undefined ? preset.baseUrl : visibleProfileBaseUrl(profile),
       protocolKind: profile?.protocolKind ?? preset.protocolKind,
+      piProviderId: profile?.piProviderId ?? preset.piProviderId,
       profileId: profile?.profileId,
       profile,
       presetId: preset.presetId,
@@ -118,6 +121,7 @@ export function modelProviderItems(
         model: configuredModel,
         baseUrl: visibleProfileBaseUrl(profile),
         protocolKind: profile.protocolKind ?? "openai_compatible_chat_completions",
+        piProviderId: profile.piProviderId,
         profileId: profile.profileId,
         profile,
         configured: true,
@@ -169,6 +173,7 @@ export function modelFormFromProviderItem(item: ModelProviderListItem): ModelFor
     logoCleared: false,
     baseUrl: item.baseUrl,
     protocolKind: item.protocolKind,
+    piProviderId: item.piProviderId ?? "",
     model: item.model,
     apiKey: "",
     apiKeyCleared: false,

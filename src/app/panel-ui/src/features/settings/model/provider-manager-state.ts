@@ -138,6 +138,7 @@ export function useModelProviderManagerState(props: ModelProviderManagerOptions)
       logoCleared: false,
       baseUrl: "https://api.example.com/v1",
       protocolKind: "openai_compatible_chat_completions",
+      piProviderId: "",
       model: "",
       apiKey: "",
       apiKeyCleared: false,

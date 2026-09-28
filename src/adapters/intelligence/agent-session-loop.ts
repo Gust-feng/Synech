@@ -3,8 +3,7 @@ import {
   type AgentMessage,
   type AgentTool,
   type AgentToolUpdateCallback,
-  type Session,
-  type SessionTreeEntry,
+  Session,
 } from "@earendil-works/pi-agent-core";
 import {
   Type,
@@ -52,7 +51,6 @@ import {
   assistantText,
   imageContentFromAttachments,
   providerFailureFromAssistant,
-  providerRefusalFromAssistant,
 } from "./provider-result-projection.js";
 import { errorMessage } from "../../kernel/values/index.js";
 import {
@@ -134,7 +132,7 @@ export function createAgentSessionLoop(options: AgentSessionLoopOptions): AgentL
         sessionId,
         startLeafRef: startEntryId === null ? null : { sessionId, entryId: startEntryId },
       });
-      const runtimeSession = createRunLocalContextSession(options.agentSession);
+      const runtimeSession = new TranscriptNormalizingSession(options.agentSession);
       const rootInvocationBindings = new ToolInvocationBindingTable();
       let state!: AgentSessionExecutionState;
       const rootEvents = new RootHarnessEventProjector({
@@ -237,47 +235,27 @@ function preparePromptInput(
   };
 }
 
-/** Keeps dynamic tool activation markers scoped to the run that produced them. */
-function createRunLocalContextSession(session: Session): Session {
-  const currentRunMessageEntryIds = new Set<string>();
-  return new Proxy(session, {
-    get(target, property, receiver) {
-      if (property === "appendMessage") {
-        return async (message: AgentMessage) => {
-          const entryId = await target.appendMessage(message);
-          currentRunMessageEntryIds.add(entryId);
-          return entryId;
-        };
-      }
-      if (property === "buildContext") {
-        return async (...args: Parameters<Session["buildContext"]>) => {
-          const options = args[0] ?? {};
-          return target.buildContext({
-            ...options,
-            entryTransforms: [
-              ...(options.entryTransforms ?? []),
-              (entries: readonly SessionTreeEntry[]) => entries.map((entry) =>
-                stripPriorRunToolActivationMarker(entry, currentRunMessageEntryIds)),
-            ],
-          });
-        };
-      }
-      const value = Reflect.get(target, property, receiver);
-      return typeof value === "function" ? value.bind(target) : value;
-    },
-  }) as Session;
+/**
+ * Pi writes the tool-activation transport detail (`addedToolNames`) onto the
+ * tool-result messages it emits; left on the message it would ride into the
+ * JSONL transcript and every later buildContext. Tool availability is already
+ * owned by the harness active-tool set, so the marker is normalized away at the
+ * Session write boundary and never persisted.
+ */
+class TranscriptNormalizingSession extends Session {
+  constructor(private readonly delegate: Session) {
+    super(delegate.getStorage());
+  }
+
+  override appendMessage(message: AgentMessage): Promise<string> {
+    return this.delegate.appendMessage(withoutToolActivationMarker(message));
+  }
 }
 
-function stripPriorRunToolActivationMarker(
-  entry: SessionTreeEntry,
-  currentRunMessageEntryIds: ReadonlySet<string>,
-): SessionTreeEntry {
-  if (entry.type !== "message" || entry.message.role !== "toolResult" ||
-      currentRunMessageEntryIds.has(entry.id) || entry.message.addedToolNames === undefined) {
-    return entry;
-  }
-  const { addedToolNames: _historicalActivation, ...message } = entry.message;
-  return { ...entry, message };
+function withoutToolActivationMarker(message: AgentMessage): AgentMessage {
+  if (message.role !== "toolResult" || message.addedToolNames === undefined) return message;
+  const { addedToolNames: _transportActivation, ...normalized } = message;
+  return normalized;
 }
 
 function createHarnessTools(
@@ -564,30 +542,16 @@ function finalResult(
   if (assistant.stopReason === "aborted") {
     return { ...facts, status: "cancelled", error: assistant.errorMessage ?? "cancelled" };
   }
-  const refusal = providerRefusalFromAssistant(assistant);
-  if (refusal !== undefined) {
-    return {
-      ...facts,
-      status: "failed",
-      error: refusal.length === 0
-        ? "The model refused the request without an explanation."
-        : `The model refused the request: ${refusal}`,
-      errorCode: "model_refusal",
-    };
-  }
   const providerFailure = providerFailureFromAssistant(assistant, contextWindow);
   if (providerFailure !== undefined) {
     return { ...facts, status: "failed", ...providerFailure };
   }
   if (assistant.stopReason === "length") {
-    const incompleteReason = assistant.providerMetadata?.incompleteReason?.trim();
     return {
       ...facts,
       status: "failed",
-      error: incompleteReason === undefined || incompleteReason.length === 0
-        ? "Model stopped before completing its response."
-        : `Model response was incomplete: ${incompleteReason}.`,
-      errorCode: incompleteReason === "content_filter" ? "content_filtered" : "output_truncated",
+      error: "Model stopped before completing its response because it reached the output token limit.",
+      errorCode: "output_truncated",
     };
   }
   if (assistant.stopReason !== "stop") {

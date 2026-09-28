@@ -306,6 +306,8 @@ export type OrdinaryRunEvent = OrdinaryRunEventBase & (
       readonly type: "context.compaction.completed";
       readonly compactionEntryRef: AgentSessionEntryRef;
       readonly tokensBefore: number;
+      /** Image blocks replaced with text placeholders before the compaction summarized them. */
+      readonly replacedImageBlocks: number;
     }
   | { readonly type: "run.approval_requested"; readonly confirmationRequests: readonly ConfirmationRequest[]; readonly invocationIds: readonly string[] }
   | { readonly type: "run.approval_decided"; readonly decision: ConfirmationDecision }

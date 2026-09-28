@@ -1,9 +1,10 @@
 import type {
   OrdinaryCapabilitySnapshot,
-  ModelCapabilities,
   ModelRunReasoningEffort,
+  ResolvedModelCapabilities,
   SanitizedModelProviderConfig,
 } from "../../../domain/config/index.js";
+import { isConfirmedModelFacts, resolvedSupportsParallelToolCalls, resolvedSupportsReasoningEffort } from "../../../domain/config/index.js";
 import { PanelHttpError } from "../http-utils.js";
 
 /**
@@ -16,7 +17,7 @@ export function ordinaryCapabilitySnapshotForRunStart(
 ): OrdinaryCapabilitySnapshot {
   return effectiveOrdinaryCapabilitySnapshotForRun(
     snapshot,
-    snapshot.modelCapabilities.supportsReasoningEffort ? reasoningEffort : undefined
+    resolvedSupportsReasoningEffort(snapshot.modelCapabilities) ? reasoningEffort : undefined
   );
 }
 
@@ -34,35 +35,36 @@ export function effectiveOrdinaryCapabilitySnapshotForRun(
 
 function activeModelWithRunOpenAISettings(
   activeModel: SanitizedModelProviderConfig,
-  modelCapabilities: ModelCapabilities,
+  modelCapabilities: ResolvedModelCapabilities,
   reasoningEffort: ModelRunReasoningEffort | undefined
 ): SanitizedModelProviderConfig {
   const {
     reasoningEffort: _profileReasoningEffort,
     reasoningSummary: profileReasoningSummary,
     parallelToolCalls: profileParallelToolCalls,
-    stream: profileStream,
     ...baseOpenAI
   } = activeModel.openAI ?? {};
-  if (reasoningEffort !== undefined && !modelCapabilities.supportsReasoningEffort) {
+  // 只有「已知模型的已确认能力」与请求矛盾时才拒绝；未确认模型不得被运行阻断。
+  if (reasoningEffort !== undefined &&
+    !resolvedSupportsReasoningEffort(modelCapabilities) &&
+    isConfirmedModelFacts(modelCapabilities.facts)) {
     throw new PanelHttpError(
       400,
       "unsupported_model_reasoning_effort",
       "当前模型不支持调节思考强度。"
     );
   }
+  const supportsReasoningEffort = resolvedSupportsReasoningEffort(modelCapabilities);
+  const supportsParallelToolCalls = resolvedSupportsParallelToolCalls(modelCapabilities);
   const openAI = removeUndefinedOpenAISettings({
     ...baseOpenAI,
-    ...(modelCapabilities.supportsReasoningEffort && profileReasoningSummary !== undefined
+    ...(supportsReasoningEffort && profileReasoningSummary !== undefined
       ? { reasoningSummary: profileReasoningSummary }
       : {}),
-    ...(modelCapabilities.supportsParallelToolCalls && profileParallelToolCalls !== undefined
+    ...(supportsParallelToolCalls && profileParallelToolCalls !== undefined
       ? { parallelToolCalls: profileParallelToolCalls }
       : {}),
-    ...(profileStream !== undefined || !modelCapabilities.supportsStreaming
-      ? { stream: modelCapabilities.supportsStreaming ? profileStream : false }
-      : {}),
-    ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+    ...(reasoningEffort === undefined || !supportsReasoningEffort ? {} : { reasoningEffort }),
   });
   return {
     ...activeModel,

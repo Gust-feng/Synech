@@ -6,7 +6,6 @@ import {
   resolveOpenAIModelRuntimeConfig,
   type OpenAIModelRuntimeMode,
 } from "../../model-runtime/openai-runtime-config.js";
-import { resolveModelCapabilities } from "../../model-runtime/model-capability-registry.js";
 import type {
   MaintenanceModelOutcome,
   MemoryMaintenanceModelPort,
@@ -27,14 +26,12 @@ import {
  * Product Home 完整性问题）。
  *
  * 三层分离（能力事实 / 调用配置 / 返回事实），与研究侧同一判定：
- * - 能力事实（视觉输入、推理输出、上下文窗口、输出上限）唯一来源是
- *   `resolveModelCapabilities`（profile + ConfigCenter 上的能力覆写），与
- *   Ordinary 同一条解析链，此处不写死也不省略——省略只会落到 Pi 的 DEFAULT
- *   常量，让窗口与输出上限的判断建立在错数上；
+ * - 能力事实（视觉输入、推理输出、上下文窗口、输出上限）唯一来源是连接显式
+ *   `piProviderId` 上的 pi 真实 catalog 精确匹配（adapter 在 binding 内完成），
+ *   这里不写死也不省略，也不由产品层传值；
  * - 调用配置：辅助通道内部固定 `thinkingLevel: "off"` 是共享通道自身的行为
  *   （研究与 ordinary-conversation-title 也走这条通道）。记忆整理是后台确定性
- *   任务，这是有理由的用途级配置；因此 `supportsReasoningOutput` 取真实能力值
- *   不会让记忆整理开始思考（通道不思考），但让 binding 的能力声明与事实一致；
+ *   任务，这是有理由的用途级配置；
  * - 返回事实：本次请求实际返回的内容块与 usage 由通道上报。
  */
 
@@ -78,10 +75,6 @@ export function createConfigCenterConsolidationModel(input: {
         if (error instanceof ModelRuntimeConfigurationError) return unavailable("model_provider_not_configured");
         throw error;
       }
-      const capabilities = resolveModelCapabilities({
-        profile: provider,
-        overrides: await input.configCenter.listModelCapabilityOverrides(),
-      });
       const channel = createModelChannel({
         resolved,
         profileId: provider.profileId,
@@ -91,11 +84,8 @@ export function createConfigCenterConsolidationModel(input: {
           provider,
           mode,
         }),
-        supportsVisionInput: capabilities.supportsVisionInput === true,
-        supportsReasoningOutput: capabilities.supportsReasoningOutput === true,
-        contextWindow: capabilities.contextWindowTokens,
-        maxOutputTokens: capabilities.maxOutputTokens,
         supportedPurposes: ["memory_consolidation"],
+        ...(provider.piProviderId === undefined ? {} : { piProviderId: provider.piProviderId }),
       });
 
       const requestId = createId("model-request");

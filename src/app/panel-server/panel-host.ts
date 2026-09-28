@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
+import type { ExecutionEnv } from "@earendil-works/pi-agent-core";
 import {
   FileSystemAgentSessionRepository,
 } from "../../adapters/intelligence/index.js";
@@ -15,6 +16,7 @@ import { runAgentDefinitionRefCacheKey } from "../agent-definitions/agent-defini
 import type { AgentDefinitionRegistry } from "../agent-definitions/agent-definition-registry.js";
 import type { AgentDefinition } from "../agent-prompts/contracts.js";
 import { CapabilityCenter } from "../capability/capability-center.js";
+import { resolveModelCapabilitiesForProfile } from "./settings/model-facts.js";
 import {
   captureKnowledgeAsset,
   managedKnowledgeDocumentTarget,
@@ -252,6 +254,7 @@ export type PanelHost = {
   readonly knowledgeAssetsReady: Promise<void>;
   readonly ensureDefaultSpace: () => Promise<void>;
   readonly flushSpaceKnowledgeSync: () => Promise<void>;
+  /** 关闭点：释放宿主按 root 共享的 pi ExecutionEnv（会话存储复用 agentDataRoot 实例）。 */
   readonly releaseAgentSessionStorage: () => Promise<void>;
   readonly resolveSubAgentRoots?: (input: PanelSubAgentRootsInput) => readonly SubAgentRootInput[];
 };
@@ -404,6 +407,7 @@ function assemblePanelHost(input: {
     path.join(productPaths.state.journals, "space-reference-deletions"),
   );
   const agentDataRoot = productPaths.data.agent.root;
+  const sharedExecutionEnvs = createSharedExecutionEnvs();
   const managedAttachmentInstanceId = randomUUID();
   const managedAttachmentRepository = createFileSystemOrdinaryManagedAttachmentRepository(
     productPaths.data.agent.attachments,
@@ -703,13 +707,18 @@ function assemblePanelHost(input: {
     fetch: input.providerFetch,
     toolOutputStore,
     resolveToolContributions: resolveFeatureToolContributions,
+    // `app/capability` must not depend on the pi adapter (architecture baseline),
+    // so the Host injects the composed capability resolver (exact pi catalog
+    // lookup + user override merge).
+    resolveModelCapabilities: resolveModelCapabilitiesForProfile,
   });
-  const agentSessionEnvironment = new NodeExecutionEnv({ cwd: agentDataRoot });
+  const agentSessionEnvironment = sharedExecutionEnvs.acquire(agentDataRoot);
   const agentSessionRepository = new FileSystemAgentSessionRepository({
     fileSystem: agentSessionEnvironment,
     sessionsRoot: productPaths.data.agent.sessions,
   });
   const ordinaryRunResources = createOrdinaryAgentRunResourceAcquirer({
+    createExecutionEnvironment: sharedExecutionEnvs.acquire,
     host: {
       configCenter: input.configCenter,
       providerFetch: input.providerFetch,
@@ -1039,7 +1048,7 @@ function assemblePanelHost(input: {
     knowledgeAssetsReady,
     ensureDefaultSpace: ensurePanelDefaultData,
     flushSpaceKnowledgeSync: () => spaceKnowledgeSync,
-    releaseAgentSessionStorage: () => agentSessionEnvironment.cleanup(),
+    releaseAgentSessionStorage: () => sharedExecutionEnvs.releaseAll(),
   };
 
   let restorePreparation: Promise<void> | undefined;
@@ -1056,6 +1065,33 @@ function assemblePanelHost(input: {
     await spaceFeature.release();
   })();
   return host;
+}
+
+/**
+ * 按 root 共享 pi ExecutionEnv 的小工厂：同一 root 只构造一次，复用给所有
+ * 消费方（会话存储、研究 loop、普通 run loop）。
+ *
+ * Synech 有意只使用 ExecutionEnv 的 FileSystem 部分——全仓没有 env.exec 调用；
+ * 命令执行由 tool-center 自掌（background 进程、进程树 kill、输出落盘等 pi 的
+ * executeShellWithCapture 不覆盖的需求）。后人不要误以为这里漏接 pi 能力。
+ */
+function createSharedExecutionEnvs(): {
+  readonly acquire: (root: string) => ExecutionEnv;
+  readonly releaseAll: () => Promise<void>;
+} {
+  const envs = new Map<string, ExecutionEnv>();
+  const acquire = (root: string): ExecutionEnv => {
+    const existing = envs.get(root);
+    if (existing !== undefined) return existing;
+    const created = new NodeExecutionEnv({ cwd: root });
+    envs.set(root, created);
+    return created;
+  };
+  const releaseAll = async (): Promise<void> => {
+    await Promise.all([...envs.values()].map((env) => env.cleanup()));
+    envs.clear();
+  };
+  return { acquire, releaseAll };
 }
 
 async function ensureMemoryRolloutPolicy(

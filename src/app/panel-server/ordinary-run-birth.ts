@@ -18,7 +18,6 @@ import type { AgentNotesFeature } from "../agent-notes/index.js";
 import type { CollaborationRulesFeature } from "../collaboration-rules/index.js";
 import type { CapabilityCenter } from "../capability/capability-center.js";
 import type { ConfigCenter } from "../config-center/index.js";
-import { resolveModelCapabilities } from "../model-runtime/model-capability-registry.js";
 import type { OrdinaryAgentFeature, OrdinaryRunBirth } from "../ordinary-agent/index.js";
 import {
   PATH_DEPENDENCY_DIRECTORY_MAX_ENTRIES,
@@ -34,6 +33,7 @@ import type {
   WorkspaceDeletionCoordinator,
 } from "../workbench-coordination/index.js";
 import { ordinaryCapabilitySnapshotForRunStart } from "./ordinary/ordinary-run-model-settings.js";
+import { resolveModelCapabilitiesForProfile } from "./settings/model-facts.js";
 import { PanelHttpError } from "./http-utils.js";
 import type { PanelRunInput } from "./request-parsers.js";
 
@@ -277,6 +277,6 @@ async function capabilitySnapshotForRun(
   return {
     ...snapshot,
     activeModel,
-    modelCapabilities: resolveModelCapabilities({ profile: activeModel, overrides }),
+    modelCapabilities: resolveModelCapabilitiesForProfile({ profile: activeModel, overrides }),
   };
 }

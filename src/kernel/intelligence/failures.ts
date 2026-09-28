@@ -132,10 +132,6 @@ export function modelFailureKindFromFacts(input: {
   // code. It must win over the status, so a drained account stops the retry
   // budget instead of spending it on backoff before surfacing the real cause.
   if (rawCode !== undefined && ACCOUNT_EXHAUSTION_CODES.has(rawCode)) return "provider_quota";
-  // Context-window codes are deterministic: the same request cannot fit after
-  // any number of retries, so they must not be collected by the
-  // `provider_response` catch-all (which would look retryable-by-default).
-  if (rawCode !== undefined && CONTEXT_OVERFLOW_CODES.has(rawCode)) return "context_overflow";
   if (input.status === 401 || input.status === 403) return "provider_auth";
   if (input.status === 408 || input.status === 504) return "provider_timeout";
   if (input.status === 429) return "provider_rate_limit";
@@ -147,7 +143,6 @@ export function modelFailureKindFromFacts(input: {
   if (AUTH_CODES.has(code)) return "provider_auth";
   if (RATE_LIMIT_CODES.has(code)) return "provider_rate_limit";
   if (CONFIG_CODES.has(code)) return "provider_config";
-  if (CONTEXT_OVERFLOW_CODES.has(code)) return "context_overflow";
   return "provider_response";
 }
 
@@ -271,10 +266,6 @@ function normalizedCode(value: string | number | undefined): string | undefined 
 const CONTENT_FILTER_CODES = new Set([
   "content_filter", "content_filtered", "safety", "safety_filter",
   "moderation", "moderation_block", "moderation_blocked", "content_policy_violation",
-]);
-const CONTEXT_OVERFLOW_CODES = new Set([
-  "context_length_exceeded", "context_window_exceeded", "context_overflow",
-  "prompt_too_long", "prompt_is_too_long",
 ]);
 const TIMEOUT_CODES = new Set(["abort_err", "etimedout", "timeout", "request_timeout", "gateway_timeout"]);
 const NETWORK_CODES = new Set([

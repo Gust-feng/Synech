@@ -1,6 +1,5 @@
 import type {
   ConfiguredModelProtocolKind,
-  ModelCapabilities,
   ProtocolToolCallCapabilities,
 } from "../../domain/config/index.js";
 
@@ -29,27 +28,4 @@ export function supportsProtocolToolCalling(capabilities: ProtocolToolCallCapabi
   return capabilities.canSendToolDefinitions &&
     capabilities.canReceiveToolCalls &&
     capabilities.canRoundTripToolResults;
-}
-
-export function constrainCapabilitiesToProtocolToolCalling(
-  capabilities: ModelCapabilities,
-  protocolCapabilities: ProtocolToolCallCapabilities,
-): ModelCapabilities {
-  if (supportsProtocolToolCalling(protocolCapabilities)) return capabilities;
-  return {
-    ...capabilities,
-    supportsToolCalling: false,
-    supportsParallelToolCalls: false,
-  };
-}
-
-export function preferredApiStyleForProtocol(
-  protocolKind: ConfiguredModelProtocolKind,
-): ModelCapabilities["preferredApiStyle"] {
-  switch (protocolKind) {
-    case "openai_compatible_chat_completions":
-      return "chat_completions";
-    case "openai_responses":
-      return "responses";
-  }
 }

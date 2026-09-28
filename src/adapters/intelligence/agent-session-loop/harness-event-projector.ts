@@ -108,6 +108,9 @@ export class RootHarnessEventProjector {
         ...(this.options.loopOptions.compactionSettings === undefined
           ? {}
           : { compactionSettings: this.options.loopOptions.compactionSettings }),
+        ...(this.options.loopOptions.confirmedContextWindowTokens === undefined
+          ? {}
+          : { confirmedContextWindowTokens: this.options.loopOptions.confirmedContextWindowTokens }),
       });
       if (sessionCompaction.status === "failed") {
         this.failMaintenance(sessionCompaction.code, sessionCompaction.error);
@@ -121,6 +124,7 @@ export class RootHarnessEventProjector {
             sessionId: this.options.sessionId,
             compactionEntryRef: sessionCompaction.compactionEntryRef,
             tokensBefore: sessionCompaction.tokensBefore,
+            replacedImageBlocks: sessionCompaction.replacedImageBlocks,
           });
         } catch (error) {
           this.recordMaintenanceFailure({ code: "context_compaction_fact_rejected", error: errorMessage(error) });
@@ -478,12 +482,23 @@ function observeProviderToolDefinitionMetrics(
 }
 
 function modelVisibleDefinitionSerialization(model: Model<Api>): ModelVisibleToolDefinitionSerialization {
-  const api = model.api === "openai-completions" ? "openai-completions" : "openai-responses";
+  const api = toolDefinitionSerializationApiFor(model.api);
   const compat = model.compat as { readonly supportsStrictMode?: boolean } | undefined;
   return {
     api,
     includeStrict: api === "openai-responses" || compat?.supportsStrictMode !== false,
   };
+}
+
+function toolDefinitionSerializationApiFor(piApi: Api): ModelVisibleToolDefinitionSerialization["api"] {
+  switch (piApi) {
+    case "openai-completions":
+      return "openai-completions";
+    case "openai-responses":
+      return "openai-responses";
+    default:
+      throw new Error(`Harness event projector cannot map Pi api ${JSON.stringify(piApi)} to a tool definition serialization.`);
+  }
 }
 
 function defaultToolDefinitionTokenCount(serializedDefinition: string): number {

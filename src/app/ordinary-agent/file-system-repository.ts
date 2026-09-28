@@ -179,13 +179,30 @@ const configSchema = z.object({
   baseUrl: z.string(), defaultAiMode: z.enum(["openai-compatible", "openai-responses"]),
   secretRef: z.string(), secretConfigured: z.boolean(), updatedAt: z.string().min(1),
 }).passthrough();
+const resolvedModelCapabilitiesSchema = z.object({
+  facts: z.union([
+    z.object({
+      status: z.literal("confirmed"),
+      piProviderId: z.string().min(1),
+      modelId: z.string(),
+      transport: z.enum(["openai_compatible_chat_completions", "openai_responses"]),
+      contextWindowTokens: z.number().positive(),
+      maxOutputTokens: z.number().positive(),
+      supportsVisionInput: z.boolean(),
+      supportsReasoningOutput: z.boolean(),
+      thinkingLevels: z.array(z.enum(["off", "minimal", "low", "medium", "high", "xhigh", "max"])),
+      supportsStrictToolSchemas: z.boolean(),
+      supportsParallelToolCalls: z.boolean(),
+    }).passthrough(),
+    z.object({
+      status: z.literal("unconfirmed"),
+      modelId: z.string(),
+    }).passthrough(),
+  ]),
+}).passthrough();
 const capabilitySnapshotSchema = z.object({
   snapshotId: z.string().min(1), createdAt: z.string().min(1), activeModel: configSchema,
-  modelCapabilities: z.object({
-    contextWindowTokens: z.number().positive(), maxOutputTokens: z.number().positive(), supportsToolCalling: z.boolean(),
-    supportsParallelToolCalls: z.boolean(), supportsStructuredOutputs: z.boolean(), supportsStreaming: z.boolean(),
-    supportsVisionInput: z.boolean(), supportsReasoningEffort: z.boolean(), preferredApiStyle: z.string(), stability: z.string(),
-  }).passthrough(),
+  modelCapabilities: resolvedModelCapabilitiesSchema,
   toolCatalog: z.object({
     scope: z.literal("agent-basic"),
     tools: z.array(z.object({
@@ -270,11 +287,7 @@ const capabilityResolutionSchema = z.object({
       canReceiveToolCalls: z.boolean(),
       canRoundTripToolResults: z.boolean(),
     }).strict(),
-    modelCapabilities: z.object({
-      contextWindowTokens: z.number().positive(), maxOutputTokens: z.number().positive(), supportsToolCalling: z.boolean(),
-      supportsParallelToolCalls: z.boolean(), supportsStructuredOutputs: z.boolean(), supportsStreaming: z.boolean(),
-      supportsVisionInput: z.boolean(), supportsReasoningEffort: z.boolean(), preferredApiStyle: z.string(), stability: z.string(),
-    }).passthrough(),
+    modelCapabilities: resolvedModelCapabilitiesSchema,
     canExposeModelTools: z.boolean(),
   }).strict(),
   allowedTools: z.array(z.string()),
@@ -327,6 +340,7 @@ const eventSchema = z.discriminatedUnion("type", [
     type: z.literal("context.compaction.completed"),
     compactionEntryRef: sessionEntryRefSchema,
     tokensBefore: z.number().int().nonnegative(),
+    replacedImageBlocks: z.number().int().nonnegative(),
   }).strict(),
   z.object({ ...eventBase, type: z.literal("run.approval_requested"), confirmationRequests: z.array(confirmationSchema).min(1), invocationIds: z.array(z.string().min(1)) }).strict(),
   z.object({ ...eventBase, type: z.literal("run.approval_decided"), decision: confirmationDecisionSchema }).strict(),

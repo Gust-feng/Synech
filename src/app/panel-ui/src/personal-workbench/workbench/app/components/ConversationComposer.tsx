@@ -5,6 +5,7 @@ import type { ChatInputProps } from '@ui/contracts/composer'
 import type { ComposerToolConfirmationPolicy } from '@ui/features/settings/config-projection'
 import { formatCompactTokenCount, formatContextUsagePercent } from '@ui/features/conversations/context-window-usage'
 import { ModelOptionPicker } from '@ui/features/settings/model/option-picker'
+import { runReasoningEffortOptions } from '@ui/features/settings/model/capability-display'
 import { ActionConfirmationDialog } from './ActionConfirmationDialog'
 import { composerSurface } from './tokens'
 import { QueuedMessageList } from './QueuedMessageList'
@@ -113,6 +114,7 @@ export function ConversationComposer({ input, onCompositionChange }: Conversatio
       />
       <div className="ui-conversation-composer__toolbar">
         <div className="ui-conversation-composer__toolbar-left">
+          {input.reasoningEffortEnabled && <ComposerReasoningSelect input={input} />}
           <button
             type="button"
             onClick={input.onSelectAttachment}
@@ -313,6 +315,8 @@ function ContextUsageRing({ progress, color }: { readonly progress: number; read
 }
 
 function ComposerReasoningSelect({ input }: { readonly input: ChatInputProps }) {
+  const selectedModel = input.models.find((model) => model.id === input.selectedModelId)
+  const effortOptions = runReasoningEffortOptions(selectedModel?.capabilities)
   return (
     <label className="relative shrink-0">
       <span className="sr-only">推理力度</span>
@@ -324,9 +328,9 @@ function ComposerReasoningSelect({ input }: { readonly input: ChatInputProps }) 
         style={{ color: 'var(--ui-text-2)' }}
       >
         <option value="">自动</option>
-        <option value="low">轻量</option>
-        <option value="medium">标准</option>
-        <option value="high">深入</option>
+        {effortOptions.map((option) => (
+          <option value={option.value} key={option.value}>{option.label}</option>
+        ))}
       </select>
       <ChevronDown size={10} className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2" style={{ color: 'var(--ui-text-3)' }} aria-hidden="true" />
     </label>

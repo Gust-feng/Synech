@@ -161,7 +161,9 @@ function projectTransition(
       ...base,
       type: event.type,
       title: "整理上下文",
-      summary: "上下文压缩完成",
+      summary: event.replacedImageBlocks > 0
+        ? `上下文压缩完成；${event.replacedImageBlocks} 张图片已替换为文字占位`
+        : "上下文压缩完成",
       status: "completed",
     };
     case "run.approval_requested": {

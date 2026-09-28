@@ -36,7 +36,6 @@ import {
   modelMessageFromAssistant,
   modelUsageFromProvider,
   providerFailureFromAssistant,
-  providerRefusalFromAssistant,
 } from "../provider-result-projection.js";
 import {
   createToolVisibilitySession,
@@ -93,6 +92,7 @@ export type DelegatedRuntimeOptions = Pick<
   | "thinkingLevel"
   | "toolDefinitionTokenCounter"
   | "compactionSettings"
+  | "confirmedContextWindowTokens"
   | "transformProviderPayload"
   | "onProviderToolDefinitionMetrics"
 >;
@@ -341,6 +341,9 @@ function attachDelegatedHarnessHooks(input: {
       thinkingLevel: input.harness.getThinkingLevel(),
       abortSignal: input.abortSignal,
       ...(input.options.compactionSettings === undefined ? {} : { compactionSettings: input.options.compactionSettings }),
+      ...(input.options.confirmedContextWindowTokens === undefined
+        ? {}
+        : { confirmedContextWindowTokens: input.options.confirmedContextWindowTokens }),
     });
     if (compaction.status === "failed") {
       // 压缩层的结构码（context_overflow / context_compaction_images_unsupported /
@@ -570,19 +573,6 @@ function delegatedAgentProjectedFailure(
   metrics: DelegatedAgentExecutionMetrics,
   contextWindow: number,
 ): ToolCallResult {
-  const refusal = providerRefusalFromAssistant(assistant);
-  if (refusal !== undefined) {
-    return delegatedAgentFailure(
-      request,
-      refusal.length === 0
-        ? "The delegated model refused the request without an explanation."
-        : `The delegated model refused the request: ${refusal}`,
-      false,
-      startedAt,
-      metrics,
-      "model_refusal",
-    );
-  }
   const providerFailure = providerFailureFromAssistant(assistant, contextWindow);
   if (providerFailure !== undefined) {
     return delegatedAgentFailure(
@@ -595,16 +585,13 @@ function delegatedAgentProjectedFailure(
     );
   }
   if (assistant.stopReason === "length") {
-    const incompleteReason = assistant.providerMetadata?.incompleteReason?.trim();
     return delegatedAgentFailure(
       request,
-      incompleteReason === undefined || incompleteReason.length === 0
-        ? "The delegated model stopped before completing its response."
-        : `The delegated model response was incomplete: ${incompleteReason}.`,
+      "The delegated model stopped before completing its response because it reached the output token limit.",
       false,
       startedAt,
       metrics,
-      incompleteReason === "content_filter" ? "content_filtered" : "output_truncated",
+      "output_truncated",
     );
   }
   return delegatedAgentFailure(

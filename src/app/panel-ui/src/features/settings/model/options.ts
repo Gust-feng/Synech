@@ -2,6 +2,11 @@ import type { ChatModelOption } from "../../../contracts/composer";
 import { resolveModelIconSvgForModel } from "./icons";
 import { modelProviderSortRank, resolveModelProviderIdentity } from "./provider-logos";
 import type { ConfigResponse, ModelCapabilities, ModelProviderModelCatalog } from "@panel-api/config";
+import {
+  modelSupportsReasoningEffort,
+  runReasoningEffortOptions,
+  type RunReasoningEffortLevel,
+} from "./capability-display";
 
 type ConfigModelProfile = NonNullable<ConfigResponse["profiles"]>[number];
 type ConfigModelProfileWithId = ConfigModelProfile & { readonly profileId: string };
@@ -93,15 +98,16 @@ export function modelOptionSupportsReasoningEffort(
   config: ConfigResponse | undefined,
   optionId: string
 ): boolean {
-  const supportsCurrentModel = config?.capabilities?.modelCapabilities?.supportsReasoningEffort === true;
-  if (optionId.length === 0) {
-    return supportsCurrentModel;
-  }
-  const parsed = parseModelOptionId(optionId);
-  if (parsed === undefined) return false;
-  return config?.config?.profileId === parsed.profileId &&
-    config.config.model === parsed.modelId &&
-    supportsCurrentModel;
+  return modelSupportsReasoningEffort(modelOptionCapabilities(config, optionId)) === true;
+}
+
+/** 该模型实际可用的运行级档位；未确认模型没有已确认档位。 */
+export function modelOptionRunReasoningLevels(
+  config: ConfigResponse | undefined,
+  optionId: string
+): readonly RunReasoningEffortLevel[] {
+  return runReasoningEffortOptions(modelOptionCapabilities(config, optionId))
+    .map((option) => option.value);
 }
 
 export function parseModelOptionId(value: string): { readonly profileId: string; readonly modelId: string } | undefined {
@@ -125,6 +131,15 @@ function modelProfileIsSelectable(profile: ConfigModelProfileWithId): boolean {
   return profile.enabled !== false &&
     profile.secretConfigured === true &&
     profile.defaultAiMode !== "none";
+}
+
+function modelOptionCapabilities(config: ConfigResponse | undefined, optionId: string): ModelCapabilities | undefined {
+  if (optionId.length === 0) {
+    return config?.capabilities?.modelCapabilities;
+  }
+  const parsed = parseModelOptionId(optionId);
+  if (parsed === undefined) return undefined;
+  return modelCapabilityLookup(config).get(modelOptionId(parsed.profileId, parsed.modelId));
 }
 
 function modelCapabilityLookup(config: ConfigResponse | undefined): ReadonlyMap<string, ModelCapabilities> {
