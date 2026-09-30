@@ -77,7 +77,6 @@ export function WorkbenchSettingsDialog(props: WorkbenchSettingsDialogProps): Re
       onDeleteModelProvider={props.actions.deleteModelProvider}
       onFetchModels={props.actions.fetchModelsForProfile}
       onSaveModelCatalog={props.actions.saveModelCatalog}
-      onSaveModelCapabilities={props.actions.saveModelCapabilities}
       onRevealModelApiKey={props.actions.revealModelApiKey}
       modelCatalogs={props.modelCatalogs}
       skills={props.app.skills}

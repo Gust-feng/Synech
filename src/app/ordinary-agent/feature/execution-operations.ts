@@ -1,6 +1,7 @@
 import type { ConfirmationDecision } from "../../../domain/confirmation/index.js";
 import { sameResultForIdempotency, toolInvocationId, type ToolCallRequest, type ToolCallResult } from "../../../domain/tools/index.js";
 import { createStableInvocationId, type IdFactory } from "../../../kernel/id.js";
+import { CodedExecutionError } from "../../execution-errors/index.js";
 import type { AgentSessionRepository } from "../../model-runtime/agent-session.js";
 import type { AcceptedToolInvocation, ProviderToolCall } from "../../model-runtime/agent-loop.js";
 import {
@@ -49,7 +50,7 @@ type ExecutionTerminalSettlement = Pick<
 >;
 type ExecutionStateOwner = Pick<
   OrdinaryExecutionCoordinator,
-  "abortController" | "beginApprovalDecision" | "beginExecution" | "controller" |
+  "abortController" | "awaitExecution" | "beginApprovalDecision" | "beginExecution" | "controller" |
   "finishApprovalDecision" | "hasContinuation" | "hasController" | "hasLiveExecution" |
   "registerApprovalContinuation" | "releaseCancellationContinuation" |
   "releaseControllerIfIdle" | "removeController" | "retainCancellationContinuation" |
@@ -173,9 +174,9 @@ export function createOrdinaryExecutionOperations(options: {
         }
         return clone(state);
       }
-      const orderedToolCalls = await options.sessionRepository.readToolCalls({
+      const orderedToolCalls = await options.sessionRepository.readToolCallsByCheckpoint({
         sessionRef: state.sessionRef,
-        assistantEntryRef: pending.assistantEntryRef,
+        checkpoint: pending.checkpoint,
       });
       state = reconcileInterruptedOrdinaryToolRound({ state, orderedToolCalls, recordedAt });
       if (persistState && state !== current.state) {
@@ -190,11 +191,11 @@ export function createOrdinaryExecutionOperations(options: {
           `Ordinary run ${runId} cannot reconcile a Session tool round without every root result`,
         );
       }
-      const toolRoundLeafRef = await options.sessionRepository.reconcileToolResultEntries({
+      const toolRoundCheckpoint = await options.sessionRepository.reconcileToolResultEntries({
         sessionRef: state.sessionRef,
-        assistantEntryRef: pending.assistantEntryRef,
+        assistantCheckpoint: pending.checkpoint,
         ...(state.session.phase === "rollbackable"
-          ? { recoveryLeafRef: state.session.endLeafRef }
+          ? { recoveryCheckpoint: state.session.endCheckpoint }
           : {}),
         orderedResults: rootResults as readonly ToolCallResult[],
       });
@@ -204,9 +205,9 @@ export function createOrdinaryExecutionOperations(options: {
         transition: {
           type: "record_session_checkpoint",
           checkpoint: {
+            checkpoint: toolRoundCheckpoint,
             kind: "tool_result_entries_committed",
             sessionId: state.sessionRef.sessionId,
-            toolRoundLeafRef,
             providerCallIds: rootResults.map((result) => result?.providerCallId ?? ""),
             invocationIds: pending.invocationIds,
           },
@@ -397,9 +398,9 @@ export function createOrdinaryExecutionOperations(options: {
       return true;
     }
     try {
-      const acceptedCompletedSession = outcome.session.latestLeafRef === null
+      const acceptedCompletedSession = outcome.session.latestCheckpoint === null
         ? outcome.session
-        : { ...outcome.session, safeLeafRef: outcome.session.latestLeafRef };
+        : { ...outcome.session, safeCheckpoint: outcome.session.latestCheckpoint };
       const blocked = await runStore.mutate(runId, {
         type: "block",
         reason: {
@@ -508,25 +509,28 @@ export function createOrdinaryExecutionOperations(options: {
         onNestedToolRequestsAccepted: (requests) => persistNestedToolRequests(runId, requests),
         onToolProgress: (progress) => activityHub.recordToolProgress(runId, progress),
         onSessionWriteCheckpoint: async (checkpoint) => {
-          let assistantText: string | undefined;
-          if (checkpoint.kind === "assistant_tool_call_entry_committed" ||
-              checkpoint.kind === "assistant_response_entry_committed") {
-            const entry = (await options.sessionRepository.readAssistantEntries({
-              sessionRef,
-              entryRefs: [checkpoint.assistantEntryRef],
-            }))[0];
-            if (entry === undefined) {
-              throw new OrdinaryFeatureError(
-                "ordinary_run_state_conflict",
-                "Committed assistant Session entry could not be read",
-              );
-            }
-            assistantText = entry.text;
+          // The committed assistant entry is not readable yet: Pi writes it in the
+          // commit that follows the event carrying this checkpoint, so the text
+          // travels with the checkpoint instead of being read back.
+          const assistantText = checkpoint.kind === "assistant_tool_call_entry_committed" ||
+              checkpoint.kind === "assistant_response_entry_committed"
+            ? checkpoint.assistantText
+            : undefined;
+          const modelRequestId = checkpoint.kind === "assistant_tool_call_entry_committed" ||
+              checkpoint.kind === "assistant_response_entry_committed"
+            ? activityHub.currentModelRequestId(runId)
+            : undefined;
+          if ((checkpoint.kind === "assistant_tool_call_entry_committed" ||
+              checkpoint.kind === "assistant_response_entry_committed") && modelRequestId === undefined) {
+            throw new CodedExecutionError(
+              "runtime_projection_failed",
+              `Ordinary run ${runId} committed an assistant checkpoint without an active model request identity.`,
+            );
           }
           await runStore.mutate(runId, {
             type: "record_session_checkpoint",
             checkpoint,
-            modelRequestId: activityHub.currentModelRequestId(runId),
+            modelRequestId,
             assistantText,
           });
         },
@@ -625,10 +629,28 @@ export function createOrdinaryExecutionOperations(options: {
         emitDiagnostic({ kind: "cancellation_cleanup_failed", runId, phase: "continuation_release", error });
         return;
       }
+      // Pi's abort settles through the cancelled run's own writer generation:
+      // the tool result, the operation closure, and the branch tip all move as
+      // part of that unwind. Rolling the branch back before the unwind finishes
+      // would let those writes re-extend the rolled-back line and leave an
+      // orphan tool result on it — every later turn would then fail at the
+      // provider. Wait for the execution to finish unwinding first.
+      await executionCoordinator.awaitExecution(runId);
       executionCoordinator.releaseControllerIfIdle(runId);
       if (finalizeSession) {
         try {
-          await terminalSettlement.finalizeSession(runId, state, state.status.kind !== "completed");
+          // The rollback target is read from the unwound state, not from the
+          // cancel-time snapshot: the unwind can still record durable
+          // checkpoints (an aborted tool's result commits its round), and a
+          // target behind those would strand the run's own ledger off the
+          // rolled-back branch.
+          const unwound = await runStore.load(runId);
+          if (unwound === undefined) return;
+          await terminalSettlement.finalizeSession(
+            runId,
+            unwound.state,
+            unwound.state.status.kind !== "completed",
+          );
         } catch {
           return;
         }

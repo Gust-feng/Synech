@@ -16,10 +16,10 @@ import type {
 } from "../../../domain/config/index.js";
 import {
   ModelRuntimeConfigurationError,
-  resolveOpenAIModelRuntimeConfig,
-  type OpenAIModelRuntimeMode,
-  type ResolvedOpenAIModelRuntimeConfig,
-} from "../../model-runtime/openai-runtime-config.js";
+  resolveModelRuntimeConfig,
+  type ResolvedModelRuntimeMode,
+  type ResolvedModelRuntimeConfig,
+} from "../../model-runtime/model-runtime-config.js";
 import type { ConfigCenter } from "../../config-center/index.js";
 import type { PanelModelCatalogFetch } from "../types.js";
 
@@ -35,12 +35,12 @@ import type { PanelModelCatalogFetch } from "../types.js";
  * - `createFrozenProviderBinding` —— 冻结 provider binding 的装配配方：一次解析出的
  *   冻结运行事实 + 连接上显式的 `piProviderId` + 取 key 闭包。模型能力事实由
  *   adapter 在 pi 真实 catalog 中精确匹配后直接使用，本文件不传入也不重定义能力。
- * - `createOpenAIAuxiliaryModelChannel` —— 配方之上的无工具单 shot 辅助通道
+ * - `createAuxiliaryModelChannel` —— 配方之上的无工具单 shot 辅助通道
  *   （固定 `thinkingLevel: "off"`）：研究成稿/核验、记忆整理、会话标题复用。
  */
 
-export type OpenAIAuxiliaryModelChannelInput = {
-  readonly resolved: ResolvedOpenAIModelRuntimeConfig;
+export type AuxiliaryModelChannelInput = {
+  readonly resolved: ResolvedModelRuntimeConfig;
   readonly profileId: SanitizedModelProviderConfig["profileId"];
   readonly providerKind: ModelProviderKind;
   readonly resolveApiKey: () => Promise<string | undefined>;
@@ -65,7 +65,7 @@ export type ConfigCenterApiKeyProvider = Pick<
 export function createConfigCenterApiKeyResolver(input: {
   readonly configCenter: ConfigCenter;
   readonly provider: ConfigCenterApiKeyProvider;
-  readonly mode: OpenAIModelRuntimeMode;
+  readonly mode: ResolvedModelRuntimeMode;
   readonly informationAccess?: Pick<SanitizedInformationAccessConfig, "web">;
 }): () => Promise<string | undefined> {
   const { configCenter, provider, mode } = input;
@@ -75,7 +75,7 @@ export function createConfigCenterApiKeyResolver(input: {
         modelProvider: provider,
         ...(input.informationAccess === undefined ? {} : { informationAccess: input.informationAccess }),
       });
-      return resolveOpenAIModelRuntimeConfig({ mode, env: current, modelProvider: provider }).apiKey;
+      return resolveModelRuntimeConfig({ mode, env: current, modelProvider: provider }).apiKey;
     } catch (error) {
       if (error instanceof ModelRuntimeConfigurationError) return undefined;
       throw error;
@@ -93,7 +93,7 @@ export function createConfigCenterApiKeyResolver(input: {
  * 精确匹配后直接使用，调用点不传能力、也不在此重定义模型能力。
  */
 export function createFrozenProviderBinding(input: {
-  readonly resolved: ResolvedOpenAIModelRuntimeConfig;
+  readonly resolved: ResolvedModelRuntimeConfig;
   readonly profileId: SanitizedModelProviderConfig["profileId"];
   readonly piProviderId?: string;
   readonly resolveApiKey: () => Promise<string | undefined>;
@@ -110,15 +110,17 @@ export function createFrozenProviderBinding(input: {
     profileId: input.profileId,
     ...(input.apiKey === undefined ? {} : { apiKey: input.apiKey }),
     resolveApiKey: input.resolveApiKey,
-    ...(input.piProviderId === undefined ? {} : { piProviderId: input.piProviderId }),
+    ...((input.piProviderId ?? input.resolved.piProviderId) === undefined
+      ? {}
+      : { piProviderId: input.piProviderId ?? input.resolved.piProviderId }),
     providerProfileId: input.resolved.providerProfileId,
     requestSettings: input.resolved.requestSettings,
     enableWebSearch: input.resolved.enableWebSearch,
   });
 }
 
-export function createOpenAIAuxiliaryModelChannel(
-  input: OpenAIAuxiliaryModelChannelInput,
+export function createAuxiliaryModelChannel(
+  input: AuxiliaryModelChannelInput,
 ): IntelligenceChannel {
   const binding = createFrozenProviderBinding({
     resolved: input.resolved,
@@ -138,7 +140,7 @@ export function createOpenAIAuxiliaryModelChannel(
 }
 
 export async function fetchPanelModelCatalog(input: {
-  readonly profile: Pick<SanitizedModelProviderConfig, "profileId" | "label" | "baseUrl">;
+  readonly profile: Pick<SanitizedModelProviderConfig, "profileId" | "label" | "baseUrl" | "piProviderId">;
   readonly apiKey: string;
   readonly fetch?: PanelModelCatalogFetch;
   readonly abortSignal?: AbortSignal;

@@ -1,5 +1,6 @@
 import type {
   ConfiguredCommandShellKind,
+  ModelRunReasoningEffort,
   ResolvedModelCapabilities,
   ModelProviderModelCatalog as DomainModelProviderModelCatalog,
   ModelProviderPreset as DomainModelProviderPreset,
@@ -14,6 +15,9 @@ import type {
   SanitizedToolConfirmationConfig,
 } from "../../domain/config/index.js";
 import type { ToolConfirmationPolicy as DomainToolConfirmationPolicy } from "../../domain/tools/index.js";
+
+export type { ModelRunReasoningEffort };
+export { MODEL_RUN_REASONING_EFFORT_LABELS } from "../../domain/config/index.js";
 
 export type ConfigResponse = {
   readonly ok?: boolean;

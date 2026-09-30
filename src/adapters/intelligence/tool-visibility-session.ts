@@ -1,8 +1,9 @@
 import {
-  type AgentHarness,
+  type AgentLane,
   type AgentTool,
   type AgentToolResult,
 } from "@earendil-works/pi-agent-core";
+import { TODO_CONTEXT } from "@earendil-works/pi-agent-core/harness/context";
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentLoopToolVisibilityPlan } from "../../app/model-runtime/agent-loop.js";
 import { isProgressiveToolVisibilityCostEffective } from "../../app/model-runtime/tool-definition-visibility-cost.js";
@@ -21,12 +22,11 @@ export type ToolVisibilityToolSet = {
   readonly tools: readonly AgentTool[];
   readonly metadataByName: ReadonlyMap<string, ToolDefinition["metadata"]>;
   readonly activeToolNames: readonly string[];
-  readonly bind?: (harness: AgentHarness) => void;
+  readonly bind?: (lane: AgentLane) => void;
 };
 
 type VisibilityControlExecutionResult = {
   readonly result: ToolCallResult;
-  readonly addedToolNames?: readonly string[];
   readonly rollback?: () => Promise<void>;
 };
 
@@ -57,12 +57,11 @@ type VisibilityControlHost = {
   readonly projectResult: (
     result: ToolCallResult,
     terminate: boolean,
-    addedToolNames?: readonly string[],
   ) => AgentToolResult<unknown>;
   readonly recordMaintenanceFailure: (failure: { readonly code: string; readonly error: string }) => void;
 };
 
-/** Owns progressive tool visibility for one Pi AgentHarness execution. */
+/** Owns progressive tool visibility for one Pi AgentLane execution. */
 export function createToolVisibilitySession(input: {
   readonly tools: readonly AgentTool[];
   readonly metadataByName: ReadonlyMap<string, ToolDefinition["metadata"]>;
@@ -81,7 +80,7 @@ export function createToolVisibilitySession(input: {
 
   const visibilityPlan = input.visibilityPlan;
   validateToolVisibilityPlan(visibilityPlan, baseTools.map((tool) => tool.name));
-  let harness: AgentHarness | undefined;
+  let lane: AgentLane | undefined;
   let visibilityMutationTail = Promise.resolve();
   const mutateVisibilityState: VisibilityStateMutation = async <T>(operation: () => Promise<T>): Promise<T> => {
     const previous = visibilityMutationTail;
@@ -110,7 +109,7 @@ export function createToolVisibilitySession(input: {
       result: searchDeferredTools(
         request,
         deferredTools,
-        requireBoundHarness(harness).getActiveTools().map((tool) => tool.name),
+        await requireBoundLane(lane).getActiveTools(TODO_CONTEXT),
       ),
     }),
   });
@@ -121,7 +120,7 @@ export function createToolVisibilitySession(input: {
       request,
       deferredTools,
       controlToolNames,
-      harness: requireBoundHarness(harness),
+      lane: requireBoundLane(lane),
       mutateVisibilityState,
     }),
   });
@@ -140,10 +139,10 @@ export function createToolVisibilitySession(input: {
     ]),
     activeToolNames: allToolNames.filter((name) => initiallyActive.has(name)),
     bind: (boundHarness) => {
-      if (harness !== undefined && harness !== boundHarness) {
-        throw new Error("Progressive tool visibility bundle is already bound to another AgentHarness.");
+      if (lane !== undefined && lane !== boundHarness) {
+        throw new Error("Progressive tool visibility bundle is already bound to another AgentLane.");
       }
-      harness = boundHarness;
+      lane = boundHarness;
     },
   };
 }
@@ -355,7 +354,6 @@ function createVisibilityControlTool(input: {
       return input.host.projectResult(
         execution.result,
         execution.result.status === "cancelled",
-        execution.addedToolNames,
       );
     },
   };
@@ -385,7 +383,7 @@ async function loadDeferredTools(input: {
   readonly request: ToolCallRequest;
   readonly deferredTools: AgentLoopToolVisibilityPlan["deferredTools"];
   readonly controlToolNames: readonly string[];
-  readonly harness: AgentHarness;
+  readonly lane: AgentLane;
   readonly mutateVisibilityState: VisibilityStateMutation;
 }): Promise<VisibilityControlExecutionResult> {
   const startedAt = Date.now();
@@ -416,18 +414,18 @@ async function loadDeferredTools(input: {
     };
   }
   return input.mutateVisibilityState(async () => {
-    const activeBeforeNames = input.harness.getActiveTools().map((tool) => tool.name);
+  const activeBeforeNames = await input.lane.getActiveTools(TODO_CONTEXT);
     const activeBefore = new Set(activeBeforeNames);
     const activatedToolNames = requestedNames.filter((name) => !activeBefore.has(name));
     const alreadyLoaded = requestedNames.filter((name) => activeBefore.has(name));
     if (activatedToolNames.length > 0) {
-      await input.harness.setActiveTools(activeToolNamesAfterVisibilityChange({
+      await input.lane.setActiveTools(activeToolNamesAfterVisibilityChange({
         activeNames: [...activeBeforeNames, ...activatedToolNames],
         deferredToolNames: input.deferredTools.map((tool) => tool.name),
         controlToolNames: input.controlToolNames,
-      }));
+      }), TODO_CONTEXT);
     }
-    const activeAfter = new Set(input.harness.getActiveTools().map((tool) => tool.name));
+    const activeAfter = new Set(await input.lane.getActiveTools(TODO_CONTEXT));
     const output: ToolFactValue = {
       kind: TOOL_VISIBILITY_ACTIVATION_KIND,
       activatedToolNames,
@@ -442,18 +440,17 @@ async function loadDeferredTools(input: {
         status: "completed",
         durationMs: Math.max(0, Date.now() - startedAt),
       },
-      ...(activatedToolNames.length === 0 ? {} : { addedToolNames: activatedToolNames }),
       ...(activatedToolNames.length === 0
         ? {}
         : {
             rollback: () => input.mutateVisibilityState(async () => {
               const activated = new Set(activatedToolNames);
-              const currentNames = input.harness.getActiveTools().map((tool) => tool.name);
-              await input.harness.setActiveTools(activeToolNamesAfterVisibilityChange({
+              const currentNames = await input.lane.getActiveTools(TODO_CONTEXT);
+              await input.lane.setActiveTools(activeToolNamesAfterVisibilityChange({
                 activeNames: currentNames.filter((name) => !activated.has(name)),
                 deferredToolNames: input.deferredTools.map((tool) => tool.name),
                 controlToolNames: input.controlToolNames,
-              }));
+              }), TODO_CONTEXT);
             }),
           }),
     };
@@ -510,11 +507,11 @@ function requireToolInputRecord(
   return value as Readonly<Record<string, ToolFactValue | undefined>>;
 }
 
-function requireBoundHarness(harness: AgentHarness | undefined): AgentHarness {
-  if (harness === undefined) {
-    throw new Error("Progressive tool visibility controller is not bound to its AgentHarness.");
+function requireBoundLane(lane: AgentLane | undefined): AgentLane {
+  if (lane === undefined) {
+    throw new Error("Progressive tool visibility controller is not bound to its AgentLane.");
   }
-  return harness;
+  return lane;
 }
 
 function visibilityControlFailure(

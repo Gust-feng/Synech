@@ -18,19 +18,18 @@ export type {
   ProtocolToolCallCapabilities,
   ProviderProtocolProfile,
   ModelCapabilityProfile,
-  ModelCapabilityOverrideSettings,
   ModelProviderProfileSettings,
   SanitizedModelProviderConfig,
   UpdateModelProviderConfigInput,
   CreateModelProviderProfileInput,
 } from "./model-settings.js";
+export { MODEL_RUN_REASONING_EFFORT_LABELS } from "./model-settings.js";
 export type {
   ModelTransportKind,
   ModelThinkingLevelName,
   ConfirmedModelFacts,
   UnconfirmedModelFacts,
   ModelFacts,
-  ModelCapabilityOverrideValues,
   ResolvedModelCapabilities,
 } from "./model-facts.js";
 export {

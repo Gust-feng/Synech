@@ -34,6 +34,7 @@ export type AppWorkbenchConfigState = {
   readonly persistedSelectedModelId: string;
   readonly selectedModelId: string;
   readonly selectedModelSupportsReasoningEffort: boolean;
+  readonly selectedModelRunReasoningLevels: readonly import("./model/capability-display").RunReasoningEffortLevel[];
   readonly selectedModelContextWindowTokens?: number;
 };
 
@@ -153,6 +154,7 @@ export function useAppWorkbenchConfigState(app: AppState): AppWorkbenchConfigSta
     persistedSelectedModelId,
     selectedModelId,
     selectedModelSupportsReasoningEffort,
+    selectedModelRunReasoningLevels: selectedModelRunReasoningLevels,
     selectedModelContextWindowTokens,
   };
 }

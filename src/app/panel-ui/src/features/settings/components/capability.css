@@ -1,108 +1,84 @@
 .basic-capabilities-settings {
-  display: grid;
-  gap: var(--cap-gap);
-
-  --cap-rail: 46px;
-  --cap-gap: 18px;
-  --cap-node: 34px;
-  --cap-node-top: 33px;
-  --cap-trunk: color-mix(in oklch, var(--fg) 16%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  width: 100%;
 }
 
 .developer-prompt-settings {
-  margin-bottom: var(--cap-gap);
+  margin-bottom: 20px;
 }
 
-.cap-node {
-  position: relative;
-  display: grid;
-  grid-template-columns: var(--cap-rail) minmax(0, 1fr);
-  align-items: start;
-}
-
-.cap-node-rail {
-  position: relative;
-  align-self: stretch;
-}
-
-.cap-node-rail::before {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: calc(var(--cap-rail) / 2 - 1px);
-  width: 2px;
-  border-radius: 2px;
-  background: var(--cap-trunk);
-  content: "";
-}
-
-.cap-node:not(:first-child) .cap-node-rail::after {
-  position: absolute;
-  top: calc(-1 * var(--cap-gap));
-  left: calc(var(--cap-rail) / 2 - 1px);
-  width: 2px;
-  height: var(--cap-gap);
-  background: var(--cap-trunk);
-  content: "";
-}
-
-.cap-node:first-child .cap-node-rail::before {
-  top: var(--cap-node-top);
-}
-
-.cap-node:last-child .cap-node-rail::before {
-  bottom: auto;
-  height: var(--cap-node-top);
-}
-
-.cap-node-dot {
-  position: absolute;
-  z-index: 1;
-  top: calc(var(--cap-node-top) - var(--cap-node) / 2);
-  left: calc((var(--cap-rail) - var(--cap-node)) / 2);
-  display: inline-flex;
-  width: var(--cap-node);
-  height: var(--cap-node);
-  align-items: center;
-  justify-content: center;
-  border: var(--border-width-thin) solid color-mix(in oklch, var(--border) 60%, transparent);
-  border-radius: 50%;
-  background: var(--surface);
-  color: var(--muted);
-}
-
-.cap-node-card {
-  display: grid;
-  gap: var(--space-4);
-  border: var(--border-width-thin) solid var(--panel-card-border);
-  border-radius: var(--radius-lg);
-  background: var(--panel-card-bg);
-  box-shadow: var(--panel-card-shadow);
-  padding: 16px 20px;
-}
-
-.cap-group-head {
+/* 现代圆润卡片规范 */
+.cap-card {
   display: flex;
-  min-height: var(--cap-node);
+  flex-direction: column;
+  gap: 18px;
+  border: var(--border-width-thin) solid color-mix(in oklch, var(--border) 72%, transparent);
+  border-radius: 16px;
+  background: var(--panel-card-bg);
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.02),
+    0 8px 24px -4px color-mix(in oklch, var(--shadow-ink, #000) 4%, transparent);
+  padding: 24px 28px;
+  transition:
+    border-color var(--motion-fast-duration) var(--motion-ease-standard),
+    box-shadow var(--motion-fast-duration) var(--motion-ease-standard);
+}
+
+.cap-card:hover {
+  border-color: color-mix(in oklch, var(--border) 90%, transparent);
+  box-shadow:
+    0 2px 6px rgba(0, 0, 0, 0.03),
+    0 12px 30px -4px color-mix(in oklch, var(--shadow-ink, #000) 6%, transparent);
+}
+
+.cap-card-head {
+  display: flex;
+  min-height: 36px;
   align-items: center;
   justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid color-mix(in oklch, var(--border) 55%, transparent);
+  padding-bottom: 16px;
+}
+
+.cap-card-title-group {
+  display: flex;
+  min-width: 0;
+  align-items: center;
   gap: 12px;
 }
 
-.cap-group-heading {
+.cap-card-icon-badge {
+  display: inline-flex;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in oklch, var(--accent) 26%, var(--border));
+  border-radius: 11px;
+  background: color-mix(in oklch, var(--accent) 9%, var(--surface));
+  color: var(--accent-strong, var(--accent));
+  box-shadow: 0 2px 6px color-mix(in oklch, var(--accent) 10%, transparent);
+}
+
+.cap-card-heading {
   display: grid;
   min-width: 0;
-  flex: 1 1 auto;
+  gap: 2px;
 }
 
-.cap-group-heading h3 {
+.cap-card-heading h3 {
   margin: 0;
   color: var(--fg);
-  font-size: 14px;
-  font-weight: var(--weight-heading);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
-.cap-group-actions {
+.cap-card-actions {
   display: inline-flex;
   flex: 0 0 auto;
   flex-wrap: wrap;
@@ -111,33 +87,38 @@
   gap: 8px;
 }
 
-.cap-group-body {
-  display: grid;
-  gap: var(--space-4);
+.cap-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
 }
 
-.cap-group-body .service-config-grid,
-.cap-group-body .model-info-grid,
-.cap-group-body .ordinary-agent-prompt-field {
+.cap-card-body .service-config-grid,
+.cap-card-body .model-info-grid,
+.cap-card-body .ordinary-agent-prompt-field {
   border-top: 0;
   padding-top: 0;
 }
 
+/* 网络搜索表单网格 */
 .basic-capabilities-settings .web-search-config-grid {
+  display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-items: start;
-  gap: 16px 18px;
+  align-items: end;
+  gap: 16px 20px;
 }
 
 .basic-capabilities-settings .web-search-max-results {
-  max-width: 220px;
+  max-width: 180px;
 }
 
 .basic-capabilities-settings .service-config-grid label {
+  display: grid;
+  gap: 7px;
   min-width: 0;
   color: var(--fg);
-  font-size: 12px;
-  font-weight: var(--weight-body);
+  font-size: 12.5px;
+  font-weight: 500;
   line-height: 1.35;
 }
 
@@ -146,12 +127,12 @@
   width: 100%;
   height: 40px;
   border: 1px solid var(--field-border);
-  border-radius: var(--radius-lg);
+  border-radius: 10px;
   background: var(--field-bg);
-  padding: 0 12px;
+  padding: 0 14px;
   color: var(--fg);
   font: inherit;
-  font-size: 13px;
+  font-size: 13.5px;
   transition:
     border-color var(--motion-fast-duration) var(--motion-ease-standard),
     background-color var(--motion-fast-duration) var(--motion-ease-standard),
@@ -173,8 +154,11 @@
   outline: none;
 }
 
+/* 运行偏好列表 */
 .capability-preference-list {
-  display: grid;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .capability-preference-row {
@@ -182,32 +166,29 @@
   min-width: 0;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-4);
-  padding: 12px 0;
+  gap: 24px;
+  border-radius: 11px;
+  padding: 12px 14px;
+  transition:
+    background-color var(--motion-fast-duration) var(--motion-ease-standard);
 }
 
-.capability-preference-row:first-child {
-  padding-top: 0;
-}
-
-.capability-preference-row:last-child {
-  padding-bottom: 0;
-}
-
-.capability-preference-row + .capability-preference-row {
-  border-top: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
+.capability-preference-row:hover {
+  background: color-mix(in oklch, var(--row-hover-bg) 70%, transparent);
 }
 
 .capability-preference-copy {
   display: grid;
   min-width: 0;
   gap: 3px;
+  flex: 1 1 auto;
 }
 
 .capability-preference-copy strong {
   color: var(--fg);
-  font-size: 13px;
-  font-weight: var(--weight-body);
+  font-size: 13.5px;
+  font-weight: 550;
+  line-height: 1.35;
 }
 
 .capability-preference-copy span {
@@ -219,24 +200,105 @@
 }
 
 .capability-preference-row .settings-select-control {
-  width: min(240px, 44%);
+  width: 200px;
+  min-width: 170px;
   flex: 0 0 auto;
 }
 
+/* 圆润胶囊开关 */
+.capability-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 58px;
+  height: 30px;
+  padding: 0 14px;
+  border: 1px solid var(--field-border);
+  border-radius: 999px;
+  background: var(--field-bg);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 550;
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast-duration) var(--motion-ease-standard),
+    border-color var(--motion-fast-duration) var(--motion-ease-standard),
+    color var(--motion-fast-duration) var(--motion-ease-standard),
+    box-shadow var(--motion-fast-duration) var(--motion-ease-standard);
+}
+
+.capability-toggle:hover {
+  border-color: var(--field-hover-border);
+  background: var(--field-hover-bg);
+  color: var(--fg);
+}
+
+.capability-toggle[aria-pressed="true"] {
+  border-color: color-mix(in oklch, var(--accent) 36%, var(--border));
+  background: color-mix(in oklch, var(--accent) 14%, var(--surface));
+  color: var(--accent-strong, var(--accent));
+  font-weight: 600;
+  box-shadow: 0 1px 3px color-mix(in oklch, var(--accent) 12%, transparent);
+}
+
+.capability-toggle:disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
+}
+
+/* 系统提示词卡片内容 */
+.ordinary-agent-prompt-field {
+  display: grid;
+  gap: 8px;
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.ordinary-agent-prompt-field textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 120px;
+  border: 1px solid var(--field-border);
+  border-radius: 12px;
+  background: var(--field-bg);
+  padding: 12px 14px;
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+  resize: vertical;
+  transition:
+    border-color var(--motion-fast-duration) var(--motion-ease-standard),
+    box-shadow var(--motion-fast-duration) var(--motion-ease-standard);
+}
+
+.ordinary-agent-prompt-field textarea:focus {
+  border-color: var(--field-focus-border);
+  box-shadow: var(--field-focus-ring);
+  outline: none;
+}
+
+.ordinary-agent-prompt-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 11.5px;
+  padding: 0 4px;
+}
+
 @media (max-width: 760px) {
-  .basic-capabilities-settings {
-    --cap-rail: 38px;
+  .cap-card {
+    padding: 16px 18px;
+    border-radius: 14px;
   }
 
-  .cap-node-card {
-    padding: 14px 16px;
-  }
-
-  .cap-group-head {
+  .cap-card-head {
     flex-wrap: wrap;
   }
 
-  .cap-group-actions {
+  .cap-card-actions {
     flex-basis: 100%;
     justify-content: flex-start;
   }
@@ -252,6 +314,7 @@
   .capability-preference-row {
     align-items: stretch;
     flex-direction: column;
+    padding: 10px 12px;
   }
 
   .capability-preference-row .settings-select-control {

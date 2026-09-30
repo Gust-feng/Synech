@@ -58,9 +58,9 @@ export const BUILTIN_PROVIDER_PROTOCOL_PROFILES: readonly ProviderProtocolProfil
     profileId: "minimax",
     label: "MiniMax",
     providerKind: "openai_compatible",
-    recommendedProtocolKind: "openai_compatible_chat_completions",
-    supportedProtocolKinds: ["openai_compatible_chat_completions"],
-    defaultBaseUrl: "https://api.minimaxi.com/v1",
+    recommendedProtocolKind: "anthropic_messages",
+    supportedProtocolKinds: ["anthropic_messages"],
+    defaultBaseUrl: "https://api.minimaxi.com/anthropic",
     modelsPath: "/models",
     unsupportedParams: ["openai_responses.input", "openai_responses.previous_response_id"],
     ignoredParams: ["presence_penalty", "frequency_penalty", "logit_bias"],
@@ -107,7 +107,6 @@ export const BUILTIN_MODEL_PROVIDER_PRESETS: readonly ModelProviderPreset[] = [
     modelsPath: "/models",
     protocolProfileId: "deepseek",
     supportedProtocolKinds: ["openai_compatible_chat_completions"],
-    defaultModel: "deepseek-v4-pro",
     regionLabel: "全球",
     docsUrl: "https://api-docs.deepseek.com/",
     piProviderId: "deepseek",
@@ -123,7 +122,6 @@ export const BUILTIN_MODEL_PROVIDER_PRESETS: readonly ModelProviderPreset[] = [
     modelsPath: "/models",
     protocolProfileId: "moonshot",
     supportedProtocolKinds: ["openai_compatible_chat_completions"],
-    defaultModel: "kimi-k3",
     regionLabel: "国内",
     docsUrl: "https://platform.moonshot.cn/docs/guide/start-using-kimi-api",
     piProviderId: "moonshotai-cn",
@@ -139,7 +137,6 @@ export const BUILTIN_MODEL_PROVIDER_PRESETS: readonly ModelProviderPreset[] = [
     modelsPath: "/models",
     protocolProfileId: "glm",
     supportedProtocolKinds: ["openai_compatible_chat_completions"],
-    defaultModel: "glm-5.1",
     regionLabel: "国内",
     docsUrl: "https://docs.bigmodel.cn/",
     piProviderId: "zai-coding-cn",
@@ -148,25 +145,26 @@ export const BUILTIN_MODEL_PROVIDER_PRESETS: readonly ModelProviderPreset[] = [
     presetId: "minimax",
     label: "MiniMax",
     vendor: "MiniMax",
-    description: "MiniMax 国内 OpenAI-compatible 接口，M2.7 为当前推荐主线。",
+    description: "MiniMax 国内 Anthropic Messages 接口，由 Pi 原生 MiniMax Provider 提供模型语义。",
     providerKind: "openai_compatible",
-    protocolKind: "openai_compatible_chat_completions",
-    baseUrl: "https://api.minimaxi.com/v1",
+    protocolKind: "anthropic_messages",
+    baseUrl: "https://api.minimaxi.com/anthropic",
     modelsPath: "/models",
     protocolProfileId: "minimax",
-    supportedProtocolKinds: ["openai_compatible_chat_completions"],
-    defaultModel: "MiniMax-M2.7",
+    supportedProtocolKinds: ["anthropic_messages"],
     regionLabel: "国内",
-    docsUrl: "https://platform.minimax.io/docs/api-reference/text-chat-openai",
-    // 不声明 piProviderId：pi 的 minimax 目录条目 api 全是 anthropic-messages
-    // （pi 的 MiniMax provider 指向 Anthropic 端点），与本预置的 OpenAI 兼容
-    // transport 不是同一语义。强行映射会让已知模型的 api 与本连接矛盾，因此
-    // MiniMax 模型全部按未知发现模型处理：连接默认 transport、ID 原样、不伪造能力。
+    docsUrl: "https://platform.minimax.io/docs/api-reference/text-chat-anthropic",
+    // pi 的 MiniMax Provider 以 Anthropic Messages 协议指向国内端点，直接映射，
+    // 不为它另开一条 OpenAI 兼容特判。
+    piProviderId: "minimax-cn",
   },
 ];
 
 export function listBuiltinModelProviderPresets(): readonly ModelProviderPreset[] {
-  return BUILTIN_MODEL_PROVIDER_PRESETS.map((preset) => ({ ...preset }));
+  return BUILTIN_MODEL_PROVIDER_PRESETS.map((preset) => ({
+    ...preset,
+    ...(preset.piProviderIds === undefined ? {} : { piProviderIds: [...preset.piProviderIds] }),
+  }));
 }
 
 export function listBuiltinProviderProtocolProfiles(): readonly ProviderProtocolProfile[] {

@@ -33,7 +33,7 @@ import type {
   SubmitOrdinaryTurnResult,
 } from "./contracts.js";
 import { OrdinaryFeatureError } from "./contracts.js";
-import type { AgentSessionEntryRef, AgentSessionRef, AgentSessionRepository } from "../model-runtime/agent-session.js";
+import type { AgentSessionRef, AgentSessionRepository } from "../model-runtime/agent-session.js";
 import type {
   AcceptedToolInvocation,
   ProviderToolCall,
@@ -76,9 +76,8 @@ import {
 } from "./conversation-cleanup.js";
 import { createTerminalSettlement, projectStableTerminalRunFacts } from "./terminal-settlement.js";
 import {
-  recoveredSessionLeaf,
-  sameSessionEntryRef,
-  sessionEntryKey,
+  recoveredSessionCheckpoint,
+  sameSessionCheckpoint,
 } from "./session-branch-recovery.js";
 import {
   cancellationReason,
@@ -423,15 +422,18 @@ export function createOrdinaryAgentFeature(input: {
         .filter((run) => run.turn.conversationId === conversationId);
       if (runs.length === 0) continue;
       try {
-        const activeBranch = await input.sessionRepository.getActiveBranchEntryRefs(control.state.sessionRef);
-        const target = recoveredSessionLeaf(runs, activeBranch, conversationId);
-        const activeLeaf = activeBranch.at(-1) ?? null;
-        if (sameSessionEntryRef(activeLeaf, target)) continue;
-        const restored = await input.sessionRepository.moveActiveLeaf(control.state.sessionRef, target);
-        if (!sameSessionEntryRef(restored, target)) {
+        const target = await recoveredSessionCheckpoint(
+          input.sessionRepository,
+          runs,
+          control.state.sessionRef,
+          conversationId,
+        );
+        if (target === null) continue;
+        const restored = await input.sessionRepository.moveActiveCheckpoint(control.state.sessionRef, target);
+        if (!sameSessionCheckpoint(restored, target)) {
           throw new OrdinaryFeatureError(
             "ordinary_run_state_conflict",
-            `Ordinary conversation ${conversationId} Session did not restore its persisted safe leaf`,
+            `Ordinary conversation ${conversationId} Session did not restore its persisted safe checkpoint`,
           );
         }
       } catch (error) {

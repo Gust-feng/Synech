@@ -10,7 +10,21 @@ import { startLocalPanelServer } from "../panel-server/index.js";
 import type { PanelProviderFetch } from "../panel-server/types.js";
 
 type RealAiSmokeEnvironment = Readonly<Record<string, string | undefined>>;
-type SmokeProtocol = "openai_responses" | "openai_compatible_chat_completions";
+type SmokeProtocol = "anthropic_messages" | "openai_responses" | "openai_compatible_chat_completions";
+
+const SMOKE_AI_MODE_BY_PROTOCOL: Readonly<Record<SmokeProtocol, "anthropic-messages" | "openai-compatible" | "openai-responses">> = {
+  anthropic_messages: "anthropic-messages",
+  openai_responses: "openai-responses",
+  openai_compatible_chat_completions: "openai-compatible",
+};
+
+function aiModeForProtocol(protocol: SmokeProtocol): "anthropic-messages" | "openai-compatible" | "openai-responses" {
+  return SMOKE_AI_MODE_BY_PROTOCOL[protocol];
+}
+
+function defaultBaseUrlForProtocol(protocol: SmokeProtocol): string {
+  return protocol === "anthropic_messages" ? "https://api.anthropic.com" : "https://api.openai.com/v1";
+}
 
 export type RealAiSmokeSummary =
   | {
@@ -102,7 +116,7 @@ export async function runRealAiSmoke(
       baseUrl: configuration.baseUrl,
       model: configuration.model,
       apiKey: configuration.apiKey,
-      defaultAiMode: configuration.protocol === "openai_responses" ? "openai-responses" : "openai-compatible",
+      defaultAiMode: aiModeForProtocol(configuration.protocol),
       enabled: true,
     });
     await configCenter.activateModelProviderProfile(smokeProfileId);
@@ -225,13 +239,18 @@ function smokeConfiguration(env: RealAiSmokeEnvironment):
   }
   const rawProtocol = env.SYNECH_MODEL_PROTOCOL?.trim() ||
     (env.SYNECH_AI_MODE?.trim() === "openai-responses" ? "openai_responses" : "openai_compatible_chat_completions");
-  if (rawProtocol !== "openai_responses" && rawProtocol !== "openai_compatible_chat_completions") {
-    return skipped("invalid_protocol", "SYNECH_MODEL_PROTOCOL must be openai_responses or openai_compatible_chat_completions.");
+  if (rawProtocol !== "openai_responses" &&
+    rawProtocol !== "openai_compatible_chat_completions" &&
+    rawProtocol !== "anthropic_messages") {
+    return skipped(
+      "invalid_protocol",
+      "SYNECH_MODEL_PROTOCOL must be openai_responses, openai_compatible_chat_completions or anthropic_messages.",
+    );
   }
   return {
     status: "ready",
     protocol: rawProtocol,
-    baseUrl: env.SYNECH_MODEL_BASE_URL?.trim() || "https://api.openai.com/v1",
+    baseUrl: env.SYNECH_MODEL_BASE_URL?.trim() || defaultBaseUrlForProtocol(rawProtocol),
     model,
     apiKey,
   };

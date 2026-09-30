@@ -1,11 +1,23 @@
 .settings-card {
-  border: var(--border-width-thin) solid var(--panel-card-border);
-  border-radius: var(--radius-xl);
+  border: var(--border-width-thin) solid color-mix(in oklch, var(--border) 72%, transparent);
+  border-radius: 16px;
   background: var(--panel-card-bg);
-  padding: var(--space-4);
-  box-shadow: var(--panel-card-shadow);
+  padding: 22px 26px;
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.02),
+    0 8px 24px -4px color-mix(in oklch, var(--shadow-ink, #000) 4%, transparent);
   backdrop-filter: var(--panel-card-backdrop-filter);
   -webkit-backdrop-filter: var(--panel-card-backdrop-filter);
+  transition:
+    border-color var(--motion-fast-duration) var(--motion-ease-standard),
+    box-shadow var(--motion-fast-duration) var(--motion-ease-standard);
+}
+
+.settings-card:hover {
+  border-color: color-mix(in oklch, var(--border) 90%, transparent);
+  box-shadow:
+    0 2px 6px rgba(0, 0, 0, 0.03),
+    0 12px 30px -4px color-mix(in oklch, var(--shadow-ink, #000) 6%, transparent);
 }
 
 .settings-card h3 {
@@ -763,28 +775,32 @@
 }
 
 .settings-select-trigger {
-  display: grid;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   width: 100%;
   height: 40px;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 12px;
+  gap: 10px;
   border: 1px solid var(--field-border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   background: var(--field-bg);
   padding: 0 12px 0 14px;
   color: var(--fg);
   font: inherit;
-  font-size: 13px;
+  font-size: 13.5px;
   font-weight: var(--weight-body);
   text-align: left;
+  box-sizing: border-box;
   transition:
     border-color var(--motion-fast-duration) var(--motion-ease-standard),
     background-color var(--motion-fast-duration) var(--motion-ease-standard),
     box-shadow var(--motion-fast-duration) var(--motion-ease-standard);
 }
 
-.settings-select-trigger > span:first-child {
+.settings-select-trigger > span:first-child,
+.settings-select-label {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -808,18 +824,18 @@
 }
 
 .settings-select-chevron {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-right: 1.8px solid currentColor;
-  border-bottom: 1.8px solid currentColor;
-  color: color-mix(in oklch, var(--fg) 76%, var(--muted));
-  transform: translateY(-2px) rotate(45deg);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: color-mix(in oklch, var(--fg) 72%, var(--muted));
   transition: transform var(--motion-fast-duration) var(--motion-ease-standard);
 }
 
 .settings-select-control.open .settings-select-chevron {
-  transform: translateY(2px) rotate(225deg);
+  transform: rotate(180deg);
 }
 
 .settings-select-popover {
@@ -856,7 +872,8 @@
   text-align: left;
 }
 
-.settings-select-option > span:first-child {
+.settings-select-option > span:first-child,
+.settings-select-option-label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -875,17 +892,13 @@
 }
 
 .settings-select-option-mark {
-  width: 7px;
-  height: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
   justify-self: center;
-  border-right: 1.8px solid currentColor;
-  border-bottom: 1.8px solid currentColor;
-  opacity: 0;
-  transform: translateY(-1px) rotate(45deg);
-}
-
-.settings-select-option[data-selected="true"] .settings-select-option-mark {
-  opacity: 1;
+  color: currentColor;
 }
 
 .settings-select-option:disabled {

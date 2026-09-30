@@ -1,8 +1,6 @@
-import type {
-  SessionMetadata,
-  SessionStorage,
-  SessionTreeEntry,
-} from "@earendil-works/pi-agent-core";
+import type { Branch, Session, SessionMetadata } from "@earendil-works/pi-agent-core";
+import { TODO_CONTEXT, type Context } from "@earendil-works/pi-agent-core/harness/context";
+import { branchTip, setValue } from "@earendil-works/pi-agent-core/harness/session";
 
 export type SessionGenerationErrorCode =
   | "generation_active"
@@ -22,9 +20,10 @@ export class SessionGenerationError extends Error {
 type GenerationStatus = "active" | "revoking" | "revoked" | "revoke_failed" | "released";
 
 type StorageGeneration<TMetadata extends SessionMetadata> = {
-  readonly id: number;
-  readonly storage: SessionStorage<TMetadata>;
+  readonly session: Session<TMetadata>;
   status: GenerationStatus;
+  /** `main` tip when this generation opened; a null revoke target restores it. */
+  initialLeafId?: string | null;
   recoveryTargetLeafId?: string | null;
   revokedLeafId?: string | null;
   revocation?: {
@@ -32,57 +31,66 @@ type StorageGeneration<TMetadata extends SessionMetadata> = {
     readonly promise: Promise<void>;
   };
   releasePromise?: Promise<void>;
+  releaseError?: unknown;
 };
 
 export type SessionStorageGenerationLease<TMetadata extends SessionMetadata> = {
-  readonly storage: SessionStorage<TMetadata>;
+  readonly session: Session<TMetadata>;
   revokeTo(targetLeafId: string | null): Promise<void>;
   release(): Promise<void>;
 };
 
 /**
- * Serializes durable writes for one Session and fences a cancelled writer before
- * its successor opens a fresh storage view. Session tree semantics stay in Pi.
+ * Serializes durable Session mutations and fences a cancelled writer before
+ * its successor opens a fresh Pi Session.
+ *
+ * Pi owns commit ordering and the transcript tree. Synech owns the generation
+ * revocation invariant that Pi's commit queue does not express: once a writer
+ * generation has been revoked, its unfinished writes must not land.
  */
 export class SessionWriteFence {
   private tail: Promise<void> = Promise.resolve();
-  private nextGenerationId = 1;
   private currentGeneration?: StorageGeneration<SessionMetadata>;
 
   async acquire<TMetadata extends SessionMetadata>(
-    openStorage: () => Promise<SessionStorage<TMetadata>>,
+    openSession: () => Promise<Session<TMetadata>>,
   ): Promise<SessionStorageGenerationLease<TMetadata>> {
     return this.enqueue(async () => {
-      if (this.currentGeneration?.status === "active") {
-        throw new SessionGenerationError(
-          "generation_active",
-          "The current Session generation is still active.",
-        );
-      }
-      if (this.currentGeneration?.status === "revoke_failed") {
-        throw new SessionGenerationError(
-          "generation_revoke_failed",
-          "The current Session generation could not restore its durable leaf.",
-        );
-      }
+      this.assertIdle();
       const priorGeneration = this.currentGeneration;
-      const storage = await openStorage();
-      if (priorGeneration?.status === "revoked"
-        && await storage.getLeafId() !== priorGeneration.revokedLeafId) {
+      const session = await openSession();
+      let initialLeafId: string | null;
+      try {
+        initialLeafId = await getMainLeafId(session);
+      } catch (error) {
+        try {
+          await session.close(TODO_CONTEXT);
+        } catch (closeError) {
+          if (priorGeneration !== undefined) {
+            priorGeneration.status = "revoke_failed";
+            priorGeneration.releaseError = closeError;
+          } else {
+            this.currentGeneration = { session, status: "active", releaseError: closeError };
+          }
+        }
+        throw error;
+      }
+      if (priorGeneration?.status === "revoked" && initialLeafId !== priorGeneration.revokedLeafId) {
         priorGeneration.status = "revoke_failed";
+        try {
+          await session.close(TODO_CONTEXT);
+        } catch (closeError) {
+          priorGeneration.releaseError = closeError;
+        }
         throw new SessionGenerationError(
           "generation_revoke_failed",
           "The reopened Session does not expose the leaf restored by the revoked generation.",
         );
       }
-      const generation: StorageGeneration<TMetadata> = {
-        id: this.nextGenerationId++,
-        storage,
-        status: "active",
-      };
+      const generation: StorageGeneration<TMetadata> = { session, status: "active", initialLeafId };
       this.currentGeneration = generation;
       return {
-        storage: new GenerationSessionStorage(this, generation),
+        session: wrapSession(this, generation),
         revokeTo: (targetLeafId) => this.revoke(generation, targetLeafId),
         release: () => this.release(generation),
       };
@@ -91,60 +99,46 @@ export class SessionWriteFence {
 
   async runWhenIdle<T>(operation: () => Promise<T>): Promise<T> {
     return this.enqueue(async () => {
-      if (this.currentGeneration?.status === "active") {
-        throw new SessionGenerationError(
-          "generation_active",
-          "The current Session generation is still active.",
-        );
-      }
-      if (this.currentGeneration?.status === "revoke_failed") {
-        throw new SessionGenerationError(
-          "generation_revoke_failed",
-          "The current Session generation could not restore its durable leaf.",
-        );
-      }
+      this.assertIdle();
       return operation();
     });
   }
 
+  executeRead<TMetadata extends SessionMetadata, TValue>(
+    generation: StorageGeneration<TMetadata>,
+    operation: (session: Session<TMetadata>) => Promise<TValue>,
+  ): Promise<TValue> {
+    this.assertActive(generation);
+    return operation(generation.session);
+  }
+
   executeWrite<TMetadata extends SessionMetadata, TValue>(
     generation: StorageGeneration<TMetadata>,
-    operation: (storage: SessionStorage<TMetadata>) => Promise<TValue>,
+    operation: (session: Session<TMetadata>) => Promise<TValue>,
   ): Promise<TValue> {
     return this.enqueue(async () => {
       this.assertActive(generation);
-      return operation(generation.storage);
+      return operation(generation.session);
     });
-  }
-
-  async executeRead<TMetadata extends SessionMetadata, TValue>(
-    generation: StorageGeneration<TMetadata>,
-    operation: (storage: SessionStorage<TMetadata>) => Promise<TValue>,
-  ): Promise<TValue> {
-    this.assertActive(generation);
-    return operation(generation.storage);
   }
 
   private revoke<TMetadata extends SessionMetadata>(
     generation: StorageGeneration<TMetadata>,
     targetLeafId: string | null,
   ): Promise<void> {
-    if (generation.status === "released") {
-      return Promise.reject(new SessionGenerationError(
-        "generation_revoked",
-        "The released Session generation can no longer restore a durable leaf.",
-      ));
-    }
-    if (generation.recoveryTargetLeafId !== undefined
-      && generation.recoveryTargetLeafId !== targetLeafId) {
+    // A null target means "undo this generation's writes": the branch returns
+    // to the tip the generation opened on, not to a detached empty branch.
+    const resolvedTargetLeafId = targetLeafId ?? generation.initialLeafId ?? null;
+    if (generation.status === "released") return Promise.reject(this.revokedError(generation));
+    if (generation.recoveryTargetLeafId !== undefined && generation.recoveryTargetLeafId !== resolvedTargetLeafId) {
       return Promise.reject(new SessionGenerationError(
         "generation_revoked",
         "The Session generation already has a different durable recovery leaf.",
       ));
     }
-    generation.recoveryTargetLeafId ??= targetLeafId;
+    generation.recoveryTargetLeafId ??= resolvedTargetLeafId;
     if (generation.status === "revoked") {
-      return generation.revokedLeafId === targetLeafId
+      return generation.revokedLeafId === resolvedTargetLeafId
         ? Promise.resolve()
         : Promise.reject(new SessionGenerationError(
             "generation_revoked",
@@ -152,7 +146,7 @@ export class SessionWriteFence {
           ));
     }
     if (generation.revocation !== undefined) {
-      return generation.revocation.targetLeafId === targetLeafId
+      return generation.revocation.targetLeafId === resolvedTargetLeafId
         ? generation.revocation.promise
         : Promise.reject(new SessionGenerationError(
             "generation_revoked",
@@ -161,19 +155,18 @@ export class SessionWriteFence {
     }
 
     const operation = this.enqueue(async () => {
-      if (generation.status === "released") return;
-      if (generation.status === "revoked") return;
-      if (this.currentGeneration !== generation) {
-        throw this.revokedError(generation);
-      }
+      if (generation.status === "released" || generation.status === "revoked") return;
+      if (this.currentGeneration !== generation) throw this.revokedError(generation);
       try {
         generation.status = "revoking";
-        const currentLeafId = await generation.storage.getLeafId();
-        if (currentLeafId !== targetLeafId) {
-          await generation.storage.setLeafId(targetLeafId);
+        if (await getMainLeafId(generation.session) !== resolvedTargetLeafId) {
+          await generation.session.mutate(
+            (mutator) => mutator.commit([setValue(branchTip("main"), resolvedTargetLeafId)], TODO_CONTEXT),
+            TODO_CONTEXT,
+          );
         }
         generation.status = "revoked";
-        generation.revokedLeafId = targetLeafId;
+        generation.revokedLeafId = resolvedTargetLeafId;
       } catch (error) {
         generation.status = "revoke_failed";
         throw new SessionGenerationError(
@@ -187,33 +180,64 @@ export class SessionWriteFence {
       generation.revocation = undefined;
       throw error;
     });
-    generation.revocation = { targetLeafId, promise: tracked };
+    generation.revocation = { targetLeafId: resolvedTargetLeafId, promise: tracked };
     return tracked;
   }
 
-  private release<TMetadata extends SessionMetadata>(
-    generation: StorageGeneration<TMetadata>,
-  ): Promise<void> {
-    generation.releasePromise ??= this.enqueue(async () => {
-      if (generation.status === "revoke_failed") return;
-      // A revoke requested in the same turn owns the durable leaf restore even
-      // when ordinary cleanup happened to enqueue release first.
-      if (generation.status === "active" && generation.revocation !== undefined) return;
-      if (generation.status === "active") generation.status = "released";
-      if (this.currentGeneration === generation) this.currentGeneration = undefined;
+  private release<TMetadata extends SessionMetadata>(generation: StorageGeneration<TMetadata>): Promise<void> {
+    generation.releasePromise ??= Promise.resolve().then(() => {
+      const revocation = generation.revocation;
+      if (revocation !== undefined) {
+        // Do not wait from inside the fence queue: revoke is itself queued and
+        // release may have been requested first in the same turn.
+        return revocation.promise.then(
+          () => this.enqueue(() => this.closeGeneration(generation)),
+          () => this.enqueue(() => this.closeGeneration(generation)),
+        );
+      }
+      return this.enqueue(() => this.closeGeneration(generation));
     });
     return generation.releasePromise;
   }
 
-  private assertActive<TMetadata extends SessionMetadata>(generation: StorageGeneration<TMetadata>): void {
-    if (generation.status !== "active" || this.currentGeneration !== generation) {
-      throw this.revokedError(generation);
+  private async closeGeneration<TMetadata extends SessionMetadata>(
+    generation: StorageGeneration<TMetadata>,
+  ): Promise<void> {
+    if (generation.status === "released") return;
+    try {
+      await generation.session.close(TODO_CONTEXT);
+    } catch (error) {
+      // Keep the generation installed until close succeeds. Otherwise a later
+      // acquire could silently collide with the still-open provider handle.
+      generation.releaseError = error;
+      throw error;
+    }
+
+    // A failed revoke is a durable safety fact, not a cleanup state. The
+    // handle is closed, but the fence must remain poisoned for later writers.
+    if (generation.status === "revoke_failed") return;
+    generation.status = "released";
+    if (this.currentGeneration === generation) this.currentGeneration = undefined;
+  }
+
+  private assertIdle(): void {
+    const generation = this.currentGeneration;
+    if (generation?.status === "revoke_failed") {
+      throw new SessionGenerationError(
+        "generation_revoke_failed",
+        "The current Session generation could not restore its durable leaf.",
+      );
+    }
+    if (generation?.status === "active" || generation?.status === "revoking" || generation?.releaseError !== undefined) {
+      throw new SessionGenerationError("generation_active", "The current Session generation is still active.");
     }
   }
 
-  private revokedError<TMetadata extends SessionMetadata>(
-    generation: StorageGeneration<TMetadata>,
-  ): SessionGenerationError {
+  private assertActive<TMetadata extends SessionMetadata>(generation: StorageGeneration<TMetadata>): void {
+    if (generation.status !== "active" || this.currentGeneration !== generation) throw this.revokedError(generation);
+  }
+
+  private revokedError<TMetadata extends SessionMetadata>(generation: StorageGeneration<TMetadata>): SessionGenerationError {
     return new SessionGenerationError(
       generation.status === "revoke_failed" ? "generation_revoke_failed" : "generation_revoked",
       generation.status === "revoke_failed"
@@ -229,64 +253,103 @@ export class SessionWriteFence {
   }
 }
 
-export class GenerationSessionStorage<TMetadata extends SessionMetadata>
-implements SessionStorage<TMetadata> {
-  constructor(
-    private readonly fence: SessionWriteFence,
-    private readonly generation: StorageGeneration<TMetadata>,
-  ) {}
+const SESSION_WRITE_METHODS = new Set([
+  "beginMutation", "mutate", "setValue", "deleteValue", "appendList", "deleteList",
+  "setName", "setLabel", "close",
+]);
 
-  getMetadata(): Promise<TMetadata> {
-    return this.read((storage) => storage.getMetadata());
-  }
+const BRANCH_WRITE_METHODS = new Set(["appendMessage", "appendCustomEntry"]);
 
-  getLeafId(): Promise<string | null> {
-    return this.read((storage) => storage.getLeafId());
-  }
+/**
+ * Routes every Session call through the fence so a revoked generation is
+ * rejected even when Pi's own mutation line would still accept it. The proxy
+ * forwards the whole Session interface; the fence only decides admission and
+ * ordering, never transcript semantics.
+ */
+function wrapSession<TMetadata extends SessionMetadata>(
+  fence: SessionWriteFence,
+  generation: StorageGeneration<TMetadata>,
+): Session<TMetadata> {
+  return new Proxy(generation.session, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver);
+      if (typeof value !== "function") return value;
+      if (property === "branch") {
+        return (...args: unknown[]) => fence.executeRead(generation, async (session) => {
+          const branch = await session.branch(args[0] as string, args[1] as Context);
+          return branch === undefined ? undefined : wrapBranch(fence, generation, branch);
+        });
+      }
+      if (SESSION_WRITE_METHODS.has(String(property))) {
+        return (...args: unknown[]) => fence.executeWrite(generation, (session) => value.apply(session, args));
+      }
+      return (...args: unknown[]) => fence.executeRead(generation, (session) => value.apply(session, args));
+    },
+  });
+}
 
-  setLeafId(leafId: string | null): Promise<void> {
-    return this.write((storage) => storage.setLeafId(leafId));
-  }
+function wrapBranch<TMetadata extends SessionMetadata>(
+  fence: SessionWriteFence,
+  generation: StorageGeneration<TMetadata>,
+  branch: Branch,
+): Branch {
+  return new Proxy(branch, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver);
+      if (typeof value !== "function") return value;
+      if (BRANCH_WRITE_METHODS.has(String(property))) {
+        return (...args: unknown[]) => fence.executeWrite(generation, () => value.apply(target, args));
+      }
+      return (...args: unknown[]) => fence.executeRead(generation, () => value.apply(target, args));
+    },
+  });
+}
 
-  createEntryId(): Promise<string> {
-    return this.read((storage) => storage.createEntryId());
-  }
+export async function getMainLeafId(session: Session): Promise<string | null> {
+  const branch = await session.branch("main", TODO_CONTEXT);
+  return branch?.getTipId(TODO_CONTEXT) ?? null;
+}
 
-  appendEntry(entry: SessionTreeEntry): Promise<void> {
-    return this.write((storage) => storage.appendEntry(entry));
-  }
+export async function getMainBranch(session: Session): Promise<Branch | undefined> {
+  return session.branch("main", TODO_CONTEXT);
+}
 
-  getEntry(id: string): Promise<SessionTreeEntry | undefined> {
-    return this.read((storage) => storage.getEntry(id));
-  }
+/** Moves the active `main` branch tip through one atomic Pi value commit. */
+export async function moveMainTip(session: Session, targetLeafId: string | null): Promise<void> {
+  await session.mutate(
+    (mutator) => mutator.commit([setValue(branchTip("main"), targetLeafId)], TODO_CONTEXT),
+    TODO_CONTEXT,
+  );
+}
 
-  findEntries<TType extends SessionTreeEntry["type"]>(
-    type: TType,
-  ): Promise<Array<Extract<SessionTreeEntry, { type: TType }>>> {
-    return this.read((storage) => storage.findEntries(type));
-  }
+/** Appends one AgentMessage to the active `main` branch. */
+type MainBranch = NonNullable<Awaited<ReturnType<Session["branch"]>>>;
+type AgentMessageParam = Parameters<MainBranch["appendMessage"]>[0];
 
-  getLabel(id: string): Promise<string | undefined> {
-    return this.read((storage) => storage.getLabel(id));
-  }
+export async function appendMainMessage(
+  session: Session,
+  message: AgentMessageParam,
+): Promise<void> {
+  const branch = await session.branch("main", TODO_CONTEXT);
+  if (branch === undefined) throw new Error("Pi main branch is not available.");
+  await branch.appendMessage(message, TODO_CONTEXT);
+}
 
-  getPathToRoot(leafId: string | null): Promise<SessionTreeEntry[]> {
-    return this.read((storage) => storage.getPathToRoot(leafId));
-  }
+/**
+ * Active `main` branch from root to tip. The ordering is load-bearing: callers
+ * compute rollback boundaries with `findIndex` and `slice`, so newest-first
+ * would silently shift every index.
+ */
+export async function getMainBranchEntries(session: Session): Promise<Awaited<ReturnType<Branch["findEntries"]>>> {
+  const branch = await session.branch("main", TODO_CONTEXT);
+  return branch?.findEntries({ order: "oldestFirst" }, TODO_CONTEXT) ?? [];
+}
 
-  getEntries(): Promise<SessionTreeEntry[]> {
-    return this.read((storage) => storage.getEntries());
-  }
-
-  private read<TValue>(
-    operation: (storage: SessionStorage<TMetadata>) => Promise<TValue>,
-  ): Promise<TValue> {
-    return this.fence.executeRead(this.generation, operation);
-  }
-
-  private write<TValue>(
-    operation: (storage: SessionStorage<TMetadata>) => Promise<TValue>,
-  ): Promise<TValue> {
-    return this.fence.executeWrite(this.generation, operation);
-  }
+/** Root-to-entry path ending at `entryId`, used for ancestry checks. */
+export async function getMainBranchPathTo(
+  session: Session,
+  entryId: string,
+): Promise<Awaited<ReturnType<Branch["findEntries"]>>> {
+  const branch = await session.branch("main", TODO_CONTEXT);
+  return branch?.findEntries({ start: entryId, order: "oldestFirst" }, TODO_CONTEXT) ?? [];
 }

@@ -8,6 +8,7 @@ import type { ModelInputAttachment } from "../model-input/index.js";
 export type { ModelCallRef } from "./model-call-ref.js";
 
 export const MODEL_PROTOCOL_KINDS = [
+  "anthropic_messages",
   "openai_compatible_chat_completions",
   "openai_responses",
 ] as const;

@@ -1,11 +1,17 @@
 import { createHash } from "node:crypto";
 import {
   type AgentHarness,
-  type AgentHarnessEvent,
+  type AgentLane,
+  type HarnessEvent,
   type AgentMessage,
   type Session,
 } from "@earendil-works/pi-agent-core";
+import { TODO_CONTEXT } from "@earendil-works/pi-agent-core/harness/context";
 import type { Api, Model } from "@earendil-works/pi-ai";
+import type {
+  AgentSessionCheckpointKind,
+  AgentSessionCheckpointRef,
+} from "../../../app/model-runtime/agent-session.js";
 import type {
   AgentLoopInput,
   ProviderToolCall,
@@ -24,13 +30,13 @@ import {
   type ToolDefinition,
 } from "../../../domain/tools/index.js";
 import { errorMessage } from "../../../kernel/values/index.js";
-import { compactSessionContextIfNeeded } from "../session-context-compaction.js";
 import { replaceUnsupportedImageBlocks } from "../session-image-placeholder.js";
 import {
   piImmediateToolResult,
   toolResultFromDetails,
 } from "../tool-result-transport.js";
 import {
+  assistantText,
   modelMessageFromAssistant,
   modelUsageFromProvider,
 } from "../provider-result-projection.js";
@@ -40,6 +46,7 @@ import {
   providerToolCallsForRound,
   requireAcceptedToolInvocations,
 } from "../agent-session-tool-bindings.js";
+import { getMainLeafId } from "../session-write-fence.js";
 import type { AgentSessionLoopOptions } from "./contracts.js";
 
 type PendingToolRequest = {
@@ -68,90 +75,193 @@ type RootProjectionInput = Pick<
 export class RootHarnessEventProjector {
   private readonly pendingToolRequests = new Map<string, PendingToolRequest>();
   private readonly preparedToolCallIds = new Set<string>();
-  private readonly compactionEntryIds: string[] = [];
+  private readonly compactionCheckpoints: AgentSessionCheckpointRef[] = [];
   private readonly timing: AgentSessionProviderTiming;
-  private inputEntryId: string | undefined;
-  private latestLeafEntryId: string | null;
-  private safeLeafEntryId: string | null;
+  private safeCheckpoint: AgentSessionCheckpointRef | null;
+  private latestCheckpoint: AgentSessionCheckpointRef | null;
+  private startCheckpoint: AgentSessionCheckpointRef | null = null;
   private currentUsage: ModelUsage = {};
   private currentMaintenanceFailure: { readonly code: string; readonly error: string } | undefined;
+  private projectionAbort?: Promise<void>;
   private currentToolRequestAcceptanceFailure: unknown;
+  private currentAssistant: Extract<AgentMessage, { readonly role: "assistant" }> | undefined;
+  private latestAssistantEntryId: string | undefined;
+  private readonly checkpointOrdinals = new Map<AgentSessionCheckpointKind, number>();
 
   constructor(private readonly options: {
     readonly input: RootProjectionInput;
     readonly loopOptions: AgentSessionLoopOptions;
     readonly sessionId: string;
     readonly agentSession: Session;
-    readonly runtimeSession: Session;
-    readonly startLeafEntryId: string | null;
     readonly modelInputSupportsImage: boolean;
     readonly rootBindings: ToolInvocationBindingTable;
     readonly resultPort: HarnessProjectionResultPort;
     readonly isCancellationRequested: () => boolean;
   }) {
-    this.latestLeafEntryId = options.startLeafEntryId;
-    this.safeLeafEntryId = options.startLeafEntryId;
+    this.latestCheckpoint = null;
+    this.safeCheckpoint = null;
     this.timing = new AgentSessionProviderTiming(options.loopOptions.now ?? (() => Date.now()));
   }
 
-  attach(harness: AgentHarness, metadataByName: ReadonlyMap<string, ToolDefinition["metadata"]>): void {
-    attachProviderPayloadHook(harness, this.options.loopOptions, metadataByName);
-    harness.on("context", async ({ messages: contextMessages }) => {
-      const messages = [...replaceUnsupportedImageBlocks(contextMessages, this.options.modelInputSupportsImage)];
-      const sessionCompaction = await compactSessionContextIfNeeded({
-        agentSession: this.options.runtimeSession,
-        activeContextMessages: messages,
-        modelRegistry: this.options.loopOptions.modelRegistry,
-        selectedModel: harness.getModel(),
-        thinkingLevel: harness.getThinkingLevel(),
-        abortSignal: this.options.input.abortSignal,
-        ...(this.options.loopOptions.compactionSettings === undefined
-          ? {}
-          : { compactionSettings: this.options.loopOptions.compactionSettings }),
-        ...(this.options.loopOptions.confirmedContextWindowTokens === undefined
-          ? {}
-          : { confirmedContextWindowTokens: this.options.loopOptions.confirmedContextWindowTokens }),
-      });
-      if (sessionCompaction.status === "failed") {
-        this.failMaintenance(sessionCompaction.code, sessionCompaction.error);
-      }
-      if (sessionCompaction.status === "compacted") {
-        this.compactionEntryIds.push(sessionCompaction.compactionEntryRef.entryId);
-        this.latestLeafEntryId = sessionCompaction.compactionEntryRef.entryId;
-        try {
-          await this.options.input.onSessionWriteCheckpoint?.({
-            kind: "compaction_entry_committed",
-            sessionId: this.options.sessionId,
-            compactionEntryRef: sessionCompaction.compactionEntryRef,
-            tokensBefore: sessionCompaction.tokensBefore,
-            replacedImageBlocks: sessionCompaction.replacedImageBlocks,
-          });
-        } catch (error) {
-          this.recordMaintenanceFailure({ code: "context_compaction_fact_rejected", error: errorMessage(error) });
-          throw error;
-        }
-        this.safeLeafEntryId = sessionCompaction.compactionEntryRef.entryId;
-        return await withMemoryBackground(sessionCompaction.compactedContextMessages, this.options.loopOptions);
-      }
-      return await withMemoryBackground(messages, this.options.loopOptions);
+  /**
+   * Mints and records the product identity of the leaf this run started from.
+   *
+   * A run whose Session had no leaf yet gets no durable start checkpoint, which
+   * the product ledger reads as "nothing before this run to roll back to".
+   */
+  async captureStart(providerEntryId: string | null): Promise<AgentSessionCheckpointRef | null> {
+    if (providerEntryId === null) return null;
+    const checkpoint = await this.checkpointFor("run_started", providerEntryId);
+    this.startCheckpoint = checkpoint;
+    this.latestCheckpoint = checkpoint;
+    this.safeCheckpoint = checkpoint;
+    return checkpoint;
+  }
+
+  /**
+   * Mints and records the product identity of the run's final assistant entry.
+   *
+   * Pi commits several assistant entries per run — empty retries and
+   * intermediate messages among them — and commits each entry only after its
+   * message_end event, so "no tool calls" cannot identify the answer at
+   * message_end time. Only the completed run knows which entry is the answer,
+   * and by then that entry is durable.
+   */
+  async captureResponse(): Promise<AgentSessionCheckpointRef | null> {
+    const entryId = this.latestAssistantEntryId;
+    if (entryId === undefined) return null;
+    const checkpoint = await this.checkpointFor("assistant_response_committed", entryId);
+    this.latestCheckpoint = checkpoint;
+    return checkpoint;
+  }
+
+  attach(
+    harness: AgentHarness,
+    lane: AgentLane,
+    metadataByName: ReadonlyMap<string, ToolDefinition["metadata"]>,
+  ): void {
+    attachProviderPayloadHook(harness, lane, this.options.loopOptions, metadataByName);
+    // Product context contributions enter through the runtime hook, not by
+    // re-running compaction at the request boundary: Pi owns the threshold and
+    // the summarization decision.
+    harness.hooks.on("transform_context", async ({ messages }) => {
+      const guarded = replaceUnsupportedImageBlocks(messages, this.options.modelInputSupportsImage);
+      return await withMemoryBackground(guarded, this.options.loopOptions);
     });
-    harness.on("session_before_compact", ({ preparation }) => {
-      if (!compactionPreparationContainsImage(preparation)) return undefined;
-      return { cancel: true };
-    });
-    harness.on("tool_result", ({ details }) => {
+    harness.hooks.on("after_tool", ({ details }) => {
       const result = toolResultFromDetails(details);
       return result === undefined ? undefined : { isError: result.status !== "completed" };
     });
-    harness.on("tool_call", ({ toolCallId }) => {
+    harness.hooks.on("before_tool", ({ toolCallId }) => {
       this.preparedToolCallIds.add(toolCallId);
       return undefined;
     });
-    harness.on("before_provider_request", () => {
+    harness.hooks.on("before_request", () => {
+      if (this.currentMaintenanceFailure !== undefined) {
+        throw new Error(this.currentMaintenanceFailure.error);
+      }
       this.timing.startRequest();
       return undefined;
     });
-    harness.subscribe(async (event) => { await this.project(event, harness); });
+    harness.hooks.on("before_drive", () => {
+      if (this.currentMaintenanceFailure !== undefined) {
+        throw new Error(this.currentMaintenanceFailure.error);
+      }
+      return undefined;
+    });
+    // Returning the projection makes Pi await it before the next provider
+    // request or tool execution. Dropping it would let tool execution outrun
+    // invocation binding, or a checkpoint outrun its durable acceptance.
+    harness.events.on("tool_end", (event) => this.project(event, harness, lane));
+    harness.events.on("message_update", (event) => this.project(event, harness, lane));
+    harness.events.on("turn_end", (event) => this.project(event, harness, lane));
+    harness.events.on("message_end", (event) => this.project(event, harness, lane));
+    harness.events.on("usage", (event) => {
+      this.mergeUsage(modelUsageFromProvider(event.row.usage));
+    });
+    harness.events.on("compaction_end", (event) => this.projectCompaction(event, lane));
+    harness.events.on("handler_error", (event) => {
+      this.recordMaintenanceFailure({
+        code: "runtime_handler_failed",
+        error: event.error,
+      });
+      this.abortCurrentOperation(lane);
+    });
+  }
+
+  private async projectCompaction(
+    event: Extract<HarnessEvent, { readonly type: "compaction_end" }>,
+    lane: AgentLane,
+  ): Promise<void> {
+    if (event.status !== "completed") return;
+    if (this.currentMaintenanceFailure !== undefined) return;
+    try {
+      const checkpoint = await this.reportCompaction(event.entryId);
+      this.compactionCheckpoints.push(checkpoint);
+      this.latestCheckpoint = checkpoint;
+      this.safeCheckpoint = checkpoint;
+    } catch (error) {
+      this.recordMaintenanceFailure({ code: "runtime_projection_failed", error: errorMessage(error) });
+      this.abortCurrentOperation(lane);
+      throw error;
+    }
+  }
+
+  private abortCurrentOperation(lane: AgentLane): void {
+    // Abort publishes events itself. Waiting here would deadlock the event bus
+    // against its current delivery; the drive gate also rejects further work.
+    this.projectionAbort ??= lane.inspectExecution(TODO_CONTEXT).then(async (execution) => {
+      if (execution.current === null) return;
+      const result = await lane.requestAbort(execution.current.id, TODO_CONTEXT);
+      if (!result.ok) throw result.error;
+    }).catch(() => undefined);
+  }
+
+  /**
+   * Projection failures are reported by Pi's passive event bus, so the event
+   * callback cannot wait for lane.abort without waiting on its own delivery
+   * tail. The owning run waits here after Pi returns, allowing the abort to
+   * finish the durable operation before the product outcome is settled.
+   */
+  async settleProjectionFailure(lane: AgentLane): Promise<void> {
+    if (this.currentMaintenanceFailure === undefined) return;
+    await this.projectionAbort;
+    const inspected = await lane.inspectExecution(TODO_CONTEXT);
+    if (inspected.current === null) return;
+    const aborted = await lane.abort(TODO_CONTEXT);
+    if (!aborted.ok && (aborted.error as { readonly _tag?: string })._tag !== "NoActiveOperation") {
+      throw aborted.error;
+    }
+  }
+
+  /**
+   * Records one durable compaction checkpoint.
+   *
+   * Pi owns the compaction result. Synech records only the durable product
+   * checkpoint for that result; it does not inspect or rewrite image history.
+   */
+  private async reportCompaction(entryId: string): Promise<AgentSessionCheckpointRef> {
+    const entries = await this.options.agentSession.getEntries([entryId], TODO_CONTEXT);
+    const entry = entries.get(entryId);
+    if (entry === undefined || entry.type !== "compaction") {
+      this.failMaintenance(
+        "context_compaction_entry_missing",
+        `Pi committed compaction entry ${entryId} that is not readable as a compaction entry.`,
+      );
+    }
+    try {
+      const checkpoint = await this.checkpointFor("compaction_committed", entryId);
+      await this.options.input.onSessionWriteCheckpoint?.({
+        kind: "compaction_entry_committed",
+        checkpoint,
+        sessionId: this.options.sessionId,
+        tokensBefore: entry.tokensBefore,
+      });
+      return checkpoint;
+    } catch (error) {
+      this.recordMaintenanceFailure({ code: "context_compaction_fact_rejected", error: errorMessage(error) });
+      throw error;
+    }
   }
 
   get usage(): ModelUsage {
@@ -166,6 +276,33 @@ export class RootHarnessEventProjector {
     return this.currentToolRequestAcceptanceFailure;
   }
 
+  /** Latest assistant message observed for this run, carried by `message_end`. */
+  get latestAssistant(): Extract<AgentMessage, { readonly role: "assistant" }> | undefined {
+    return this.currentAssistant;
+  }
+
+  async checkpointFor(
+    kind: AgentSessionCheckpointKind,
+    providerEntryId: string,
+  ): Promise<AgentSessionCheckpointRef> {
+    return this.options.loopOptions.checkpointPort?.record(kind, providerEntryId) ??
+      this.mintEphemeralCheckpoint(kind);
+  }
+
+  /**
+   * Identity for a run without a durable minting authority. Product code never
+   * sees it: no Session writer means no durable checkpoint to name.
+   */
+ private mintEphemeralCheckpoint(kind: AgentSessionCheckpointKind): Promise<AgentSessionCheckpointRef> {
+    const ordinal = (this.checkpointOrdinals.get(kind) ?? 0) + 1;
+    this.checkpointOrdinals.set(kind, ordinal);
+    return Promise.resolve({
+      sessionId: this.options.sessionId,
+      checkpointId: `${kind}#${ordinal}`,
+      kind,
+    });
+  }
+
   mergeUsage(usage: ModelUsage | undefined, preserveLatestAgentRequest = false): void {
     this.currentUsage = mergeModelUsage(
       this.currentUsage,
@@ -177,19 +314,10 @@ export class RootHarnessEventProjector {
   sessionExecutionRefs(): AgentSessionExecutionRefs {
     return {
       sessionId: this.options.sessionId,
-      startLeafRef: this.options.startLeafEntryId === null
-        ? null
-        : { sessionId: this.options.sessionId, entryId: this.options.startLeafEntryId },
-      ...(this.inputEntryId === undefined
-        ? {}
-        : { inputEntryRef: { sessionId: this.options.sessionId, entryId: this.inputEntryId } }),
-      safeLeafRef: this.safeLeafEntryId === null
-        ? null
-        : { sessionId: this.options.sessionId, entryId: this.safeLeafEntryId },
-      latestLeafRef: this.latestLeafEntryId === null
-        ? null
-        : { sessionId: this.options.sessionId, entryId: this.latestLeafEntryId },
-      compactionEntryRefs: this.compactionEntryIds.map((entryId) => ({ sessionId: this.options.sessionId, entryId })),
+      startCheckpoint: this.startCheckpoint,
+      safeCheckpoint: this.safeCheckpoint,
+      latestCheckpoint: this.latestCheckpoint,
+      compactionCheckpoints: [...this.compactionCheckpoints],
     };
   }
 
@@ -206,8 +334,21 @@ export class RootHarnessEventProjector {
     this.currentToolRequestAcceptanceFailure ??= error;
   }
 
-  private async project(event: AgentHarnessEvent, harness: AgentHarness): Promise<void> {
-    if (event.type === "tool_execution_end") {
+  private async project(event: HarnessEvent, harness: AgentHarness, lane: AgentLane): Promise<void> {
+    if (this.currentMaintenanceFailure !== undefined) return;
+    try {
+      await this.projectEvent(event, harness, lane);
+    } catch (error) {
+      // A projection failure must converge the run, not escape as an unhandled
+      // rejection. The first, most specific failure wins.
+      this.recordMaintenanceFailure({ code: "runtime_projection_failed", error: errorMessage(error) });
+      this.abortCurrentOperation(lane);
+      throw error;
+    }
+  }
+
+  private async projectEvent(event: HarnessEvent, harness: AgentHarness, lane: AgentLane): Promise<void> {
+    if (event.type === "tool_end") {
       await projectToolExecutionEnd({
         event,
         pendingRequest: this.pendingToolRequests.get(event.toolCallId),
@@ -225,29 +366,29 @@ export class RootHarnessEventProjector {
       return;
     }
     if (event.type === "message_update") {
-      if (event.assistantMessageEvent.type === "text_delta") {
-        if (event.assistantMessageEvent.delta.length > 0) this.timing.observeVisibleOutput();
+      if (event.event.type === "text_delta") {
+        if (event.event.delta.length > 0) this.timing.observeVisibleOutput();
         await this.options.input.onModelContent?.({
-          contentIndex: event.assistantMessageEvent.contentIndex,
+          contentIndex: event.event.contentIndex,
           kind: "text",
           phase: "delta",
-          content: event.assistantMessageEvent.delta,
+          content: event.event.delta,
         });
       }
-      if (event.assistantMessageEvent.type === "thinking_delta") {
+      if (event.event.type === "thinking_delta") {
         await this.options.input.onModelContent?.({
-          contentIndex: event.assistantMessageEvent.contentIndex,
+          contentIndex: event.event.contentIndex,
           kind: "thinking",
           phase: "delta",
-          content: event.assistantMessageEvent.delta,
+          content: event.event.delta,
         });
       }
-      if (event.assistantMessageEvent.type === "thinking_end") {
+      if (event.event.type === "thinking_end") {
         await this.options.input.onModelContent?.({
-          contentIndex: event.assistantMessageEvent.contentIndex,
+          contentIndex: event.event.contentIndex,
           kind: "thinking",
           phase: "completed",
-          content: event.assistantMessageEvent.content,
+          content: event.event.content,
         });
       }
       return;
@@ -274,38 +415,46 @@ export class RootHarnessEventProjector {
           "Pi Session turn ended without one tool result for every assistant tool call.",
         );
       }
-      const entryId = await this.options.agentSession.getLeafId();
+      const entryId = await getMainLeafId(this.options.agentSession);
       if (entryId === null) throw new Error("Session did not expose the completed tool-result group leaf.");
-      this.latestLeafEntryId = entryId;
+      const cp = await this.checkpointFor("tool_results_committed", entryId);
+      this.latestCheckpoint = cp;
       await this.options.input.onSessionWriteCheckpoint?.({
         kind: "tool_result_entries_committed",
+        checkpoint: cp,
         sessionId: this.options.sessionId,
-        toolRoundLeafRef: { sessionId: this.options.sessionId, entryId },
         providerCallIds,
         invocationIds,
       });
-      this.safeLeafEntryId = entryId;
+      this.safeCheckpoint = cp;
       return;
     }
     if (event.type !== "message_end") return;
-    const entryId = await this.options.agentSession.getLeafId();
-    if (entryId === null) throw new Error("Session did not expose the entry appended by message_end.");
-    this.latestLeafEntryId = entryId;
-    if (event.message.role === "toolResult") {
-      await this.options.resultPort.deliverPendingMessage(event.message);
-      return;
+    // Pi reports the committed entry id on the event. Reading the branch tip
+    // here would observe the previous entry: the lane advances the tip in the
+    // commit that follows `message_end`, so the tip read is stale by one entry.
+    if (event.entryId === undefined) {
+      throw new Error("Pi message_end event did not report the committed entry id.");
     }
-    if (event.message.role === "user") {
-      this.inputEntryId ??= entryId;
-      await this.options.input.onSessionWriteCheckpoint?.({
-        kind: "input_entry_committed",
-        sessionId: this.options.sessionId,
-        inputEntryRef: { sessionId: this.options.sessionId, entryId },
-      });
-      this.safeLeafEntryId = entryId;
-      return;
+      const entryId = event.entryId;
+      if (event.message.role === "toolResult") {
+        await this.options.resultPort.deliverPendingMessage(event.message);
+        return;
+      }
+      if (event.message.role === "user") {
+        const cp = await this.checkpointFor("input_committed", entryId);
+        this.latestCheckpoint = cp;
+        await this.options.input.onSessionWriteCheckpoint?.({
+          kind: "input_entry_committed",
+          checkpoint: cp,
+          sessionId: this.options.sessionId,
+        });
+        this.safeCheckpoint = cp;
+        return;
     }
     if (event.message.role !== "assistant") return;
+    this.currentAssistant = event.message;
+    this.latestAssistantEntryId = entryId;
 
     for (const [contentIndex, block] of event.message.content.entries()) {
       if (block.type !== "thinking") continue;
@@ -327,23 +476,27 @@ export class RootHarnessEventProjector {
       this.options.rootBindings.replace(boundRequests);
       const providerCallIds = boundRequests.map((call) => call.providerCallId);
       const invocationIds = boundRequests.map((call) => call.invocationId);
+      const cp = await this.checkpointFor("assistant_tool_calls_committed", entryId);
+      this.latestCheckpoint = cp;
       await this.options.input.onSessionWriteCheckpoint?.({
         kind: "assistant_tool_call_entry_committed",
+        checkpoint: cp,
         sessionId: this.options.sessionId,
-        assistantEntryRef: { sessionId: this.options.sessionId, entryId },
+        // Pi commits this entry after the event, so the text travels with the
+        // checkpoint instead of being read back from the Session.
+        assistantText: assistantText(event.message),
         providerCallIds,
         invocationIds,
       });
       for (const call of boundRequests) emitToolRequested(this.options.input, call);
-      this.rememberPendingToolRequests(boundRequests, harness.getActiveTools().map((tool) => tool.name));
-    } else {
-      await this.options.input.onSessionWriteCheckpoint?.({
-        kind: "assistant_response_entry_committed",
-        sessionId: this.options.sessionId,
-        assistantEntryRef: { sessionId: this.options.sessionId, entryId },
-      });
+      this.rememberPendingToolRequests(boundRequests, await lane.getActiveTools(TODO_CONTEXT));
     }
-    this.mergeUsage(modelUsageFromProvider(event.message.usage));
+    // No else branch: a tool-free assistant message is not necessarily the
+    // answer. Pi commits several assistant entries per run — empty retries and
+    // intermediate messages among them — and commits each entry only after its
+    // message_end event, so minting here would both misclassify non-final
+    // entries and name entries that are not durable yet. The final answer's
+    // checkpoint is minted by captureResponse() when the run completes.
     this.currentUsage = this.timing.completeUsage(this.currentUsage, event.message.usage.output);
   }
 
@@ -367,7 +520,7 @@ export class RootHarnessEventProjector {
   }
 }
 
-export type ToolExecutionEndEvent = Extract<AgentHarnessEvent, { readonly type: "tool_execution_end" }>;
+export type ToolExecutionEndEvent = Extract<HarnessEvent, { readonly type: "tool_end" }>;
 
 export async function projectToolExecutionEnd(input: {
   readonly event: ToolExecutionEndEvent;
@@ -413,6 +566,7 @@ export async function projectToolExecutionEnd(input: {
 
 export function attachProviderPayloadHook(
   harness: AgentHarness,
+  lane: AgentLane,
   options: Pick<
     AgentSessionLoopOptions,
     | "transformProviderPayload"
@@ -422,20 +576,25 @@ export function attachProviderPayloadHook(
   metadataByName: ReadonlyMap<string, ToolDefinition["metadata"]>,
 ): void {
   if (options.transformProviderPayload === undefined && options.onProviderToolDefinitionMetrics === undefined) return;
-  harness.on("before_provider_payload", ({ model, payload }) => {
-    const tools = activeModelVisibleToolDefinitions(harness, metadataByName);
+  harness.hooks.on("before_payload", async ({ model, payload }) => {
+    const tools = await activeModelVisibleToolDefinitions(harness, lane, metadataByName);
     const transformedPayload = options.transformProviderPayload?.({ model, payload, tools }) ?? payload;
     observeProviderToolDefinitionMetrics(options, tools, model);
     return { payload: transformedPayload };
   });
 }
 
-function activeModelVisibleToolDefinitions(
+async function activeModelVisibleToolDefinitions(
   harness: AgentHarness,
+  lane: AgentLane,
   metadataByName: ReadonlyMap<string, ToolDefinition["metadata"]>,
-): ToolDefinition[] {
-  return harness.getActiveTools().map((tool) => {
-    const metadata = metadataByName.get(tool.name);
+): Promise<ToolDefinition[]> {
+  const harnessTools = await harness.getTools(TODO_CONTEXT);
+  const activeToolNames = new Set(await lane.getActiveTools(TODO_CONTEXT));
+  return harnessTools
+    .filter((tool) => activeToolNames.has(tool.name))
+    .map((tool) => {
+      const metadata = metadataByName.get(tool.name);
     return {
       name: tool.name,
       description: tool.description,
@@ -492,6 +651,8 @@ function modelVisibleDefinitionSerialization(model: Model<Api>): ModelVisibleToo
 
 function toolDefinitionSerializationApiFor(piApi: Api): ModelVisibleToolDefinitionSerialization["api"] {
   switch (piApi) {
+    case "anthropic-messages":
+      return "anthropic-messages";
     case "openai-completions":
       return "openai-completions";
     case "openai-responses":
@@ -507,19 +668,6 @@ function defaultToolDefinitionTokenCount(serializedDefinition: string): number {
 
 function normalizedToolDefinitionTokenCount(value: number): number {
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
-}
-
-function messageContainsImage(message: AgentMessage): boolean {
-  return "content" in message && Array.isArray(message.content) && message.content.some((block) =>
-    typeof block === "object" && block !== null && "type" in block && block.type === "image");
-}
-
-function compactionPreparationContainsImage(preparation: {
-  readonly messagesToSummarize: readonly AgentMessage[];
-  readonly turnPrefixMessages: readonly AgentMessage[];
-}): boolean {
-  return preparation.messagesToSummarize.some(messageContainsImage) ||
-    preparation.turnPrefixMessages.some(messageContainsImage);
 }
 
 function emitToolRequested(input: RootProjectionInput, request: ToolCallRequest): void {

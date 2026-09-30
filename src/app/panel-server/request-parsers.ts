@@ -4,7 +4,6 @@ import type {
   CreateModelProviderProfileInput,
   McpConfirmationMode,
   McpServerTransportKind,
-  ModelCapabilityOverrideValues,
   ModelRunReasoningEffort,
   ModelProviderModelCatalogItem,
   OpenAIModelRequestSettings,
@@ -19,6 +18,7 @@ import type {
   UpsertMcpServerInput,
 } from "../../domain/config/index.js";
 import { normalizeModelCatalogDisplayName } from "../../domain/config/index.js";
+import { MODEL_RUN_REASONING_EFFORT_LABELS } from "../../domain/config/index.js";
 import type { ConfirmationDecision } from "../../domain/confirmation/index.js";
 import type { ToolConfirmationPolicy } from "../../domain/tools/index.js";
 import {
@@ -68,13 +68,6 @@ export type ModelProviderOrderUpdateInput = {
   readonly order: readonly string[];
 };
 
-export type ModelCapabilityUpdateInput = {
-  readonly profileId?: string;
-  readonly model?: string;
-  readonly providerKind?: ConfiguredModelProviderKind;
-  readonly capabilities: ModelCapabilityOverrideValues;
-};
-
 type ConversationRollbackInput = {
   readonly targetTurnId?: string;
   readonly targetRunId?: string;
@@ -104,17 +97,19 @@ const normalizeRequestObject = (value: unknown): unknown =>
   typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
 const requestRecordSchema = z.preprocess(normalizeRequestObject, z.record(z.string(), z.unknown()));
 const modelProviderKindSchema = z.enum(["openai_compatible"]);
-const modelProtocolKindSchema = z.enum(["openai_responses", "openai_compatible_chat_completions"]);
-const preferredApiStyleSchema = z.enum(["chat_completions", "responses", "openai_compatible"]);
-const modelStabilitySchema = z.enum(["stable", "preview", "deprecated", "unknown"]);
+const modelProtocolKindSchema = z.enum([
+  "anthropic_messages",
+  "openai_responses",
+  "openai_compatible_chat_completions",
+]);
 const mcpTransportSchema = z.enum(["stdio", "http"]);
 const mcpConfirmationModeSchema = z.enum(["always", "unsafe_only", "never"]);
 const mcpToolExposureModeSchema = z.enum(["none", "all", "selected"]);
 const webSearchProviderSchema = z.enum(["tavily", "exa", "zai", "metaso", "google", "bing", "model_builtin", "none"]);
 const toolConfirmationPolicySchema = z.enum(["prompt", "full_access"]);
 const skillTriggerModeSchema = z.enum(["keyword", "model"]);
-const aiModeSchema = z.enum(["none", "openai-compatible", "openai-responses"]);
-const configuredAiModeSchema = z.enum(["none", "openai-compatible", "openai-responses"]);
+const aiModeSchema = z.enum(["none", "anthropic-messages", "openai-compatible", "openai-responses"]);
+const configuredAiModeSchema = z.enum(["none", "anthropic-messages", "openai-compatible", "openai-responses"]);
 
 const conversationOwnerSchema = z.object({
   kind: z.enum(["space", "workspace"]),
@@ -249,48 +244,6 @@ export function parseModelCatalogUpdate(raw: unknown): ModelCatalogUpdateInput {
     fetchedAt: optionalString(record.fetchedAt),
     models,
   };
-}
-
-export function parseModelCapabilityUpdate(raw: unknown): ModelCapabilityUpdateInput {
-  const record = parseRequestRecord(raw);
-  const capabilities = parseRequestRecord(record.capabilities ?? raw);
-  return {
-    profileId: optionalString(record.profileId),
-    model: optionalString(record.model),
-    providerKind: parseOptionalModelProviderKind(record.providerKind),
-    capabilities: {
-      contextWindowTokens: positiveIntegerOrUndefined(capabilities.contextWindowTokens, "上下文窗口 token 必须是正整数。"),
-      maxOutputTokens: positiveIntegerOrUndefined(capabilities.maxOutputTokens, "最大输出 token 必须是正整数。"),
-      supportsToolCalling: booleanOrUndefined(capabilities.supportsToolCalling),
-      supportsParallelToolCalls: booleanOrUndefined(capabilities.supportsParallelToolCalls),
-      supportsStructuredOutputs: booleanOrUndefined(capabilities.supportsStructuredOutputs),
-      supportsStreaming: booleanOrUndefined(capabilities.supportsStreaming),
-      supportsVisionInput: booleanOrUndefined(capabilities.supportsVisionInput),
-      supportsReasoningEffort: booleanOrUndefined(capabilities.supportsReasoningEffort),
-      supportsReasoningOutput: booleanOrUndefined(capabilities.supportsReasoningOutput),
-      preferredApiStyle: parseOptionalPreferredApiStyle(capabilities.preferredApiStyle),
-      stability: parseOptionalModelStability(capabilities.stability),
-      lastVerifiedAt: optionalString(capabilities.lastVerifiedAt),
-    },
-  };
-}
-
-function positiveIntegerOrUndefined(value: unknown, message: string): number | undefined {
-  if (value === undefined || value === null || value === "") {
-    return undefined;
-  }
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 1) {
-    throw new PanelHttpError(400, "invalid_model_capability", message);
-  }
-  return Math.floor(value);
-}
-
-function parseOptionalPreferredApiStyle(value: unknown): ModelCapabilityOverrideValues["preferredApiStyle"] | undefined {
-  return parseOptionalEnum(preferredApiStyleSchema, value, "invalid_model_capability", "模型 API 风格无效。");
-}
-
-function parseOptionalModelStability(value: unknown): ModelCapabilityOverrideValues["stability"] | undefined {
-  return parseOptionalEnum(modelStabilitySchema, value, "invalid_model_capability", "模型稳定性无效。");
 }
 
 export function parseToolStateUpdate(toolName: string, raw: unknown): ToolStateSettings {
@@ -776,10 +729,21 @@ function parseOptionalOpenAIReasoningEffort(value: unknown): OpenAIModelRequestS
 
 function parseOptionalRunReasoningEffort(value: unknown): ModelRunReasoningEffort | undefined {
   if (value === undefined || value === null || value === "") return undefined;
-  if (value === "low" || value === "medium" || value === "high") {
+  if (
+    value === "minimal" ||
+    value === "low" ||
+    value === "medium" ||
+    value === "high" ||
+    value === "xhigh" ||
+    value === "max"
+  ) {
     return value;
   }
-  throw new PanelHttpError(400, "invalid_openai_parameter", "思考强度只能是 low、medium 或 high。");
+  throw new PanelHttpError(
+    400,
+    "invalid_openai_parameter",
+    `思考强度无效。可用档位由所选模型决定，当前请求词汇表为 ${Object.keys(MODEL_RUN_REASONING_EFFORT_LABELS).join(" / ")}。`,
+  );
 }
 
 function parseOptionalOpenAIReasoningSummary(value: unknown): OpenAIModelRequestSettings["reasoningSummary"] {

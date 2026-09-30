@@ -418,6 +418,7 @@ function parseJsonObject(value: string): Readonly<Record<string, unknown>> | und
 }
 
 function protocolForModel(model: Model<Api>): ModelProvider["protocolKind"] {
+  if (model.api === "anthropic-messages") return "anthropic_messages";
   if (model.api === "openai-completions") return "openai_compatible_chat_completions";
   if (model.api === "openai-responses") return "openai_responses";
   throw new Error(`Pi model collection channel does not support API ${model.api}.`);

@@ -1,5 +1,5 @@
 import { toolInvocationId, sameResultForIdempotency, type ToolCallResult } from "../../domain/tools/index.js";
-import type { AgentSessionEntryRef } from "../model-runtime/agent-session.js";
+import type { AgentSessionCheckpointRef } from "../model-runtime/agent-session.js";
 import type {
   OrdinaryFeatureDiagnostic,
   OrdinarySessionFinalizationResult,
@@ -14,7 +14,7 @@ import { isTerminal } from "./run-lifecycle-policy.js";
 export function createTerminalSettlement(input: {
   readonly finalizeSession?: (
     runId: string,
-    target?: AgentSessionEntryRef | null,
+    target?: AgentSessionCheckpointRef | null,
   ) => Promise<OrdinarySessionFinalizationResult>;
   readonly loadRun: (runId: string) => Promise<OrdinaryRunSnapshotDocument | undefined>;
   readonly cachedRun: (runId: string) => OrdinaryRunSnapshotDocument | undefined;
@@ -133,14 +133,14 @@ export function createTerminalSettlement(input: {
     const failedAttempt = sessionFinalizationFailures.get(runId);
     // Durable run facts may advance while cleanup is pending; replay the first target exactly.
     const target = failedAttempt === undefined
-      ? (restoreSafeLeaf ? rollbackLeafRef(state) : undefined)
+      ? (restoreSafeLeaf ? rollbackCheckpoint(state) : undefined)
       : failedAttempt.target;
     await attemptSessionFinalization(runId, target);
   }
 
   async function attemptSessionFinalization(
     runId: string,
-    target: AgentSessionEntryRef | null | undefined,
+    target: AgentSessionCheckpointRef | null | undefined,
   ): Promise<void> {
     if (input.finalizeSession === undefined) return;
     sessionFinalizationPending.add(runId);
@@ -263,7 +263,7 @@ export function createTerminalSettlement(input: {
 }
 
 type SessionFinalizationFailure = {
-  readonly target: AgentSessionEntryRef | null | undefined;
+  readonly target: AgentSessionCheckpointRef | null | undefined;
   readonly error: unknown;
 };
 
@@ -309,10 +309,10 @@ export function projectStableTerminalRunFacts(
   });
 }
 
-function rollbackLeafRef(state: OrdinaryRunState): AgentSessionEntryRef | null {
-  if (state.session.phase === "completion_candidate") return state.session.rollbackLeafRef;
-  if (state.session.phase === "rollbackable") return state.session.endLeafRef;
-  if (state.session.phase === "started") return state.session.startLeafRef;
+function rollbackCheckpoint(state: OrdinaryRunState): AgentSessionCheckpointRef | null {
+  if (state.session.phase === "completion_candidate") return state.session.rollbackCheckpoint;
+  if (state.session.phase === "rollbackable") return state.session.endCheckpoint;
+  if (state.session.phase === "started") return state.session.startCheckpoint;
   return null;
 }
 

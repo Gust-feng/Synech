@@ -87,9 +87,7 @@
   --floating-panel-backdrop-filter: none;
   --overlay-ink: rgba(38, 33, 28, 1);
   --app-backdrop-blur: 4px;
-  --settings-dialog-max-width: 920px;
-  --settings-dialog-max-height: 680px;
-  --settings-sidebar-width: 200px;
+  --settings-sidebar-width: 224px;
   --settings-sidebar-compact-width: 168px;
   --motion-ease-standard: cubic-bezier(0.2, 0, 0, 1);
   --motion-interaction-duration: 140ms;
@@ -161,48 +159,12 @@ html[data-style="default"][data-color="dark"] .ui-workbench-root .settings-overl
   color: var(--fg);
 }
 
-.ui-workbench-root .settings-sidebar {
-  min-width: 0;
-  padding: 14px 8px;
+.ui-workbench-root .settings-content:not(.model-settings-content):not(.memory-settings-content) {
+  padding: clamp(24px, 3.5vh, 44px) clamp(20px, 4vw, 64px) 64px;
 }
 
-.ui-workbench-root .settings-close-button {
-  width: 28px;
-  height: 28px;
-  margin: 0 4px 12px auto;
-  border-radius: 6px;
-}
-
-.ui-workbench-root .settings-sidebar nav {
-  gap: 2px;
-  overflow-y: auto;
-  padding: 0 2px;
-}
-
-.ui-workbench-root .settings-sidebar nav button {
-  min-width: 0;
-  height: 36px;
-  padding: 0 10px;
-  font-size: 13px;
-}
-
-.ui-workbench-root .settings-main > header {
-  height: 52px;
-  min-height: 52px;
-  background: color-mix(in oklch, var(--ui-surface) 80%, var(--ui-canvas));
-  padding: 0 24px;
-}
-
-.ui-workbench-root .settings-main h2 {
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.ui-workbench-root .settings-content {
-  padding: 20px 24px 28px;
-}
-
-.ui-workbench-root .settings-content.model-settings-content {
+.ui-workbench-root .settings-content.model-settings-content,
+.ui-workbench-root .settings-content.memory-settings-content {
   padding: 0;
 }
 
@@ -244,31 +206,27 @@ html[data-style="default"][data-color="dark"] .ui-workbench-root .settings-overl
   box-shadow: none;
 }
 
-@keyframes modal-card-enter {
-  from {
-    opacity: 0;
-    transform: translate3d(0, 8px, 0) scale(0.985);
-  }
-
-  to {
-    opacity: 1;
-    transform: translate3d(0, 0, 0) scale(1);
-  }
-}
-
 @media (max-width: 620px) {
   .ui-workbench-root .settings-overlay {
-    padding: 10px;
+    padding: 0;
   }
 
   .ui-workbench-root .settings-dialog {
-    width: calc(100vw - 20px);
-    height: calc(100vh - 20px);
+    width: 100vw;
+    height: 100vh;
     grid-template-columns: minmax(148px, 38vw) minmax(0, 1fr);
   }
 
   .ui-workbench-root .settings-sidebar {
-    padding: 10px 6px;
+    padding: 12px 0;
+  }
+
+  .ui-workbench-root .settings-sidebar-heading {
+    margin: 0 10px 12px;
+  }
+
+  .ui-workbench-root .settings-sidebar nav {
+    padding: 0 10px;
   }
 
   .ui-workbench-root .settings-sidebar nav button {
@@ -305,6 +263,10 @@ html[data-style="default"][data-color="dark"] .ui-workbench-root .settings-overl
 
   .ui-workbench-root .settings-sidebar {
     padding: 8px 0;
+  }
+
+  .ui-workbench-root .settings-sidebar nav {
+    padding: 0 2px;
   }
 
   .ui-workbench-root .settings-sidebar nav button {

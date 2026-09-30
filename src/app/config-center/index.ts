@@ -9,8 +9,6 @@ import type {
   LocalDevSecretStore,
   McpServerSecretValueInput,
   McpServerSettings,
-  ModelCapabilityOverrideValues,
-  ModelCapabilityOverrideSettings,
   ModelProviderModelCatalog,
   SettingsStore,
   SanitizedCommandShellConfig,
@@ -67,7 +65,6 @@ import {
   getModelProviderApiKey as readModelProviderApiKey,
   getModelProviderConfig as readModelProviderConfig,
   listModelProviderProfiles as readModelProviderProfiles,
-  updateModelCapabilityOverride as changeModelCapabilityOverride,
   updateModelProviderConfig as changeModelProviderConfig,
   upsertModelProviderModelCatalog as changeModelProviderModelCatalog,
 } from "./model-provider-service.js";
@@ -218,24 +215,6 @@ export class ConfigCenter {
     });
   }
 
-  async listModelCapabilityOverrides(): Promise<readonly ModelCapabilityOverrideSettings[]> {
-    const settings = await this.readOrCreateSettings();
-    return settings.modelCapabilityOverrides ?? [];
-  }
-
-  async updateModelCapabilityOverride(input: {
-    readonly profileId?: string;
-    readonly model: string;
-    readonly providerKind?: ConfiguredModelProviderKind;
-    readonly capabilities: ModelCapabilityOverrideValues;
-  }): Promise<readonly ModelCapabilityOverrideSettings[]> {
-    return this.runMutation(async () => {
-      const current = await this.readOrCreateSettings();
-      const change = changeModelCapabilityOverride(current, input, new Date().toISOString());
-      await this.options.settingsStore.writeSettings(change.settings);
-      return change.result;
-    });
-  }
 
   async listToolStates(): Promise<readonly ToolStateSettings[]> {
     const settings = await this.readOrCreateSettings();

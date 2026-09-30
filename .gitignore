@@ -15,13 +15,16 @@ obj/
 .vite-preview-cache/
 
 # Local documents and media
-docs/
 AGENTS.md
 local-assets/
 .workbuddy/
+docs/architecture/架构决策记录.md
+docs/architecture/adr/adr/
 
 # Local development state
 .tmp/
+.tmp-runtime-lease-*/
+.dsh-acl-recovery/
 .codex/
 .opencode/
 .claude/
@@ -46,6 +49,7 @@ panel-template-upload50/
 panel-template-export.zip
 scripts/eval-*.mjs
 scripts/tmp-*.py
+scripts/diagnose-legacy-agent-sessions.mjs
 
 # Generated at build time from the @earendil-works/pi-ai model catalog.
 src/app/model-runtime/model-capability-definitions.generated.ts

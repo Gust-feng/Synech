@@ -1,10 +1,12 @@
-import React from "react";
+import React, { useState } from "react";
+import { Trash2 } from "lucide-react";
 import { resolveModelIconSvgForModel } from "./icons";
 import { EmptyBlock } from "../../../components/workspace-common";
 import { ModelCatalogPanel } from "./catalog-panel";
+import { ModelPickerPanel } from "./model-picker-panel";
 import { ModelProviderForm } from "./provider-form";
 import { ProviderLogo } from "./settings-icons";
-import { ModelProviderList } from "./provider-list";
+import { ModelProviderList, ProviderDirectory } from "./provider-list";
 import {
   useModelProviderManagerState,
   type ModelProviderManagerOptions,
@@ -16,8 +18,11 @@ type ModelProviderManagerProps = ModelProviderManagerOptions & {
 
 export function ModelProviderManager(props: ModelProviderManagerProps): React.ReactElement {
   const controller = useModelProviderManagerState(props);
+  const [directoryOpen, setDirectoryOpen] = useState(false);
   const {
     filteredItems,
+    showProviderSearch,
+    catalogItems,
     query,
     setQuery,
     selectedItem,
@@ -29,8 +34,11 @@ export function ModelProviderManager(props: ModelProviderManagerProps): React.Re
     revealed,
     revealBusy,
     modelsFetchBusy,
+    fetchFeedback,
+    clearFetchFeedback,
     catalogState,
     selectItem,
+    addProvider,
     addCustomProvider,
     reorderProviders,
     deleteProvider,
@@ -40,6 +48,7 @@ export function ModelProviderManager(props: ModelProviderManagerProps): React.Re
     revealSelectedApiKey,
     scheduleSelectedModelSave,
     fetchSelectedModels,
+    applySelectedModels,
     selectCatalogModel,
     commitModelDisplayName,
     removeCatalogModel,
@@ -64,14 +73,44 @@ export function ModelProviderManager(props: ModelProviderManagerProps): React.Re
         reorderEnabled={query.trim().length === 0}
         onQueryChange={setQuery}
         onSelect={selectItem}
-        onAddCustomProvider={() => void addCustomProvider()}
         onReorder={reorderProviders}
         onDeleteProvider={deleteProvider}
+        showProviderSearch={showProviderSearch}
+        onOpenCatalog={() => setDirectoryOpen(true)}
       />
 
-      <section className="provider-detail-pane" aria-label="模型服务详情">
+      {directoryOpen ? (
+        <ProviderDirectory
+          items={catalogItems}
+          saving={props.saving}
+          onClose={() => setDirectoryOpen(false)}
+          onAddProvider={async (item) => {
+            await addProvider(item);
+            setDirectoryOpen(false);
+          }}
+          onAddCustomProvider={async () => {
+            await addCustomProvider();
+            setDirectoryOpen(false);
+          }}
+        />
+      ) : catalogState.pickerOpenFor === selectedItem.key ? (
+        <ModelPickerPanel
+          item={selectedItem}
+          availableModels={catalogState.availableCandidates}
+          currentSavedIds={catalogState.catalogModels.map((m) => m.id)}
+          modelIconSvg={(model) => resolveModelIconSvgForModel({
+            providerIdentity: selectedProviderIdentity,
+            modelId: model.id,
+            displayName: model.displayName,
+          })}
+          saving={props.saving}
+          onClose={() => catalogState.setPickerOpenFor(undefined)}
+          onConfirm={applySelectedModels}
+        />
+      ) : (
+        <section className="provider-detail-pane" aria-label="模型服务详情">
         <header className="provider-detail-header">
-          {selectedBuiltinLocked ? (
+          {selectedItem.presetId !== undefined ? (
             <>
               <ProviderLogo item={selectedItem} large />
               <div className="provider-detail-title">
@@ -80,7 +119,7 @@ export function ModelProviderManager(props: ModelProviderManagerProps): React.Re
             </>
           ) : (
             <>
-              <label className="provider-detail-logo-edit" aria-label="替换供应商 logo">
+              <label className="provider-detail-logo-edit" aria-label="替换服务 logo">
                 <ProviderLogo item={{ ...selectedItem, logoDataUrl: selectedForm.logoDataUrl || selectedItem.logoDataUrl }} large />
                 <input
                   type="file"
@@ -96,8 +135,8 @@ export function ModelProviderManager(props: ModelProviderManagerProps): React.Re
                 <input
                   value={selectedForm.label}
                   onChange={(event) => updateModelForm({ label: event.target.value })}
-                  aria-label="供应商名称"
-                  placeholder="自定义厂商"
+                  aria-label="服务名称"
+                  placeholder="自定义服务"
                   spellCheck={false}
                   autoComplete="off"
                   autoCorrect="off"
@@ -105,6 +144,18 @@ export function ModelProviderManager(props: ModelProviderManagerProps): React.Re
                 />
               </div>
             </>
+          )}
+          {(selectedItem.presetId === undefined || selectedItem.configured) && (
+            <button
+              type="button"
+              className="provider-detail-delete"
+              title={selectedItem.presetId !== undefined ? "重置此服务配置" : "删除此模型服务"}
+              aria-label={selectedItem.presetId !== undefined ? `重置 ${selectedItem.title} 配置` : `删除 ${selectedItem.title}`}
+              disabled={props.saving}
+              onClick={() => void deleteProvider(selectedItem)}
+            >
+              <Trash2 size={16} />
+            </button>
           )}
         </header>
 
@@ -134,8 +185,9 @@ export function ModelProviderManager(props: ModelProviderManagerProps): React.Re
           showSavedCount={catalogState.showSavedCount}
           showModelSearch={catalogState.showModelSearch}
           modelQuery={catalogState.modelQuery}
-          selectedModelRowId={catalogState.selectedModelRowId}
+          selectedModelRowId={catalogState.selectedModelRowId ?? selectedForm.model ?? selectedItem.model}
           modelNameDrafts={catalogState.modelNameDrafts}
+          hasApiKey={hasApiKeyAction}
           modelIconSvg={(model) => resolveModelIconSvgForModel({
             providerIdentity: selectedProviderIdentity,
             modelId: model.id,
@@ -143,6 +195,8 @@ export function ModelProviderManager(props: ModelProviderManagerProps): React.Re
           })}
           saving={props.saving}
           modelsFetchBusy={modelsFetchBusy}
+          fetchFeedback={fetchFeedback}
+          onClearFetchFeedback={clearFetchFeedback}
           onModelQueryChange={catalogState.setModelQuery}
           onFetchModels={fetchSelectedModels}
           onSelectCatalogModel={selectCatalogModel}
@@ -152,6 +206,7 @@ export function ModelProviderManager(props: ModelProviderManagerProps): React.Re
           onAddCatalogModel={addCatalogModel}
         />
       </section>
+      )}
     </div>
   );
 }

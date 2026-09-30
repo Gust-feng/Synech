@@ -3,9 +3,9 @@ import { createId, nowIso } from "../../../kernel/id.js";
 import type { ConfigCenter } from "../../config-center/index.js";
 import {
   ModelRuntimeConfigurationError,
-  resolveOpenAIModelRuntimeConfig,
-  type OpenAIModelRuntimeMode,
-} from "../../model-runtime/openai-runtime-config.js";
+  resolveModelRuntimeConfig,
+  type ResolvedModelRuntimeMode,
+} from "../../model-runtime/model-runtime-config.js";
 import type {
   MaintenanceModelOutcome,
   MemoryMaintenanceModelPort,
@@ -13,7 +13,7 @@ import type {
 import type { MaintenancePromptMessage } from "../../memory/capture/consolidation.js";
 import { MAINTENANCE_PROMPT_REF } from "../../memory/capture/consolidation.js";
 import {
-  createOpenAIAuxiliaryModelChannel,
+  createAuxiliaryModelChannel,
   createConfigCenterApiKeyResolver,
 } from "../settings/model-provider-adapter.js";
 
@@ -52,9 +52,9 @@ function toModelMessage(message: MaintenancePromptMessage): ModelMessage {
 
 export function createConfigCenterConsolidationModel(input: {
   readonly configCenter: ConfigCenter;
-  readonly createModelChannel?: typeof createOpenAIAuxiliaryModelChannel;
+  readonly createModelChannel?: typeof createAuxiliaryModelChannel;
 }): MemoryMaintenanceModelPort {
-  const createModelChannel = input.createModelChannel ?? createOpenAIAuxiliaryModelChannel;
+  const createModelChannel = input.createModelChannel ?? createAuxiliaryModelChannel;
   return {
     async generate({ messages }) {
       const provider = await input.configCenter.getModelProviderConfig();
@@ -66,11 +66,11 @@ export function createConfigCenterConsolidationModel(input: {
       ) {
         return unavailable("model_provider_not_configured");
       }
-      const mode: OpenAIModelRuntimeMode = configuredMode;
+      const mode: ResolvedModelRuntimeMode = configuredMode;
       const environment = await input.configCenter.createModelRuntimeEnvironment({ modelProvider: provider });
       let resolved;
       try {
-        resolved = resolveOpenAIModelRuntimeConfig({ mode, env: environment, modelProvider: provider });
+        resolved = resolveModelRuntimeConfig({ mode, env: environment, modelProvider: provider });
       } catch (error) {
         if (error instanceof ModelRuntimeConfigurationError) return unavailable("model_provider_not_configured");
         throw error;

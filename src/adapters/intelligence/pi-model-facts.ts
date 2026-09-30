@@ -83,9 +83,8 @@ function confirmedFactsFromPiModel(resolution: KnownPiModel): ConfirmedModelFact
     supportsReasoningOutput: model.reasoning === true,
     thinkingLevels: supportedThinkingLevels(model),
     supportsStrictToolSchemas: supportsStrictToolSchemasFor(model),
-    // 并行工具调用是 OpenAI 协议特性：只有连接显式指向 pi 的 openai provider
-    // 时，命中的模型才确实说 OpenAI 方言。
-    supportsParallelToolCalls: piProviderId === "openai",
+    // 并行工具调用是 OpenAI 协议字段；按真实 Pi Model.api 派生，不按 provider id 猜。
+    supportsParallelToolCalls: model.api !== "anthropic-messages",
   };
 }
 
@@ -96,6 +95,8 @@ export function piModelTransport(api: Api): ModelTransportKind | undefined {
       return "openai_compatible_chat_completions";
     case "openai-responses":
       return "openai_responses";
+    case "anthropic-messages":
+      return "anthropic_messages";
     default:
       return undefined;
   }
@@ -124,9 +125,13 @@ function supportedThinkingLevels(model: Model<Api>): readonly ModelThinkingLevel
 }
 
 function supportsStrictToolSchemasFor(model: Model<Api>): boolean {
-  if (model.api === "openai-responses") return true;
-  const compat = model.compat as { readonly supportsStrictMode?: boolean } | undefined;
-  return compat?.supportsStrictMode !== false;
+  const compat = model.compat as {
+    readonly supportsStrictMode?: boolean;
+    readonly supportsStrictTools?: boolean;
+  } | undefined;
+  return model.api === "anthropic-messages"
+    ? compat?.supportsStrictTools === true
+    : compat?.supportsStrictMode === true;
 }
 
 let cachedCatalog: MutableModels | undefined;

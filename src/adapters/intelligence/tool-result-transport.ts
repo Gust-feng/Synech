@@ -1,4 +1,4 @@
-import type { AgentHarnessEvent, AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentMessage, HarnessEvent } from "@earendil-works/pi-agent-core";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import { createHash } from "node:crypto";
 import { canonicalToolResultMessage } from "../../app/model-runtime/tool-result-message.js";
@@ -24,7 +24,7 @@ export type PendingToolResultDelivery = {
   readonly result: ToolCallResult;
 };
 
-type ToolExecutionEndEvent = Extract<AgentHarnessEvent, { readonly type: "tool_execution_end" }>;
+type ToolExecutionEndEvent = Extract<HarnessEvent, { readonly type: "tool_end" }>;
 type PiToolResultMessage = Extract<AgentMessage, { readonly role: "toolResult" }>;
 
 export function piImmediateToolResult(input: {
@@ -81,7 +81,6 @@ export function harnessToolResult(
     readonly modelInputSupportsImage: boolean;
   },
   terminate = false,
-  addedToolNames?: readonly string[],
 ) {
   const deliverable = toolResultForPiTransport(
     result,
@@ -93,9 +92,6 @@ export function harnessToolResult(
   return {
     content: [{ type: "text" as const, text: message.content }, ...imageContent],
     details: { kind: "result" as const, result: cloneToolResult(deliverable) },
-    ...(deliverable === result && addedToolNames !== undefined && addedToolNames.length > 0
-      ? { addedToolNames: [...addedToolNames] }
-      : {}),
     ...(terminate || deliverable.errorFacts?.code === "tool_result_attachment_not_supported" ||
         deliverable.errorFacts?.code === "tool_result_image_input_unsupported" ||
         deliverable.errorFacts?.code === "tool_result_image_input_projection_mismatch"

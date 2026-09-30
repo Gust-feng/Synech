@@ -2,6 +2,7 @@ import type { ComposerToolConfirmationPolicy } from "../features/settings/config
 import type { ContextWindowUsage } from "../features/conversations/context-window-usage";
 import type { ContextAttachment } from "./context";
 import type { ModelCapabilities } from "@panel-api/config";
+import type { ModelRunReasoningEffort } from "@panel-api/config";
 import type { ModelProviderIdentity } from "../features/settings/model/provider-logos";
 
 export type ChatModelOption = {
@@ -39,9 +40,9 @@ export type ChatInputProps = AttachmentInputProps & {
   readonly models: readonly ChatModelOption[];
   readonly selectedModelId: string;
   readonly contextUsage?: ContextWindowUsage;
-  readonly reasoningEffort: "" | "low" | "medium" | "high";
+  readonly reasoningEffort: "" | ModelRunReasoningEffort;
   readonly reasoningEffortEnabled: boolean;
-  readonly onReasoningEffortChange: (value: "" | "low" | "medium" | "high") => void;
+  readonly onReasoningEffortChange: (value: "" | ModelRunReasoningEffort) => void;
   readonly toolConfirmationPolicy: ComposerToolConfirmationPolicy;
   readonly onToolConfirmationPolicyChange: (value: ComposerToolConfirmationPolicy) => void;
   readonly onModelSelect: (modelId: string) => void | Promise<void>;

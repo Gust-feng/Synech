@@ -1,7 +1,6 @@
 import type { ToolCallResult } from "../../domain/tools/index.js";
 import type {
   AgentSessionAssistantEntry,
-  AgentSessionEntryRef,
 } from "../model-runtime/agent-session.js";
 import type {
   OrdinaryRunActivity,
@@ -23,14 +22,14 @@ export function durableOrdinaryRunReplayFromState(
   run: OrdinaryRunState,
   assistantEntries: readonly AgentSessionAssistantEntry[],
 ): OrdinaryRunActivityReplay {
-  const assistantTextByEntryId = new Map(assistantEntries.map((entry) =>
-    [sessionEntryKey(entry.entryRef), entry.text] as const));
+  const assistantTextByCheckpointId = new Map(assistantEntries.map((entry) =>
+    [entry.checkpoint.checkpointId, entry.text] as const));
   const activities = durableActivities(
     run.runId,
     run.timeline,
     run.toolCalls,
     run.toolResultRecordedAt,
-    assistantTextByEntryId,
+    assistantTextByCheckpointId,
   );
   const lastEventId = run.timeline.at(-1)?.eventId ?? "initial";
   return {
@@ -48,7 +47,7 @@ function durableActivities(
   events: readonly OrdinaryRunEvent[],
   toolResults: readonly ToolCallResult[],
   toolResultRecordedAt: Readonly<Record<string, string>>,
-  assistantTextByEntryId: ReadonlyMap<string, string>,
+  assistantTextByCheckpointId: ReadonlyMap<string, string>,
 ): OrdinaryRunActivity[] {
   const pending: Array<{
     readonly recordedAt: string;
@@ -58,7 +57,7 @@ function durableActivities(
   }> = [];
   for (const [insertion, event] of events.entries()) {
     if (event.type === "model.output.completed") {
-      const content = assistantTextByEntryId.get(sessionEntryKey(event.assistantEntryRef));
+      const content = assistantTextByCheckpointId.get(event.assistantCheckpoint.checkpointId);
       if (content === undefined) continue;
       pending.push({
         recordedAt: event.recordedAt,
@@ -72,7 +71,7 @@ function durableActivities(
           type: "model.output.completed",
           durability: "durable",
           modelRequestId: event.modelRequestId,
-          assistantEntryRef: structuredClone(event.assistantEntryRef),
+          assistantCheckpoint: structuredClone(event.assistantCheckpoint),
           content,
         },
       });
@@ -156,8 +155,4 @@ function durableModelRequestId(activity: OrdinaryRunActivity): string | undefine
     return "modelRequestId" in activity.event ? activity.event.modelRequestId : undefined;
   }
   return "modelRequestId" in activity ? activity.modelRequestId : undefined;
-}
-
-function sessionEntryKey(ref: AgentSessionEntryRef): string {
-  return `${ref.sessionId}\u0000${ref.entryId}`;
 }

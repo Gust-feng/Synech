@@ -6,12 +6,10 @@ import {
   fetchModelProviderCatalog,
   mergeCatalogsIntoConfig,
   revealModelProviderApiKey,
-  saveModelCapabilityConfig,
   saveModelProviderCatalog,
   saveModelProviderConfig,
   saveModelProviderOrder,
   selectModelProviderModel,
-  type ModelCapabilityUpdateForm,
 } from "../config-actions";
 import { mergeConfigResponse, type VisibleAiMode } from "../config-projection";
 import type { ModelForm } from "../components/types";
@@ -27,7 +25,6 @@ export type ModelSettingsController = {
   readonly selectComposerModel: (modelOptionId: string) => Promise<void>;
   readonly fetchModelsForProfile: (profileId?: string) => Promise<ModelProviderModelCatalog | undefined>;
   readonly saveModelCatalog: (profileId: string, catalog: ModelProviderModelCatalog) => Promise<void>;
-  readonly saveModelCapabilities: (form: ModelCapabilityUpdateForm) => Promise<void>;
 };
 
 export type ModelSettingsControllerOptions = SettingsControllerContext & {
@@ -308,44 +305,6 @@ export function createModelSettingsController(options: ModelSettingsControllerOp
     }
   }
 
-  async function saveModelCapabilities(form: ModelCapabilityUpdateForm): Promise<void> {
-    const save = options.modelSaveQueueRef.current
-      .catch(() => undefined)
-      .then(() => persistModelCapabilities(form));
-    options.modelSaveQueueRef.current = save.catch(() => undefined);
-    await save;
-  }
-
-  async function persistModelCapabilities(form: ModelCapabilityUpdateForm): Promise<void> {
-    options.setSavingModel(true);
-    try {
-      const response = await saveModelCapabilityConfig(form);
-      if (options.mountedRef.current) {
-        const catalogs = response.modelCatalogs ?? options.app.config?.modelCatalogs ?? [];
-        if (response.modelCatalogs !== undefined) {
-          options.setModelCatalogs(catalogRecordFromList(response.modelCatalogs));
-        }
-        options.setApp((previous) => ({
-          ...previous,
-          config: mergeConfigResponse(
-            catalogs.length === 0 ? previous.config : mergeCatalogsIntoConfig(previous.config, catalogs),
-            response
-          ),
-          error: undefined,
-        }));
-      }
-    } catch (error) {
-      if (options.mountedRef.current) {
-        options.setApp((previous) => ({
-          ...previous,
-          error: error instanceof Error ? error.message : "模型信息保存失败。",
-        }));
-      }
-      throw error;
-    } finally {
-      if (options.mountedRef.current) options.setSavingModel(false);
-    }
-  }
 
   return {
     saveModelConfig,
@@ -356,7 +315,6 @@ export function createModelSettingsController(options: ModelSettingsControllerOp
     selectComposerModel,
     fetchModelsForProfile,
     saveModelCatalog,
-    saveModelCapabilities,
   };
 }
 

@@ -171,6 +171,7 @@ function parseModelProtocolKind(
   }
 ): ModelProviderProfileSettings["protocolKind"] {
   if (
+    value === "anthropic_messages" ||
     value === "openai_responses" ||
     value === "openai_compatible_chat_completions"
   ) {
@@ -178,7 +179,8 @@ function parseModelProtocolKind(
   }
   if (value !== undefined) {
     throw new ConfigSchemaValidationError(
-      "Invalid settings document: model protocol must be openai_responses or openai_compatible_chat_completions."
+      "Invalid settings document: model protocol must be anthropic_messages, " +
+      "openai_responses or openai_compatible_chat_completions."
     );
   }
   return defaultProtocolForProfile(input);
@@ -187,15 +189,27 @@ function parseModelProtocolKind(
 function normalizeProfileProtocol(
   protocolKind: ConfiguredModelProtocolKind
 ): ConfiguredModelProtocolKind {
-  return protocolKind === "openai_responses"
-    ? "openai_responses"
-    : "openai_compatible_chat_completions";
+  switch (protocolKind) {
+    case "anthropic_messages":
+      return "anthropic_messages";
+    case "openai_responses":
+      return "openai_responses";
+    case "openai_compatible_chat_completions":
+      return "openai_compatible_chat_completions";
+  }
 }
 
 function normalizeProfileAiModeForProtocol(
   protocolKind: ConfiguredModelProtocolKind
 ): ConfiguredModelRuntimeMode {
-  return protocolKind === "openai_compatible_chat_completions" ? "openai-compatible" : "openai-responses";
+  switch (protocolKind) {
+    case "anthropic_messages":
+      return "anthropic-messages";
+    case "openai_compatible_chat_completions":
+      return "openai-compatible";
+    case "openai_responses":
+      return "openai-responses";
+  }
 }
 
 function builtInPresetForProfile(profile: ModelProviderProfileSettings): ReturnType<typeof listBuiltinModelProviderPresets>[number] | undefined {

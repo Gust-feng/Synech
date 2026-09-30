@@ -8,19 +8,19 @@ export function CapabilitySettingsSection(props: {
   readonly children: React.ReactNode;
 }): React.ReactElement {
   return (
-    <section className="cap-node" aria-label={props.title} aria-busy={props.busy === true}>
-      <div className="cap-node-rail" aria-hidden="true">
-        <span className="cap-node-dot">{props.icon}</span>
-      </div>
-      <div className="cap-node-card">
-        <header className="cap-group-head">
-          <div className="cap-group-heading">
+    <section className="cap-card" aria-label={props.title} aria-busy={props.busy === true}>
+      <header className="cap-card-head">
+        <div className="cap-card-title-group">
+          <span className="cap-card-icon-badge" aria-hidden="true">
+            {props.icon}
+          </span>
+          <div className="cap-card-heading">
             <h3>{props.title}</h3>
           </div>
-          {props.actions !== undefined && <div className="cap-group-actions">{props.actions}</div>}
-        </header>
-        <div className="cap-group-body">{props.children}</div>
-      </div>
+        </div>
+        {props.actions !== undefined && <div className="cap-card-actions">{props.actions}</div>}
+      </header>
+      <div className="cap-card-body">{props.children}</div>
     </section>
   );
 }

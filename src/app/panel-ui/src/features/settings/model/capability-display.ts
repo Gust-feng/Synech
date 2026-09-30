@@ -1,4 +1,5 @@
 import type { ModelCapabilities } from "@panel-api/config";
+import { MODEL_RUN_REASONING_EFFORT_LABELS } from "@panel-api/config";
 
 /** Pi 事实二态：已知（confirmed）与远程发现但 Pi 未识别（unconfirmed）。 */
 type ModelFacts = NonNullable<ModelCapabilities["facts"]>;
@@ -7,17 +8,12 @@ type ConfirmedModelFacts = Extract<ModelFacts, { readonly status: "confirmed" }>
 /** 档位名取自 Pi 事实投影，产品侧不自行维护档位集合。 */
 export type ModelThinkingLevelName = ConfirmedModelFacts["thinkingLevels"][number];
 
-/** 运行级请求只接受 low / medium / high；选项随所选模型的 Pi 可用档位收敛。 */
-export type RunReasoningEffortLevel = "low" | "medium" | "high";
+/** 运行级请求只接受 Pi 档位名；"off" 用 absence 表达，不进入选项。 */
+export type RunReasoningEffortLevel = Exclude<ConfirmedModelFacts["thinkingLevels"][number], "off">;
 
 /** 用户对单个 model id 的显式声明白名单；保存只发这些键，不带 Pi 事实。 */
-export type ModelCapabilityOverride = NonNullable<ModelCapabilities["override"]>;
 
-const RUN_REASONING_LEVEL_LABELS: Readonly<Record<RunReasoningEffortLevel, string>> = {
-  low: "轻量",
-  medium: "标准",
-  high: "深入",
-};
+const RUN_REASONING_LEVEL_LABELS = MODEL_RUN_REASONING_EFFORT_LABELS;
 
 export function isConfirmedModelFacts(facts: ModelFacts | undefined): facts is ConfirmedModelFacts {
   return facts?.status === "confirmed";
@@ -28,15 +24,15 @@ export function isConfirmedModelFacts(facts: ModelFacts | undefined): facts is C
  * 未确认模型在这里一律得到 undefined，调用方据此不展示任何能力信息。
  */
 export function modelContextWindowTokens(capabilities: ModelCapabilities | undefined): number | undefined {
-  return capabilities?.override?.contextWindowTokens ?? confirmedValue(capabilities, (facts) => facts.contextWindowTokens);
+  return confirmedValue(capabilities, (facts) => facts.contextWindowTokens);
 }
 
 export function modelMaxOutputTokens(capabilities: ModelCapabilities | undefined): number | undefined {
-  return capabilities?.override?.maxOutputTokens ?? confirmedValue(capabilities, (facts) => facts.maxOutputTokens);
+  return confirmedValue(capabilities, (facts) => facts.maxOutputTokens);
 }
 
 export function modelSupportsVisionInput(capabilities: ModelCapabilities | undefined): boolean | undefined {
-  return capabilities?.override?.supportsVisionInput ?? confirmedValue(capabilities, (facts) => facts.supportsVisionInput);
+  return confirmedValue(capabilities, (facts) => facts.supportsVisionInput);
 }
 
 /** Pi 可用档位；未确认模型没有已确认档位，返回 undefined。 */
@@ -45,8 +41,6 @@ export function modelThinkingLevels(capabilities: ModelCapabilities | undefined)
 }
 
 export function modelSupportsReasoningEffort(capabilities: ModelCapabilities | undefined): boolean | undefined {
-  const override = capabilities?.override?.supportsReasoningEffort;
-  if (override !== undefined) return override;
   const levels = modelThinkingLevels(capabilities);
   return levels === undefined ? undefined : levels.some((level) => level !== "off");
 }
@@ -57,8 +51,8 @@ export function runReasoningEffortOptions(
 ): readonly { readonly value: RunReasoningEffortLevel; readonly label: string }[] {
   const levels = modelThinkingLevels(capabilities);
   if (levels === undefined) return [];
-  return (["low", "medium", "high"] as readonly RunReasoningEffortLevel[])
-    .filter((level) => levels.includes(level))
+  return levels
+    .filter((level): level is RunReasoningEffortLevel => level !== "off")
     .map((level) => ({ value: level, label: RUN_REASONING_LEVEL_LABELS[level] }));
 }
 

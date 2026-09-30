@@ -21,7 +21,6 @@ import { isSchedulingBarrierCleared, nextEligibleQueuedRun, orderedConversationR
 import { conversationCleanupJobIsIdle, createConversationCleanupJob, prepareConversationCleanup, recordConversationCleanupSuccess, type ConversationCleanupDisposition, type ConversationCleanupJob } from "../conversation-cleanup.js";
 import { assertConversationWritable, normalizedSubmissionId, sameSubmissionInput } from "../conversation-submission-policy.js";
 import { isTerminal } from "../run-lifecycle-policy.js";
-import { sessionEntryKey } from "../session-branch-recovery.js";
 import type { ManagedAttachmentLifecycle } from "../attachment-lifecycle.js";
 import type { OrdinaryRunActivityHub } from "../run-activity-hub.js";
 import type { createTerminalSettlement } from "../terminal-settlement.js";
@@ -37,7 +36,7 @@ type ConversationRunStore = Pick<
 >;
 type ConversationSessionStore = Pick<
   AgentSessionRepository,
-  "create" | "delete" | "getActiveBranchEntryRefs" | "moveActiveLeaf" | "readAssistantEntries"
+  "create" | "delete" | "locateSessionCheckpoints" | "moveActiveCheckpoint" | "readAssistantEntriesByCheckpoint"
 >;
 type ConversationManagedAttachments = Pick<
   ManagedAttachmentLifecycle,
@@ -781,7 +780,7 @@ function schedulingFacts(runId: string): OrdinaryRunSchedulingFacts {
           "Cannot roll back across terminal turns that never entered the Session until those turns have a durable retirement fact",
         );
       }
-      await options.sessionRepository.moveActiveLeaf(current.state.sessionRef, target.session.endLeafRef);
+      await options.sessionRepository.moveActiveCheckpoint(current.state.sessionRef, target.session.endCheckpoint);
       return current;
     });
     return requireConversationView(control);
@@ -948,8 +947,7 @@ function schedulingFacts(runId: string): OrdinaryRunSchedulingFacts {
 
   async function visibleRuns(control: OrdinaryConversationControlDocument): Promise<readonly OrdinaryRunState[]> {
     const runs = runStore.cachedDocuments().map((document) => document.state);
-    const activeBranch = await options.sessionRepository.getActiveBranchEntryRefs(control.state.sessionRef);
-    return visibleOrdinaryConversationRuns(control, runs, activeBranch);
+    return visibleOrdinaryConversationRuns(options.sessionRepository, control, runs);
   }
 
   async function conversationView(control: OrdinaryConversationControlDocument): Promise<OrdinaryConversationReadModel | undefined> {
@@ -957,21 +955,21 @@ function schedulingFacts(runId: string): OrdinaryRunSchedulingFacts {
     const runs = await visibleRuns(control);
     const completedAnswers = runs.flatMap((run) =>
       run.status.kind === "completed" && run.session.phase === "rollbackable"
-        ? [{ runId: run.runId, entryRef: run.session.endLeafRef }]
+        ? [{ runId: run.runId, checkpoint: run.session.endCheckpoint }]
         : []);
     const assistantEntries = completedAnswers.length === 0
       ? []
-      : await options.sessionRepository.readAssistantEntries({
+      : await options.sessionRepository.readAssistantEntriesByCheckpoint({
           sessionRef: control.state.sessionRef,
-          entryRefs: completedAnswers.map((answer) => answer.entryRef),
+          checkpoints: completedAnswers.map((answer) => answer.checkpoint),
         });
-    const assistantTextByEntryRef = new Map(assistantEntries.map((entry) =>
-      [sessionEntryKey(entry.entryRef), entry.text] as const));
+    const assistantTextByCheckpointId = new Map(assistantEntries.map((entry) =>
+      [entry.checkpoint.checkpointId, entry.text] as const));
     return projectOrdinaryConversation({
       control,
       runs,
       completedAssistantTextByRunId: new Map(completedAnswers.flatMap((answer) => {
-        const text = assistantTextByEntryRef.get(sessionEntryKey(answer.entryRef));
+        const text = assistantTextByCheckpointId.get(answer.checkpoint.checkpointId);
         return text === undefined ? [] : [[answer.runId, text] as const];
       })),
     });

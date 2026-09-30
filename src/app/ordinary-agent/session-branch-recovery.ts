@@ -1,45 +1,56 @@
-import type { AgentSessionEntryRef } from "../model-runtime/agent-session.js";
+import type {
+  AgentSessionCheckpointPosition,
+  AgentSessionCheckpointRef,
+  AgentSessionRef,
+  AgentSessionRepository,
+} from "../model-runtime/agent-session.js";
 import { OrdinaryFeatureError, type OrdinaryRunState } from "./contracts.js";
 
-export function sessionEntryKey(ref: AgentSessionEntryRef): string {
-  return `${ref.sessionId}\u0000${ref.entryId}`;
-}
-
-function rollbackLeafRef(state: OrdinaryRunState): AgentSessionEntryRef | null {
+/** The checkpoint this run would restore the live branch to. */
+function rollbackCheckpoint(state: OrdinaryRunState): AgentSessionCheckpointRef | null {
   switch (state.session.phase) {
     case "not_started": return null;
-    case "started": return state.session.startLeafRef;
-    case "rollbackable": return state.session.endLeafRef;
-    case "completion_candidate": return state.session.rollbackLeafRef;
+    case "started": return state.session.startCheckpoint;
+    case "rollbackable": return state.session.endCheckpoint;
+    case "completion_candidate": return state.session.rollbackCheckpoint;
   }
 }
 
-export function recoveredSessionLeaf(
+/**
+ * Resolves the deepest durable checkpoint this conversation recorded.
+ *
+ * The product contributes only the checkpoints it recorded itself; the runtime
+ * provider answers where each one sits on the live transcript. Product code
+ * therefore never interprets branch structure, so a provider change to branch
+ * layout cannot silently change recovery behaviour.
+ */
+export async function recoveredSessionCheckpoint(
+  store: Pick<AgentSessionRepository, "locateSessionCheckpoints">,
   runs: readonly OrdinaryRunState[],
-  activeBranch: readonly AgentSessionEntryRef[],
+  sessionRef: AgentSessionRef,
   conversationId: string,
-): AgentSessionEntryRef | null {
-  const branchIndex = new Map(activeBranch.map((entry, index) => [sessionEntryKey(entry), index]));
-  const durableLeaves = runs
-    .map(rollbackLeafRef)
-    .filter((entry): entry is AgentSessionEntryRef => entry !== null);
-  let target: { readonly entry: AgentSessionEntryRef; readonly index: number } | undefined;
-  for (const entry of durableLeaves) {
-    const index = branchIndex.get(sessionEntryKey(entry));
-    if (index !== undefined && (target === undefined || index > target.index)) target = { entry, index };
-  }
-  if (target !== undefined) return target.entry;
-  if (durableLeaves.length > 0) {
-    throw new OrdinaryFeatureError(
-      "ordinary_run_state_conflict",
-      `Ordinary conversation ${conversationId} has no persisted safe leaf on its active Session branch`,
-    );
-  }
-  return null;
+): Promise<AgentSessionCheckpointRef | null> {
+  const recorded = runs
+    .map(rollbackCheckpoint)
+    .filter((checkpoint): checkpoint is AgentSessionCheckpointRef => checkpoint !== null);
+  if (recorded.length === 0) return null;
+  const located = await store.locateSessionCheckpoints({ sessionRef, checkpoints: recorded });
+  const deepest = located.reduce<AgentSessionCheckpointPosition | undefined>(
+    (best, item) => (best === undefined || item.position > best.position ? item : best),
+    undefined,
+  );
+  if (deepest !== undefined) return deepest.checkpoint;
+  throw new OrdinaryFeatureError(
+    "ordinary_run_state_conflict",
+    `Ordinary conversation ${conversationId} has no persisted safe checkpoint on its active Session branch`,
+  );
 }
 
-export function sameSessionEntryRef(left: AgentSessionEntryRef | null, right: AgentSessionEntryRef | null): boolean {
+export function sameSessionCheckpoint(
+  left: AgentSessionCheckpointRef | null,
+  right: AgentSessionCheckpointRef | null,
+): boolean {
   return left === null || right === null
     ? left === right
-    : left.sessionId === right.sessionId && left.entryId === right.entryId;
+    : left.sessionId === right.sessionId && left.checkpointId === right.checkpointId;
 }

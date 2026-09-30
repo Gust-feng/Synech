@@ -1,24 +1,47 @@
 import React from "react";
 import { Eye, EyeOff } from "lucide-react";
+import { SettingsSelectControl } from "../components/select-control";
 import type { ModelForm, ModelProviderListItem } from "./settings-projection";
-import { modelProtocolKind, requestPathOptionsForProvider } from "./settings-projection";
+import { modelProtocolKind, modelProtocolOptions } from "./settings-projection";
 
-export function ModelProviderForm(props: {
+/**
+ * 模型服务表单组件属性定义。
+ */
+export type ModelProviderFormProps = {
+  /** 当前选中的模型服务配置项信息（包含预设元数据、受保护状态等） */
   readonly item: ModelProviderListItem;
+  /** 当前编辑中的表单草稿状态 */
   readonly modelForm: ModelForm;
+  /** 当前 API Key 是否明文显式显示 */
   readonly revealed: boolean;
+  /** 是否正在请求解密并显示 API Key */
   readonly revealBusy: boolean;
+  /** 是否正在执行保存操作 */
   readonly saving?: boolean;
+  /** 是否存在有效的 API Key 切换显示操作权限 */
   readonly hasApiKeyAction: boolean;
+  /** 当前连接是否已在本地或安全存储中配置过密钥 */
   readonly selectedSecretConfigured: boolean;
+  /** 表单草稿局部更新回调 */
   readonly onUpdateModelForm: (patch: Partial<ModelForm>) => void;
+  /** 整体设置表单草稿回调 */
   readonly onSetModelForm: (form: ModelForm) => void;
+  /** 触发解密显式显示 API Key 的异步回调 */
   readonly onRevealApiKey: () => Promise<void>;
+  /** 调度并触发表单防抖自动持久化保存 */
   readonly onScheduleModelSave: (form: ModelForm) => void;
-}): React.ReactElement {
+};
+
+/**
+ * 模型服务凭据与连接参数表单组件。
+ *
+ * 负责呈现与编辑 API Key（支持明文切换查看）、Base URL（节点基础连接地址）
+ * 以及底层通信协议（Protocol / Transport，如 OpenAI 兼容、Anthropic Messages 等）。
+ */
+export function ModelProviderForm(props: ModelProviderFormProps): React.ReactElement {
   return (
     <div className="provider-form">
-      <label>
+      <label className="provider-form-full">
         <span>API Key</span>
         <div className="api-key-field">
           <input
@@ -55,63 +78,38 @@ export function ModelProviderForm(props: {
           </span>
         </div>
       </label>
-      <label>
+      <label className="provider-form-base-url">
         <span>Base URL</span>
         <div className="provider-base-url-field">
           <input
-            value={props.modelForm.baseUrl || props.item.baseUrl}
+            value={props.modelForm.baseUrl}
             disabled={props.saving}
             spellCheck={false}
             autoComplete="off"
             autoCorrect="off"
             autoCapitalize="off"
+            title={props.modelForm.baseUrl || props.item.preset?.baseUrl || props.item.baseUrl || "https://api.example.com/v1"}
             onChange={(event) => {
               props.onUpdateModelForm({ baseUrl: event.target.value });
             }}
-            placeholder="https://api.example.com/v1"
-          />
-        </div>
-      </label>
-      <label>
-        <span>Pi Provider</span>
-        <div className="provider-base-url-field">
-          <input
-            value={props.modelForm.piProviderId}
-            disabled={props.saving === true || props.item.protectedBuiltin === true}
-            spellCheck={false}
-            autoComplete="off"
-            autoCorrect="off"
-            autoCapitalize="off"
-            onChange={(event) => {
-              props.onUpdateModelForm({ piProviderId: event.target.value });
+            onBlur={(event) => {
+              event.currentTarget.scrollLeft = 0;
             }}
-            placeholder="模型语义来源，留空表示全部按未知模型处理"
+            placeholder={props.item.preset?.baseUrl || props.item.baseUrl || "https://api.example.com/v1"}
           />
         </div>
-        <small className="provider-field-hint">
-          Pi Provider / 模型语义来源：与 Base URL 明确分离，声明该连接的已知模型取自哪个 Pi Provider 的真实目录。
-        </small>
       </label>
-      {props.item.preset === undefined && (
-        <details className="provider-advanced-options">
-          <summary>高级兼容设置</summary>
-          <label>
-            <span>默认传输</span>
-            <select
-              value={props.modelForm.protocolKind || props.item.protocolKind}
-              aria-label="默认传输"
-              onChange={(event) => props.onUpdateModelForm({ protocolKind: modelProtocolKind(event.target.value) })}
-            >
-              {requestPathOptionsForProvider().map((option) => (
-                <option value={option.value} key={option.value}>{option.label}</option>
-              ))}
-            </select>
-            <small className="provider-field-hint">
-              连接级默认 transport：已知模型的 transport 由 Pi 事实决定，这里只用于远程发现但 Pi 未识别的模型。
-            </small>
-          </label>
-        </details>
-      )}
+      <div className="provider-protocol-field">
+        <span>协议</span>
+        <SettingsSelectControl
+          id="provider-protocol-kind"
+          ariaLabel="协议"
+          value={props.modelForm.protocolKind || props.item.protocolKind}
+          disabled={props.saving}
+          options={modelProtocolOptions()}
+          onChange={(value) => props.onUpdateModelForm({ protocolKind: modelProtocolKind(value) })}
+        />
+      </div>
     </div>
   );
 }

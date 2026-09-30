@@ -3,8 +3,14 @@ import {
   type AgentMessage,
   type AgentTool,
   type AgentToolUpdateCallback,
+  type AgentLane,
   Session,
 } from "@earendil-works/pi-agent-core";
+import {
+  TODO_CONTEXT,
+  withAbortSignal,
+  type Context,
+} from "@earendil-works/pi-agent-core/harness/context";
 import {
   Type,
   type AssistantMessage,
@@ -56,6 +62,8 @@ import { errorMessage } from "../../kernel/values/index.js";
 import {
   ToolInvocationBindingTable,
 } from "./agent-session-tool-bindings.js";
+import { getMainLeafId } from "./session-write-fence.js";
+import { toHarnessTool } from "./pi-agent/harness-tool-bridge.js";
 import type { AgentSessionLoopOptions } from "./agent-session-loop/contracts.js";
 import {
   RootHarnessEventProjector,
@@ -114,6 +122,17 @@ type ActiveAgentLoopExecution = {
   readonly cancel: () => Promise<void>;
 };
 
+class PiRunFailure extends Error {
+  constructor(
+    message: string,
+    readonly code: string,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = "PiRunFailure";
+  }
+}
+
 /** Provider-neutral mechanical loop whose transcript is owned by one agent Session. */
 export function createAgentSessionLoop(options: AgentSessionLoopOptions): AgentLoop {
   let activeExecution: ActiveAgentLoopExecution | undefined;
@@ -124,15 +143,8 @@ export function createAgentSessionLoop(options: AgentSessionLoopOptions): AgentL
       if (released) throw new Error("Agent session loop has been released.");
       if (activeExecution !== undefined) throw new Error("Agent session loop is already executing.");
       if (input.abortSignal.aborted) return cancelledBeforeStart(input);
-      const sessionId = (await options.agentSession.getMetadata()).id;
-      const startEntryId = await options.agentSession.getLeafId();
+      const sessionId = options.agentSession.metadata.id;
       const prompt = preparePromptInput(input);
-      await input.onSessionWriteCheckpoint?.({
-        kind: "start_leaf_captured",
-        sessionId,
-        startLeafRef: startEntryId === null ? null : { sessionId, entryId: startEntryId },
-      });
-      const runtimeSession = new TranscriptNormalizingSession(options.agentSession);
       const rootInvocationBindings = new ToolInvocationBindingTable();
       let state!: AgentSessionExecutionState;
       const rootEvents = new RootHarnessEventProjector({
@@ -140,8 +152,6 @@ export function createAgentSessionLoop(options: AgentSessionLoopOptions): AgentL
         loopOptions: options,
         sessionId,
         agentSession: options.agentSession,
-        runtimeSession,
-        startLeafEntryId: startEntryId,
         modelInputSupportsImage: options.selectedModel.input.includes("image"),
         rootBindings: rootInvocationBindings,
         resultPort: {
@@ -163,23 +173,118 @@ export function createAgentSessionLoop(options: AgentSessionLoopOptions): AgentL
         cancellationRequested: false,
       };
       const harnessTools = createHarnessTools(input, state, options);
-      const harness = new AgentHarness({
-        env: options.executionEnvironment,
-        session: runtimeSession,
+      const runContext = withAbortSignal(input.abortSignal, TODO_CONTEXT);
+      const created = await AgentHarness.create({
+        session: options.agentSession,
         models: options.modelRegistry,
         model: options.selectedModel,
         thinkingLevel: options.thinkingLevel,
         systemPrompt: input.instructions,
-        tools: [...harnessTools.tools],
+        tools: harnessTools.tools.map((tool) => toHarnessTool(tool, input.abortSignal)),
         activeToolNames: [...harnessTools.activeToolNames],
+       compaction: options.compactionSettings,
+      }, runContext);
+      const harness = created.harness;
+      // An operation left open by an interrupted process rejects every new
+      // prompt on its lane (Pi LaneBusy). The product has already reconciled
+      // that interrupted run at its own layer, so the stale operation is
+      // settled by abort here — never resumed: resuming would re-drive the
+      // interrupted generation and issue provider calls nobody asked for.
+      for (const openOperation of created.open) {
+        const staleLane = await harness.lane(openOperation.lane, runContext);
+        const aborted = await staleLane.abort(runContext);
+        if (!aborted.ok) {
+          throw new Error(
+            `Pi lane could not settle the operation left open by an interrupted run: ${aborted.error.message}`,
+          );
+        }
+      }
+      const lane = await harness.lane("main", runContext);
+      harnessTools.bind?.(lane);
+      await lane.setActiveTools([...harnessTools.activeToolNames], TODO_CONTEXT);
+      rootEvents.attach(harness, lane, harnessTools.metadataByName);
+      const startEntryId = await getMainLeafId(options.agentSession);
+      await input.onSessionWriteCheckpoint?.({
+        kind: "start_leaf_captured",
+        checkpoint: await rootEvents.captureStart(startEntryId),
+        sessionId,
       });
-      harnessTools.bind?.(harness);
-      await harness.setActiveTools([...harnessTools.activeToolNames]);
-      rootEvents.attach(harness, harnessTools.metadataByName);
-      const run = harness.prompt(prompt.text, { images: prompt.images });
+      // A previous run can die with its lane operation still durably recorded:
+      // a cancel revokes the run's writer generation while Pi's operation
+      // closure lands on the revoked line, and a crash simply leaves it. The
+      // product has already settled that run, so the leftover operation is
+      // aborted here, not resumed, and this run starts on a clean lane.
+      const promptLane = () => lane.prompt(prompt.text, prompt.images, runContext);
+      // `created.open` is the one recovery point for durable orphaned
+      // operations. A LaneBusy here means that invariant was not restored;
+      // aborting and retrying would hide the race and could touch another run.
+      const started = promptLane();
+      const run = started.then(async (result) => {
+        await rootEvents.settleProjectionFailure(lane);
+        if (!result.ok) {
+          throw new PiRunFailure(result.error.message, piAdmissionErrorCode(result.error), { cause: result.error });
+        }
+        if (result.value.status === "failed") {
+          const assistantFailure = rootEvents.latestAssistant === undefined
+            ? undefined
+            : providerFailureFromAssistant(rootEvents.latestAssistant, options.selectedModel.contextWindow);
+          throw new PiRunFailure(
+            assistantFailure?.error ?? result.value.error?.message ?? "Pi run failed without a diagnostic message.",
+            assistantFailure?.errorCode ?? result.value.error?.code ?? "pi_run_failed",
+          );
+        }
+        if (result.value.status === "aborted") {
+          throw new DOMException("Agent run was aborted.", "AbortError");
+        }
+        if (result.value.status === "suspended") {
+          await settleUnsupportedSuspendedRun(lane, runContext, result.value.operationId);
+          throw new PiRunFailure(
+            "Pi returned a deferred run, but Synech does not support deferred responses.",
+            "deferred_unsupported",
+          );
+        }
+        const assistant = rootEvents.latestAssistant;
+        const responseFailure = validateCompletedAssistant(assistant, state);
+        if (responseFailure !== undefined) {
+          throw new PiRunFailure(responseFailure.error, responseFailure.code);
+        }
+        if (assistant === undefined) {
+          throw new PiRunFailure(
+            "Pi completed without a final assistant message.",
+            "final_assistant_missing",
+          );
+        }
+        if (rootEvents.maintenanceFailure !== undefined) {
+          throw new PiRunFailure(
+            rootEvents.maintenanceFailure.error,
+            rootEvents.maintenanceFailure.code,
+          );
+        }
+        // The answer's checkpoint is durable only once the run has picked its
+        // final assistant entry: intermediate and retry entries commit without
+        // being the answer, and each entry lands after its own message_end.
+        const responseCheckpoint = await rootEvents.captureResponse();
+        if (responseCheckpoint === null) {
+          throw new PiRunFailure(
+            "Pi completed without a durable final assistant entry.",
+            "final_assistant_checkpoint_missing",
+          );
+        }
+        await input.onSessionWriteCheckpoint?.({
+          kind: "assistant_response_entry_committed",
+          checkpoint: responseCheckpoint,
+          sessionId,
+          assistantText: assistantText(assistant),
+        });
+        return assistant;
+      });
       let abortPromise: Promise<void> | undefined;
       const abort = (): Promise<void> => {
-        abortPromise ??= harness.abort().then(() => undefined);
+        abortPromise ??= lane.inspectExecution(TODO_CONTEXT).then(async (execution) => {
+          if (execution.current === null) return;
+          const aborted = await lane.requestAbort(execution.current.id, TODO_CONTEXT);
+          if (!aborted.ok) throw aborted.error;
+        });
         return abortPromise;
       };
       const cancel = (): Promise<void> => {
@@ -235,29 +340,6 @@ function preparePromptInput(
   };
 }
 
-/**
- * Pi writes the tool-activation transport detail (`addedToolNames`) onto the
- * tool-result messages it emits; left on the message it would ride into the
- * JSONL transcript and every later buildContext. Tool availability is already
- * owned by the harness active-tool set, so the marker is normalized away at the
- * Session write boundary and never persisted.
- */
-class TranscriptNormalizingSession extends Session {
-  constructor(private readonly delegate: Session) {
-    super(delegate.getStorage());
-  }
-
-  override appendMessage(message: AgentMessage): Promise<string> {
-    return this.delegate.appendMessage(withoutToolActivationMarker(message));
-  }
-}
-
-function withoutToolActivationMarker(message: AgentMessage): AgentMessage {
-  if (message.role !== "toolResult" || message.addedToolNames === undefined) return message;
-  const { addedToolNames: _transportActivation, ...normalized } = message;
-  return normalized;
-}
-
 function createHarnessTools(
   input: AgentLoopInput,
   state: AgentSessionExecutionState,
@@ -304,8 +386,8 @@ function delegatedAgentFactPorts(input: AgentLoopInput, state: AgentSessionExecu
         message: Extract<AgentMessage, { readonly role: "toolResult" }>,
         parentInvocationId?: string,
       ) => deliverPendingToolResultMessage(input, state, message, parentInvocationId),
-      project: (result: ToolCallResult, terminate: boolean, addedToolNames?: readonly string[]) =>
-        harnessToolResult(result, state, terminate, addedToolNames),
+      project: (result: ToolCallResult, terminate: boolean) =>
+        harnessToolResult(result, state, terminate),
     },
     run: {
       emitToolRequested: (request: ToolCallRequest) => emitToolRequested(input, request),
@@ -343,8 +425,7 @@ function toolVisibilityHost(
     projectResult: (
       result: ToolCallResult,
       terminate: boolean,
-      addedToolNames?: readonly string[],
-    ) => harnessToolResult(result, state, terminate, addedToolNames),
+    ) => harnessToolResult(result, state, terminate),
     recordMaintenanceFailure: (failure: { readonly code: string; readonly error: string }) => {
       state.rootEvents.recordMaintenanceFailure(failure);
     },
@@ -579,7 +660,89 @@ function failedRunResult(error: unknown, input: AgentLoopInput, state: AgentSess
     return failedResult(state, errorMessage(state.toolAcceptanceFailure), "tool_result_acceptance_failed");
   }
   if (isAbortError(error)) return cancelledResult(state, error);
+  if (error instanceof PiRunFailure) return failedResult(state, errorMessage(error), error.code);
+  const piErrorCode = piOperationErrorCode(error);
+  if (piErrorCode !== undefined) return failedResult(state, errorMessage(error), piErrorCode);
   return failedResult(state, errorMessage(error), "agent_loop_failed");
+}
+
+function validateCompletedAssistant(
+  assistant: Extract<AgentMessage, { readonly role: "assistant" }> | undefined,
+  state: AgentSessionExecutionState,
+): { readonly error: string; readonly code: string } | undefined {
+  const attachmentFailure = [...state.toolResults.values()].find((result) =>
+    result.errorFacts?.code === "tool_result_attachment_not_supported" ||
+    result.errorFacts?.code === "tool_result_image_input_unsupported" ||
+    result.errorFacts?.code === "tool_result_image_input_projection_mismatch",
+  );
+  if (assistant === undefined) {
+    return attachmentFailure === undefined
+      ? {
+          error: "Pi completed without a final assistant message.",
+          code: "final_assistant_missing",
+        }
+      : {
+          error: "Pi completed after a tool result could not be delivered to the model; no final assistant message was produced.",
+          code: "tool_result_delivery_failed",
+        };
+  }
+  const toolCallCount = assistant.content.filter((block) => block.type === "toolCall").length;
+  if (toolCallCount > 0) {
+    return attachmentFailure === undefined
+      ? {
+          error: "Pi completed with a tool-use assistant message and no final assistant response.",
+          code: "final_assistant_is_tool_use",
+        }
+      : {
+          error: "Pi completed after a tool result could not be delivered to the model; the last assistant message still contains tool use.",
+          code: "tool_result_delivery_failed",
+        };
+  }
+  if (assistant.stopReason !== "stop") {
+    return {
+      error: `Pi completed without a final assistant response because the last assistant stop reason was ${JSON.stringify(assistant.stopReason)}.`,
+      code: "final_assistant_not_complete",
+    };
+  }
+  if (assistantText(assistant).trim().length === 0) {
+    return {
+      error: "Pi completed with an empty assistant response.",
+      code: "final_assistant_empty",
+    };
+  }
+  return undefined;
+}
+
+async function settleUnsupportedSuspendedRun(
+  lane: AgentLane,
+  context: Context,
+  operationId: string,
+): Promise<void> {
+  const inspected = await lane.inspectExecution(TODO_CONTEXT);
+  if (inspected.current?.id !== operationId) {
+    throw new PiRunFailure(
+      "Pi suspended run no longer owns the lane operation, so it could not be settled.",
+      "deferred_settlement_mismatch",
+    );
+  }
+  const aborted = await lane.abort(context);
+  if (!aborted.ok) {
+    throw new PiRunFailure(
+      `Pi deferred run could not be settled: ${aborted.error.message}`,
+      "deferred_settlement_failed",
+      { cause: aborted.error },
+    );
+  }
+}
+
+function piAdmissionErrorCode(error: { readonly _tag?: string }): string {
+  return error._tag === "LaneBusy" ? "pi_lane_busy" : `pi_${error._tag?.toLowerCase() ?? "run_admission_failed"}`;
+}
+
+function piOperationErrorCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null || !("_tag" in error)) return undefined;
+  const tag = (error as { readonly _tag?: unknown })._tag;
+  return typeof tag === "string" ? `pi_${tag.toLowerCase()}` : undefined;
 }
 
 function failedResult(state: AgentSessionExecutionState, error: string, errorCode: string): AgentLoopResult {

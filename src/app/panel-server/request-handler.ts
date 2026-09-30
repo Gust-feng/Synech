@@ -26,6 +26,7 @@ import {
 import { preparePanelStorageForStartup } from "./storage/panel-storage.js";
 import { listPanelSkillSettings, refreshPanelSkillSettings, setPanelSkillEnabled } from "./settings/skill-service.js";
 import { OrdinaryFeatureError } from "../ordinary-agent/contracts.js";
+import { AgentSessionRepositoryError } from "../model-runtime/agent-session.js";
 import { OrdinaryPanelCursorError } from "./ordinary/ordinary-agent-panel-projection.js";
 import { handlePanelOrdinaryRoute } from "./ordinary/ordinary-routes.js";
 import {
@@ -258,6 +259,10 @@ function createPanelRequestHandler(runtime: PanelHost): (request: IncomingMessag
         writePanelError(response, dataMaintenanceHttpError(error));
         return;
       }
+      if (error instanceof AgentSessionRepositoryError) {
+        writePanelError(response, agentSessionHttpError(error));
+        return;
+      }
       logUnhandledPanelRequestError(request, error);
       writePanelError(response, new PanelHttpError(500, "panel_internal_error", "面板请求失败。"));
     }).finally(() => {
@@ -313,6 +318,21 @@ export function ordinaryTurnApplicationHttpError(error: OrdinaryTurnApplicationE
       return new PanelHttpError(409, "conversation_owner_conflict", error.message);
     case "conversation_space_not_found":
       return new PanelHttpError(404, "conversation_space_not_found", error.message);
+  }
+}
+
+function agentSessionHttpError(error: AgentSessionRepositoryError): PanelHttpError {
+  switch (error.code) {
+    case "agent_session_legacy_requires_reset":
+      return new PanelHttpError(409, error.code, error.message);
+    case "agent_session_writer_active":
+      // The writer is mid-handoff; the repository already retried briefly.
+      return new PanelHttpError(409, error.code, "上一轮会话正在收尾，请稍候重试。");
+    case "agent_session_not_found":
+    case "agent_session_checkpoint_unknown":
+      return new PanelHttpError(404, error.code, error.message);
+    default:
+      return new PanelHttpError(500, error.code, error.message);
   }
 }
 

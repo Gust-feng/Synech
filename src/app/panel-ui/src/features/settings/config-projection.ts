@@ -1,8 +1,9 @@
 import type { ConfigResponse, ModelProviderModelCatalog, ToolConfirmationPolicy } from "@panel-api/config";
+import type { ModelRunReasoningEffort } from "@panel-api/config";
 
-export type ComposerReasoningEffort = "" | "low" | "medium" | "high";
+export type ComposerReasoningEffort = "" | ModelRunReasoningEffort;
 export type ComposerToolConfirmationPolicy = ToolConfirmationPolicy;
-export type VisibleAiMode = "none" | "openai-compatible" | "openai-responses";
+export type VisibleAiMode = "none" | "anthropic-messages" | "openai-compatible" | "openai-responses";
 
 export function mergeConfigResponse(previous: ConfigResponse | undefined, incoming: ConfigResponse): ConfigResponse {
   return {
@@ -25,6 +26,7 @@ export function mergeConfigResponse(previous: ConfigResponse | undefined, incomi
 }
 export function normalizeVisibleAiMode(mode: VisibleAiMode | undefined): VisibleAiMode {
   return mode === "none" ||
+    mode === "anthropic-messages" ||
     mode === "openai-compatible" ||
     mode === "openai-responses"
     ? mode

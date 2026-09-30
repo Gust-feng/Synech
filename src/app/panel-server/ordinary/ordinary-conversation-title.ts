@@ -3,12 +3,12 @@ import { createId, nowIso } from "../../../kernel/id.js";
 import type { ConfigCenter } from "../../config-center/index.js";
 import {
   ModelRuntimeConfigurationError,
-  resolveOpenAIModelRuntimeConfig,
-  type OpenAIModelRuntimeMode,
-  type ResolvedOpenAIModelRuntimeConfig,
-} from "../../model-runtime/openai-runtime-config.js";
+  resolveModelRuntimeConfig,
+  type ResolvedModelRuntimeMode,
+  type ResolvedModelRuntimeConfig,
+} from "../../model-runtime/model-runtime-config.js";
 import {
-  createOpenAIAuxiliaryModelChannel,
+  createAuxiliaryModelChannel,
   createConfigCenterApiKeyResolver,
 } from "../settings/model-provider-adapter.js";
 import type { OrdinaryConversationTitleGenerator, OrdinaryRunBirth } from "../../ordinary-agent/index.js";
@@ -25,12 +25,12 @@ const TITLE_PROMPT_REF = "prompt:ordinary.conversation_title.v1";
  */
 export function createOrdinaryConversationTitleGenerator(input: {
   readonly configCenter: ConfigCenter;
-  readonly createModelChannel?: typeof createOpenAIAuxiliaryModelChannel;
+  readonly createModelChannel?: typeof createAuxiliaryModelChannel;
 }): OrdinaryConversationTitleGenerator {
-  const createModelChannel = input.createModelChannel ?? createOpenAIAuxiliaryModelChannel;
+  const createModelChannel = input.createModelChannel ?? createAuxiliaryModelChannel;
   return async ({ conversationId, userMessage, birth }) => {
     const mode = birth.aiMode;
-    if (mode !== "openai-compatible" && mode !== "openai-responses") return undefined;
+    if (mode !== "anthropic-messages" && mode !== "openai-compatible" && mode !== "openai-responses") return undefined;
     if (birth.config.secretConfigured !== true) return undefined;
     const environment = await input.configCenter.createModelRuntimeEnvironment({
       modelProvider: birth.config,
@@ -73,12 +73,12 @@ export function createOrdinaryConversationTitleGenerator(input: {
 
 /** 缺 key/模型名等预期环境状态转换为 undefined（回退），其余错误继续上抛。 */
 function resolveRuntimeConfig(input: {
-  readonly mode: OpenAIModelRuntimeMode;
+  readonly mode: ResolvedModelRuntimeMode;
   readonly environment: Readonly<Record<string, string | undefined>>;
   readonly birth: OrdinaryRunBirth;
-}): ResolvedOpenAIModelRuntimeConfig | undefined {
+}): ResolvedModelRuntimeConfig | undefined {
   try {
-    return resolveOpenAIModelRuntimeConfig({
+    return resolveModelRuntimeConfig({
       mode: input.mode,
       env: input.environment,
       modelProvider: input.birth.config,

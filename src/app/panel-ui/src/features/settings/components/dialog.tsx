@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   Bot,
   Brain,
+  ArrowLeft,
   CheckCircle2,
   ChartColumn,
   CloudCog,
@@ -14,7 +15,6 @@ import {
   Palette,
   Server,
   SlidersHorizontal,
-  X,
 } from "lucide-react";
 import type {
   ConfigResponse,
@@ -25,13 +25,11 @@ import type { ConversationFollowUpMode } from "../../../contracts/composer";
 import type { SkillDefinition } from "../../../contracts/skills";
 import type { SubAgentDefinition } from "../../../contracts/sub-agents";
 import type { McpEnvironmentCheckResponse, McpReferenceResponse, ToolsResponse } from "@panel-api/tools";
-import type { ModelCapabilityUpdateForm } from "../config-actions";
 import { AppearanceSettings } from "./appearance";
 import { ModelProviderManager } from "../model/provider-manager";
 import type { McpServerForm, ModelForm, SettingsGroup, ToolForm } from "./types";
 import { BasicCapabilitiesSettings, OrdinaryAgentPromptSettings } from "./basic-capabilities";
 import { McpServiceSettings } from "./mcp-service";
-import { ModelInformationSettings } from "../model/information-settings";
 import { WebSearchSettings } from "./web-search";
 import { SkillSettings } from "./skills";
 import { SubAgentSettings } from "./sub-agents";
@@ -72,7 +70,6 @@ export function SettingsDialog(props: {
   readonly onDeleteModelProvider: (profileId: string, fallbackProfileId?: string) => Promise<void>;
   readonly onFetchModels: (profileId?: string) => Promise<ModelProviderModelCatalog | undefined>;
   readonly onSaveModelCatalog: (profileId: string, catalog: ModelProviderModelCatalog) => Promise<void>;
-  readonly onSaveModelCapabilities: (form: ModelCapabilityUpdateForm) => Promise<void>;
   readonly onRevealModelApiKey: (profileId: string) => Promise<string | undefined>;
   readonly modelCatalogs?: Readonly<Record<string, ModelProviderModelCatalog>>;
   readonly skills: readonly SkillDefinition[];
@@ -141,15 +138,26 @@ export function SettingsDialog(props: {
   const visibleActiveGroup = visibleGroups.some((group) => group.id === activeGroup)
     ? activeGroup
     : visibleGroups[0]?.id ?? "models";
-  const activeInfo = visibleGroups.find((group) => group.id === visibleActiveGroup) ?? visibleGroups[0]!;
+  const currentGroup = visibleGroups.find((group) => group.id === visibleActiveGroup);
+  const currentGroupLabel = currentGroup?.label ?? "设置";
+
   return (
     <div className="settings-overlay" role="dialog" aria-modal="true" aria-label="设置">
       <button type="button" className="settings-backdrop" aria-label="关闭设置" onClick={props.onClose} />
-      <section className="settings-dialog">
+      <section className={`settings-dialog ${visibleActiveGroup === "models" ? "model-settings-dialog" : ""}`}>
         <aside className="settings-sidebar">
-          <button type="button" className="settings-close-button" onClick={props.onClose} aria-label="关闭">
-            <X size={16} />
-          </button>
+          <div className="settings-sidebar-heading" data-desktop-drag-region>
+            <button
+              type="button"
+              className="settings-close-button"
+              onClick={props.onClose}
+              aria-label="返回工作台"
+              title="返回工作台 (Esc)"
+            >
+              <ArrowLeft size={17} />
+            </button>
+            <strong>设置</strong>
+          </div>
           <nav aria-label="设置分组">
             {visibleGroups.map((group) => (
               <button
@@ -171,8 +179,11 @@ export function SettingsDialog(props: {
           </nav>
         </aside>
         <div className="settings-main">
-          <header>
-            <h2>{activeInfo.label}</h2>
+          <header className="settings-main-header">
+            <div className="settings-main-header-title">
+              <span>{currentGroupLabel}</span>
+            </div>
+            <div className="settings-main-drag-region" data-desktop-drag-region aria-hidden="true" />
           </header>
           <div className={`settings-content ${visibleActiveGroup === "models" ? "model-settings-content" : ""} ${visibleActiveGroup === "memory" ? "memory-settings-content" : ""}`}>
             <div
@@ -215,12 +226,6 @@ export function SettingsDialog(props: {
                   onSaveSkillTriggerMode={props.onSaveSkillTriggerMode}
                   savingOrdinaryAgentPrompt={props.savingOrdinaryAgentPrompt}
                   onSaveOrdinaryAgentSystemPromptVariant={props.onSaveOrdinaryAgentSystemPromptVariant}
-                />
-                <ModelInformationSettings
-                  config={props.config}
-                  modelCatalogs={props.modelCatalogs}
-                  saving={props.savingModel}
-                  onSave={props.onSaveModelCapabilities}
                 />
               </div>
             )}

@@ -12,6 +12,7 @@ import {
   resolvedThinkingLevels,
 } from "../dist/domain/config/model-facts.js";
 import { resolveModelCapabilities } from "../dist/app/model-runtime/model-capability-resolution.js";
+import { MODEL_RUN_REASONING_EFFORT_LABELS } from "../dist/domain/config/index.js";
 
 const PI_CATALOG = await import("@earendil-works/pi-ai/providers/all");
 
@@ -101,6 +102,20 @@ test("unknown discovered models run on the connection default transport without 
   );
   assert.equal(responsesBinding.selectedModel.api, "openai-responses");
 
+  // Anthropic Messages has no wire-level "omit max_tokens" convention: Pi will
+  // send Model.maxTokens as max_tokens. An unconfirmed model has no factual
+  // budget, so the Adapter must reject it instead of constructing max_tokens: 0.
+  assert.throws(
+    () => createModelProviderBinding(
+      bindingOptions({
+        piProviderId: "minimax-cn",
+        model: modelId,
+        protocol: "anthropic_messages",
+      }),
+    ),
+    /has no factual max_tokens/,
+  );
+
   // A connection without an explicit piProviderId treats every model as unknown.
   assert.equal(
     resolveDiscoveredModelFacts({ piProviderId: undefined, modelId: "gpt-4o" }).status,
@@ -129,16 +144,105 @@ test("model ids resolve only inside their explicitly declared Pi provider", asyn
   assert.equal(cn.piProviderId, "moonshotai-cn");
 });
 
-test("a known model whose Pi api this product cannot serve fails explicitly at binding time", async () => {
-  // A custom profile may declare any pi provider; pi's MiniMax catalog speaks
-  // anthropic-messages, which this product has no transport for.
-  const facts = resolveDiscoveredModelFacts({ piProviderId: "minimax-cn", modelId: "MiniMax-M2.7" });
+test("a known Anthropic Messages model binds through the Anthropic transport", async () => {
+  // pi's MiniMax provider speaks anthropic-messages; the connection protocol is
+  // irrelevant once the model is known.
+  const facts = resolveDiscoveredModelFacts({ piProviderId: "minimax-cn", modelId: "MiniMax-M3" });
   assert.equal(facts.status, "confirmed");
-  assert.equal(facts.transport, undefined);
+  assert.equal(facts.transport, "anthropic_messages");
+
+  const binding = createModelProviderBinding(
+    bindingOptions({ piProviderId: "minimax-cn", model: "MiniMax-M3" }),
+  );
+  assert.equal(binding.selectedModel.api, "anthropic-messages");
+  // Anthropic transport carries no OpenAI payload policy: never a dialect rewrite.
+  assert.equal(binding.transformProviderPayload, undefined);
+});
+
+test("a known model whose Pi api this product cannot serve fails explicitly at binding time", async () => {
+  // A custom profile may declare any pi provider. Bedrock's converse-stream api
+  // has no transport here, so the binding must fail loudly instead of silently
+  // substituting the connection protocol.
+  const facts = resolveDiscoveredModelFacts({ piProviderId: "amazon-bedrock", modelId: "anthropic.claude-sonnet-4-5-20250929-v1:0" });
+  if (facts.status === "confirmed") {
+    assert.equal(facts.transport, undefined);
+    assert.throws(
+      () => createModelProviderBinding(
+        bindingOptions({ piProviderId: "amazon-bedrock", model: "anthropic.claude-sonnet-4-5-20250929-v1:0" }),
+      ),
+      /bedrock-converse-stream/,
+    );
+  }
+});
+
+test("built-in web search cannot be silently applied to the Anthropic transport", async () => {
   assert.throws(
     () => createModelProviderBinding(
-      bindingOptions({ piProviderId: "minimax-cn", model: "MiniMax-M2.7" }),
+      bindingOptions({ piProviderId: "minimax-cn", model: "MiniMax-M3", protocol: "anthropic_messages", enableWebSearch: true }),
     ),
-    /anthropic-messages/,
+    /Built-in web search is not supported by the Anthropic Messages protocol binding/,
+  );
+});
+
+test("run reasoning levels are exactly the model's real Pi thinking levels", async () => {
+  // gpt-5.6 on openai carries xhigh and max; the product must not clip them to a
+  // fixed three-level vocabulary.
+  const facts = resolveDiscoveredModelFacts({ piProviderId: "openai", modelId: "gpt-5.6-sol" });
+  assert.equal(facts.status, "confirmed");
+  assert.ok(facts.thinkingLevels.length > 0, "expected real Pi thinking levels");
+
+  const labelKeys = Object.keys(MODEL_RUN_REASONING_EFFORT_LABELS);
+  for (const level of facts.thinkingLevels) {
+    if (level === "off") continue; // not a selectable run level, see below
+    assert.ok(labelKeys.includes(level), `Pi level ${level} has no product label`);
+  }
+  // "off" means the model can be told not to reason; the run-level vocabulary
+  // expresses that by absence, so it must never be offered as an option.
+  assert.ok(!labelKeys.includes("off"), "off must not be a selectable run level");
+
+  // An unconfirmed model must not gain levels, and a confirmed one must not lose them.
+  assert.deepEqual(resolvedThinkingLevels({ facts }), facts.thinkingLevels);
+  const unconfirmed = resolveDiscoveredModelFacts({ piProviderId: "openai", modelId: "not-in-catalog" });
+  assert.deepEqual(resolvedThinkingLevels({ facts: unconfirmed }), undefined);
+});
+
+test("the product level vocabulary covers every Pi level the label table names", async () => {
+  // Guards against a new Pi level landing without a product label: the UI could
+  // not render it and the request parser would reject it.
+  const real = PI_CATALOG.getBuiltinModel("openai", "gpt-5.6-sol");
+  const piLevels = Object.entries(real.thinkingLevelMap ?? {})
+    .filter(([, value]) => value !== null)
+    .map(([level]) => level);
+  const labelKeys = Object.keys(MODEL_RUN_REASONING_EFFORT_LABELS);
+  for (const level of piLevels) {
+    if (level === "off") continue;
+    assert.ok(labelKeys.includes(level), `Pi level ${level} is missing a product label`);
+  }
+});
+
+test("strict tool schema support is projected from the model's real compat", async () => {
+  const openai = resolveDiscoveredModelFacts({ piProviderId: "openai", modelId: "gpt-4o" });
+  assert.equal(openai.status, "confirmed");
+  assert.equal(openai.supportsStrictToolSchemas, true);
+
+  const openRouter = resolveDiscoveredModelFacts({
+    piProviderId: "openrouter",
+    modelId: "x-ai/grok-4",
+  });
+  if (openRouter.status === "confirmed" && openRouter.transport === "openai_responses") {
+    assert.equal(
+      openRouter.supportsStrictToolSchemas,
+      PI_CATALOG.getBuiltinModel("openrouter", "x-ai/grok-4").compat?.supportsStrictMode === true,
+    );
+  }
+
+  const anthropic = resolveDiscoveredModelFacts({
+    piProviderId: "anthropic",
+    modelId: "claude-haiku-4-5",
+  });
+  assert.equal(anthropic.status, "confirmed");
+  assert.equal(
+    anthropic.supportsStrictToolSchemas,
+    PI_CATALOG.getBuiltinModel("anthropic", "claude-haiku-4-5").compat?.supportsStrictTools === true,
   );
 });

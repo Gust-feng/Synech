@@ -10,7 +10,6 @@ import type { CommandShellKind, ConfigResponse, ModelProviderModelCatalog, Skill
 import type { SkillDefinition } from "../../contracts/skills";
 import type { SubAgentDefinition } from "../../contracts/sub-agents";
 import type { McpEnvironmentCheckResponse, McpReferenceResponse, McpServerPreset, ToolsResponse } from "@panel-api/tools";
-import type { ModelCapabilityOverride } from "./model/capability-display";
 import { parseModelOptionId } from "./model/options";
 
 export async function saveModelProviderConfig(input: {
@@ -70,7 +69,7 @@ export async function createCustomModelProviderProfile(input: {
   readonly form: ModelForm;
   readonly aiMode: VisibleAiMode;
 }): Promise<ConfigResponse> {
-  const label = input.form.label.trim() || "自定义厂商";
+  const label = input.form.label.trim() || "自定义服务";
   const created = await postJson<ConfigResponse>("/api/config/model-profiles", {
     profileId: input.form.profileId.trim() || label,
     label,
@@ -203,22 +202,6 @@ export async function saveModelProviderCatalog(input: {
     ...response,
     modelCatalogs: response.modelCatalogs ?? [response.catalog],
   };
-}
-
-export type ModelCapabilityUpdateForm = {
-  readonly profileId: string;
-  readonly providerKind?: string;
-  readonly model: string;
-  readonly capabilities: ModelCapabilityOverride;
-};
-
-export async function saveModelCapabilityConfig(input: ModelCapabilityUpdateForm): Promise<ConfigResponse> {
-  return postJson<ConfigResponse>("/api/config/model-capabilities", {
-    profileId: input.profileId,
-    providerKind: input.providerKind,
-    model: input.model,
-    capabilities: input.capabilities,
-  });
 }
 
 export async function saveCommandShellConfig(kind: CommandShellKind | "auto"): Promise<ConfigResponse> {

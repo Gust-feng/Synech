@@ -90,9 +90,6 @@ test("Ordinary resource acquisition carries standing rules and implicit memory i
         async release() { released += 1; },
       };
     },
-    createExecutionEnvironment() {
-      return { async cleanup() { released += 1; } };
-    },
     createTokenCounter() {
       return {
         source: "openai_tiktoken",
@@ -171,5 +168,5 @@ test("Ordinary resource acquisition carries standing rules and implicit memory i
   } finally {
     await run.release();
   }
-  assert.equal(released, 3);
+  assert.equal(released, 2);
 });

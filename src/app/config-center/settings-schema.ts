@@ -12,12 +12,10 @@ import {
   createDefaultModelProviderProfile,
   dedupeProfiles,
   normalizeBuiltInModelProviderProfiles,
-  normalizeModelCapabilityOverrides,
   normalizeModelCatalogs,
   normalizeModelProfile,
   normalizePositiveInteger,
   normalizeProfileId,
-  parseModelCapabilityOverrides,
   parseModelCatalogs,
   parseModelProfile,
 } from "./model-provider-settings.js";
@@ -61,9 +59,7 @@ export {
   normalizeModelProtocolKind,
   normalizePositiveInteger,
   normalizeProfileId,
-  sanitizeCapabilityOverride,
 } from "./model-provider-settings.js";
-export { normalizeOpenAIModelRequestSettings } from "./openai-request-settings.js";
 export { ConfigSchemaValidationError, normalizeRequiredConfigString } from "./settings-utils.js";
 export {
   normalizeCommandShellSettings,
@@ -149,7 +145,6 @@ export function parseLocalSettingsFile(raw: unknown): LocalSettings {
     modelProfiles,
     modelProviderOrder: parseModelProviderOrder(record.modelProviderOrder, modelProfiles),
     modelCatalogs: parseModelCatalogs(record.modelCatalogs, updatedAt),
-    modelCapabilityOverrides: parseModelCapabilityOverrides(record.modelCapabilityOverrides, updatedAt),
     toolStates: parseToolStates(record.toolStates, updatedAt),
     toolConfirmation: parseToolConfirmationSettings(
       record.toolConfirmation,
@@ -232,7 +227,6 @@ export function createDefaultLocalSettings(now: string = new Date().toISOString(
     modelProfiles: [defaultProfile],
     modelProviderOrder: [],
     modelCatalogs: [],
-    modelCapabilityOverrides: [],
     toolStates: [],
     toolConfirmation: normalizeToolConfirmationSettings(undefined, now),
     ordinaryAgent: createDefaultOrdinaryAgentPromptSettings(now),
@@ -279,7 +273,6 @@ export function normalizeLocalSettings(settings: LocalSettings): LocalSettings {
     modelProfiles: profiles,
     modelProviderOrder: normalizeModelProviderOrder(settings.modelProviderOrder ?? [], profiles),
     modelCatalogs,
-    modelCapabilityOverrides: normalizeModelCapabilityOverrides(settings.modelCapabilityOverrides ?? [], now),
     toolStates: normalizeToolStates(settings.toolStates ?? [], now),
     toolConfirmation: normalizeToolConfirmationSettings(settings.toolConfirmation, now),
     ordinaryAgent: normalizeOrdinaryAgentPromptSettings(settings.ordinaryAgent, now),

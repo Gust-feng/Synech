@@ -16,6 +16,12 @@ const PROTOCOL_TOOL_CALL_CAPABILITIES: Record<ConfiguredModelProtocolKind, Proto
     canReceiveToolCalls: true,
     canRoundTripToolResults: true,
   },
+  anthropic_messages: {
+    protocolKind: "anthropic_messages",
+    canSendToolDefinitions: true,
+    canReceiveToolCalls: true,
+    canRoundTripToolResults: true,
+  },
 };
 
 export function resolveProtocolToolCallCapabilities(

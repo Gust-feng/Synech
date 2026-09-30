@@ -58,6 +58,7 @@ export function useModelProviderManagerState(props: ModelProviderManagerOptions)
   const providerOrderRef = useRef<readonly string[]>([]);
   const lastActiveProfileIdRef = useRef<string | undefined>(undefined);
   const selectedKeyRef = useRef(selectedKey);
+  const previousSelectedKeyRef = useRef<string | undefined>(undefined);
   const saveQueue = useProviderSaveQueue(props.onSave);
   const revealRef = useRef(props.onRevealModelApiKey);
   revealRef.current = props.onRevealModelApiKey;
@@ -70,7 +71,10 @@ export function useModelProviderManagerState(props: ModelProviderManagerOptions)
   const providerItems = useMemo(() => modelProviderItems(projectedConfig), [projectedConfig]);
   const items = providerItems;
   providerOrderRef.current = items.map((item) => item.key);
-  const filteredItems = items.filter((item) => {
+  const visibleItems = items.filter((item) =>
+    item.configured || item.protectedBuiltin && CORE_PRESET_IDS.has(item.presetId ?? "") || item.key === selectedKey
+  );
+  const filteredItems = visibleItems.filter((item) => {
     const normalized = query.trim().toLowerCase();
     if (normalized.length === 0) return true;
     return [item.title, item.model, item.baseUrl].some((value) => value.toLowerCase().includes(normalized));
@@ -114,6 +118,14 @@ export function useModelProviderManagerState(props: ModelProviderManagerOptions)
   }, [activeProfileId, items, selectedKey]);
 
   useEffect(() => {
+    const nextKey = selectedItem?.key;
+    const switchedProvider = previousSelectedKeyRef.current !== nextKey;
+    previousSelectedKeyRef.current = nextKey;
+    if (switchedProvider) {
+      // 挑选语义只属于打开时的厂商：切换供应商即清空选择面板与名称草稿
+      catalogState.setPickerOpenFor(undefined);
+      catalogState.setModelNameDrafts({});
+    }
     if (!isActive || selectedItem === undefined) return;
     if (props.modelForm.profileId === modelProviderFormId(selectedItem)) return;
     const nextForm = modelFormFromProviderItem(selectedItem);
@@ -125,7 +137,20 @@ export function useModelProviderManagerState(props: ModelProviderManagerOptions)
 
   function selectItem(item: ModelProviderListItem): void {
     saveQueue.flush();
+    setQuery("");
     setSelectedKey(item.key);
+  }
+
+  async function addProvider(item: ModelProviderListItem): Promise<void> {
+    if (item.presetId === undefined || item.profileId !== undefined) {
+      selectItem(item);
+      return;
+    }
+    saveQueue.flush();
+    const form = modelFormFromProviderItem(item);
+    await props.onSave(form);
+    setQuery("");
+    setSelectedKey(`profile:${item.presetId}`);
   }
 
   async function addCustomProvider(): Promise<void> {
@@ -133,7 +158,7 @@ export function useModelProviderManagerState(props: ModelProviderManagerOptions)
     const profileId = nextCustomProfileId(providerItems, providerDraft.createdProfiles);
     const nextForm: ModelForm = {
       profileId,
-      label: "自定义厂商",
+      label: "自定义服务",
       logoDataUrl: "",
       logoCleared: false,
       baseUrl: "https://api.example.com/v1",
@@ -170,11 +195,17 @@ export function useModelProviderManagerState(props: ModelProviderManagerOptions)
   }
 
   async function reorderProviders(nextOrder: readonly string[]): Promise<void> {
-    if (query.trim().length > 0 || sameStringList(providerOrderRef.current, nextOrder)) return;
-    providerOrderRef.current = nextOrder;
-    setProviderDraft((previous) => ({ ...previous, order: nextOrder }));
+    if (query.trim().length > 0) return;
+    const visibleKeys = new Set(nextOrder);
+    const orderedVisible = [...nextOrder];
+    const completeOrder = providerOrderRef.current.map((key) =>
+      visibleKeys.has(key) ? orderedVisible.shift()! : key
+    );
+    if (sameStringList(providerOrderRef.current, completeOrder)) return;
+    providerOrderRef.current = completeOrder;
+    setProviderDraft((previous) => ({ ...previous, order: completeOrder }));
     try {
-      await props.onReorderModelProviders(nextOrder);
+      await props.onReorderModelProviders(completeOrder);
     } catch {
       setProviderDraft((previous) => ({ ...previous, order: undefined }));
     }
@@ -184,7 +215,9 @@ export function useModelProviderManagerState(props: ModelProviderManagerOptions)
     if (item.profileId === undefined) return;
     saveQueue.flush();
     const deletingActive = item.profileId === activeProfileId;
-    const fallbackItem = items.find((candidate) => candidate.key !== item.key);
+    const fallbackItem =
+      items.find((candidate) => candidate.key !== item.key && candidate.configured) ??
+      items.find((candidate) => candidate.key !== item.key);
     const fallbackProfile = deletingActive ? fallbackItem?.profile : undefined;
     if (deletingActive && fallbackProfile?.profileId === undefined) {
       try {
@@ -333,6 +366,8 @@ export function useModelProviderManagerState(props: ModelProviderManagerOptions)
 
   return {
     filteredItems,
+    showProviderSearch: visibleItems.length > 6,
+    catalogItems: items.filter((item) => !item.configured && !CORE_PRESET_IDS.has(item.presetId ?? "")),
     query,
     setQuery,
     selectedItem,
@@ -344,8 +379,11 @@ export function useModelProviderManagerState(props: ModelProviderManagerOptions)
     revealed,
     revealBusy,
     modelsFetchBusy: catalogActions.modelsFetchBusy,
+    fetchFeedback: catalogActions.fetchFeedback,
+    clearFetchFeedback: catalogActions.clearFetchFeedback,
     catalogState,
     selectItem,
+    addProvider,
     addCustomProvider,
     reorderProviders,
     deleteProvider,
@@ -355,9 +393,12 @@ export function useModelProviderManagerState(props: ModelProviderManagerOptions)
     revealSelectedApiKey,
     scheduleSelectedModelSave,
     fetchSelectedModels: catalogActions.fetchSelectedModels,
+    applySelectedModels: catalogActions.applySelectedModels,
     selectCatalogModel: catalogActions.selectCatalogModel,
     commitModelDisplayName: catalogActions.commitModelDisplayName,
     removeCatalogModel: catalogActions.removeCatalogModel,
     addCatalogModel: catalogActions.addCatalogModel,
   };
 }
+
+const CORE_PRESET_IDS: ReadonlySet<string> = new Set(["openai", "anthropic", "deepseek", "moonshot", "glm", "minimax", "qwen"]);

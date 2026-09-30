@@ -4,12 +4,15 @@ import {
   listBuiltinModelProviderPresets,
   listBuiltinProviderProtocolProfiles,
 } from "../../../domain/config/index.js";
+import {
+  getPiModelCatalogGeneratedAt,
+  listPiProviderCatalog,
+} from "../../../adapters/intelligence/index.js";
 import { fetchPanelModelCatalog } from "./model-provider-adapter.js";
 import { PanelHttpError, readJsonBody, writeJson } from "../http-utils.js";
 import {
   parseConfigUpdate,
   parseCreateModelProfile,
-  parseModelCapabilityUpdate,
   parseModelCatalogUpdate,
   parseModelProviderOrderUpdate,
 } from "../request-parsers.js";
@@ -30,6 +33,16 @@ export async function handlePanelModelConfigRoute(
   response: ServerResponse,
   url: URL,
 ): Promise<boolean> {
+  if (request.method === "GET" && url.pathname === "/api/config/pi-model-providers") {
+    writeJson(response, 200, {
+      ok: true,
+      status: "completed",
+      generatedAt: getPiModelCatalogGeneratedAt(),
+      providers: listPiProviderCatalog(),
+    });
+    return true;
+  }
+
   if (request.method === "GET" && url.pathname === "/api/config/capabilities") {
     writeJson(response, 200, {
       ok: true,
@@ -280,39 +293,6 @@ export async function handlePanelModelConfigRoute(
     } catch (error) {
       throw configCenterHttpError(error);
     }
-  }
-
-  if (request.method === "POST" && url.pathname === "/api/config/model-capabilities") {
-    const input = parseModelCapabilityUpdate(await readJsonBody(request));
-    const activeProfile = await runtime.configCenter.getModelProviderConfig();
-    const targetProfile = input.profileId === undefined
-      ? activeProfile
-      : (await runtime.configCenter.listModelProviderProfiles())
-        .find((profile) => profile.profileId === input.profileId);
-    if (targetProfile === undefined) {
-      throw new PanelHttpError(404, "model_profile_not_found", "未找到模型配置。");
-    }
-    const model = input.model ?? targetProfile.model;
-    if (model === undefined) {
-      throw new PanelHttpError(400, "missing_model_name", "保存模型能力前需要先填写模型名。");
-    }
-    await runtime.configCenter.updateModelCapabilityOverride({
-      profileId: targetProfile.profileId,
-      providerKind: input.providerKind ?? targetProfile.providerKind,
-      model,
-      capabilities: input.capabilities,
-    });
-    invalidateCapabilityCache(runtime);
-    writeJson(response, 200, {
-      ok: true,
-      status: "completed",
-      config: await runtime.configCenter.getModelProviderConfig(),
-      profiles: await runtime.configCenter.listModelProviderProfiles(),
-      modelCatalogs: await runtime.configCenter.listModelProviderModelCatalogs(),
-      modelCapabilityProfiles: await modelCapabilityProfilesPayload(runtime),
-      capabilities: await runtime.capabilityCenter.snapshot(),
-    });
-    return true;
   }
 
   return false;

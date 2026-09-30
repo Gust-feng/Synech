@@ -1,3 +1,11 @@
+:root {
+  --settings-dialog-max-width: 1200px;
+  --settings-dialog-max-height: 840px;
+  --settings-sidebar-width: 224px;
+  --settings-sidebar-compact-width: 64px;
+  --settings-header-height: 48px;
+}
+
 .settings-overlay {
   position: fixed;
   inset: 0;
@@ -5,31 +13,44 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 18px;
+  padding: clamp(16px, 3vh, 40px) clamp(20px, 3.5vw, 56px);
 }
 
 .settings-backdrop {
   position: absolute;
   inset: 0;
-  background: color-mix(in oklch, var(--overlay-ink) 20%, transparent);
-  backdrop-filter: blur(var(--app-backdrop-blur));
-  -webkit-backdrop-filter: blur(var(--app-backdrop-blur));
+  background: color-mix(in oklch, var(--overlay-ink, #000) 45%, transparent);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
 }
 
 .settings-dialog {
   position: relative;
   display: grid;
-  width: min(var(--settings-dialog-max-width), calc(100vw - 36px));
-  height: min(var(--settings-dialog-max-height), calc(100vh - 36px));
+  width: min(var(--settings-dialog-max-width, 1200px), 100%);
+  height: min(var(--settings-dialog-max-height, 840px), 100%);
+  max-height: calc(100vh - 48px);
   overflow: hidden;
-  grid-template-columns: var(--settings-sidebar-width) minmax(0, 1fr);
-  border: var(--border-width-md) solid var(--floating-panel-border);
-  border-radius: var(--radius-lg);
-  background: var(--floating-panel-bg);
-  box-shadow: var(--floating-panel-shadow);
-  backdrop-filter: var(--floating-panel-backdrop-filter);
-  -webkit-backdrop-filter: var(--floating-panel-backdrop-filter);
-  animation: modal-card-enter var(--motion-dialog-duration) var(--motion-ease-standard) both;
+  grid-template-columns: var(--settings-sidebar-width, 224px) minmax(0, 1fr);
+  border: 1px solid color-mix(in oklch, var(--border) 80%, transparent);
+  border-radius: 18px;
+  background: var(--detail-pane-bg);
+  box-shadow:
+    0 24px 64px -12px rgba(0, 0, 0, 0.45),
+    0 4px 20px -2px rgba(0, 0, 0, 0.12),
+    0 0 0 1px color-mix(in oklch, white 8%, transparent) inset;
+  animation: settings-workspace-enter var(--motion-dialog-duration) var(--motion-ease-standard) both;
+}
+
+@keyframes settings-workspace-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.985) translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
 }
 
 .settings-sidebar {
@@ -38,19 +59,43 @@
   flex-direction: column;
   border-right: var(--border-width-thin) solid var(--border);
   background: var(--list-pane-bg);
-  padding: var(--space-4) 0;
+  padding: 0 0 var(--space-4);
+}
+
+.settings-sidebar-heading {
+  display: flex;
+  height: var(--settings-header-height, 48px);
+  min-height: var(--settings-header-height, 48px);
+  box-sizing: border-box;
+  align-items: center;
+  gap: 10px;
+  padding: 0 16px;
+  margin-bottom: 0;
+  border-bottom: var(--border-width-thin) solid color-mix(in oklch, var(--border) 80%, transparent);
+  color: var(--fg);
+  font-size: 15px;
+  font-weight: var(--weight-heading, 600);
+  user-select: none;
+  app-region: drag;
+  -webkit-app-region: drag;
+}
+
+.settings-sidebar-heading .settings-close-button {
+  margin: 0;
+  app-region: no-drag;
+  -webkit-app-region: no-drag;
 }
 
 .settings-close-button {
   display: flex;
-  width: 34px;
-  height: 34px;
+  width: 28px;
+  height: 28px;
   align-items: center;
   justify-content: center;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   color: color-mix(in oklch, var(--fg) 72%, var(--muted));
-  margin: 0 var(--space-4) var(--space-3);
+  margin: 0;
   transition:
     border-color var(--motion-interaction-duration) var(--motion-ease-standard),
     background-color var(--motion-interaction-duration) var(--motion-ease-standard),
@@ -64,23 +109,25 @@
 }
 
 .settings-sidebar nav {
-  display: grid;
-  gap: 1px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 12px 10px;
+  overflow-y: auto;
 }
 
 .settings-sidebar nav button {
   display: grid;
-  height: 38px;
+  height: 40px;
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
-  gap: var(--space-2);
-  border: 1px solid var(--list-row-border);
-  border-left: var(--list-row-marker-width) solid transparent;
-  border-radius: var(--list-row-radius);
-  padding: 0 22px;
-  color: color-mix(in oklch, var(--fg) 72%, var(--muted));
+  gap: var(--space-3);
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 0 14px;
+  color: color-mix(in oklch, var(--fg) 75%, var(--muted));
   text-align: left;
-  font-size: 14px;
+  font-size: 13.5px;
   font-weight: 550;
   transition:
     background-color var(--motion-interaction-duration) var(--motion-ease-standard),
@@ -89,19 +136,17 @@
     box-shadow var(--motion-interaction-duration) var(--motion-ease-standard);
 }
 
-.settings-sidebar nav button:hover,
-.settings-sidebar nav button.active {
+.settings-sidebar nav button:hover {
   background: var(--row-hover-bg);
   color: var(--fg);
-  box-shadow: none;
 }
 
 .settings-sidebar nav button.active {
-  border-color: var(--list-row-active-border);
-  border-left-color: var(--list-row-active-marker);
-  background: var(--row-active-bg);
-  box-shadow: var(--list-row-active-shadow);
-  font-weight: var(--weight-label);
+  border-color: color-mix(in oklch, var(--accent) 22%, var(--border));
+  background: color-mix(in oklch, var(--accent) 10%, var(--surface));
+  color: var(--accent-strong, var(--fg));
+  font-weight: 600;
+  box-shadow: 0 1px 3px color-mix(in oklch, var(--accent) 8%, transparent);
 }
 
 .settings-sidebar nav button.active svg:first-child {
@@ -114,48 +159,66 @@
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
+  background: var(--detail-pane-bg);
 }
 
-.settings-main > header {
+.settings-main-header {
   display: flex;
-  height: 58px;
-  flex-shrink: 0;
+  height: var(--settings-header-height, 48px);
+  min-height: var(--settings-header-height, 48px);
+  box-sizing: border-box;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  border-bottom: var(--border-width-thin) solid var(--border);
-  padding: 0 28px;
+  border-bottom: var(--border-width-thin) solid color-mix(in oklch, var(--border) 80%, transparent);
+  background: var(--detail-pane-bg);
+  padding: 0 10px 0 24px;
+  flex-shrink: 0;
+  user-select: none;
+  position: relative;
+  z-index: 5;
 }
 
-.settings-main h2 {
-  min-width: 0;
-  overflow: hidden;
-  margin: 0;
-  font-size: 19px;
-  font-weight: var(--weight-label);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.settings-main-header-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--fg);
+  font-size: 14px;
+  font-weight: var(--weight-heading, 600);
+  letter-spacing: -0.01em;
+}
+
+.settings-main-drag-region {
+  flex: 1 1 auto;
+  height: 100%;
+  app-region: drag;
+  -webkit-app-region: drag;
 }
 
 .settings-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   min-width: 0;
   min-height: 0;
   flex: 1 1 auto;
   overflow-x: hidden;
   overflow-y: auto;
   background: var(--detail-pane-bg);
-  padding: var(--space-6);
+  padding: clamp(28px, 4vh, 48px) clamp(24px, 5vw, 96px) 72px;
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-pane-thumb) transparent;
 }
 
 .settings-content.model-settings-content {
+  display: block;
   overflow: hidden;
   padding: 0;
 }
 
 .settings-content.memory-settings-content {
   display: flex;
+  align-items: stretch;
   overflow: hidden;
   padding: 0;
 }
@@ -163,6 +226,12 @@
 .settings-content.memory-settings-content > .memory-center {
   width: 100%;
   height: 100%;
+}
+
+.settings-content:not(.model-settings-content):not(.memory-settings-content) > * {
+  width: 100%;
+  max-width: 820px;
+  margin: 0 auto;
 }
 
 .settings-panel-slot {
@@ -174,14 +243,25 @@
   height: 100%;
 }
 
+@media (min-width: 1101px) {
+  .model-settings-dialog .settings-content.model-settings-content {
+    min-height: 0;
+    flex: 1 1 auto;
+    background: transparent;
+  }
+}
+
 @media (max-width: 620px) {
   .settings-overlay {
-    padding: var(--space-2);
+    padding: 0;
   }
 
   .settings-dialog {
-    width: calc(100vw - 16px);
-    height: calc(100vh - 16px);
+    width: 100vw;
+    height: 100vh;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
     grid-template-columns: var(--settings-sidebar-compact-width) minmax(0, 1fr);
   }
 
@@ -194,6 +274,16 @@
     margin: 0 auto var(--space-2);
   }
 
+  .settings-sidebar-heading {
+    justify-content: center;
+    margin-right: 0;
+    margin-left: 0;
+  }
+
+  .settings-sidebar-heading strong {
+    display: none;
+  }
+
   .settings-sidebar nav button {
     grid-template-columns: 1fr;
     justify-items: center;
@@ -203,11 +293,6 @@
   .settings-sidebar nav button span,
   .settings-sidebar nav button svg:last-child {
     display: none;
-  }
-
-  .settings-main > header {
-    height: 50px;
-    padding: 0 var(--space-4);
   }
 
   .settings-content {
@@ -225,7 +310,7 @@
 
 @media (min-width: 621px) and (max-width: 920px) {
   .settings-overlay .settings-dialog {
-    grid-template-columns: 168px minmax(0, 1fr);
+    grid-template-columns: 190px minmax(0, 1fr);
   }
 
   .settings-overlay .settings-sidebar nav button {

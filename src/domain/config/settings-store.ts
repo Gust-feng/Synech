@@ -5,13 +5,8 @@ import type { InformationAccessSettings } from "./information-access.js";
 import type { McpServerSettings } from "./mcp-settings.js";
 
 import type {
-
-  ModelCapabilityOverrideSettings,
-
   ModelProviderModelCatalog,
-
   ModelProviderProfileSettings,
-
 } from "./model-settings.js";
 
 import type {
@@ -30,7 +25,6 @@ export type LocalSettings = {
   readonly modelProfiles: readonly ModelProviderProfileSettings[];
   readonly modelProviderOrder?: readonly string[];
   readonly modelCatalogs?: readonly ModelProviderModelCatalog[];
-  readonly modelCapabilityOverrides?: readonly ModelCapabilityOverrideSettings[];
   readonly toolStates?: readonly ToolStateSettings[];
   readonly toolConfirmation?: ToolConfirmationSettings;
   readonly ordinaryAgent?: OrdinaryAgentPromptSettings;

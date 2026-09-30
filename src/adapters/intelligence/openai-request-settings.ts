@@ -1,16 +1,14 @@
-import type { OpenAIModelRequestSettings } from "../../domain/config/index.js";
 import type { ToolDefinition } from "../../domain/tools/index.js";
 
 /**
- * OpenAI 兼容请求设置里与并行工具调用相关的那一部分推导。
+ * OpenAI-compatible tool calls may run in parallel only for a read-only batch.
  *
- * 历史上这里还有 stream / max_output_tokens 等 control-field 组装函数，但 payload
- * 的实际组装由 `model-provider-binding.ts` 的 provider payload transformer 拥有
- * （那里按 completions / responses 两种 API 分别落字段），那些函数零调用方，已删除。
+ * Pi deliberately leaves `parallel_tool_calls` to the caller; Synech must send
+ * it because otherwise a provider may parallelize a batch that contains a write.
+ * This is a product safety decision, not a user-selectable provider field.
  */
-export function configuredOpenAIParallelToolCalls(
+export function safeParallelToolCalls(
   tools: readonly ToolDefinition[] | undefined,
-  settings: OpenAIModelRequestSettings | undefined,
   options: {
     readonly includeWithoutTools?: boolean;
   } = {}
@@ -21,5 +19,20 @@ export function configuredOpenAIParallelToolCalls(
   if (tools !== undefined && tools.length > 0 && tools.some((tool) => tool.metadata?.operationType !== "read-only")) {
     return false;
   }
-  return settings?.parallelToolCalls;
+  return true;
+}
+
+/**
+ * Preserve an explicit connection preference while still preventing write
+ * tools from being sent as a parallel batch.
+ */
+export function configuredOpenAIParallelToolCalls(
+  tools: readonly ToolDefinition[] | undefined,
+  settings: { readonly parallelToolCalls?: boolean } | undefined,
+  options: { readonly includeWithoutTools?: boolean } = {},
+): boolean | undefined {
+  const safe = safeParallelToolCalls(tools, options);
+  if (safe === false) return false;
+  if (safe === undefined) return undefined;
+  return settings?.parallelToolCalls ?? safe;
 }

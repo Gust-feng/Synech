@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ModelProviderModelCatalog } from "@panel-api/config";
 import { removeRecordKey, useModelCatalogState } from "./catalog-state";
 import {
@@ -24,25 +24,51 @@ type ProviderCatalogActionsOptions = {
 
 export function useProviderCatalogActions(options: ProviderCatalogActionsOptions) {
   const [modelsFetchBusy, setModelsFetchBusy] = useState(false);
+  const [fetchFeedback, setFetchFeedback] = useState<{
+    readonly type: "error" | "success";
+    readonly message: string;
+  } | undefined>(undefined);
+
+  useEffect(() => {
+    setFetchFeedback(undefined);
+  }, [options.selectedItem?.key]);
 
   async function fetchSelectedModels(): Promise<void> {
     const { selectedItem, selectedForm } = options;
     if (selectedItem === undefined) return;
     const profileId = selectedItem.profileId ?? modelProviderFormId(selectedItem);
     setModelsFetchBusy(true);
+    setFetchFeedback(undefined);
     try {
-      if (selectedItem.profileId === undefined) {
-        await options.saveProvider(modelFormForProviderItem(selectedForm, selectedItem));
-      }
+      // Fetch always uses the current form, including a key the user just entered.
+      // Persist the connection first so discovery never runs against stale secrets.
+      await options.saveProvider(modelFormForProviderItem(selectedForm, selectedItem));
       const catalog = await options.onFetchModels(profileId);
       if (catalog !== undefined) {
         options.catalogState.setFetchedCatalogs((previous) => ({
           ...previous,
           [catalog.profileId]: catalog,
         }));
+        if (catalog.models.length > 0) {
+          // 获取成功后呼出独立模型挑选面板，由用户自主决定选用哪些模型；
+          // 面板记录打开时的厂商，切换供应商后不得展示给其他厂商
+          options.catalogState.setPickerOpenFor(selectedItem.key);
+          setFetchFeedback(undefined);
+        } else {
+          setFetchFeedback({
+            type: "error",
+            message: "服务端返回的模型列表为空，请确认上游支持模型列表接口",
+          });
+        }
+      } else {
+        setFetchFeedback({
+          type: "error",
+          message: "获取模型失败，请检查 Base URL、API Key 与网络连通性",
+        });
       }
-    } catch {
-      // The parent owns user-facing error state.
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "获取模型失败，请检查厂商配置与网络";
+      setFetchFeedback({ type: "error", message });
     } finally {
       setModelsFetchBusy(false);
     }
@@ -50,18 +76,19 @@ export function useProviderCatalogActions(options: ProviderCatalogActionsOptions
 
   async function saveCatalogModels(models: readonly ModelProviderModelItem[]): Promise<void> {
     const { selectedItem, selectedCatalog, catalogState } = options;
-    if (selectedItem?.profileId === undefined) return;
+    if (selectedItem === undefined) return;
+    const profileId = selectedItem.profileId ?? modelProviderFormId(selectedItem);
     const catalog = selectedCatalog ?? catalogState.fetchedCatalog ?? {
-      profileId: selectedItem.profileId,
+      profileId,
       label: selectedItem.title,
       baseUrl: selectedItem.baseUrl,
       modelsPath: "/models",
       fetchedAt: new Date().toISOString(),
       models: [],
     };
-    await options.onSaveModelCatalog(selectedItem.profileId, {
+    await options.onSaveModelCatalog(profileId, {
       ...catalog,
-      profileId: selectedItem.profileId,
+      profileId,
       label: catalog.label ?? selectedItem.title,
       baseUrl: catalog.baseUrl || selectedItem.baseUrl,
       fetchedAt: new Date().toISOString(),
@@ -70,9 +97,9 @@ export function useProviderCatalogActions(options: ProviderCatalogActionsOptions
   }
 
   async function addCatalogModel(model: ModelProviderModelItem): Promise<void> {
-    const { selectedItem, catalogState } = options;
-    if (selectedItem?.profileId === undefined) return;
-    const profileId = selectedItem.profileId;
+    const { selectedItem, selectedForm, catalogState } = options;
+    if (selectedItem === undefined) return;
+    const profileId = selectedItem.profileId ?? modelProviderFormId(selectedItem);
     const nextModels = [...catalogState.catalogModels.filter((item) => item.id !== model.id), model];
     try {
       await saveCatalogModels(nextModels);
@@ -90,18 +117,22 @@ export function useProviderCatalogActions(options: ProviderCatalogActionsOptions
         },
       };
     });
+    if (selectedForm.model.trim().length === 0) {
+      selectCatalogModel(model.id);
+    }
   }
 
   async function removeCatalogModel(modelId: string): Promise<void> {
     const { selectedItem, selectedForm, selectedCatalog, catalogState } = options;
     const nextModels = (selectedCatalog?.models ?? catalogState.catalogModels).filter((model) => model.id !== modelId);
     if (selectedForm.model === modelId || selectedItem?.model === modelId) {
+      const fallbackModelId = nextModels[0]?.id ?? "";
       const nextForm = selectedItem === undefined
-        ? { ...selectedForm, model: "" }
-        : modelFormForProviderItem({ ...selectedForm, model: "" }, selectedItem);
+        ? { ...selectedForm, model: fallbackModelId }
+        : modelFormForProviderItem({ ...selectedForm, model: fallbackModelId }, selectedItem);
       options.setModelForm(nextForm);
       options.upsertModelFormDraft(nextForm);
-      catalogState.setSelectedModelRowId(undefined);
+      catalogState.setSelectedModelRowId(fallbackModelId || undefined);
     }
     catalogState.setModelNameDrafts((previous) => removeRecordKey(previous, modelId));
     try {
@@ -140,9 +171,52 @@ export function useProviderCatalogActions(options: ProviderCatalogActionsOptions
     }
   }
 
+  async function applySelectedModels(selectedModelIds: readonly string[]): Promise<void> {
+    const { selectedItem, selectedForm, catalogState } = options;
+    if (selectedItem === undefined) return;
+    const candidateMap = new Map(catalogState.availableCandidates.map((m) => [m.id, m]));
+    const existingMap = new Map(catalogState.catalogModels.map((m) => [m.id, m]));
+
+    const nextModels: ModelProviderModelItem[] = [];
+    for (const id of selectedModelIds) {
+      const existing = existingMap.get(id);
+      const candidate = candidateMap.get(id);
+      if (existing !== undefined) {
+        nextModels.push(existing);
+      } else if (candidate !== undefined) {
+        nextModels.push(candidate);
+      } else {
+        nextModels.push({ id, displayName: id });
+      }
+    }
+
+    try {
+      await saveCatalogModels(nextModels);
+      catalogState.setPickerOpenFor(undefined);
+
+      const currentModelRemoved = !selectedModelIds.includes(selectedForm.model);
+      if (currentModelRemoved) {
+        // 当前激活的模型被移出列表：回退到第一个或者清空
+        const fallbackModelId = nextModels[0]?.id ?? "";
+        if (selectedItem !== undefined) {
+          const nextForm = modelFormForProviderItem({ ...selectedForm, model: fallbackModelId }, selectedItem);
+          options.setModelForm(nextForm);
+          options.upsertModelFormDraft(nextForm);
+          void options.saveModelImmediately(nextForm).catch(() => undefined);
+        }
+        catalogState.setSelectedModelRowId(fallbackModelId || undefined);
+      }
+    } catch {
+      // 保持错误捕获
+    }
+  }
+
   return {
     modelsFetchBusy,
+    fetchFeedback,
+    clearFetchFeedback: () => setFetchFeedback(undefined),
     fetchSelectedModels,
+    applySelectedModels,
     selectCatalogModel,
     commitModelDisplayName,
     removeCatalogModel,

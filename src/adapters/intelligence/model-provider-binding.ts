@@ -9,6 +9,7 @@ import {
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
+import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
 import type {
   OpenAIModelRequestSettings,
   ProviderProtocolProfileId,
@@ -30,9 +31,19 @@ import type { ToolDefinition } from "../../domain/tools/index.js";
  * 只存在于 adapter 内部，绝不得外溢到产品层 DTO / UI；产品层的「未确认」投影
  * 不携带任何数字。
  */
-const UNKNOWN_MODEL_CONTEXT_WINDOW = 128_000;
-const UNKNOWN_MODEL_MAX_OUTPUT_TOKENS = 16_384;
+/**
+ * 未确认模型的 transport 必需数值。
+ *
+ * pi 的 `Model` 类型要求这些字段是数字，但「Pi 未识别」意味着 Synech 没有任何
+ * 事实可填。这里的取值准则只有一条：**不得让 Synech 的猜测变成对模型的限制**。
+ * 因此 contextWindow 取一个明确的「无窗口事实」哨兵，只参与上游溢出判定，
+ * 不构成任何承诺；maxTokens 取 0，让 pi 走各自的缺省路径，而不是把 Synech 的
+ * 猜测当作输出上限发给上游。产品层看不到这两个常量（未确认投影只带 modelId）。
+ */
+const UNCONFIRMED_MODEL_CONTEXT_WINDOW = Number.MAX_SAFE_INTEGER;
+const UNCONFIRMED_MODEL_MAX_OUTPUT_TOKENS = 0;
 const PROVIDER_ID_PREFIX = "synech";
+type ProviderApiKind = "anthropic-messages" | "openai-completions" | "openai-responses";
 
 export type ModelProviderBindingOptions = {
   /** 连接级默认 transport；只有未知发现模型使用它。 */
@@ -73,6 +84,7 @@ export type ModelProviderPayloadTransformer = (input: {
 export type ModelProviderBindingFactories = {
   readonly createChatCompletionsTransport?: () => ProviderStreams;
   readonly createResponsesTransport?: () => ProviderStreams;
+  readonly createAnthropicMessagesTransport?: () => ProviderStreams;
 };
 
 /**
@@ -90,6 +102,10 @@ export function createModelProviderBinding(
   options: ModelProviderBindingOptions,
   factories: ModelProviderBindingFactories = {},
 ): ModelProviderBinding {
+  if (options.enableWebSearch === true && options.protocol === "anthropic_messages") {
+    // 产品内建 Web Search 只在 Responses transport 上有对应物；不静默丢弃开关。
+    throw new Error("Built-in web search is not supported by the Anthropic Messages protocol binding.");
+  }
   const discovered = resolveDiscoveredModel({
     piProviderId: options.piProviderId,
     modelId: options.model,
@@ -97,6 +113,13 @@ export function createModelProviderBinding(
   const providerApiKind = discovered.status === "known"
     ? supportedPiApiKind(discovered.model.api, options.model)
     : resolveProviderApiKind(options.protocol);
+  if (discovered.status === "unknown" && providerApiKind === "anthropic-messages") {
+    throw new Error(
+      `Model ${options.model} is not present in the declared Pi provider catalog, so the Anthropic ` +
+      "Messages transport has no factual max_tokens to send. Configure a known Pi model or choose a " +
+      "non-Anthropic transport for this unconfirmed model.",
+    );
+  }
   const providerId = buildProviderId(options.profileId);
   const configuredModel = discovered.status === "known"
     ? knownProviderModel(discovered.model, options, providerId)
@@ -122,9 +145,7 @@ export function createModelProviderBinding(
       },
     },
     models: [configuredModel],
-    api: providerApiKind === "openai-completions"
-      ? (factories.createChatCompletionsTransport ?? openAICompletionsApi)()
-      : (factories.createResponsesTransport ?? openAIResponsesApi)(),
+    api: providerStreamsForApi(providerApiKind, factories),
   });
   const modelRegistry = createModels();
   modelRegistry.setProvider(provider);
@@ -137,9 +158,12 @@ export function createModelProviderBinding(
       `Model ${options.model} registered Pi api ${JSON.stringify(selectedModel.api)} but protocol ${options.protocol} requires ${providerApiKind}.`,
     );
   }
-  const transformProviderPayload = providerApiKind === "openai-completions" ||
-    options.requestSettings !== undefined ||
-    options.enableWebSearch === true
+  // Anthropic Messages 由 pi 直接构建 SDK 请求（含 thinking 字段），没有可覆写的
+  // 明文 payload；不套用 OpenAI 方言层的字段策略。
+  const usesOpenAIPayloadPolicy =
+    providerApiKind !== "anthropic-messages" &&
+    (options.requestSettings !== undefined || options.enableWebSearch === true);
+  const transformProviderPayload = usesOpenAIPayloadPolicy
     ? createProviderPayloadTransformer(
         options.requestSettings,
         options.providerProfileId,
@@ -158,15 +182,17 @@ export function createModelProviderBinding(
 }
 
 /**
- * 已知模型的 transport 由真实 Pi Model.api 决定。Synech 没有的 api（如
- * anthropic-messages）在构造期显式失败，不静默降级、也不回退连接协议。
+ * 已知模型的 transport 由真实 Pi Model.api 决定；产品为每个已接入 api 提供对应
+ * transport。仍未接入的 api 在构造期显式失败，不静默降级、也不回退连接协议。
  */
-function supportedPiApiKind(api: Api, modelId: string): "openai-completions" | "openai-responses" {
+function supportedPiApiKind(api: Api, modelId: string): ProviderApiKind {
   switch (api) {
     case "openai-completions":
       return "openai-completions";
     case "openai-responses":
       return "openai-responses";
+    case "anthropic-messages":
+      return "anthropic-messages";
     default:
       throw new Error(
         `Pi model ${modelId} declares api ${JSON.stringify(api)}, which this product cannot serve; ` +
@@ -175,17 +201,32 @@ function supportedPiApiKind(api: Api, modelId: string): "openai-completions" | "
   }
 }
 
-const PROVIDER_API_KIND_BY_PROTOCOL: Record<ModelProtocolKind, "openai-completions" | "openai-responses"> = {
+const PROVIDER_API_KIND_BY_PROTOCOL: Record<ModelProtocolKind, ProviderApiKind> = {
   openai_compatible_chat_completions: "openai-completions",
   openai_responses: "openai-responses",
+  anthropic_messages: "anthropic-messages",
 };
 
-function resolveProviderApiKind(protocol: ModelProtocolKind): "openai-completions" | "openai-responses" {
-  const api: "openai-completions" | "openai-responses" | undefined = PROVIDER_API_KIND_BY_PROTOCOL[protocol];
+function resolveProviderApiKind(protocol: ModelProtocolKind): ProviderApiKind {
+  const api: ProviderApiKind | undefined = PROVIDER_API_KIND_BY_PROTOCOL[protocol];
   if (api === undefined) {
     throw new Error(`Model provider binding does not support protocol kind ${JSON.stringify(protocol)}.`);
   }
   return api;
+}
+
+function providerStreamsForApi(
+  api: ProviderApiKind,
+  factories: ModelProviderBindingFactories,
+): ProviderStreams {
+  switch (api) {
+    case "openai-completions":
+      return (factories.createChatCompletionsTransport ?? openAICompletionsApi)();
+    case "openai-responses":
+      return (factories.createResponsesTransport ?? openAIResponsesApi)();
+    case "anthropic-messages":
+      return (factories.createAnthropicMessagesTransport ?? anthropicMessagesApi)();
+  }
 }
 
 function buildProviderId(profileId: string): string {
@@ -213,7 +254,7 @@ function knownProviderModel(
 function unknownProviderModel(
   options: ModelProviderBindingOptions,
   providerId: string,
-  api: "openai-completions" | "openai-responses",
+  api: ProviderApiKind,
 ): Model<Api> {
   return {
     id: options.model,
@@ -227,8 +268,8 @@ function unknownProviderModel(
     // model must never advertise image input.
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: UNKNOWN_MODEL_CONTEXT_WINDOW,
-    maxTokens: UNKNOWN_MODEL_MAX_OUTPUT_TOKENS,
+    contextWindow: UNCONFIRMED_MODEL_CONTEXT_WINDOW,
+    maxTokens: UNCONFIRMED_MODEL_MAX_OUTPUT_TOKENS,
   };
 }
 
@@ -245,7 +286,7 @@ function createProviderPayloadTransformer(
   providerProfileId: ProviderProtocolProfileId | undefined,
   modelId: string,
   enableWebSearch: boolean,
-  bindingApiKind: "openai-completions" | "openai-responses",
+  bindingApiKind: Exclude<ProviderApiKind, "anthropic-messages">,
 ): ModelProviderPayloadTransformer {
   return ({ model, payload, tools }) => {
     const record = asRecord(payload);

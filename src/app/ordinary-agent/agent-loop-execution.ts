@@ -2,7 +2,7 @@ import type { ModelMessage, ModelUsage } from "../../domain/intelligence/index.j
 import type { RunCapabilityResolution } from "../../domain/config/index.js";
 import { executionErrorFacts } from "../execution-errors/index.js";
 import type {
-  AgentSessionEntryRef,
+  AgentSessionCheckpointRef,
   AgentLoop,
   AgentLoopAgentTool,
   AgentLoopResult,
@@ -28,7 +28,7 @@ export type OrdinaryAgentLoopRunResources = {
   readonly capabilityResolution?: RunCapabilityResolution;
   readonly toolMetrics?: import("./tool-runtime-metrics.js").OrdinaryToolMetricsCollector;
   /** Revokes this run's Session writer to its last feature-accepted protocol boundary. */
-  readonly revokeSessionTo?: (target: AgentSessionEntryRef | null) => Promise<void>;
+  readonly revokeSessionTo?: (target: AgentSessionCheckpointRef | null) => Promise<void>;
   /** Releases only the Session writer after Ordinary has committed terminal state. */
   readonly releaseSession?: () => Promise<void>;
   /** Releases every run-scoped resource created by the acquirer, including the loop. */
@@ -267,7 +267,7 @@ function reportReleaseError(error: unknown, onReleaseError?: (error: unknown) =>
 
 type ActiveSessionControl = {
   attach(resources: OrdinaryAgentLoopRunResources, lease: ResourceLease): void;
-  finalize(target?: AgentSessionEntryRef | null): Promise<void>;
+  finalize(target?: AgentSessionCheckpointRef | null): Promise<void>;
   finish(): void;
 };
 
@@ -275,7 +275,7 @@ function createActiveSessionControl(): ActiveSessionControl {
   let resources: OrdinaryAgentLoopRunResources | undefined;
   let resourceLease: ResourceLease | undefined;
   let requested = false;
-  let targetLeaf: AgentSessionEntryRef | null = null;
+  let revokeTarget: AgentSessionCheckpointRef | null = null;
   let finished = false;
   let revokePromise: Promise<void> | undefined;
   let pending: ReturnType<typeof deferred<void>> | undefined;
@@ -283,7 +283,7 @@ function createActiveSessionControl(): ActiveSessionControl {
   const startRevoke = (): Promise<void> => {
     if (!requested || finished) return Promise.resolve();
     if (resources?.revokeSessionTo === undefined) return Promise.resolve();
-    revokePromise ??= resources.revokeSessionTo(targetLeaf).catch((error: unknown) => {
+    revokePromise ??= resources.revokeSessionTo(revokeTarget).catch((error: unknown) => {
       revokePromise = undefined;
       throw error;
     });
@@ -306,20 +306,27 @@ function createActiveSessionControl(): ActiveSessionControl {
     },
     async finalize(target) {
       const shouldRevoke = target !== undefined;
-      if (requested && shouldRevoke && JSON.stringify(targetLeaf) !== JSON.stringify(target)) {
+      if (requested && shouldRevoke && JSON.stringify(revokeTarget) !== JSON.stringify(target)) {
         return Promise.reject(new Error("Ordinary Session revoke target cannot change."));
       }
       if (shouldRevoke) {
         requested = true;
-        targetLeaf = target;
+        revokeTarget = target;
       }
       if (finished) return;
       if (resources === undefined) {
         pending ??= deferred<void>();
         await pending.promise;
       }
-      if (shouldRevoke) await startRevoke();
+      // The loop release awaits the aborted run until Pi has settled it, and
+      // Pi's own terminal transaction (the write that closes the lane
+      // operation) is part of that settlement. Revoking first would make that
+      // transaction land on a revoked generation, leave the lane operation
+      // orphaned on disk, and brick every later turn on this Session. Revoke
+      // only after the run is fully settled, while the session lease is still
+      // open so the fence can restore its durable leaf.
       await resourceLease?.release();
+      if (shouldRevoke) await startRevoke();
       await resources?.releaseSession?.();
       finished = true;
     },

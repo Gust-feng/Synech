@@ -103,6 +103,11 @@ function createRunContextReferences(input: {
       sourceIdentity: hasLocalPathPermission(ref, permissionRefs)
         ? ref.sourceIdentity
         : undefined,
+      // Space 授权注入的挂载版本与 sourceIdentity 同源：授权比对用它识别
+      // Workspace 挂载是否变化，缺了会把未变更的引用误判为源身份漂移。
+      ...(hasLocalPathPermission(ref, permissionRefs) && ref.mountVersion !== undefined
+        ? { mountVersion: ref.mountVersion }
+        : {}),
       kind: ref.kind,
       title: ref.title === undefined ? undefined : safeText(ref.title, 120),
       summary: ref.summary === undefined ? undefined : safeText(ref.summary, MAX_SUMMARY_LENGTH),
@@ -151,7 +156,7 @@ function createRunPermissionRefs(
   return unique([
     "read:workspace:current-task",
     "write:memory://artifacts",
-    aiMode === "openai-compatible" || aiMode === "openai-responses"
+    aiMode !== "none"
       ? "execute:responses-ai"
       : "execute:none",
     ...(inputPermissionRefs ?? []),

@@ -22,7 +22,12 @@ export function normalizeBaseUrl(value: string | undefined): string | undefined 
 }
 
 export function normalizeAiMode(value: ConfiguredModelRuntimeMode | undefined): ConfiguredModelRuntimeMode | undefined {
-  return value === "none" || value === "openai-compatible" || value === "openai-responses" ? value : undefined;
+  return value === "none" ||
+    value === "anthropic-messages" ||
+    value === "openai-compatible" ||
+    value === "openai-responses"
+    ? value
+    : undefined;
 }
 
 export function normalizeModelProviderKind(value: ConfiguredModelProviderKind | undefined): ConfiguredModelProviderKind | undefined {
@@ -33,6 +38,7 @@ export function normalizeModelProtocolKind(
   value: ConfiguredModelProtocolKind | undefined
 ): ConfiguredModelProtocolKind | undefined {
   if (
+    value === "anthropic_messages" ||
     value === "openai_responses" ||
     value === "openai_compatible_chat_completions"
   ) {

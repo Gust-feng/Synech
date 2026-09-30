@@ -2,59 +2,66 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import {
   JsonlSessionRepo,
-  Session,
-  SessionError,
-  type ExecutionEnv,
+  type Session,
   type JsonlSessionMetadata,
 } from "@earendil-works/pi-agent-core";
+import { TODO_CONTEXT } from "@earendil-works/pi-agent-core/harness/context";
+import { appendList, list } from "@earendil-works/pi-agent-core/harness/session";
+import {
+  agentRuntimeExecutionEnv,
+  type AgentRuntimeEnvironment,
+  type AgentSessionHandle,
+} from "./pi-agent/runtime-environment.js";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import type {
-  AgentSessionEntryRef,
+  AgentSessionCheckpointKind,
+  AgentSessionCheckpointPosition,
+  AgentSessionCheckpointRef,
   AgentSessionAssistantEntry,
   AgentSessionRef,
   AgentSessionRepository,
 } from "../../app/model-runtime/agent-session.js";
+import { AgentSessionRepositoryError } from "../../app/model-runtime/agent-session.js";
+import type { TranscriptEntryRef } from "./agent-transcript.js";
 import type { ModelInputAttachmentRef } from "../../domain/intelligence/index.js";
 import { canonicalToolResultMessage } from "../../app/model-runtime/tool-result-message.js";
+import { parseLegacyV3SessionHeader } from "./session-legacy-diagnostic.js";
 import {
   normalizeToolFactValue,
   toolInvocationId,
+  type ProviderToolCall,
   type ToolCallResult,
 } from "../../domain/tools/index.js";
 import {
   SessionGenerationError,
   SessionWriteFence,
+  appendMainMessage,
+  getMainBranchPathTo,
+  getMainBranchEntries,
+  getMainLeafId,
+  moveMainTip,
   type SessionStorageGenerationLease,
 } from "./session-write-fence.js";
 
-export type AgentSessionRepositoryErrorCode =
-  | "agent_session_duplicate"
-  | "agent_session_ref_invalid"
-  | "agent_session_metadata_mismatch"
-  | "agent_session_attachment_mismatch"
-  | "agent_session_not_found"
-  | "agent_session_revoke_failed"
-  | "agent_session_writer_active";
-
-export class AgentSessionRepositoryError extends Error {
-  readonly code: AgentSessionRepositoryErrorCode;
-
-  constructor(code: AgentSessionRepositoryErrorCode, message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "AgentSessionRepositoryError";
-    this.code = code;
-  }
-}
-
 export type AgentSessionLease = {
   readonly ref: AgentSessionRef;
-  readonly session: Session<JsonlSessionMetadata>;
-  revokeTo(target: AgentSessionEntryRef | null): Promise<void>;
+  readonly session: AgentSessionHandle<JsonlSessionMetadata>;
+  /** Mints and persists one durable checkpoint owned by this writer. */
+  recordCheckpoint(
+    kind: AgentSessionCheckpointKind,
+    entryRef: TranscriptEntryRef,
+  ): Promise<AgentSessionCheckpointRef>;
+  /**
+   * Restores this writer's durable leaf to the transcript position behind one
+   * product checkpoint. Resolution reads the writer's own Session handle, the
+   * line shared with concurrent readers while this writer is live.
+   */
+  revokeTo(target: AgentSessionCheckpointRef | null): Promise<void>;
   release(): Promise<void>;
 };
 
 export type FileSystemAgentSessionRepositoryConfig = {
-  readonly fileSystem: ExecutionEnv;
+  readonly executionEnvironment: AgentRuntimeEnvironment;
   readonly sessionsRoot: string;
 };
 
@@ -65,145 +72,391 @@ export type FileSystemAgentSessionRepositoryConfig = {
 export class FileSystemAgentSessionRepository implements AgentSessionRepository {
   private readonly sessionsRoot: string;
   private readonly jsonlRepository: JsonlSessionRepo;
+  private readonly fileSystem: ReturnType<typeof agentRuntimeExecutionEnv>;
   private readonly writeFences = new Map<string, SessionWriteFence>();
+  /**
+   * Pi permits only one open handle per session. This gate coordinates the
+   * repository-owned handles without serializing unrelated sessions.
+   */
+  private readonly sessionAccessGates = new Map<string, SessionAccessGate>();
+  /**
+   * Live writer per session. Pi opens a session only once, so this handle is the
+   * only readable line while a writer exists: readers run through it and the
+   * checkpoint mapping commits on it.
+   */
+  private readonly writerSessions = new Map<string, Session<JsonlSessionMetadata>>();
 
   constructor(config: FileSystemAgentSessionRepositoryConfig) {
     this.sessionsRoot = path.resolve(config.sessionsRoot);
-    this.jsonlRepository = new JsonlSessionRepo({ fs: config.fileSystem, sessionsRoot: this.sessionsRoot });
+    this.fileSystem = agentRuntimeExecutionEnv(config.executionEnvironment);
+    this.jsonlRepository = new JsonlSessionRepo({
+      fileSystem: this.fileSystem,
+      sessionsRoot: this.sessionsRoot,
+    });
   }
 
   async create(input: { readonly sessionId: string; readonly sessionCwd: string }): Promise<AgentSessionRef> {
     requireNonEmpty(input.sessionId, "sessionId");
     requireNonEmpty(input.sessionCwd, "sessionCwd");
-    const duplicate = (await this.jsonlRepository.list()).some((metadata) => metadata.id === input.sessionId);
-    if (duplicate) {
-      throw new AgentSessionRepositoryError(
-        "agent_session_duplicate",
-        `Agent session ${input.sessionId} already exists.`,
+    return this.runInSessionAccess(input.sessionId, async () => {
+      const duplicate = (await this.jsonlRepository.list({ cwd: input.sessionCwd }, TODO_CONTEXT))
+        .some((metadata) => metadata.id === input.sessionId);
+      if (duplicate) {
+        throw new AgentSessionRepositoryError(
+          "agent_session_duplicate",
+          `Agent session ${input.sessionId} already exists.`,
+        );
+      }
+      const session = await this.jsonlRepository.create(
+        { id: input.sessionId, cwd: input.sessionCwd },
+        TODO_CONTEXT,
       );
-    }
-    const session = await this.jsonlRepository.create({ id: input.sessionId, cwd: input.sessionCwd });
-    return this.refFromMetadata(await session.getMetadata());
+      try {
+        return this.refFromMetadata(session.metadata);
+      } finally {
+        await session.close(TODO_CONTEXT);
+      }
+    });
   }
 
   async acquire(ref: AgentSessionRef): Promise<AgentSessionLease> {
     this.validateRef(ref);
-    const metadata = this.metadataFromRef(ref);
-    const fence = this.writeFence(ref.sessionId);
-    let generation: SessionStorageGenerationLease<JsonlSessionMetadata>;
-    try {
-      generation = await fence.acquire(async () => {
-        const opened = await this.jsonlRepository.open(metadata);
-        this.assertMetadataMatches(ref, await opened.getMetadata());
-        return opened.getStorage();
-      });
-    } catch (error) {
-      if (error instanceof SessionError && error.code === "not_found") {
-        throw new AgentSessionRepositoryError(
-          "agent_session_not_found",
-          `Agent session ${ref.sessionId} was not found.`,
-          { cause: error },
-        );
-      }
-      if (error instanceof SessionGenerationError && error.code === "generation_active") {
-        throw new AgentSessionRepositoryError(
-          "agent_session_writer_active",
-          `Agent session ${ref.sessionId} already has an active writer.`,
-          { cause: error },
-        );
-      }
-      if (error instanceof SessionGenerationError && error.code === "generation_revoke_failed") {
-        throw new AgentSessionRepositoryError(
-          "agent_session_revoke_failed",
-          `Agent session ${ref.sessionId} cannot open a new writer because its durable leaf was not restored.`,
-          { cause: error },
-        );
-      }
-      throw error;
-    }
-    const session = new Session(generation.storage);
-    return {
-      ref,
-      session,
-      revokeTo: async (target) => {
-        if (target !== null && target.sessionId !== ref.sessionId) {
+    return this.runInSessionAccess(ref.sessionId, async () => {
+      const metadata = this.metadataFromRef(ref);
+      const fence = this.writeFence(ref.sessionId);
+      let generation: SessionStorageGenerationLease<JsonlSessionMetadata>;
+      try {
+        generation = await fence.acquire(async () => {
+          await this.assertSessionExists(ref);
+          return this.openValidatedSession(ref, metadata);
+        });
+      } catch (error) {
+        if (error instanceof SessionGenerationError && error.code === "generation_active") {
           throw new AgentSessionRepositoryError(
-            "agent_session_ref_invalid",
-            "Agent session entry ref belongs to a different session.",
+            "agent_session_writer_active",
+            `Agent session ${ref.sessionId} already has an active writer.`,
+            { cause: error },
           );
         }
-        await generation.revokeTo(target?.entryId ?? null);
-      },
-      release: generation.release,
-    };
+        if (error instanceof SessionGenerationError && error.code === "generation_revoke_failed") {
+          throw new AgentSessionRepositoryError(
+            "agent_session_revoke_failed",
+            `Agent session ${ref.sessionId} cannot open a new writer because its durable leaf was not restored.`,
+            { cause: error },
+          );
+        }
+        throw error;
+      }
+      this.beginWriter(ref, generation.session);
+      return {
+        ref,
+        session: generation.session,
+        recordCheckpoint: (kind, entryRef) => this.recordCheckpointOnWriter(ref, kind, entryRef),
+        revokeTo: async (target) => {
+          if (target === null) {
+            await generation.revokeTo(null);
+            return;
+          }
+          this.assertCheckpointIdentity(ref, target);
+          const index = await readEntireCheckpointIndex(generation.session);
+          const entryId = recordedCheckpointEntryId(index, target);
+          if (entryId === undefined) {
+            throw new AgentSessionRepositoryError(
+              "agent_session_checkpoint_unknown",
+              "Agent session " + ref.sessionId + " has no recorded checkpoint " + target.checkpointId + ".",
+            );
+          }
+          await generation.revokeTo(entryId);
+        },
+        release: () => this.runInSessionAccess(ref.sessionId, async () => {
+          // Keep the writer registered when close fails. The fence remains
+          // poisoned in that case, and a read must not race the still-open
+          // provider handle by opening a second Session.
+          await generation.release();
+          this.endWriter(ref);
+        }),
+      };
+    });
   }
 
-  async getActiveLeaf(ref: AgentSessionRef): Promise<AgentSessionEntryRef | null> {
-    const session = await this.openForRead(ref);
-    const entryId = await session.getLeafId();
-    return entryId === null ? null : { sessionId: ref.sessionId, entryId };
+  /** Publishes the writer's own handle for the whole writer generation. */
+  private beginWriter(ref: AgentSessionRef, session: Session<JsonlSessionMetadata>): void {
+    this.writerSessions.set(ref.sessionId, session);
   }
 
-  async moveActiveLeaf(
+  private endWriter(ref: AgentSessionRef): void {
+    this.writerSessions.delete(ref.sessionId);
+  }
+
+  /**
+   * Runs one read on the live writer's own handle while this session is being
+   * written, and inside a scoped handle otherwise. Pi opens a session only once,
+   * so a reader that opened a second handle would be refused: the writer's line
+   * is the readable one, and a run reads its own commits through the same line.
+   * That line is generation-checked, so a read that lands on a revoked or
+   * released writer reports a writer conflict instead of a stale answer.
+   *
+   * A read that leaves its own handle open permanently blocks the session for
+   * every later read and writer, so the scoped handle always closes.
+   *
+   * The per-session gate closes the writer/open race. A writer cannot register
+   * or unregister while a scoped read is opening, using, and closing its handle.
+   * There is therefore no provider-error retry loop here.
+   */
+  private async readFromSession<T>(
     ref: AgentSessionRef,
-    target: AgentSessionEntryRef | null,
-  ): Promise<AgentSessionEntryRef | null> {
-    if (target !== null && target.sessionId !== ref.sessionId) {
+    operation: (session: Session<JsonlSessionMetadata>) => Promise<T>,
+  ): Promise<T> {
+    this.validateRef(ref);
+    return this.runInSessionAccess(ref.sessionId, async () => {
+      const writer = this.writerSessions.get(ref.sessionId);
+      if (writer !== undefined) {
+        this.assertMetadataMatches(ref, writer.metadata);
+        try {
+          return await operation(writer);
+        } catch (error) {
+          if (!(error instanceof SessionGenerationError)) throw error;
+          throw new AgentSessionRepositoryError(
+            "agent_session_writer_active",
+            `Agent session ${ref.sessionId} cannot be read because its writer is no longer active.`,
+            { cause: error },
+          );
+        }
+      }
+      const session = await this.openForRead(ref);
+      try {
+        return await operation(session);
+      } finally {
+        await session.close(TODO_CONTEXT);
+      }
+    });
+  }
+
+  async moveActiveCheckpoint(
+    ref: AgentSessionRef,
+    target: AgentSessionCheckpointRef | null,
+  ): Promise<AgentSessionCheckpointRef | null> {
+    if (target === null) {
       throw new AgentSessionRepositoryError(
         "agent_session_ref_invalid",
-        "Agent session entry ref belongs to a different session.",
+        "Agent session active branch cannot be restored without a product checkpoint.",
       );
     }
+    this.assertCheckpointIdentity(ref, target);
+    const entryRef = await this.resolveTranscriptEntry(ref, target);
     const lease = await this.acquire(ref);
     try {
-      await lease.session.moveTo(target?.entryId ?? null);
-      const entryId = await lease.session.getLeafId();
-      return entryId === null ? null : { sessionId: ref.sessionId, entryId };
+      const active = await getMainLeafId(lease.session);
+      if (active !== entryRef.entryId) {
+        await moveMainTip(lease.session, entryRef.entryId);
+      }
+      const restored = await getMainLeafId(lease.session);
+      if (restored !== entryRef.entryId) {
+        throw new AgentSessionRepositoryError(
+          "agent_session_ref_invalid",
+          `Agent session ${ref.sessionId} did not restore its active branch to checkpoint ${target.checkpointId}.`,
+        );
+      }
+      return target;
     } finally {
       await lease.release();
     }
   }
 
-  async getActiveBranchEntryRefs(ref: AgentSessionRef): Promise<readonly AgentSessionEntryRef[]> {
-    const session = await this.openForRead(ref);
-    return (await session.getBranch()).map((entry) => ({
-      sessionId: ref.sessionId,
-      entryId: entry.id,
-    }));
+  /**
+   * Transcript positions in branch order. Provider-internal: the product never
+   * receives an entry id, so a change of provider ids cannot change which
+   * positions exist.
+   */
+  async activeTranscriptPositions(ref: AgentSessionRef): Promise<readonly TranscriptEntryRef[]> {
+    const entries = await this.readFromSession(ref, getMainBranchEntries);
+    return entries.map((entry) => ({ sessionId: ref.sessionId, entryId: entry.id }));
   }
 
-  async readAssistantEntries(input: {
+  async locateSessionCheckpoints(input: {
     readonly sessionRef: AgentSessionRef;
-    readonly entryRefs: readonly AgentSessionEntryRef[];
+    readonly checkpoints: readonly AgentSessionCheckpointRef[];
+  }): Promise<readonly AgentSessionCheckpointPosition[]> {
+    for (const checkpoint of input.checkpoints) this.assertCheckpointIdentity(input.sessionRef, checkpoint);
+    const unique = new Map(input.checkpoints.map((checkpoint) => [checkpoint.checkpointId, checkpoint] as const));
+    if (unique.size === 0) return [];
+    const resolved = await this.resolveTranscriptEntries(input.sessionRef, [...unique.values()]);
+    const positions = await this.activeTranscriptPositions(input.sessionRef);
+    const positionByEntryId = new Map(positions.map((ref, index) => [ref.entryId, index] as const));
+    return resolved.flatMap(({ checkpoint, entryRef }) => {
+      const position = positionByEntryId.get(entryRef.entryId);
+      return position === undefined ? [] : [{ checkpoint, position }];
+    });
+  }
+
+  /** Mints and persists the product identity of one existing durable entry. */
+  async recordSessionCheckpoint(input: {
+    readonly sessionRef: AgentSessionRef;
+    readonly kind: AgentSessionCheckpointKind;
+    readonly entryRef: TranscriptEntryRef;
+  }): Promise<AgentSessionCheckpointRef> {
+    this.validateRef(input.sessionRef);
+    this.assertEntryBelongsToSession(input.sessionRef, input.entryRef);
+    return this.recordCheckpointOnWriter(input.sessionRef, input.kind, input.entryRef);
+  }
+
+  async readAssistantEntriesByCheckpoint(input: {
+    readonly sessionRef: AgentSessionRef;
+    readonly checkpoints: readonly AgentSessionCheckpointRef[];
   }): Promise<readonly AgentSessionAssistantEntry[]> {
-    for (const entryRef of input.entryRefs) this.assertEntryBelongsToSession(input.sessionRef, entryRef);
-    const session = await this.openForRead(input.sessionRef);
-    return Promise.all(input.entryRefs.map(async (entryRef): Promise<AgentSessionAssistantEntry> => {
-      const entry = await session.getEntry(entryRef.entryId);
-      if (entry?.type !== "message" || entry.message.role !== "assistant") {
+    for (const checkpoint of input.checkpoints) {
+      this.assertCheckpointIdentity(input.sessionRef, checkpoint);
+    }
+    const entryRefs = await this.resolveTranscriptEntries(input.sessionRef, input.checkpoints);
+    const texts = await this.readTranscriptAssistantTexts(input.sessionRef, entryRefs);
+    return input.checkpoints.map((checkpoint, index) => ({ checkpoint, text: texts[index] ?? "" }));
+  }
+
+  /** Mints a checkpoint on the live writer's own mutation line. */
+  private async recordCheckpointOnWriter(
+    ref: AgentSessionRef,
+    kind: AgentSessionCheckpointKind,
+    entryRef: TranscriptEntryRef,
+  ): Promise<AgentSessionCheckpointRef> {
+    const session = this.writerSessions.get(ref.sessionId);
+    if (session === undefined) {
+      // Recovery records mappings for entries a previous writer already
+      // committed, so it takes a short writer of its own. The live run keeps
+      // the atomic path through the lease.
+      const lease = await this.acquire(ref);
+      try {
+        return await lease.recordCheckpoint(kind, entryRef);
+      } finally {
+        await lease.release();
+      }
+    }
+    return this.mintCheckpoint(session, ref, kind, entryRef);
+  }
+
+  /**
+   * Derives one product identity from the durable checkpoint index and records
+   * the transcript position behind it in the same mutation line.
+   *
+   * A per-kind counter held only in memory would let two writer generations of
+   * one Session mint the same identity for different entries, silently
+   * overwriting the earlier mapping.
+   */
+  private async mintCheckpoint(
+    session: Session<JsonlSessionMetadata>,
+    ref: AgentSessionRef,
+    kind: AgentSessionCheckpointKind,
+    entryRef: TranscriptEntryRef,
+  ): Promise<AgentSessionCheckpointRef> {
+    const recorded = await readEntireCheckpointIndex(session);
+    const ordinal = recorded.filter((record) => record.kind === kind).length + 1;
+    const checkpoint: AgentSessionCheckpointRef = {
+      sessionId: ref.sessionId,
+      checkpointId: kind + "#" + ordinal,
+      kind,
+    };
+    await session.mutate(
+      (mutator) => mutator.commit(
+        [appendList(checkpointIndexAddress(), {
+          checkpointId: checkpoint.checkpointId,
+          kind,
+          entryId: entryRef.entryId,
+        })],
+        TODO_CONTEXT,
+      ),
+      TODO_CONTEXT,
+    );
+    return checkpoint;
+  }
+
+  /** Durable checkpoint index; an absent index simply means no checkpoint yet. */
+  private async readCheckpointIndex(ref: AgentSessionRef): Promise<readonly StoredCheckpoint[]> {
+    return this.readFromSession(ref, readEntireCheckpointIndex);
+  }
+
+  /**
+   * Resolves the transcript position behind each product checkpoint, in input
+   * order. A missing or conflicting mapping is an explicit failure: the caller
+   * must not guess an entry, silently rebuild the mapping, or fall back to the
+   * current branch tip.
+   */
+  private async resolveTranscriptEntries(
+    ref: AgentSessionRef,
+    checkpoints: readonly AgentSessionCheckpointRef[],
+  ): Promise<readonly RecordedCheckpoint[]> {
+    if (checkpoints.length === 0) return [];
+    const index = await this.readCheckpointIndex(ref);
+    return checkpoints.map((checkpoint) => {
+      const entryId = recordedCheckpointEntryId(index, checkpoint);
+      if (entryId === undefined) {
         throw new AgentSessionRepositoryError(
-          "agent_session_ref_invalid",
-          `Agent session entry ${entryRef.entryId} is not an assistant message.`,
+          "agent_session_checkpoint_unknown",
+          "Agent session " + ref.sessionId + " has no recorded checkpoint " + checkpoint.checkpointId + ".",
         );
       }
-      const text = entry.message.content
-        .filter((block) => block.type === "text")
-        .map((block) => block.text)
-        .join("");
-      return {
-        entryRef: { sessionId: input.sessionRef.sessionId, entryId: entryRef.entryId },
-        text,
-      };
-    }));
+      return { checkpoint, entryRef: { sessionId: ref.sessionId, entryId } };
+    });
+  }
+
+  private async resolveTranscriptEntry(
+    ref: AgentSessionRef,
+    checkpoint: AgentSessionCheckpointRef,
+  ): Promise<TranscriptEntryRef> {
+    const resolved = await this.resolveTranscriptEntries(ref, [checkpoint]);
+    return resolved[0]!.entryRef;
+  }
+
+  private async readTranscriptAssistantTexts(
+    ref: AgentSessionRef,
+    records: readonly RecordedCheckpoint[],
+  ): Promise<readonly string[]> {
+    for (const record of records) this.assertEntryBelongsToSession(ref, record.entryRef);
+    return this.readFromSession(ref, (session) =>
+      Promise.all(records.map((record) => this.readAssistantText(session, record.entryRef))));
+  }
+
+  private async readAssistantText(
+    session: Session<JsonlSessionMetadata>,
+    entryRef: TranscriptEntryRef,
+  ): Promise<string> {
+    const entry = await session.getEntry(entryRef.entryId, TODO_CONTEXT);
+    if (entry?.type !== "message" || entry.message.role !== "assistant") {
+      throw new AgentSessionRepositoryError(
+        "agent_session_ref_invalid",
+        "Agent session entry " + entryRef.entryId + " is not an assistant message.",
+      );
+    }
+    return entry.message.content
+      .filter((block) => block.type === "text")
+      .map((block) => block.text)
+      .join("");
+  }
+
+  private assertCheckpointIdentity(
+    sessionRef: AgentSessionRef,
+    checkpoint: AgentSessionCheckpointRef,
+  ): void {
+    if (checkpoint.sessionId !== sessionRef.sessionId) {
+      throw new AgentSessionRepositoryError(
+        "agent_session_ref_invalid",
+        "Agent session checkpoint belongs to a different session.",
+      );
+    }
+    if (checkpoint.checkpointId.trim().length === 0) {
+      throw new AgentSessionRepositoryError(
+        "agent_session_ref_invalid",
+        "Agent session checkpointId must not be empty.",
+      );
+    }
   }
 
   async readToolCalls(input: {
     readonly sessionRef: AgentSessionRef;
-    readonly assistantEntryRef: AgentSessionEntryRef;
-  }) {
+    readonly assistantEntryRef: TranscriptEntryRef;
+  }): Promise<readonly ProviderToolCall[]> {
     this.assertEntryBelongsToSession(input.sessionRef, input.assistantEntryRef);
-    const session = await this.openForRead(input.sessionRef);
-    const entry = await session.getEntry(input.assistantEntryRef.entryId);
+    const entryRef = input.assistantEntryRef;
+    return this.readFromSession(input.sessionRef, async (session) => {
+      const entry = await session.getEntry(entryRef.entryId, TODO_CONTEXT);
     if (entry?.type !== "message" || entry.message.role !== "assistant") {
       throw new AgentSessionRepositoryError(
         "agent_session_ref_invalid",
@@ -221,15 +474,27 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
         // invocation id minted by Ordinary is stable across this read.
         roundId: input.assistantEntryRef.entryId,
       }));
+    });
+  }
+
+  async readToolCallsByCheckpoint(input: {
+    readonly sessionRef: AgentSessionRef;
+    readonly checkpoint: AgentSessionCheckpointRef;
+  }): Promise<readonly ProviderToolCall[]> {
+    const entryRef = await this.resolveTranscriptEntry(input.sessionRef, input.checkpoint);
+    return this.readToolCalls({ sessionRef: input.sessionRef, assistantEntryRef: entryRef });
   }
 
   async reconcileToolResultEntries(input: {
     readonly sessionRef: AgentSessionRef;
-    readonly assistantEntryRef: AgentSessionEntryRef;
-    readonly recoveryLeafRef?: AgentSessionEntryRef | null;
+    readonly assistantCheckpoint: AgentSessionCheckpointRef;
+    readonly recoveryCheckpoint?: AgentSessionCheckpointRef | null;
     readonly orderedResults: readonly ToolCallResult[];
-  }): Promise<AgentSessionEntryRef> {
-    this.assertEntryBelongsToSession(input.sessionRef, input.assistantEntryRef);
+  }): Promise<AgentSessionCheckpointRef> {
+    const assistantEntryRef = await this.resolveTranscriptEntry(input.sessionRef, input.assistantCheckpoint);
+    const recoveryEntryRef = input.recoveryCheckpoint === undefined || input.recoveryCheckpoint === null
+      ? input.recoveryCheckpoint ?? null
+      : await this.resolveTranscriptEntry(input.sessionRef, input.recoveryCheckpoint);
     if (input.orderedResults.some((result) => result.parentInvocationId !== undefined) ||
         new Set(input.orderedResults.map(toolInvocationId)).size !== input.orderedResults.length) {
       throw new AgentSessionRepositoryError(
@@ -239,12 +504,12 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
     }
     const lease = await this.acquire(input.sessionRef);
     try {
-      let branch = await lease.session.getBranch();
-      let assistantIndex = branch.findIndex((entry) => entry.id === input.assistantEntryRef.entryId);
+      let branch = await getMainBranchEntries(lease.session);
+      let assistantIndex = branch.findIndex((entry) => entry.id === assistantEntryRef.entryId);
       if (assistantIndex < 0) {
-        await this.restorePendingAssistantBranch(lease.session, input);
-        branch = await lease.session.getBranch();
-        assistantIndex = branch.findIndex((entry) => entry.id === input.assistantEntryRef.entryId);
+        await this.restorePendingAssistantBranch(lease.session, assistantEntryRef, recoveryEntryRef);
+        branch = await getMainBranchEntries(lease.session);
+        assistantIndex = branch.findIndex((entry) => entry.id === assistantEntryRef.entryId);
         if (assistantIndex < 0) {
           throw new AgentSessionRepositoryError(
             "agent_session_ref_invalid",
@@ -314,7 +579,7 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
             entry.message.toolCallId !== expected.providerCallId || entry.message.toolName !== expected.toolName ||
             entry.message.isError !== (expected.status !== "completed") || text !== expectedMessage?.content ||
             !imagesMatch) {
-          await lease.session.moveTo(input.assistantEntryRef.entryId);
+          await moveMainTip(lease.session, assistantEntryRef.entryId);
           matchingSuffixLength = 0;
           break;
         }
@@ -332,7 +597,7 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
       }
       for (const result of input.orderedResults.slice(matchingSuffixLength)) {
         const modelMessage = canonicalToolResultMessage(result);
-        await lease.session.appendMessage({
+        await appendMainMessage(lease.session, {
           role: "toolResult",
           toolCallId: result.providerCallId,
           toolName: result.toolName,
@@ -344,14 +609,24 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
           timestamp: Date.now(),
         });
       }
-      const leafId = await lease.session.getLeafId();
-      if (leafId === null) {
-        throw new AgentSessionRepositoryError(
-          "agent_session_ref_invalid",
-          "Agent session reconciliation did not produce a durable leaf.",
-        );
-      }
-      return { sessionId: input.sessionRef.sessionId, entryId: leafId };
+    const leafId = await getMainLeafId(lease.session);
+    if (leafId === null) {
+      throw new AgentSessionRepositoryError(
+        "agent_session_ref_invalid",
+        "Agent session reconciliation did not produce a durable leaf.",
+      );
+    }
+    // A retried reconciliation of the same durable round must reuse the identity
+    // it already minted instead of stacking a second checkpoint on one leaf.
+    const existing = (await readEntireCheckpointIndex(lease.session))
+      .find((item) => item.kind === "tool_results_committed" && item.entryId === leafId);
+    if (existing !== undefined) {
+      return { sessionId: input.sessionRef.sessionId, checkpointId: existing.checkpointId, kind: existing.kind };
+    }
+    return await lease.recordCheckpoint("tool_results_committed", {
+      sessionId: input.sessionRef.sessionId,
+      entryId: leafId,
+    });
     } finally {
       await lease.release();
     }
@@ -365,28 +640,25 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
    */
   private async restorePendingAssistantBranch(
     session: Session<JsonlSessionMetadata>,
-    input: {
-      readonly sessionRef: AgentSessionRef;
-      readonly assistantEntryRef: AgentSessionEntryRef;
-      readonly recoveryLeafRef?: AgentSessionEntryRef | null;
-    },
+    assistantEntryRef: TranscriptEntryRef,
+    recoveryEntryRef: TranscriptEntryRef | null | undefined,
   ): Promise<void> {
-    const recovery = input.recoveryLeafRef;
-    if (recovery === undefined || (recovery !== null && recovery.sessionId !== input.sessionRef.sessionId)) {
+    const recovery = recoveryEntryRef;
+    if (recovery === undefined || (recovery !== null && recovery.sessionId !== assistantEntryRef.sessionId)) {
       throw new AgentSessionRepositoryError(
         "agent_session_ref_invalid",
         "Agent session assistant entry is not on the active branch.",
       );
     }
-    const activeLeafId = await session.getLeafId();
+    const activeLeafId = await getMainLeafId(session);
     if ((recovery?.entryId ?? null) !== activeLeafId) {
       throw new AgentSessionRepositoryError(
         "agent_session_ref_invalid",
         "Agent session recovery leaf does not match the active branch.",
       );
     }
-    const assistantPath = await session.getBranch(input.assistantEntryRef.entryId);
-    if (assistantPath.at(-1)?.id !== input.assistantEntryRef.entryId) {
+    const assistantPath = await getMainBranchPathTo(session, assistantEntryRef.entryId);
+    if (assistantPath.at(-1)?.id !== assistantEntryRef.entryId) {
       throw new AgentSessionRepositoryError(
         "agent_session_ref_invalid",
         "Agent session pending assistant entry does not exist.",
@@ -401,42 +673,81 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
         "Agent session recovery leaf is not an ancestor of the pending assistant entry.",
       );
     }
-    await session.moveTo(input.assistantEntryRef.entryId);
+    await moveMainTip(session, assistantEntryRef.entryId);
   }
 
   async delete(ref: AgentSessionRef): Promise<void> {
     this.validateRef(ref);
-    try {
-      await this.writeFence(ref.sessionId).runWhenIdle(async () => {
-        let session: Session<JsonlSessionMetadata>;
-        try {
-          session = await this.jsonlRepository.open(this.metadataFromRef(ref));
-        } catch (error) {
-          if (error instanceof SessionError && error.code === "not_found") return;
-          throw error;
-        }
-        const metadata = await session.getMetadata();
-        this.assertMetadataMatches(ref, metadata);
-        await this.jsonlRepository.delete(metadata);
-      });
-    } catch (error) {
-      if (error instanceof SessionGenerationError && error.code === "generation_active") {
+    await this.runInSessionAccess(ref.sessionId, async () => {
+      if (this.writerSessions.has(ref.sessionId)) {
         throw new AgentSessionRepositoryError(
           "agent_session_writer_active",
           `Agent session ${ref.sessionId} cannot be deleted while its writer is active.`,
-          { cause: error },
         );
       }
-      if (error instanceof SessionGenerationError && error.code === "generation_revoke_failed") {
-        throw new AgentSessionRepositoryError(
-          "agent_session_revoke_failed",
-          `Agent session ${ref.sessionId} cannot be deleted because its durable leaf was not restored.`,
-          { cause: error },
-        );
+      try {
+        await this.writeFence(ref.sessionId).runWhenIdle(async () => {
+          await this.assertSessionExists(ref);
+          const session = await this.openValidatedSession(ref, this.metadataFromRef(ref));
+          const metadata = session.metadata;
+          await session.close(TODO_CONTEXT);
+          await this.jsonlRepository.delete(metadata, TODO_CONTEXT);
+        });
+      } catch (error) {
+        if (error instanceof SessionGenerationError && error.code === "generation_active") {
+          throw new AgentSessionRepositoryError(
+            "agent_session_writer_active",
+            `Agent session ${ref.sessionId} cannot be deleted while its writer is active.`,
+            { cause: error },
+          );
+        }
+        if (error instanceof SessionGenerationError && error.code === "generation_revoke_failed") {
+          throw new AgentSessionRepositoryError(
+            "agent_session_revoke_failed",
+            `Agent session ${ref.sessionId} cannot be deleted because its durable leaf was not restored.`,
+            { cause: error },
+          );
+        }
+        throw error;
       }
+      this.writeFences.delete(ref.sessionId);
+    });
+  }
+
+  private async openValidatedSession(
+    ref: AgentSessionRef,
+    metadata: JsonlSessionMetadata,
+  ): Promise<Session<JsonlSessionMetadata>> {
+    const headerLines = await this.fileSystem.readTextLines(metadata.path, { maxLines: 1 }, TODO_CONTEXT);
+    if (!headerLines.ok) throw headerLines.error;
+    const legacyHeader = parseLegacyV3SessionHeader(headerLines.value[0]);
+    if (legacyHeader !== undefined) {
+      throw new AgentSessionRepositoryError(
+        "agent_session_legacy_requires_reset",
+        `Agent session ${legacyHeader.id} uses legacy v3 JSONL; back up the Product Home, then explicitly reset the entire Product Home before creating new sessions.`,
+      );
+    }
+    const session = await this.jsonlRepository.open(metadata, TODO_CONTEXT);
+    try {
+      this.assertMetadataMatches(ref, session.metadata);
+      return session;
+    } catch (error) {
+      await session.close(TODO_CONTEXT).catch(() => undefined);
       throw error;
     }
-    this.writeFences.delete(ref.sessionId);
+  }
+
+  private sessionAccessGate(sessionId: string): SessionAccessGate {
+    let gate = this.sessionAccessGates.get(sessionId);
+    if (gate === undefined) {
+      gate = new SessionAccessGate();
+      this.sessionAccessGates.set(sessionId, gate);
+    }
+    return gate;
+  }
+
+  private runInSessionAccess<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
+    return this.sessionAccessGate(sessionId).run(operation);
   }
 
   private writeFence(sessionId: string): SessionWriteFence {
@@ -448,25 +759,26 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
     return fence;
   }
 
+  /**
+   * Opens a scoped read handle for a session no writer owns. A writer that
+   * appears during this method cannot race the check because callers hold the
+   * session access gate. An open failure is therefore either a provider error
+   * or a real missing session already proven by the listing check; it must not
+   * be guessed from an error message.
+   */
   private async openForRead(ref: AgentSessionRef): Promise<Session<JsonlSessionMetadata>> {
     this.validateRef(ref);
-    try {
-      const session = await this.jsonlRepository.open(this.metadataFromRef(ref));
-      this.assertMetadataMatches(ref, await session.getMetadata());
-      return session;
-    } catch (error) {
-      if (error instanceof SessionError && error.code === "not_found") {
-        throw new AgentSessionRepositoryError(
-          "agent_session_not_found",
-          `Agent session ${ref.sessionId} was not found.`,
-          { cause: error },
-        );
-      }
-      throw error;
+    await this.assertSessionExists(ref);
+    if (this.writerSessions.has(ref.sessionId)) {
+      throw new AgentSessionRepositoryError(
+        "agent_session_writer_active",
+        `Agent session ${ref.sessionId} cannot be read while its writer is active.`,
+      );
     }
+    return this.openValidatedSession(ref, this.metadataFromRef(ref));
   }
 
-  private assertEntryBelongsToSession(ref: AgentSessionRef, entryRef: AgentSessionEntryRef): void {
+  private assertEntryBelongsToSession(ref: AgentSessionRef, entryRef: TranscriptEntryRef): void {
     if (entryRef.sessionId !== ref.sessionId) {
       throw new AgentSessionRepositoryError(
         "agent_session_ref_invalid",
@@ -481,7 +793,7 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
       sessionId: metadata.id,
       storageKey: path.relative(this.sessionsRoot, resolvedPath).split(path.sep).join("/"),
       sessionCwd: metadata.cwd,
-      createdAt: metadata.createdAt,
+      createdAt: new Date(metadata.createdAt).toISOString(),
     };
   }
 
@@ -489,9 +801,26 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
     return {
       id: ref.sessionId,
       cwd: ref.sessionCwd,
-      createdAt: ref.createdAt,
+      storageVersion: 1,
+      createdAt: Date.parse(ref.createdAt),
       path: this.pathFromStorageKey(ref.storageKey),
+      modifiedAt: Date.now(),
     };
+  }
+
+  /**
+   * Pi 0.87 removed the typed not-found error, so existence is proven through
+   * the repository listing instead of matching provider error text.
+   */
+  private async assertSessionExists(ref: AgentSessionRef): Promise<void> {
+    const exists = (await this.jsonlRepository.list({ cwd: ref.sessionCwd }, TODO_CONTEXT))
+      .some((metadata) => metadata.id === ref.sessionId);
+    if (!exists) {
+      throw new AgentSessionRepositoryError(
+        "agent_session_not_found",
+        `Agent session ${ref.sessionId} was not found.`,
+      );
+    }
   }
 
   private validateRef(ref: AgentSessionRef): void {
@@ -566,5 +895,82 @@ function normalizeStorageKey(storageKey: string): string {
 function requireNonEmpty(value: string, name: string): void {
   if (value.trim().length === 0) {
     throw new AgentSessionRepositoryError("agent_session_ref_invalid", `Agent session ${name} must not be empty.`);
+  }
+}
+
+/** Durable checkpoint mapping lives in the Session value store under our namespace. */
+const CHECKPOINT_NAMESPACE = "synech.checkpoint";
+const CHECKPOINT_INDEX_KEY = "recorded";
+
+type StoredCheckpoint = {
+  readonly checkpointId: string;
+  readonly kind: AgentSessionCheckpointKind;
+  readonly entryId: string;
+};
+
+type RecordedCheckpoint = {
+  readonly checkpoint: AgentSessionCheckpointRef;
+  readonly entryRef: TranscriptEntryRef;
+};
+
+/**
+ * The Session's own checkpoint index. Keeping the mapping in the same durable
+ * store as the transcript, rather than in a sidecar, keeps mapping and
+ * transcript in one place and lets a new repository instance resolve the same
+ * identities.
+ */
+function checkpointIndexAddress(): ReturnType<typeof list<StoredCheckpoint>> {
+  return list<StoredCheckpoint>(CHECKPOINT_NAMESPACE, CHECKPOINT_INDEX_KEY);
+}
+
+/**
+ * Reads the whole checkpoint index. Pi caps a single readList at 10_000
+ * elements and defaults to the OLDEST 1_000, so an index that only grows would
+ * silently stop resolving its newest records without paging by seq cursor.
+ */
+async function readEntireCheckpointIndex(
+  session: Session<JsonlSessionMetadata>,
+): Promise<readonly StoredCheckpoint[]> {
+  const records: StoredCheckpoint[] = [];
+  let cursor: { seq: number } | undefined;
+  for (;;) {
+    const page = await session.readList(
+      checkpointIndexAddress(),
+      { limit: 10_000, ...(cursor === undefined ? {} : { cursor }) },
+      TODO_CONTEXT,
+    );
+    if (page.length === 0) break;
+    for (const element of page) records.push(element.value);
+    if (page.length < 10_000) break;
+    cursor = { seq: page[page.length - 1]!.seq };
+  }
+  return records;
+}
+
+/** Transcript position recorded for one checkpoint, or undefined when unmapped. */
+function recordedCheckpointEntryId(
+  index: readonly StoredCheckpoint[],
+  checkpoint: AgentSessionCheckpointRef,
+): string | undefined {
+  const stored = index.find((item) => item.checkpointId === checkpoint.checkpointId);
+  if (stored === undefined) return undefined;
+  if (stored.kind !== checkpoint.kind) {
+    throw new AgentSessionRepositoryError(
+      "agent_session_checkpoint_conflict",
+      "Agent session checkpoint " + checkpoint.checkpointId + " is recorded as " + stored.kind +
+        ", not " + checkpoint.kind + ".",
+    );
+  }
+  return stored.entryId;
+}
+
+/** Serializes repository-owned open handles for one Pi session. */
+class SessionAccessGate {
+  private tail: Promise<void> = Promise.resolve();
+
+  run<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.tail.then(operation);
+    this.tail = result.then(() => undefined, () => undefined);
+    return result;
   }
 }

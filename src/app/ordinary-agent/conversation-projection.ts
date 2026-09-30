@@ -3,24 +3,19 @@ import type {
   OrdinaryConversationReadModel,
   OrdinaryRunState,
 } from "./contracts.js";
-import type { AgentSessionEntryRef } from "../model-runtime/agent-session.js";
+import type { AgentSessionCheckpointRef, AgentSessionRepository } from "../model-runtime/agent-session.js";
 
-export function visibleOrdinaryConversationRuns(
+export async function visibleOrdinaryConversationRuns(
+  store: Pick<AgentSessionRepository, "locateSessionCheckpoints">,
   control: OrdinaryConversationControlDocument,
   allRuns: readonly OrdinaryRunState[],
-  activeBranchEntryRefs: readonly AgentSessionEntryRef[],
-): readonly OrdinaryRunState[] {
+): Promise<readonly OrdinaryRunState[]> {
   const conversationRuns = allRuns.filter((run) => run.turn.conversationId === control.state.conversationId);
-  assertConversationSessionOwnership(control, conversationRuns, activeBranchEntryRefs);
-  if (activeBranchEntryRefs.length === 0 && conversationRuns.some(hasDurableSessionEntry)) {
+  assertConversationSessionOwnership(control, conversationRuns);
+  const onBranch = await runsOnActiveBranch(store, control, conversationRuns);
+  if (onBranch.length === 0 && conversationRuns.some(hasDurableSessionEntry)) {
     throw new Error(`Ordinary conversation ${control.state.conversationId} has durable runs but no active Session branch`);
   }
-  const branchIndex = new Map(activeBranchEntryRefs.map((entry, index) => [sessionEntryKey(entry), index]));
-  const onBranch = conversationRuns
-    .map((run) => ({ run, index: activeBranchIndex(run, branchIndex) }))
-    .filter((item): item is { readonly run: OrdinaryRunState; readonly index: number } => item.index !== undefined)
-    .sort((left, right) => left.index - right.index)
-    .map((item) => item.run);
   const visible = [...onBranch];
   const included = new Set(visible.map((run) => run.runId));
   let predecessorRunId = visible.at(-1)?.runId;
@@ -45,7 +40,6 @@ export function visibleOrdinaryConversationRuns(
 function assertConversationSessionOwnership(
   control: OrdinaryConversationControlDocument,
   runs: readonly OrdinaryRunState[],
-  activeBranchEntryRefs: readonly AgentSessionEntryRef[],
 ): void {
   const sessionId = control.state.sessionRef.sessionId;
   for (const run of runs) {
@@ -53,18 +47,57 @@ function assertConversationSessionOwnership(
       throw new Error(`Ordinary run ${run.runId} does not belong to conversation Session ${sessionId}`);
     }
   }
-  for (const entryRef of activeBranchEntryRefs) {
-    if (entryRef.sessionId !== sessionId) {
-      throw new Error(`Ordinary conversation ${control.state.conversationId} received a foreign Session branch entry`);
-    }
+}
+
+/**
+ * Orders the conversation's runs by where the provider places the leaf each run
+ * recorded. The provider owns branch order; the product supplies only its own
+ * durable checkpoints and reads back a position, so a provider change to branch
+ * layout cannot reorder the product's turns on its own.
+ */
+async function runsOnActiveBranch(
+  store: Pick<AgentSessionRepository, "locateSessionCheckpoints">,
+  control: OrdinaryConversationControlDocument,
+  runs: readonly OrdinaryRunState[],
+): Promise<readonly OrdinaryRunState[]> {
+  const checkpointByRunId = new Map(runs.map((run) => [run.runId, runBranchCheckpoint(run)] as const));
+  const recorded = [...checkpointByRunId.values()]
+    .filter((checkpoint): checkpoint is AgentSessionCheckpointRef => checkpoint !== null);
+  if (recorded.length === 0) return [];
+  const located = await store.locateSessionCheckpoints({
+    sessionRef: control.state.sessionRef,
+    checkpoints: recorded,
+  });
+  const positionByCheckpointId = new Map(
+    located.map((item) => [item.checkpoint.checkpointId, item.position] as const),
+  );
+  return runs
+    .flatMap((run) => {
+      const checkpoint = checkpointByRunId.get(run.runId);
+      const position = checkpoint === undefined || checkpoint === null
+        ? undefined
+        : positionByCheckpointId.get(checkpoint.checkpointId);
+      return position === undefined ? [] : [{ run, position }];
+    })
+    .sort((left, right) => left.position - right.position)
+    .map((item) => item.run);
+}
+
+/** The durable checkpoint this run recorded, or null before its first write. */
+function runBranchCheckpoint(run: OrdinaryRunState): AgentSessionCheckpointRef | null {
+  switch (run.session.phase) {
+    case "not_started": return null;
+    case "started": return run.session.startCheckpoint;
+    case "rollbackable": return run.session.endCheckpoint;
+    case "completion_candidate": return run.session.assistantCheckpoint;
   }
 }
 
 function hasDurableSessionEntry(run: OrdinaryRunState): boolean {
   switch (run.session.phase) {
     case "not_started": return false;
-    case "started": return run.session.startLeafRef !== null ||
-      run.session.compactionEntryRefs.length > 0 ||
+    case "started": return run.session.startCheckpoint !== null ||
+      run.session.compactionCheckpoints.length > 0 ||
       run.pendingToolRound !== undefined;
     case "rollbackable":
     case "completion_candidate":
@@ -127,22 +160,6 @@ export function projectOrdinaryConversation(input: {
       updatedAt: run.timestamps.updatedAt,
     }]),
   };
-}
-
-function activeBranchIndex(
-  run: OrdinaryRunState,
-  branchIndex: ReadonlyMap<string, number>,
-): number | undefined {
-  const entryRef = run.session.phase === "rollbackable"
-    ? run.session.endLeafRef
-    : run.session.phase === "completion_candidate"
-      ? run.session.assistantEntryRef
-      : undefined;
-  return entryRef === undefined ? undefined : branchIndex.get(sessionEntryKey(entryRef));
-}
-
-function sessionEntryKey(ref: AgentSessionEntryRef): string {
-  return `${ref.sessionId}\u0000${ref.entryId}`;
 }
 
 export function normalizeOrdinaryConversationTitle(value: string): string {

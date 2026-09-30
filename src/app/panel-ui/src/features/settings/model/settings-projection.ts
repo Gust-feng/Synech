@@ -5,7 +5,6 @@ import type {
 } from "@panel-api/config";
 import {
   builtinProviderPresetId,
-  modelProviderDisplayName,
   modelProviderSortRank,
   resolveModelProviderIdentity,
 } from "./provider-logos.js";
@@ -25,7 +24,10 @@ export type ModelForm = {
 
 export type ModelProviderProfileItem = NonNullable<ConfigResponse["profiles"]>[number];
 export type ModelProviderModelItem = ModelProviderModelCatalog["models"][number];
-export type ModelProtocolKind = "openai_responses" | "openai_compatible_chat_completions";
+export type ModelProtocolKind =
+  | "anthropic_messages"
+  | "openai_responses"
+  | "openai_compatible_chat_completions";
 
 export type ModelProviderListItem = {
   readonly key: string;
@@ -42,6 +44,7 @@ export type ModelProviderListItem = {
   readonly preset?: ModelProviderPreset;
   readonly configured: boolean;
   readonly protectedBuiltin: boolean;
+  readonly active?: boolean;
 };
 
 export function filterModelCatalogItems(
@@ -72,7 +75,6 @@ export function modelProviderItems(
   }));
   const boundProfileIds = new Set<string>();
   const presetItems = presets.map((preset: ModelProviderPreset) => {
-    const presetIdentity = resolveModelProviderIdentity(preset);
     const bindings = profileBindings.filter((item) => {
       if (item.profile.profileId === preset.presetId) return true;
       return item.presetId === preset.presetId;
@@ -90,11 +92,11 @@ export function modelProviderItems(
       boundProfileIds.add(binding.profile.profileId);
     }
     const profile = binding?.profile;
-    const configuredModel = profile === undefined ? preset.defaultModel ?? "" : profile.model ?? "";
+    const configuredModel = profile?.model ?? "";
     return {
       key: profile?.profileId === undefined ? `preset:${preset.presetId}` : `profile:${profile.profileId}`,
       title: profile === undefined
-        ? presetIdentity === "unknown" ? preset.label : modelProviderDisplayName(presetIdentity)
+        ? preset.label
         : friendlyProfileTitle(profile),
       vendor: preset.vendor,
       logoDataUrl: profile?.logoDataUrl,
@@ -107,7 +109,8 @@ export function modelProviderItems(
       presetId: preset.presetId,
       preset,
       configured: profile !== undefined,
-      protectedBuiltin: true,
+      protectedBuiltin: profile === undefined,
+      active: profile?.profileId !== undefined && profile.profileId === activeProfileId,
     } satisfies ModelProviderListItem;
   });
   const customItems = profileBindings
@@ -126,21 +129,27 @@ export function modelProviderItems(
         profile,
         configured: true,
         protectedBuiltin: false,
+        active: profile.profileId !== undefined && profile.profileId === activeProfileId,
       } satisfies ModelProviderListItem;
     });
   return [...presetItems, ...customItems]
     .map((item: ModelProviderListItem, index: number) => ({ item, index }))
     .sort((left, right) => {
+      const rankDelta = modelProviderSortRank(left.item) - modelProviderSortRank(right.item);
+      if (rankDelta !== 0 && (modelProviderSortRank(left.item) < NEUTRAL_PROVIDER_RANK || modelProviderSortRank(right.item) < NEUTRAL_PROVIDER_RANK)) {
+        return rankDelta;
+      }
       const leftOrder = orderIndex(order, left.item.key);
       const rightOrder = orderIndex(order, right.item.key);
       if (leftOrder !== rightOrder) {
         return leftOrder - rightOrder;
       }
-      const rankDelta = modelProviderSortRank(left.item) - modelProviderSortRank(right.item);
       return rankDelta === 0 ? left.index - right.index : rankDelta;
     })
     .map(({ item }: { readonly item: ModelProviderListItem }) => item);
 }
+
+const NEUTRAL_PROVIDER_RANK = 99;
 
 export function modelCatalogItemsWithConfiguredModel(
   models: readonly ModelProviderModelItem[],
@@ -180,15 +189,17 @@ export function modelFormFromProviderItem(item: ModelProviderListItem): ModelFor
   };
 }
 
-export function requestPathOptionsForProvider(): readonly { readonly value: string; readonly label: string }[] {
+export function modelProtocolOptions(): readonly { readonly value: ModelProtocolKind; readonly label: string }[] {
   return [
-    { value: "openai_responses", label: "/responses" },
     { value: "openai_compatible_chat_completions", label: "/chat/completions" },
+    { value: "openai_responses", label: "/responses" },
+    { value: "anthropic_messages", label: "/messages" },
   ];
 }
 
 export function modelProtocolKind(value: string): ModelProtocolKind {
-  return value === "openai_responses" ? value : "openai_compatible_chat_completions";
+  if (value === "anthropic_messages" || value === "openai_responses") return value;
+  return "openai_compatible_chat_completions";
 }
 
 export function visibleProfileBaseUrl(profile: ModelProviderProfileItem): string {
@@ -201,21 +212,40 @@ export function visibleProfileBaseUrl(profile: ModelProviderProfileItem): string
 
 function isSettingsModelProviderPreset(preset: ModelProviderPreset): boolean {
   return preset.providerKind === "openai_compatible" &&
-    (preset.protocolKind === "openai_responses" || preset.protocolKind === "openai_compatible_chat_completions");
+    isSettingsModelProtocol(preset.protocolKind);
 }
 
 function isSettingsModelProviderProfile(profile: ModelProviderProfileItem): boolean {
   return profile.providerKind === "openai_compatible" &&
-    (profile.protocolKind === "openai_responses" || profile.protocolKind === "openai_compatible_chat_completions");
+    isSettingsModelProtocol(profile.protocolKind);
+}
+
+/**
+ * Protocols the model settings surface can list and edit.
+ *
+ * The product serves three transports. Filtering this list would hide valid
+ * Pi-native connections (Anthropic Messages, MiniMax) from the user entirely,
+ * so every served protocol must stay selectable here.
+ */
+const SETTINGS_MODEL_PROTOCOLS: ReadonlySet<ModelProtocolKind> = new Set<ModelProtocolKind>([
+  "anthropic_messages",
+  "openai_responses",
+  "openai_compatible_chat_completions",
+]);
+
+function isSettingsModelProtocol(
+  value: ModelProtocolKind | undefined,
+): value is ModelProtocolKind {
+  return value !== undefined && SETTINGS_MODEL_PROTOCOLS.has(value);
 }
 
 function friendlyProfileTitle(profile: ModelProviderProfileItem): string {
   const label = profile.label?.trim();
   if (label !== undefined && label.length > 0) return label;
   const raw = profile.profileId ?? "";
-  if (raw.trim().length === 0) return "自定义厂商";
+  if (raw.trim().length === 0) return "自定义服务";
   if (raw.toLowerCase() === "default") return "OpenAI";
-  if (raw.toLowerCase() === "custom") return "自定义厂商";
+  if (raw.toLowerCase() === "custom") return "自定义服务";
   return raw;
 }
 

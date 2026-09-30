@@ -1,10 +1,14 @@
 import {
   AgentHarness,
-  InMemorySessionRepo,
+  MemorySessionRepo,
   type AgentMessage,
   type AgentTool,
+  type AgentLane,
+  type AgentHarnessOptions,
+  type HarnessEvent,
   type Session,
 } from "@earendil-works/pi-agent-core";
+import { TODO_CONTEXT, withAbortSignal } from "@earendil-works/pi-agent-core/harness/context";
 import {
   Type,
   type AssistantMessage,
@@ -25,7 +29,6 @@ import {
   type ToolDefinition,
   type ToolFactValue,
 } from "../../../domain/tools/index.js";
-import { compactSessionContextIfNeeded } from "../session-context-compaction.js";
 import { replaceUnsupportedImageBlocks } from "../session-image-placeholder.js";
 import {
   harnessToolResult,
@@ -56,6 +59,8 @@ import {
   type HarnessProjectionResultPort,
 } from "./harness-event-projector.js";
 import type { AgentSessionLoopOptions } from "./contracts.js";
+import { agentRuntimeExecutionEnv } from "../pi-agent/runtime-environment.js";
+import { toHarnessTool } from "../pi-agent/harness-tool-bridge.js";
 
 type ProjectedHarnessToolResult = ReturnType<typeof harnessToolResult>;
 
@@ -86,13 +91,11 @@ export type DelegatedLoopContext = Pick<
 
 export type DelegatedRuntimeOptions = Pick<
   AgentSessionLoopOptions,
-  | "executionEnvironment"
   | "modelRegistry"
   | "selectedModel"
   | "thinkingLevel"
   | "toolDefinitionTokenCounter"
   | "compactionSettings"
-  | "confirmedContextWindowTokens"
   | "transformProviderPayload"
   | "onProviderToolDefinitionMetrics"
 >;
@@ -100,7 +103,7 @@ export type DelegatedRuntimeOptions = Pick<
 export type DelegatedAgentFactPorts = {
   readonly results: HarnessProjectionResultPort & {
     acceptForDelivery(result: ToolCallResult): Promise<ProjectedHarnessToolResult | undefined>;
-    project(result: ToolCallResult, terminate: boolean, addedToolNames?: readonly string[]): ProjectedHarnessToolResult;
+    project(result: ToolCallResult, terminate: boolean): ProjectedHarnessToolResult;
   };
   readonly run: {
     emitToolRequested(request: ToolCallRequest): void;
@@ -125,7 +128,10 @@ export type DelegatedMechanicalToolFactory = (input: {
 
 export type DelegatedAgentRunnerDependencies = {
   readonly createSession?: (sessionId: string) => Promise<Session>;
-  readonly createHarness?: (options: ConstructorParameters<typeof AgentHarness>[0]) => AgentHarness;
+  readonly createHarness?: (
+    options: AgentHarnessOptions<undefined>,
+    context: ReturnType<typeof withAbortSignal>,
+  ) => Promise<{ readonly harness: AgentHarness<undefined>; readonly lane: AgentLane }>;
 };
 
 export function createDelegatedAgentTool(input: {
@@ -214,7 +220,7 @@ async function runDelegatedAgent(input: {
   const metrics: DelegatedAgentExecutionMetrics = { modelRounds: 0, toolCallCount: 0, usage: {} };
   const sessionId = `delegated-agent:${parentInvocationId}`;
   const session = input.dependencies?.createSession === undefined
-    ? await new InMemorySessionRepo().create({ id: sessionId })
+    ? await new MemorySessionRepo().create({ id: sessionId }, TODO_CONTEXT)
     : await input.dependencies.createSession(sessionId);
   const toolDefinitions = boundary.definitions
     .filter((definition) => boundary.permission.allowedTools.includes(definition.name));
@@ -254,42 +260,72 @@ async function runDelegatedAgent(input: {
     ),
     host: visibilityHost,
   });
-  const harnessOptions: ConstructorParameters<typeof AgentHarness>[0] = {
-    env: input.options.executionEnvironment,
+  const latestAssistant: { current?: Extract<AgentMessage, { readonly role: "assistant" }> } = {};
+  const harnessOptions: AgentHarnessOptions<undefined> = {
     session,
     models: input.options.modelRegistry,
     model: input.options.selectedModel,
     thinkingLevel: input.options.thinkingLevel,
     systemPrompt: input.invocation.instructions,
-    tools: [...harnessTools.tools],
+    tools: harnessTools.tools.map((tool) => toHarnessTool(tool, input.abortSignal)),
     activeToolNames: [...harnessTools.activeToolNames],
   };
-  const harness = input.dependencies?.createHarness?.(harnessOptions) ?? new AgentHarness(harnessOptions);
-  harnessTools.bind?.(harness);
-  await harness.setActiveTools([...harnessTools.activeToolNames]);
+  const runContext = withAbortSignal(input.abortSignal, TODO_CONTEXT);
+  const runtime = await createDelegatedRuntime(harnessOptions, runContext, input.dependencies);
+  const harness = runtime.harness;
+  const lane = runtime.lane;
+  harnessTools.bind?.(lane);
+  await lane.setActiveTools([...harnessTools.activeToolNames], TODO_CONTEXT);
   attachDelegatedHarnessHooks({
     harness,
+    lane,
     session,
     parentInvocationId,
     loopInput: input.loopInput,
     options: input.options,
     abortSignal: input.abortSignal,
     metadataByName: harnessTools.metadataByName,
+    latestAssistant,
     metrics,
     bindings,
     acceptedRequests,
     facts: input.facts,
   });
-  const handleAbort = (): void => { void harness.abort().catch(() => undefined); };
+  const handleAbort = (): void => {
+    void lane.inspectExecution(TODO_CONTEXT).then(async (execution) => {
+      if (execution.current === null) return;
+      await lane.requestAbort(execution.current.id, TODO_CONTEXT);
+    }).catch(() => undefined);
+  };
   input.abortSignal.addEventListener("abort", handleAbort, { once: true });
   if (input.abortSignal.aborted) handleAbort();
   try {
-    const assistant = await harness.prompt(input.invocation.input);
-    if (input.abortSignal.aborted || assistant.stopReason === "aborted") {
+    const runResult = await lane.prompt(input.invocation.input, undefined, runContext);
+    if (!runResult.ok) throw runResult.error;
+    if (input.abortSignal.aborted || runResult.value.status === "aborted") {
       return delegatedAgentFailure(
         input.request,
-        input.abortSignal.reason ?? assistant.errorMessage,
+        input.abortSignal.reason,
         true,
+        input.startedAt,
+        metrics,
+      );
+    }
+    if (runResult.value.status === "failed") {
+      return delegatedAgentFailure(
+        input.request,
+        runResult.value.error?.message ?? "Pi delegated run failed without a diagnostic message.",
+        false,
+        input.startedAt,
+        metrics,
+      );
+    }
+    const assistant = latestAssistant.current;
+    if (assistant === undefined) {
+      return delegatedAgentFailure(
+        input.request,
+        "Pi delegated run completed without an assistant message.",
+        false,
         input.startedAt,
         metrics,
       );
@@ -300,7 +336,7 @@ async function runDelegatedAgent(input: {
         input.request,
         input.startedAt,
         metrics,
-        harness.getModel().contextWindow,
+        input.options.selectedModel.contextWindow,
       );
     }
     return {
@@ -317,7 +353,9 @@ async function runDelegatedAgent(input: {
 
 function attachDelegatedHarnessHooks(input: {
   readonly harness: AgentHarness;
+  readonly lane: AgentLane;
   readonly session: Session;
+  readonly latestAssistant: { current?: Extract<AgentMessage, { readonly role: "assistant" }> };
   readonly parentInvocationId: string;
   readonly loopInput: DelegatedLoopContext;
   readonly options: DelegatedRuntimeOptions;
@@ -330,44 +368,26 @@ function attachDelegatedHarnessHooks(input: {
 }): void {
   const pendingRequests = new Map<string, PendingToolRequest>();
   const preparedToolCallIds = new Set<string>();
-  attachProviderPayloadHook(input.harness, input.options, input.metadataByName);
-  input.harness.on("context", async ({ messages: contextMessages }) => {
-    const messages = [...replaceUnsupportedImageBlocks(contextMessages, input.options.selectedModel.input.includes("image"))];
-    const compaction = await compactSessionContextIfNeeded({
-      agentSession: input.session,
-      activeContextMessages: messages,
-      modelRegistry: input.options.modelRegistry,
-      selectedModel: input.harness.getModel(),
-      thinkingLevel: input.harness.getThinkingLevel(),
-      abortSignal: input.abortSignal,
-      ...(input.options.compactionSettings === undefined ? {} : { compactionSettings: input.options.compactionSettings }),
-      ...(input.options.confirmedContextWindowTokens === undefined
-        ? {}
-        : { confirmedContextWindowTokens: input.options.confirmedContextWindowTokens }),
-    });
-    if (compaction.status === "failed") {
-      // 压缩层的结构码（context_overflow / context_compaction_images_unsupported /
-      // context_compaction_failed）挂在错误上一起走，消费方按 code 分支，不从文案猜。
-      throw Object.assign(new Error(compaction.error), { code: compaction.code });
-    }
-    return compaction.status === "compacted"
-      ? { messages: [...compaction.compactedContextMessages] }
-      : { messages: [...messages] };
-  });
-  input.harness.on("session_before_compact", ({ preparation }) => {
-    if (!compactionPreparationContainsImage(preparation)) return undefined;
-    return { cancel: true };
-  });
-  input.harness.on("tool_result", ({ details }) => {
+  attachProviderPayloadHook(input.harness, input.lane, input.options, input.metadataByName);
+  // Compaction is owned by Pi. Synech only contributes the text-only guard here.
+  input.harness.hooks.on("transform_context", async ({ messages }) => ({
+    messages: [
+      ...replaceUnsupportedImageBlocks(
+        messages,
+        input.options.selectedModel.input.includes("image"),
+      ),
+    ],
+  }));
+  input.harness.hooks.on("after_tool", ({ details }) => {
     const result = toolResultFromDetails(details);
     return result === undefined ? undefined : { isError: result.status !== "completed" };
   });
-  input.harness.on("tool_call", ({ toolCallId }) => {
+  input.harness.hooks.on("before_tool", ({ toolCallId }) => {
     preparedToolCallIds.add(toolCallId);
     return undefined;
   });
-  input.harness.subscribe(async (event) => {
-    if (event.type === "tool_execution_end") {
+  const projectEvent = async (event: HarnessEvent): Promise<void> => {
+    if (event.type === "tool_end") {
       await projectToolExecutionEnd({
         event,
         pendingRequest: pendingRequests.get(event.toolCallId),
@@ -384,13 +404,20 @@ function attachDelegatedHarnessHooks(input: {
       });
       return;
     }
-    if (event.type === "message_end" && event.message.role === "toolResult") {
+    if (event.type !== "message_end") return;
+    if (event.message.role === "toolResult") {
       await input.facts.results.deliverPendingMessage(event.message, input.parentInvocationId);
       return;
     }
-    if (event.type !== "message_end" || event.message.role !== "assistant") return;
-    const roundId = await input.session.getLeafId();
-    if (roundId === null) throw new Error("Delegated Session did not expose the assistant entry id.");
+    if (event.message.role !== "assistant") return;
+    input.latestAssistant.current = event.message;
+    // Pi advances the branch tip in the commit that follows `message_end`, so a
+    // tip read here observes the previous entry; the event carries the id of
+    // the entry it names.
+    const roundId = event.entryId;
+    if (roundId === undefined) {
+      throw new Error("Delegated Session message_end did not report the assistant entry id.");
+    }
     const providerCalls = providerToolCallsForRound(
       modelMessageFromAssistant(event.message).toolCalls ?? [],
       roundId,
@@ -439,14 +466,28 @@ function attachDelegatedHarnessHooks(input: {
       input.bindings.remember(request);
       pendingRequests.set(request.providerCallId, {
         request,
-        modelVisibleAtRequest: input.harness.getActiveTools().some((tool) => tool.name === request.toolName),
+        modelVisibleAtRequest: (await input.lane.getActiveTools(TODO_CONTEXT)).includes(request.toolName),
       });
     }
     const usage = modelUsageFromProvider(event.message.usage);
     input.metrics.modelRounds += 1;
     input.metrics.usage = mergeModelUsage(input.metrics.usage, usage);
     input.facts.run.observeUsage(usage);
-  });
+  }
+  // Returning the projection makes the delegated harness await it before the
+  // next request or tool execution, so nested invocation binding and tool-result
+  // acceptance never lag behind the lane. A rejected projection is recorded as a
+  // maintenance failure instead of escaping as an unhandled rejection.
+  const observe = async (event: HarnessEvent): Promise<void> => {
+    try {
+      await projectEvent(event);
+    } catch (error) {
+      input.facts.maintenance.fail("runtime_projection_failed", errorMessage(error));
+      throw error;
+    }
+  };
+  input.harness.events.on("tool_end", (event) => observe(event));
+  input.harness.events.on("message_end", (event) => observe(event));
 }
 
 function validateDelegatedToolBoundary(
@@ -611,23 +652,22 @@ function delegatedExecutionMetadata(metrics: DelegatedAgentExecutionMetrics) {
   };
 }
 
-function messageContainsImage(message: AgentMessage): boolean {
-  return "content" in message && Array.isArray(message.content) && message.content.some((block) =>
-    typeof block === "object" && block !== null && "type" in block && block.type === "image");
-}
-
-function compactionPreparationContainsImage(preparation: {
-  readonly messagesToSummarize: readonly AgentMessage[];
-  readonly turnPrefixMessages: readonly AgentMessage[];
-}): boolean {
-  return preparation.messagesToSummarize.some(messageContainsImage) ||
-    preparation.turnPrefixMessages.some(messageContainsImage);
-}
-
 function uniqueStrings(values: readonly string[]): readonly string[] {
   return [...new Set(values)];
 }
 
 function abortMessage(reason: unknown): string {
   return reason === undefined ? "cancelled" : errorMessage(reason);
+}
+
+async function createDelegatedRuntime(
+  options: AgentHarnessOptions<undefined>,
+  context: ReturnType<typeof withAbortSignal>,
+  dependencies: DelegatedAgentRunnerDependencies | undefined,
+): Promise<{ readonly harness: AgentHarness<undefined>; readonly lane: AgentLane }> {
+  const created = dependencies?.createHarness === undefined
+    ? await AgentHarness.create(options, context)
+    : await dependencies.createHarness(options, context);
+  const lane = await created.harness.lane("main", context);
+  return { harness: created.harness, lane };
 }

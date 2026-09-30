@@ -31,21 +31,25 @@ export function modelOptionsFromConfig(
       const rankDelta = modelProviderSortRank({
         title: left.profile.label,
         profileId: left.profile.profileId,
+        piProviderId: left.profile.piProviderId,
         baseUrl: left.profile.baseUrl,
         model: left.profile.model,
       }) - modelProviderSortRank({
         title: right.profile.label,
         profileId: right.profile.profileId,
+        piProviderId: right.profile.piProviderId,
         baseUrl: right.profile.baseUrl,
         model: right.profile.model,
       });
       return rankDelta === 0 ? left.index - right.index : rankDelta;
     })
     .flatMap(({ profile }) => {
-      const catalog = catalogs[profile.profileId];
+      const savedCatalog = catalogs[profile.profileId];
+      const catalog = savedCatalog?.modelsPath === "pi-catalog" ? undefined : savedCatalog;
       const identity = resolveModelProviderIdentity({
         title: profile.label ?? catalog?.label,
         profileId: profile.profileId,
+        piProviderId: profile.piProviderId,
         baseUrl: profile.baseUrl ?? catalog?.baseUrl,
         model: profile.model,
       });

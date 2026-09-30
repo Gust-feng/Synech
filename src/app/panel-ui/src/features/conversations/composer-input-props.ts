@@ -6,6 +6,7 @@ import type {
 } from "../../contracts/composer";
 import type { ContextAttachment } from "../../contracts/context";
 import type { ContextWindowUsage } from "./context-window-usage";
+import type { ModelRunReasoningEffort } from "@panel-api/config";
 
 export type WorkbenchInputPropsOptions = {
   readonly goal: string;
@@ -19,9 +20,9 @@ export type WorkbenchInputPropsOptions = {
   readonly models: readonly ChatModelOption[];
   readonly selectedModelId: string;
   readonly contextUsage?: ContextWindowUsage;
-  readonly reasoningEffort: "" | "low" | "medium" | "high";
+  readonly reasoningEffort: "" | ModelRunReasoningEffort;
   readonly reasoningEffortEnabled: boolean;
-  readonly onReasoningEffortChange: (value: "" | "low" | "medium" | "high") => void;
+  readonly onReasoningEffortChange: (value: "" | ModelRunReasoningEffort) => void;
   readonly toolConfirmationPolicy: ComposerToolConfirmationPolicy;
   readonly onToolConfirmationPolicyChange: (value: ComposerToolConfirmationPolicy) => void;
   readonly closeSignal: number;

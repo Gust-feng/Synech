@@ -4,7 +4,7 @@ import type { RunCapabilityResolution } from "../../domain/config/index.js";
 import { toolInvocationId, sameResultForIdempotency, type ProviderToolCall, type ToolCallRequest, type ToolCallResult } from "../../domain/tools/index.js";
 import type {
   AgentSessionExecutionRefs,
-  AgentSessionEntryRef,
+  AgentSessionCheckpointRef,
   AgentSessionRef,
   AgentSessionWriteCheckpoint,
 } from "../model-runtime/agent-session.js";
@@ -169,16 +169,16 @@ function sessionAfter(
   if ("session" in transition && transition.session !== undefined) {
     assertExecutionRefsBelongToSession(state.sessionRef, transition.session);
     if (state.session.phase !== "not_started" &&
-        !sameEntryRef(state.session.startLeafRef, transition.session.startLeafRef)) {
+        !sameCheckpoint(state.session.startCheckpoint, transition.session.startCheckpoint)) {
       throw new OrdinaryFeatureError(
         "ordinary_run_state_conflict",
         "Ordinary execution cannot change its captured Session start leaf",
       );
     }
     if (transition.type === "complete") {
-      if (state.session.phase !== "completion_candidate" || transition.session.latestLeafRef === null ||
-          !sameEntryRef(state.session.startLeafRef, transition.session.startLeafRef) ||
-          !sameEntryRef(state.session.assistantEntryRef, transition.session.latestLeafRef)) {
+      if (state.session.phase !== "completion_candidate" || transition.session.latestCheckpoint === null ||
+          !sameCheckpoint(state.session.startCheckpoint, transition.session.startCheckpoint) ||
+          !sameCheckpoint(state.session.assistantCheckpoint, transition.session.latestCheckpoint)) {
         throw new OrdinaryFeatureError(
           "ordinary_run_state_conflict",
           "Ordinary completion requires its Session response candidate as a rollbackable end leaf",
@@ -186,9 +186,9 @@ function sessionAfter(
       }
       return {
         phase: "rollbackable",
-        startLeafRef: cloneJson(state.session.startLeafRef),
-        endLeafRef: cloneJson(state.session.assistantEntryRef),
-        compactionEntryRefs: cloneJson(transition.session.compactionEntryRefs),
+        startCheckpoint: cloneJson(state.session.startCheckpoint),
+        endCheckpoint: cloneJson(state.session.assistantCheckpoint),
+        compactionCheckpoints: cloneJson(transition.session.compactionCheckpoints),
       };
     }
     return sessionPhaseFromExecutionRefs(transition.session);
@@ -197,9 +197,9 @@ function sessionAfter(
       state.session.phase === "completion_candidate") {
     return {
       phase: "rollbackable",
-      startLeafRef: cloneJson(state.session.startLeafRef),
-      endLeafRef: cloneJson(state.session.rollbackLeafRef),
-      compactionEntryRefs: cloneJson(state.session.compactionEntryRefs),
+      startCheckpoint: cloneJson(state.session.startCheckpoint),
+      endCheckpoint: cloneJson(state.session.rollbackCheckpoint),
+      compactionCheckpoints: cloneJson(state.session.compactionCheckpoints),
     };
   }
   return state.session;
@@ -209,15 +209,16 @@ function applySessionCheckpoint(
   current: OrdinaryRunState["session"],
   checkpoint: AgentSessionWriteCheckpoint,
 ): OrdinaryRunState["session"] {
-  assertCheckpointEntrySessions(checkpoint);
   if (checkpoint.kind === "start_leaf_captured") {
     if (current.phase !== "not_started") {
       throw new OrdinaryFeatureError("ordinary_run_state_conflict", "Ordinary run Session start leaf was already captured");
     }
     return {
       phase: "started",
-      startLeafRef: cloneJson(checkpoint.startLeafRef),
-      compactionEntryRefs: [],
+      // A Session with no leaf before this run starts from nothing, so there is
+      // no durable checkpoint to resolve and nothing to roll back to.
+      startCheckpoint: cloneJson(checkpoint.checkpoint),
+      compactionCheckpoints: [],
     };
   }
   if (current.phase === "not_started") {
@@ -233,14 +234,16 @@ function applySessionCheckpoint(
       }
       return {
         phase: "rollbackable",
-        startLeafRef: cloneJson(current.startLeafRef),
-        endLeafRef: cloneJson(checkpoint.inputEntryRef),
-        compactionEntryRefs: [],
+        startCheckpoint: cloneJson(current.startCheckpoint),
+        endCheckpoint: cloneJson(checkpoint.checkpoint),
+        compactionCheckpoints: [],
       };
     case "assistant_tool_call_entry_committed":
       if (current.phase !== "rollbackable") {
         throw new OrdinaryFeatureError("ordinary_run_state_conflict", "Ordinary Session tool round requires a rollbackable prefix");
       }
+      // The assistant tool-call turn stays the accepted prefix until its tool
+      // results are durable; the run ledger tracks the pending round.
       return current;
     case "tool_result_entries_committed":
       if (current.phase !== "rollbackable") {
@@ -248,9 +251,9 @@ function applySessionCheckpoint(
       }
       return {
         phase: "rollbackable",
-        startLeafRef: cloneJson(current.startLeafRef),
-        endLeafRef: cloneJson(checkpoint.toolRoundLeafRef),
-        compactionEntryRefs: cloneJson(current.compactionEntryRefs),
+        startCheckpoint: cloneJson(current.startCheckpoint),
+        endCheckpoint: cloneJson(checkpoint.checkpoint),
+        compactionCheckpoints: cloneJson(current.compactionCheckpoints),
       };
     case "compaction_entry_committed":
       if (current.phase !== "rollbackable") {
@@ -258,11 +261,11 @@ function applySessionCheckpoint(
       }
       return {
         phase: "rollbackable",
-        startLeafRef: cloneJson(current.startLeafRef),
-        endLeafRef: cloneJson(checkpoint.compactionEntryRef),
-        compactionEntryRefs: [
-          ...current.compactionEntryRefs,
-          cloneJson(checkpoint.compactionEntryRef),
+        startCheckpoint: cloneJson(current.startCheckpoint),
+        endCheckpoint: cloneJson(checkpoint.checkpoint),
+        compactionCheckpoints: [
+          ...current.compactionCheckpoints,
+          cloneJson(checkpoint.checkpoint),
         ],
       };
     case "assistant_response_entry_committed":
@@ -271,47 +274,27 @@ function applySessionCheckpoint(
       }
       return {
         phase: "completion_candidate",
-        startLeafRef: cloneJson(current.startLeafRef),
-        rollbackLeafRef: cloneJson(current.endLeafRef),
-        assistantEntryRef: cloneJson(checkpoint.assistantEntryRef),
-        compactionEntryRefs: cloneJson(current.compactionEntryRefs),
+        startCheckpoint: cloneJson(current.startCheckpoint),
+        rollbackCheckpoint: cloneJson(current.endCheckpoint),
+        assistantCheckpoint: cloneJson(checkpoint.checkpoint),
+        compactionCheckpoints: cloneJson(current.compactionCheckpoints),
       };
   }
 }
 
-function assertCheckpointEntrySessions(checkpoint: AgentSessionWriteCheckpoint): void {
-  const refs = checkpoint.kind === "start_leaf_captured"
-    ? [checkpoint.startLeafRef]
-    : checkpoint.kind === "input_entry_committed"
-      ? [checkpoint.inputEntryRef]
-      : checkpoint.kind === "assistant_tool_call_entry_committed"
-        ? [checkpoint.assistantEntryRef]
-        : checkpoint.kind === "tool_result_entries_committed"
-          ? [checkpoint.toolRoundLeafRef]
-          : checkpoint.kind === "compaction_entry_committed"
-            ? [checkpoint.compactionEntryRef]
-            : [checkpoint.assistantEntryRef];
-  if (refs.some((ref) => ref !== null && ref.sessionId !== checkpoint.sessionId)) {
-    throw new OrdinaryFeatureError(
-      "ordinary_run_state_conflict",
-      "Ordinary Session checkpoint contains an entry from a different Session",
-    );
-  }
-}
-
 function sessionPhaseFromExecutionRefs(refs: AgentSessionExecutionRefs): OrdinaryRunState["session"] {
-  if (refs.safeLeafRef === null) {
+  if (refs.safeCheckpoint === null) {
     return {
       phase: "started",
-      startLeafRef: cloneJson(refs.startLeafRef),
-      compactionEntryRefs: cloneJson(refs.compactionEntryRefs),
+      startCheckpoint: cloneJson(refs.startCheckpoint),
+      compactionCheckpoints: cloneJson(refs.compactionCheckpoints),
     };
   }
   return {
     phase: "rollbackable",
-    startLeafRef: cloneJson(refs.startLeafRef),
-    endLeafRef: cloneJson(refs.safeLeafRef),
-    compactionEntryRefs: cloneJson(refs.compactionEntryRefs),
+    startCheckpoint: cloneJson(refs.startCheckpoint),
+    endCheckpoint: cloneJson(refs.safeCheckpoint),
+    compactionCheckpoints: cloneJson(refs.compactionCheckpoints),
   };
 }
 
@@ -319,14 +302,14 @@ function assertExecutionRefsBelongToSession(
   sessionRef: AgentSessionRef,
   refs: AgentSessionExecutionRefs,
 ): void {
-  const entryRefs = [
-    refs.startLeafRef,
-    refs.inputEntryRef,
-    refs.safeLeafRef,
-    refs.latestLeafRef,
-    ...refs.compactionEntryRefs,
-  ].filter((ref): ref is AgentSessionEntryRef => ref !== null && ref !== undefined);
-  if (refs.sessionId !== sessionRef.sessionId || entryRefs.some((ref) => ref.sessionId !== sessionRef.sessionId)) {
+  const checkpoints = [
+    refs.startCheckpoint,
+    refs.safeCheckpoint,
+    refs.latestCheckpoint,
+    ...refs.compactionCheckpoints,
+  ].filter((checkpoint): checkpoint is AgentSessionCheckpointRef => checkpoint !== null);
+  if (refs.sessionId !== sessionRef.sessionId ||
+      checkpoints.some((checkpoint) => checkpoint.sessionId !== sessionRef.sessionId)) {
     throw new OrdinaryFeatureError(
       "ordinary_run_state_conflict",
       "Ordinary execution Session refs do not belong to the run Session",
@@ -335,17 +318,17 @@ function assertExecutionRefsBelongToSession(
 }
 
 function assertOrdinarySessionState(state: OrdinaryRunState): void {
-  const refs: AgentSessionEntryRef[] = [];
+  const checkpoints: AgentSessionCheckpointRef[] = [];
   if (state.session.phase !== "not_started") {
-    if (state.session.startLeafRef !== null) refs.push(state.session.startLeafRef);
-    refs.push(...state.session.compactionEntryRefs);
+    if (state.session.startCheckpoint !== null) checkpoints.push(state.session.startCheckpoint);
+    checkpoints.push(...state.session.compactionCheckpoints);
   }
-  if (state.session.phase === "rollbackable") refs.push(state.session.endLeafRef);
+  if (state.session.phase === "rollbackable") checkpoints.push(state.session.endCheckpoint);
   if (state.session.phase === "completion_candidate") {
-    refs.push(state.session.rollbackLeafRef, state.session.assistantEntryRef);
+    checkpoints.push(state.session.rollbackCheckpoint, state.session.assistantCheckpoint);
   }
   if (state.pendingToolRound !== undefined) {
-    refs.push(state.pendingToolRound.assistantEntryRef);
+    checkpoints.push(state.pendingToolRound.checkpoint);
     if (state.session.phase !== "rollbackable") {
       throw new OrdinaryFeatureError(
         "ordinary_run_state_conflict",
@@ -353,7 +336,7 @@ function assertOrdinarySessionState(state: OrdinaryRunState): void {
       );
     }
   }
-  if (refs.some((ref) => ref.sessionId !== state.sessionRef.sessionId)) {
+  if (checkpoints.some((checkpoint) => checkpoint.sessionId !== state.sessionRef.sessionId)) {
     throw new OrdinaryFeatureError(
       "ordinary_run_state_conflict",
       "Ordinary run Session positions must belong to its conversation Session",
@@ -363,7 +346,7 @@ function assertOrdinarySessionState(state: OrdinaryRunState): void {
       (state.session.phase !== "rollbackable" || state.pendingToolRound !== undefined)) {
     throw new OrdinaryFeatureError(
       "ordinary_run_state_conflict",
-      "An Ordinary completed run requires a rollbackable Session end leaf",
+      "An Ordinary completed run requires a rollbackable Session end checkpoint",
     );
   }
   if (state.session.phase === "completion_candidate" && state.pendingToolRound !== undefined) {
@@ -374,10 +357,13 @@ function assertOrdinarySessionState(state: OrdinaryRunState): void {
   }
 }
 
-function sameEntryRef(left: AgentSessionEntryRef | null, right: AgentSessionEntryRef | null): boolean {
+function sameCheckpoint(
+  left: AgentSessionCheckpointRef | null,
+  right: AgentSessionCheckpointRef | null,
+): boolean {
   return left === null || right === null
     ? left === right
-    : left.sessionId === right.sessionId && left.entryId === right.entryId;
+    : left.sessionId === right.sessionId && left.checkpointId === right.checkpointId;
 }
 
 /**
@@ -462,7 +448,7 @@ function pendingToolRoundAfter(
   if (checkpoint.kind === "assistant_tool_call_entry_committed") {
     return acceptedOrdinaryToolRound({
       state,
-      assistantEntryRef: checkpoint.assistantEntryRef,
+      checkpoint: checkpoint.checkpoint,
       providerCallIds: checkpoint.providerCallIds,
       invocationIds: checkpoint.invocationIds,
     });
@@ -518,7 +504,7 @@ function toolResultRecordedAtAfter(
 /** Durably accepts one validated root assistant turn before any tool enters preflight. */
 export function acceptOrdinaryToolRound(input: {
   readonly state: OrdinaryRunState;
-  readonly assistantEntryRef: AgentSessionEntryRef;
+  readonly checkpoint: AgentSessionCheckpointRef;
   readonly providerCallIds: readonly string[];
   readonly invocationIds: readonly string[];
 }): OrdinaryRunState {
@@ -554,7 +540,7 @@ export function acceptOrdinaryToolRound(input: {
 
 function acceptedOrdinaryToolRound(input: {
   readonly state: OrdinaryRunState;
-  readonly assistantEntryRef: AgentSessionEntryRef;
+  readonly checkpoint: AgentSessionCheckpointRef;
   readonly providerCallIds: readonly string[];
   readonly invocationIds: readonly string[];
 }): NonNullable<OrdinaryRunState["pendingToolRound"]> {
@@ -562,12 +548,6 @@ function acceptedOrdinaryToolRound(input: {
     throw new OrdinaryFeatureError(
       "ordinary_run_state_conflict",
       "An Ordinary pending tool round requires a rollbackable Session prefix",
-    );
-  }
-  if (input.assistantEntryRef.sessionId !== input.state.sessionRef.sessionId) {
-    throw new OrdinaryFeatureError(
-      "ordinary_run_state_conflict",
-      "An Ordinary pending tool round cannot reference a different Session",
     );
   }
   if (input.invocationIds.length === 0) throw new Error("An Ordinary pending tool round requires tool invocation identities");
@@ -581,7 +561,7 @@ function acceptedOrdinaryToolRound(input: {
     throw new Error("An Ordinary pending tool round cannot contain duplicate tool invocation identities");
   }
   return {
-    assistantEntryRef: cloneJson(input.assistantEntryRef),
+    checkpoint: cloneJson(input.checkpoint),
     providerCallIds: [...input.providerCallIds],
     invocationIds: [...input.invocationIds],
   };
@@ -1043,19 +1023,23 @@ function eventForTransition(
         return {
             ...base,
             type: "context.compaction.completed",
-            compactionEntryRef: cloneJson(transition.checkpoint.compactionEntryRef),
+            compactionCheckpoint: cloneJson(transition.checkpoint.checkpoint),
             tokensBefore: transition.checkpoint.tokensBefore,
-            replacedImageBlocks: transition.checkpoint.replacedImageBlocks,
           };
       }
-      if ((transition.checkpoint.kind === "assistant_tool_call_entry_committed" ||
-          transition.checkpoint.kind === "assistant_response_entry_committed") &&
-          transition.modelRequestId !== undefined) {
+      if (transition.checkpoint.kind === "assistant_tool_call_entry_committed" ||
+          transition.checkpoint.kind === "assistant_response_entry_committed") {
+        if (transition.modelRequestId === undefined) {
+          throw new OrdinaryFeatureError(
+            "ordinary_run_state_conflict",
+            "Assistant Session checkpoint requires a model request identity",
+          );
+        }
         return {
           ...base,
           type: "model.output.completed",
           modelRequestId: transition.modelRequestId,
-          assistantEntryRef: cloneJson(transition.checkpoint.assistantEntryRef),
+          assistantCheckpoint: cloneJson(transition.checkpoint.checkpoint),
         };
       }
       return undefined;
@@ -1145,8 +1129,7 @@ function samePendingToolRound(
   left: NonNullable<OrdinaryRunState["pendingToolRound"]>,
   right: NonNullable<OrdinaryRunState["pendingToolRound"]>,
 ): boolean {
-  return left.assistantEntryRef.sessionId === right.assistantEntryRef.sessionId
-    && left.assistantEntryRef.entryId === right.assistantEntryRef.entryId
+  return left.checkpoint.checkpointId === right.checkpoint.checkpointId
     && sameOrderedIds(left.providerCallIds, right.providerCallIds)
     && sameOrderedIds(left.invocationIds, right.invocationIds);
 }

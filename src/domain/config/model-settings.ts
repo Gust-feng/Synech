@@ -1,10 +1,15 @@
-import type { ModelCapabilityOverrideValues, ResolvedModelCapabilities } from "./model-facts.js";
+import type { ModelThinkingLevelName, ResolvedModelCapabilities } from "./model-facts.js";
 
-export type ConfiguredModelRuntimeMode = "none" | "openai-compatible" | "openai-responses";
+export type ConfiguredModelRuntimeMode =
+  | "none"
+  | "anthropic-messages"
+  | "openai-compatible"
+  | "openai-responses";
 
 export type ConfiguredModelProviderKind = "openai_compatible";
 
 export type ConfiguredModelProtocolKind =
+  | "anthropic_messages"
   | "openai_responses"
   | "openai_compatible_chat_completions";
 
@@ -44,9 +49,33 @@ export type ProviderProtocolProfile = {
 
 export type ModelStability = "stable" | "preview" | "deprecated" | "unknown";
 
-export type OpenAIReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
+export type OpenAIReasoningEffort =
+  | "none"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max";
 
-export type ModelRunReasoningEffort = "low" | "medium" | "high";
+/**
+ * 运行级推理档位。
+ *
+ * 直接派生自 Pi 的档位名，排除 "off"（那是"不请求档位"，用 absence 表达）。
+ * 产品**不维护自己的档位集合**：模型实际支持哪几档完全由该模型真实的
+ * `thinkingLevelMap` 决定，档位多于此集合的上游 api 由 Pi 自己扩展。
+ */
+export type ModelRunReasoningEffort = Exclude<ModelThinkingLevelName, "off">;
+
+/** 档位到展示名的映射；新档位必须在这里补一个名字，否则无法在 UI 呈现。 */
+export const MODEL_RUN_REASONING_EFFORT_LABELS: Readonly<Record<ModelRunReasoningEffort, string>> = {
+  minimal: "极简",
+  low: "轻量",
+  medium: "标准",
+  high: "深入",
+  xhigh: "极深",
+  max: "最高",
+};
 
 export type OpenAIReasoningSummary = "auto" | "concise" | "detailed";
 
@@ -79,7 +108,6 @@ export type ModelProviderPreset = {
   readonly modelsPath: string;
   readonly protocolProfileId?: ProviderProtocolProfileId;
   readonly supportedProtocolKinds?: readonly ConfiguredModelProtocolKind[];
-  readonly defaultModel?: string;
   readonly regionLabel?: string;
   readonly docsUrl?: string;
   /**
@@ -88,6 +116,8 @@ export type ModelProviderPreset = {
    * OpenAI 兼容端点）时，该连接的全部模型都按「远程发现、Pi 未识别」处理。
    */
   readonly piProviderId?: string;
+  /** Other Pi provider IDs accepted by this preset's Pi-native connection. */
+  readonly piProviderIds?: readonly string[];
 };
 
 export type ModelProviderModelCatalogItem = {
@@ -112,14 +142,6 @@ export type ModelCapabilityProfile = {
   readonly protocolKind: ConfiguredModelProtocolKind;
   readonly model: string;
   readonly capabilities: ResolvedModelCapabilities;
-};
-
-export type ModelCapabilityOverrideSettings = {
-  readonly profileId?: string;
-  readonly providerKind?: ConfiguredModelProviderKind;
-  readonly model: string;
-  readonly capabilities: ModelCapabilityOverrideValues;
-  readonly updatedAt: string;
 };
 
 export type ModelProviderProfileSettings = {

@@ -44,6 +44,7 @@ export function App(): React.ReactElement {
     modelOptions,
     selectedModelId,
     selectedModelSupportsReasoningEffort,
+    selectedModelRunReasoningLevels,
     selectedModelContextWindowTokens,
   } = configState;
   const shellState = useAppShellState();

@@ -149,6 +149,12 @@ export function createOrdinaryExecutionCoordinator() {
     rollbackApprovalDecision,
     finishApprovalDecision,
     hasExecution: (runId: string) => executions.has(runId),
+    async awaitExecution(runId: string) {
+      // Resolves once the run's execution task has fully unwound — Pi's abort
+      // has settled and the session lease is released — so a cancellation
+      // rollback never rewinds the branch under Pi's own completion writes.
+      await executions.get(runId)?.catch(() => undefined);
+    },
     startExecutionTask,
     trackPostExecutionTask,
     retainCancellationContinuation(runId: string, continuation: OrdinaryExecutionContinuation | undefined) {

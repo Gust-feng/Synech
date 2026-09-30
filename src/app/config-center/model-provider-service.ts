@@ -3,8 +3,6 @@ import type {
   CreateModelProviderProfileInput,
   LocalDevSecretStore,
   LocalSettings,
-  ModelCapabilityOverrideValues,
-  ModelCapabilityOverrideSettings,
   ModelProviderModelCatalog,
   ModelProviderProfileSettings,
   SanitizedModelProviderConfig,
@@ -22,7 +20,6 @@ import {
   normalizeProfileId,
   normalizeRequiredConfigString,
   requireActiveModelProfile,
-  sanitizeCapabilityOverride,
 } from "./settings-schema.js";
 import {
   toSanitizedModelProfile,
@@ -255,37 +252,6 @@ export async function updateModelProviderConfig(
   };
 }
 
-export function updateModelCapabilityOverride(
-  current: LocalSettings,
-  input: {
-    readonly profileId?: string;
-    readonly model: string;
-    readonly providerKind?: ConfiguredModelProviderKind;
-    readonly capabilities: ModelCapabilityOverrideValues;
-  },
-  now: string,
-): SettingsChange<readonly ModelCapabilityOverrideSettings[]> {
-  const profileId = input.profileId === undefined ? undefined : normalizeProfileId(input.profileId);
-  const nextOverride: ModelCapabilityOverrideSettings = {
-    ...(profileId === undefined ? {} : { profileId }),
-    providerKind: normalizeModelProviderKind(input.providerKind),
-    model: normalizeRequiredConfigString(input.model, "model"),
-    capabilities: sanitizeCapabilityOverride(input.capabilities),
-    updatedAt: now,
-  };
-  const existing = current.modelCapabilityOverrides ?? [];
-  const settings = normalizeLocalSettings({
-    ...current,
-    version: 1,
-    modelCapabilityOverrides: [
-      ...existing.filter((item) => !sameCapabilityOverrideScope(item, nextOverride)),
-      nextOverride,
-    ],
-    updatedAt: now,
-  });
-  return { settings, result: settings.modelCapabilityOverrides ?? [] };
-}
-
 function createModelProviderProfileFallback(
   profileId: string,
   label: string,
@@ -309,13 +275,4 @@ function builtinPresetForProtectedProfile(
   profile: Pick<ModelProviderProfileSettings, "profileId">,
 ): ReturnType<typeof listBuiltinModelProviderPresets>[number] | undefined {
   return builtinPresetForProfileId(profile.profileId);
-}
-
-function sameCapabilityOverrideScope(
-  left: ModelCapabilityOverrideSettings,
-  right: ModelCapabilityOverrideSettings,
-): boolean {
-  return left.profileId === right.profileId &&
-    left.providerKind === right.providerKind &&
-    left.model === right.model;
 }

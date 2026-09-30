@@ -7,7 +7,7 @@ import {
 export type ModelVisibleToolDefinitionTokenCounter = (serializedDefinitions: string) => number;
 
 export type ModelVisibleToolDefinitionSerialization = {
-  readonly api: "openai-completions" | "openai-responses";
+  readonly api: "anthropic-messages" | "openai-completions" | "openai-responses";
   /** OpenAI-compatible Chat providers may reject the optional `strict` field. */
   readonly includeStrict: boolean;
 };
@@ -20,6 +20,8 @@ export function toolDefinitionSerializationApiForProtocol(
       return "openai-completions";
     case "openai_responses":
       return "openai-responses";
+    case "anthropic_messages":
+      return "anthropic-messages";
     default: {
       const unsupportedProtocolKind: never = protocolKind;
       throw new Error(`Model visible tool definitions do not support protocol kind ${JSON.stringify(unsupportedProtocolKind)}.`);
@@ -152,6 +154,7 @@ function assertSupportedDefinitionSerializationApi(
   switch (api) {
     case "openai-completions":
     case "openai-responses":
+    case "anthropic-messages":
       return;
     default: {
       const unsupportedApi: never = api;

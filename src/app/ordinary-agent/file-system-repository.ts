@@ -175,8 +175,8 @@ const toolCallSchema = z.object({
 });
 const configSchema = z.object({
   profileId: z.string().min(1), providerKind: z.literal("openai_compatible"),
-  protocolKind: z.enum(["openai_responses", "openai_compatible_chat_completions"]),
-  baseUrl: z.string(), defaultAiMode: z.enum(["openai-compatible", "openai-responses"]),
+  protocolKind: z.enum(["anthropic_messages", "openai_responses", "openai_compatible_chat_completions"]),
+  baseUrl: z.string(), defaultAiMode: z.enum(["anthropic-messages", "openai-compatible", "openai-responses"]),
   secretRef: z.string(), secretConfigured: z.boolean(), updatedAt: z.string().min(1),
 }).passthrough();
 const resolvedModelCapabilitiesSchema = z.object({
@@ -233,8 +233,8 @@ const agentNoteVersionsSchema = z.object({
   }).strict(),
 }).strict();
 const birthSchema = z.object({
-  instructions: z.string(), aiMode: z.enum(["none", "openai-compatible", "openai-responses"]), config: configSchema,
-  reasoningEffort: z.enum(["low", "medium", "high"]).optional(),
+  instructions: z.string(), aiMode: z.enum(["none", "anthropic-messages", "openai-compatible", "openai-responses"]), config: configSchema,
+  reasoningEffort: z.enum(["minimal", "low", "medium", "high", "xhigh", "max"]).optional(),
   agentDefinitionRef: z.object({
     agentId: z.string().min(1), agentDisplayName: z.string(), promptRef: z.string().min(1), promptVersion: z.string().min(1),
     outputContractId: z.string().min(1), toolVisibilityProfileId: z.string().min(1), definitionHash: z.string().optional(),
@@ -312,9 +312,17 @@ const capabilityResolutionSchema = z.object({
   warnings: z.array(z.string()),
   createdAt: z.string().min(1),
 }).strict();
-const sessionEntryRefSchema = z.object({
+const sessionCheckpointRefSchema = z.object({
   sessionId: z.string().min(1),
-  entryId: z.string().min(1),
+  checkpointId: z.string().min(1),
+  kind: z.enum([
+    "run_started",
+    "input_committed",
+    "assistant_tool_calls_committed",
+    "tool_results_committed",
+    "compaction_committed",
+    "assistant_response_committed",
+  ]),
 }).strict();
 const eventBase = {
   eventId: z.string().min(1), runId: z.string().min(1), sequence: z.number().int().positive(), recordedAt: z.string().min(1),
@@ -326,7 +334,7 @@ const eventSchema = z.discriminatedUnion("type", [
     ...eventBase,
     type: z.literal("model.output.completed"),
     modelRequestId: z.string().min(1),
-    assistantEntryRef: sessionEntryRefSchema,
+    assistantCheckpoint: sessionCheckpointRefSchema,
   }).strict(),
   z.object({
     ...eventBase,
@@ -338,9 +346,8 @@ const eventSchema = z.discriminatedUnion("type", [
   z.object({
     ...eventBase,
     type: z.literal("context.compaction.completed"),
-    compactionEntryRef: sessionEntryRefSchema,
+    compactionCheckpoint: sessionCheckpointRefSchema,
     tokensBefore: z.number().int().nonnegative(),
-    replacedImageBlocks: z.number().int().nonnegative(),
   }).strict(),
   z.object({ ...eventBase, type: z.literal("run.approval_requested"), confirmationRequests: z.array(confirmationSchema).min(1), invocationIds: z.array(z.string().min(1)) }).strict(),
   z.object({ ...eventBase, type: z.literal("run.approval_decided"), decision: confirmationDecisionSchema }).strict(),
@@ -353,21 +360,21 @@ const sessionPhaseSchema = z.discriminatedUnion("phase", [
   z.object({ phase: z.literal("not_started") }).strict(),
   z.object({
     phase: z.literal("started"),
-    startLeafRef: sessionEntryRefSchema.nullable(),
-    compactionEntryRefs: z.array(sessionEntryRefSchema),
+    startCheckpoint: sessionCheckpointRefSchema.nullable(),
+    compactionCheckpoints: z.array(sessionCheckpointRefSchema),
   }).strict(),
   z.object({
     phase: z.literal("rollbackable"),
-    startLeafRef: sessionEntryRefSchema.nullable(),
-    endLeafRef: sessionEntryRefSchema,
-    compactionEntryRefs: z.array(sessionEntryRefSchema),
+    startCheckpoint: sessionCheckpointRefSchema.nullable(),
+    endCheckpoint: sessionCheckpointRefSchema,
+    compactionCheckpoints: z.array(sessionCheckpointRefSchema),
   }).strict(),
   z.object({
     phase: z.literal("completion_candidate"),
-    startLeafRef: sessionEntryRefSchema.nullable(),
-    rollbackLeafRef: sessionEntryRefSchema,
-    assistantEntryRef: sessionEntryRefSchema,
-    compactionEntryRefs: z.array(sessionEntryRefSchema),
+    startCheckpoint: sessionCheckpointRefSchema.nullable(),
+    rollbackCheckpoint: sessionCheckpointRefSchema,
+    assistantCheckpoint: sessionCheckpointRefSchema,
+    compactionCheckpoints: z.array(sessionCheckpointRefSchema),
   }).strict(),
 ]);
 const rawStateSchema = z.object({
@@ -393,6 +400,7 @@ const rawStateSchema = z.object({
         // 请求解析不读取，只随 run 快照持久化供投影/恢复使用
         automaticSpaceReference: z.boolean().optional(),
         sourceIdentity: z.string().min(1).optional(),
+        mountVersion: z.string().min(1).optional(),
         kind: z.enum(["file", "project", "web", "workspace"]),
         title: z.string().optional(),
         summary: z.string().optional(),
@@ -415,7 +423,7 @@ const rawStateSchema = z.object({
   session: sessionPhaseSchema,
   visibleAssistantText: z.string().optional(),
   pendingToolRound: z.object({
-    assistantEntryRef: sessionEntryRefSchema,
+    checkpoint: sessionCheckpointRefSchema,
     providerCallIds: z.array(z.string().min(1)).min(1),
     invocationIds: z.array(z.string().min(1)).min(1),
   }).strict().optional(),
@@ -467,14 +475,14 @@ const rawStateSchema = z.object({
   const sessionRefs = state.session.phase === "not_started"
     ? []
     : [
-        state.session.startLeafRef,
-        ...state.session.compactionEntryRefs,
-        ...(state.session.phase === "rollbackable" ? [state.session.endLeafRef] : []),
+        state.session.startCheckpoint,
+        ...state.session.compactionCheckpoints,
+        ...(state.session.phase === "rollbackable" ? [state.session.endCheckpoint] : []),
         ...(state.session.phase === "completion_candidate"
-          ? [state.session.rollbackLeafRef, state.session.assistantEntryRef]
+          ? [state.session.rollbackCheckpoint, state.session.assistantCheckpoint]
           : []),
       ].filter((ref) => ref !== null);
-  if (state.pendingToolRound !== undefined) sessionRefs.push(state.pendingToolRound.assistantEntryRef);
+  if (state.pendingToolRound !== undefined) sessionRefs.push(state.pendingToolRound.checkpoint);
   if (sessionRefs.some((ref) => ref.sessionId !== state.sessionRef.sessionId)) {
     context.addIssue({ code: "custom", message: "run Session entry ref belongs to a different Session", path: ["session"] });
   }

@@ -3,7 +3,6 @@ import path from "node:path";
 import type { ConversationOwner } from "../../domain/execution-scope/index.js";
 import type {
   CapabilityMcpCatalogItem,
-  ModelCapabilityOverrideSettings,
   OrdinaryCapabilitySnapshot,
   ResolvedModelCapabilities,
   SanitizedInformationAccessConfig,
@@ -73,7 +72,6 @@ export type CapabilityCenterOptions = {
    */
   readonly resolveModelCapabilities: (input: {
     readonly profile: SanitizedModelProviderConfig;
-    readonly overrides?: readonly ModelCapabilityOverrideSettings[];
   }) => ResolvedModelCapabilities;
 };
 
@@ -156,9 +154,8 @@ export class CapabilityCenter {
   }
 
   private async buildSnapshot(input: CapabilityCenterSnapshotInput = {}): Promise<CapabilityCenterSnapshotResult> {
-    const [activeModel, overrides, toolStates, toolConfirmation, skillTrigger, mcpServers, commandShell, env, webSearch] = await Promise.all([
+    const [activeModel, toolStates, toolConfirmation, skillTrigger, mcpServers, commandShell, env, webSearch] = await Promise.all([
       this.options.configCenter.getModelProviderConfig(),
-      this.options.configCenter.listModelCapabilityOverrides(),
       this.options.configCenter.listToolStates(),
       this.options.configCenter.getToolConfirmationConfig(),
       this.options.configCenter.getSkillTriggerConfig(),
@@ -172,10 +169,7 @@ export class CapabilityCenter {
       this.listSkills({ executionRoot }),
       this.listSubAgents({ executionRoot }),
     ]);
-    const modelCapabilities = this.options.resolveModelCapabilities({
-      profile: activeModel,
-      ...(overrides === undefined ? {} : { overrides }),
-    });
+    const modelCapabilities = this.options.resolveModelCapabilities({ profile: activeModel });
     const subAgentRoots = this.subAgentRootsFor({ executionRoot });
     const registry = new ToolRegistry({ toolCenter: { outputStore: this.options.toolOutputStore } });
     const hostContributions = this.options.resolveToolContributions?.({

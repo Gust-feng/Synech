@@ -19,7 +19,7 @@ import type {
 import type { ModelRuntimeMode } from "../model-runtime/contracts.js";
 import type {
   AgentSessionExecutionRefs,
-  AgentSessionEntryRef,
+  AgentSessionCheckpointRef,
   AgentSessionRef,
   AgentSessionWriteCheckpoint,
 } from "../model-runtime/agent-session.js";
@@ -257,8 +257,8 @@ export type OrdinaryRunStatus =
     };
 
 export type OrdinaryPendingToolRound = {
-  /** Pi Session entry containing the provider-ordered root tool calls. */
-  readonly assistantEntryRef: AgentSessionEntryRef;
+  /** Product identity of the assistant turn that requested these calls. */
+  readonly checkpoint: AgentSessionCheckpointRef;
   /** Provider call identities in the exact assistant-message order. */
   readonly providerCallIds: readonly string[];
   /** Synech invocation identities of the root tool calls in provider order. */
@@ -270,21 +270,21 @@ export type OrdinaryRunSessionPhase =
   | { readonly phase: "not_started" }
   | {
       readonly phase: "started";
-      readonly startLeafRef: AgentSessionEntryRef | null;
-      readonly compactionEntryRefs: readonly AgentSessionEntryRef[];
+      readonly startCheckpoint: AgentSessionCheckpointRef | null;
+      readonly compactionCheckpoints: readonly AgentSessionCheckpointRef[];
     }
   | {
       readonly phase: "rollbackable";
-      readonly startLeafRef: AgentSessionEntryRef | null;
-      readonly endLeafRef: AgentSessionEntryRef;
-      readonly compactionEntryRefs: readonly AgentSessionEntryRef[];
+      readonly startCheckpoint: AgentSessionCheckpointRef | null;
+      readonly endCheckpoint: AgentSessionCheckpointRef;
+      readonly compactionCheckpoints: readonly AgentSessionCheckpointRef[];
     }
   | {
       readonly phase: "completion_candidate";
-      readonly startLeafRef: AgentSessionEntryRef | null;
-      readonly rollbackLeafRef: AgentSessionEntryRef;
-      readonly assistantEntryRef: AgentSessionEntryRef;
-      readonly compactionEntryRefs: readonly AgentSessionEntryRef[];
+      readonly startCheckpoint: AgentSessionCheckpointRef | null;
+      readonly rollbackCheckpoint: AgentSessionCheckpointRef;
+      readonly assistantCheckpoint: AgentSessionCheckpointRef;
+      readonly compactionCheckpoints: readonly AgentSessionCheckpointRef[];
     };
 
 type OrdinaryRunEventBase = {
@@ -299,15 +299,13 @@ export type OrdinaryRunEvent = OrdinaryRunEventBase & (
   | {
       readonly type: "model.output.completed";
       readonly modelRequestId: string;
-      readonly assistantEntryRef: AgentSessionEntryRef;
+      readonly assistantCheckpoint: AgentSessionCheckpointRef;
     }
   | { readonly type: "model.reasoning.completed"; readonly modelRequestId: string; readonly contentIndex: number; readonly content: string }
   | {
       readonly type: "context.compaction.completed";
-      readonly compactionEntryRef: AgentSessionEntryRef;
+      readonly compactionCheckpoint: AgentSessionCheckpointRef;
       readonly tokensBefore: number;
-      /** Image blocks replaced with text placeholders before the compaction summarized them. */
-      readonly replacedImageBlocks: number;
     }
   | { readonly type: "run.approval_requested"; readonly confirmationRequests: readonly ConfirmationRequest[]; readonly invocationIds: readonly string[] }
   | { readonly type: "run.approval_decided"; readonly decision: ConfirmationDecision }
@@ -509,7 +507,7 @@ export type OrdinaryRunActivity = OrdinaryRunActivityBase & (
       readonly type: "model.output.completed";
       readonly durability: "durable";
       readonly modelRequestId: string;
-      readonly assistantEntryRef: AgentSessionEntryRef;
+      readonly assistantCheckpoint: AgentSessionCheckpointRef;
       readonly content: string;
     }
   | { readonly type: "model.request"; readonly durability: "live_only"; readonly reason: "initial" | "after_tool" | "after_approval" }
@@ -554,7 +552,7 @@ export interface OrdinaryExecutionPort {
   /** Finalizes an active Session writer after Ordinary durably commits terminal state. */
   finalizeSession?(
     runId: string,
-    target?: import("../model-runtime/agent-session.js").AgentSessionEntryRef | null,
+    target?: AgentSessionCheckpointRef | null,
   ): Promise<OrdinarySessionFinalizationResult>;
 }
 

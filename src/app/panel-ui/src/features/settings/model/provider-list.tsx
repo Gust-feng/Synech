@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Plus, Search, Trash2 } from "lucide-react";
+import { GripVertical, Plus, Search, Trash2, X } from "lucide-react";
 import type { ModelProviderListItem } from "./settings-projection";
 import { ProviderLogo } from "./settings-icons";
 import { sameStringList } from "./settings-list-equality";
@@ -14,9 +14,10 @@ export function ModelProviderList(props: {
   readonly reorderEnabled: boolean;
   readonly onQueryChange: (value: string) => void;
   readonly onSelect: (item: ModelProviderListItem) => void;
-  readonly onAddCustomProvider: () => void;
   readonly onReorder: (order: readonly string[]) => Promise<void>;
   readonly onDeleteProvider: (item: ModelProviderListItem) => Promise<void>;
+  readonly showProviderSearch: boolean;
+  readonly onOpenCatalog: () => void;
 }): React.ReactElement {
   const [draggingKey, setDraggingKey] = useState<string | undefined>(undefined);
   const [insertIndex, setInsertIndex] = useState<number | undefined>(undefined);
@@ -260,20 +261,22 @@ export function ModelProviderList(props: {
 
   return (
     <aside className="provider-list-pane" aria-label="模型服务">
-      <div className="provider-list-header">
-        <label className="provider-search">
-          <Search size={14} />
-          <input
-            value={props.query}
-            onChange={(event) => props.onQueryChange(event.target.value)}
-            placeholder="搜索"
-            spellCheck={false}
-            autoComplete="off"
-            autoCorrect="off"
-            autoCapitalize="off"
-          />
-        </label>
-      </div>
+      {props.showProviderSearch && (
+        <div className="provider-list-header">
+          <label className="provider-search">
+            <Search size={14} />
+            <input
+              value={props.query}
+              onChange={(event) => props.onQueryChange(event.target.value)}
+              placeholder="搜索服务"
+              spellCheck={false}
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+            />
+          </label>
+        </div>
+      )}
       <div className={`provider-list ${draggingKey === undefined ? "" : "reordering"} ${dropHandoffActive ? "drop-handoff" : ""}`}>
         {props.items.map((item, index) => {
           const selected = item.key === props.selectedItem.key;
@@ -304,36 +307,10 @@ export function ModelProviderList(props: {
               <button
                 type="button"
                 className="provider-row-main"
-                onClick={() => {
-                  if (suppressSelectRef.current) {
-                    suppressSelectRef.current = false;
-                    return;
-                  }
-                  props.onSelect(item);
-                }}
-                onPointerDown={(event) => {
-                  if (!props.reorderEnabled || event.button !== 0) return;
-                  event.currentTarget.setPointerCapture(event.pointerId);
-                  beginPointerReorder(item, index, event.pointerId, event.clientY, false, true, providerRowStep(event.currentTarget));
-                }}
-                onPointerMove={(event) => movePointerReorder(item, event.pointerId, event.clientX, event.clientY)}
-                onPointerUp={(event) => {
-                  if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-                    event.currentTarget.releasePointerCapture(event.pointerId);
-                  }
-                  endPointerReorder(item, event.pointerId);
-                }}
-                onPointerCancel={(event) => {
-                  if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-                    event.currentTarget.releasePointerCapture(event.pointerId);
-                  }
-                  cancelReorder();
-                }}
+                onClick={() => props.onSelect(item)}
               >
                 <ProviderLogo item={item} />
-                <span>
-                  <strong>{item.title}</strong>
-                </span>
+                <strong className="provider-row-title">{item.title}</strong>
               </button>
               <button
                 type="button"
@@ -363,11 +340,12 @@ export function ModelProviderList(props: {
                   cancelReorder();
                 }}
               >
-                <span className="provider-row-grip" aria-hidden="true" />
+                <GripVertical size={14} className="provider-row-grip-icon" aria-hidden="true" />
               </button>
             </article>
           );
         })}
+        {props.items.length === 0 && <p className="provider-directory-empty">没有匹配的服务</p>}
       </div>
       <button
         ref={deleteZoneRef}
@@ -375,15 +353,74 @@ export function ModelProviderList(props: {
         className={`provider-add-button ${deleteMode ? "delete-drop" : ""} ${deleteZoneActive ? "active" : ""}`}
         onClick={() => {
           if (deleteMode) return;
-          props.onAddCustomProvider();
+          props.onOpenCatalog();
         }}
         disabled={deleteMode ? !deleteAvailable : props.saving}
-        aria-label={deleteMode ? "删除模型供应商" : "添加模型供应商"}
+        aria-label={deleteMode ? "删除模型服务" : "添加服务"}
       >
         {deleteMode ? <Trash2 size={16} /> : <Plus size={16} />}
-        {deleteMode ? (deleteAvailable ? "删除模型供应商" : "无法删除") : "添加模型供应商"}
+        {deleteMode ? (deleteAvailable ? "删除模型服务" : "无法删除") : "添加服务"}
       </button>
     </aside>
+  );
+}
+
+export function ProviderDirectory(props: {
+  readonly items: readonly ModelProviderListItem[];
+  readonly saving?: boolean;
+  readonly onClose: () => void;
+  readonly onAddProvider: (item: ModelProviderListItem) => Promise<void>;
+  readonly onAddCustomProvider: () => Promise<void>;
+}): React.ReactElement {
+  const [query, setQuery] = useState("");
+  const [addingKey, setAddingKey] = useState<string | undefined>(undefined);
+  const normalizedQuery = query.trim().toLowerCase();
+  const items = props.items.filter((item) => {
+    if (normalizedQuery.length === 0) return true;
+    const presetKey = item.presetId?.toLowerCase() ?? "";
+    const aliases = PROVIDER_SEARCH_ALIASES[presetKey] ?? [];
+    return [item.title, item.vendor, item.presetId, ...aliases].some((value) =>
+      value?.toLowerCase().includes(normalizedQuery),
+    );
+  });
+  return (
+    <section className="provider-directory-pane" aria-label="添加服务">
+      <header className="provider-directory-header">
+        <div>
+          <h2>添加服务</h2>
+        </div>
+        <button type="button" className="provider-directory-close" onClick={props.onClose} aria-label="返回我的服务" title="返回我的服务">
+          <X size={18} />
+        </button>
+      </header>
+      <div className="provider-directory-toolbar">
+        <label className="provider-directory-search">
+          <Search size={17} />
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索厂商或平台" spellCheck={false} autoComplete="off" />
+        </label>
+        <button type="button" className="provider-directory-custom" onClick={() => void props.onAddCustomProvider()} disabled={props.saving}>
+          <Plus size={16} /> 自定义服务
+        </button>
+      </div>
+      {items.length === 0 ? <p className="provider-directory-empty">没有匹配的服务</p> : <div className="provider-directory-groups">
+        <div className="provider-directory-grid">
+          {items.map((item) => (
+            <button
+              type="button"
+              key={item.key}
+              disabled={addingKey !== undefined || props.saving}
+              onClick={() => {
+                setAddingKey(item.key);
+                void props.onAddProvider(item).finally(() => setAddingKey(undefined));
+              }}
+            >
+              <ProviderLogo item={item} large />
+              <span><strong>{item.title}</strong><small>{item.vendor ?? "服务连接"}</small></span>
+            </button>
+          ))}
+        </div>
+      </div>}
+    </section>
   );
 }
 
@@ -443,3 +480,17 @@ function providerRowStep(node: HTMLElement): number {
 function clampIndex(value: number, itemCount: number): number {
   return Math.min(Math.max(value, 0), Math.max(0, itemCount - 1));
 }
+
+const PROVIDER_SEARCH_ALIASES: Readonly<Record<string, readonly string[]>> = {
+  moonshot: ["kimi", "月之暗面", "moonshot"],
+  glm: ["智谱", "zhipu", "glm", "bigmodel", "zai", "z.ai"],
+  openai: ["chatgpt", "gpt", "openai"],
+  anthropic: ["claude", "anthropic"],
+  qwen: ["通义", "千问", "阿里", "dashscope", "qwen"],
+  minimax: ["稀宇", "minimax", "海螺"],
+  deepseek: ["深度求索", "deepseek"],
+  google: ["gemini", "gemma", "google", "谷歌"],
+  xai: ["grok", "xai", "x-ai"],
+  meta: ["llama", "meta"],
+  xiaomi: ["小米", "mimo", "xiaomi"],
+};

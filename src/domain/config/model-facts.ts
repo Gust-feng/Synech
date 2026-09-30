@@ -12,10 +12,11 @@
  * 到这里）；已知/未知二态不得合并为同一伪造事实类型。
  */
 
-import type { ModelPreferredApiStyle, ModelStability } from "./model-settings.js";
-
 /** 产品可服务的 transport；已知模型的 transport 由真实 Pi Model.api 决定。 */
-export type ModelTransportKind = "openai_compatible_chat_completions" | "openai_responses";
+export type ModelTransportKind =
+  | "openai_compatible_chat_completions"
+  | "openai_responses"
+  | "anthropic_messages";
 
 /** Pi 思考档位名；可用档位动态来自真实 Pi Model.thinkingLevelMap。 */
 export type ModelThinkingLevelName = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -52,52 +53,26 @@ export type UnconfirmedModelFacts = {
 
 export type ModelFacts = ConfirmedModelFacts | UnconfirmedModelFacts;
 
-/** 用户对单个 model id 的显式能力覆写值（ConfigCenter 持久化；用户自有事实源）。 */
-export type ModelCapabilityOverrideValues = {
-  readonly contextWindowTokens?: number;
-  readonly maxOutputTokens?: number;
-  readonly supportsToolCalling?: boolean;
-  readonly supportsParallelToolCalls?: boolean;
-  readonly supportsStructuredOutputs?: boolean;
-  readonly supportsStreaming?: boolean;
-  readonly supportsVisionInput?: boolean;
-  readonly supportsReasoningEffort?: boolean;
-  readonly supportsReasoningOutput?: boolean;
-  readonly preferredApiStyle?: ModelPreferredApiStyle;
-  readonly stability?: ModelStability;
-  readonly lastVerifiedAt?: string;
-};
-
-/**
- * 运行期能力投影：`resolveModelCapabilities` 的返回契约。
- *
- * `facts` 是唯一的模型事实来源（Pi 已知事实 / 未确认二态）；`override` 是用户对
- * 该 model id 的显式声明，只在与确认事实合并时生效，永远不伪造未确认事实。
- */
 export type ResolvedModelCapabilities = {
   readonly facts: ModelFacts;
-  readonly override?: ModelCapabilityOverrideValues;
 };
 
 export function isConfirmedModelFacts(facts: ModelFacts): facts is ConfirmedModelFacts {
   return facts.status === "confirmed";
 }
 
-/**
- * 生效值优先级：用户显式覆写 > Pi 已确认事实 > 未确认（undefined，不得猜测）。
- * 用户覆写是用户对自有模型 id 的显式声明，遵循既有 ADR 0001 的最强层语义。
- */
+/** @deprecated 覆写层过渡保留；最终口径只读 Pi 已确认事实或未确认。 */
 export function resolvedContextWindowTokens(resolved: ResolvedModelCapabilities): number | undefined {
-  return resolved.override?.contextWindowTokens ?? confirmedOrUndefined(resolved, (facts) => facts.contextWindowTokens);
+  return confirmedOrUndefined(resolved, (facts) => facts.contextWindowTokens);
 }
 
 export function resolvedMaxOutputTokens(resolved: ResolvedModelCapabilities): number | undefined {
-  return resolved.override?.maxOutputTokens ?? confirmedOrUndefined(resolved, (facts) => facts.maxOutputTokens);
+  return confirmedOrUndefined(resolved, (facts) => facts.maxOutputTokens);
 }
 
 /** undefined = 视觉输入未确认；调用方按保守策略处理（不发送图片）。 */
 export function resolvedSupportsVisionInput(resolved: ResolvedModelCapabilities): boolean | undefined {
-  return resolved.override?.supportsVisionInput ?? confirmedOrUndefined(resolved, (facts) => facts.supportsVisionInput);
+  return confirmedOrUndefined(resolved, (facts) => facts.supportsVisionInput);
 }
 
 /**
@@ -109,7 +84,6 @@ export function confirmedModelSupportsReasoningEffort(facts: ConfirmedModelFacts
 }
 
 export function resolvedSupportsReasoningEffort(resolved: ResolvedModelCapabilities): boolean {
-  if (resolved.override?.supportsReasoningEffort !== undefined) return resolved.override.supportsReasoningEffort;
   return resolved.facts.status === "confirmed" && confirmedModelSupportsReasoningEffort(resolved.facts);
 }
 
@@ -120,13 +94,11 @@ export function resolvedThinkingLevels(
 }
 
 export function resolvedSupportsStrictToolSchemas(resolved: ResolvedModelCapabilities): boolean {
-  return resolved.override?.supportsStructuredOutputs ??
-    (resolved.facts.status === "confirmed" && resolved.facts.supportsStrictToolSchemas);
+  return resolved.facts.status === "confirmed" && resolved.facts.supportsStrictToolSchemas;
 }
 
 export function resolvedSupportsParallelToolCalls(resolved: ResolvedModelCapabilities): boolean {
-  return resolved.override?.supportsParallelToolCalls ??
-    (resolved.facts.status === "confirmed" && resolved.facts.supportsParallelToolCalls);
+  return resolved.facts.status === "confirmed" && resolved.facts.supportsParallelToolCalls;
 }
 
 function confirmedOrUndefined<T>(

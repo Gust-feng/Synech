@@ -1,14 +1,14 @@
 
 export {
   ModelRuntimeConfigurationError,
-} from "./openai-runtime-config.js";
+} from "./model-runtime-config.js";
 
 export type {
   ModelRuntimeConfigurationIssueCode,
   ModelRuntimeChannelFactory,
   ModelRuntimeEnvironment,
   ModelRuntimeSummaryInput,
-} from "./openai-runtime-config.js";
+} from "./model-runtime-config.js";
 export type { ModelRuntimeMode, OrdinaryModelRuntimeMode } from "./contracts.js";
 export type {
   AgentLoop,
@@ -23,11 +23,12 @@ export type {
 } from "./agent-loop.js";
 export type {
   AgentSessionExecutionRefs,
-  AgentSessionEntryRef,
+  AgentSessionCheckpointPosition,
   AgentSessionAssistantEntry,
   AgentSessionRef,
   AgentSessionRepository,
   AgentSessionWriteCheckpoint,
+  AgentSessionCheckpointRef,
 } from "./agent-session.js";
 export {
   canonicalToolResultMessage,

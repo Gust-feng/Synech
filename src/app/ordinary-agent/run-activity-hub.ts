@@ -47,7 +47,7 @@ export function createOrdinaryRunActivityHub(options: {
   readonly checkpointIntervalMs: number;
   readonly idFactory: IdFactory;
   readonly now: () => string;
-  readonly sessionRepository: Pick<AgentSessionRepository, "readAssistantEntries">;
+  readonly sessionRepository: Pick<AgentSessionRepository, "readAssistantEntriesByCheckpoint">;
   readonly isReleased: () => boolean;
   readonly getCachedRun: (runId: string) => OrdinaryRunSnapshotDocument | undefined;
   readonly loadRun: (runId: string) => Promise<OrdinaryRunSnapshotDocument | undefined>;
@@ -79,12 +79,12 @@ export function createOrdinaryRunActivityHub(options: {
     state.toolCalls.some((result) => result.status === "approval_required");
 
   async function readRunAssistantEntries(state: OrdinaryRunState) {
-    const entryRefs = state.timeline.flatMap((event) =>
-      event.type === "model.output.completed" ? [event.assistantEntryRef] : []);
-    if (entryRefs.length === 0) return [];
-    return options.sessionRepository.readAssistantEntries({
+    const checkpoints = state.timeline.flatMap((event) =>
+      event.type === "model.output.completed" ? [event.assistantCheckpoint] : []);
+    if (checkpoints.length === 0) return [];
+    return options.sessionRepository.readAssistantEntriesByCheckpoint({
       sessionRef: state.sessionRef,
-      entryRefs,
+      checkpoints,
     });
   }
 
@@ -162,7 +162,7 @@ export function createOrdinaryRunActivityHub(options: {
         type: "model.output.completed",
         durability: "durable",
         modelRequestId: event.modelRequestId,
-        assistantEntryRef: clone(event.assistantEntryRef),
+        assistantCheckpoint: clone(event.assistantCheckpoint),
         content: assistantText,
       };
       stream.activities.push(activity);

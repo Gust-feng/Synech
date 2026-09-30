@@ -273,10 +273,9 @@ async function capabilitySnapshotForRun(
   const snapshot = await runtime.capabilityCenter.snapshot({ executionRoot, memoryOwner, informationAccess });
   if (override === undefined) return snapshot;
   const activeModel = await modelProviderConfigForRun(runtime, override);
-  const overrides = await runtime.configCenter.listModelCapabilityOverrides();
   return {
     ...snapshot,
     activeModel,
-    modelCapabilities: resolveModelCapabilitiesForProfile({ profile: activeModel, overrides }),
+    modelCapabilities: resolveModelCapabilitiesForProfile({ profile: activeModel }),
   };
 }
