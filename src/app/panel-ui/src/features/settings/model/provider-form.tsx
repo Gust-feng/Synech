@@ -1,8 +1,9 @@
-import React from "react";
+import React, { useId } from "react";
 import { Eye, EyeOff } from "lucide-react";
 import { SettingsSelectControl } from "../components/select-control";
 import type { ModelForm, ModelProviderListItem } from "./settings-projection";
 import { modelProtocolKind, modelProtocolOptions } from "./settings-projection";
+import { builtinProviderPresetId } from "./provider-logos";
 
 /**
  * 模型服务表单组件属性定义。
@@ -12,6 +13,7 @@ export type ModelProviderFormProps = {
   readonly item: ModelProviderListItem;
   /** 当前编辑中的表单草稿状态 */
   readonly modelForm: ModelForm;
+  readonly piProviderIds: readonly string[];
   /** 当前 API Key 是否明文显式显示 */
   readonly revealed: boolean;
   /** 是否正在请求解密并显示 API Key */
@@ -39,6 +41,15 @@ export type ModelProviderFormProps = {
  * 以及底层通信协议（Protocol / Transport，如 OpenAI 兼容、Anthropic Messages 等）。
  */
 export function ModelProviderForm(props: ModelProviderFormProps): React.ReactElement {
+  const piProviderListId = useId();
+  const piProviderLocked = props.item.protectedBuiltin ||
+    builtinProviderPresetId({ profileId: props.item.profileId }) !== undefined;
+  const piProviderIds = [...new Set([
+    ...props.piProviderIds,
+    ...(props.item.preset?.piProviderIds ?? []),
+    ...(props.item.piProviderId === undefined ? [] : [props.item.piProviderId]),
+  ])].sort();
+
   return (
     <div className="provider-form">
       <label className="provider-form-full">
@@ -110,6 +121,27 @@ export function ModelProviderForm(props: ModelProviderFormProps): React.ReactEle
           onChange={(value) => props.onUpdateModelForm({ protocolKind: modelProtocolKind(value) })}
         />
       </div>
+      <label className="provider-form-full">
+        <span>Pi Provider</span>
+        <div className="provider-base-url-field">
+          <input
+            aria-label="Pi Provider"
+            value={props.modelForm.piProviderId}
+            list={piProviderListId}
+            disabled={props.saving || piProviderLocked}
+            title={piProviderLocked ? "内置槽位由预设管理" : undefined}
+            spellCheck={false}
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            placeholder="未声明"
+            onChange={(event) => props.onUpdateModelForm({ piProviderId: event.target.value })}
+          />
+          <datalist id={piProviderListId}>
+            {piProviderIds.map((providerId) => <option key={providerId} value={providerId} />)}
+          </datalist>
+        </div>
+      </label>
     </div>
   );
 }

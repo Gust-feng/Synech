@@ -17,7 +17,6 @@ type ProviderCatalogActionsOptions = {
   readonly setModelForm: (form: ModelForm) => void;
   readonly upsertModelFormDraft: (form: ModelForm) => void;
   readonly saveModelImmediately: (form: ModelForm) => Promise<void>;
-  readonly saveProvider: (form: ModelForm) => Promise<void>;
   readonly onFetchModels: (profileId?: string) => Promise<ModelProviderModelCatalog | undefined>;
   readonly onSaveModelCatalog: (profileId: string, catalog: ModelProviderModelCatalog) => Promise<void>;
 };
@@ -31,7 +30,7 @@ export function useProviderCatalogActions(options: ProviderCatalogActionsOptions
 
   useEffect(() => {
     setFetchFeedback(undefined);
-  }, [options.selectedItem?.key]);
+  }, [options.selectedItem === undefined ? undefined : modelProviderFormId(options.selectedItem)]);
 
   async function fetchSelectedModels(): Promise<void> {
     const { selectedItem, selectedForm } = options;
@@ -42,7 +41,7 @@ export function useProviderCatalogActions(options: ProviderCatalogActionsOptions
     try {
       // Fetch always uses the current form, including a key the user just entered.
       // Persist the connection first so discovery never runs against stale secrets.
-      await options.saveProvider(modelFormForProviderItem(selectedForm, selectedItem));
+      await options.saveModelImmediately(modelFormForProviderItem(selectedForm, selectedItem));
       const catalog = await options.onFetchModels(profileId);
       if (catalog !== undefined) {
         options.catalogState.setFetchedCatalogs((previous) => ({
@@ -50,9 +49,7 @@ export function useProviderCatalogActions(options: ProviderCatalogActionsOptions
           [catalog.profileId]: catalog,
         }));
         if (catalog.models.length > 0) {
-          // 获取成功后呼出独立模型挑选面板，由用户自主决定选用哪些模型；
-          // 面板记录打开时的厂商，切换供应商后不得展示给其他厂商
-          options.catalogState.setPickerOpenFor(selectedItem.key);
+          options.catalogState.setPickerOpenFor(profileId);
           setFetchFeedback(undefined);
         } else {
           setFetchFeedback({
@@ -125,21 +122,25 @@ export function useProviderCatalogActions(options: ProviderCatalogActionsOptions
   async function removeCatalogModel(modelId: string): Promise<void> {
     const { selectedItem, selectedForm, selectedCatalog, catalogState } = options;
     const nextModels = (selectedCatalog?.models ?? catalogState.catalogModels).filter((model) => model.id !== modelId);
-    if (selectedForm.model === modelId || selectedItem?.model === modelId) {
-      const fallbackModelId = nextModels[0]?.id ?? "";
-      const nextForm = selectedItem === undefined
-        ? { ...selectedForm, model: fallbackModelId }
-        : modelFormForProviderItem({ ...selectedForm, model: fallbackModelId }, selectedItem);
-      options.setModelForm(nextForm);
-      options.upsertModelFormDraft(nextForm);
-      catalogState.setSelectedModelRowId(fallbackModelId || undefined);
-    }
-    catalogState.setModelNameDrafts((previous) => removeRecordKey(previous, modelId));
     try {
+      if (selectedForm.model === modelId || selectedItem?.model === modelId) {
+        await saveSelectedModel(nextModels[0]?.id ?? "");
+      }
       await saveCatalogModels(nextModels);
+      catalogState.setModelNameDrafts((previous) => removeRecordKey(previous, modelId));
     } catch {
-      return;
+      // The parent owns user-facing error state.
     }
+  }
+
+  async function saveSelectedModel(modelId: string): Promise<void> {
+    const { selectedItem, selectedForm, catalogState } = options;
+    if (selectedItem === undefined) return;
+    const nextForm = modelFormForProviderItem({ ...selectedForm, model: modelId }, selectedItem);
+    await options.saveModelImmediately(nextForm);
+    options.setModelForm(nextForm);
+    options.upsertModelFormDraft(nextForm);
+    catalogState.setSelectedModelRowId(modelId || undefined);
   }
 
   function selectCatalogModel(modelId: string): void {
@@ -191,23 +192,13 @@ export function useProviderCatalogActions(options: ProviderCatalogActionsOptions
     }
 
     try {
+      if (!selectedModelIds.includes(selectedForm.model)) {
+        await saveSelectedModel(nextModels[0]?.id ?? "");
+      }
       await saveCatalogModels(nextModels);
       catalogState.setPickerOpenFor(undefined);
-
-      const currentModelRemoved = !selectedModelIds.includes(selectedForm.model);
-      if (currentModelRemoved) {
-        // 当前激活的模型被移出列表：回退到第一个或者清空
-        const fallbackModelId = nextModels[0]?.id ?? "";
-        if (selectedItem !== undefined) {
-          const nextForm = modelFormForProviderItem({ ...selectedForm, model: fallbackModelId }, selectedItem);
-          options.setModelForm(nextForm);
-          options.upsertModelFormDraft(nextForm);
-          void options.saveModelImmediately(nextForm).catch(() => undefined);
-        }
-        catalogState.setSelectedModelRowId(fallbackModelId || undefined);
-      }
     } catch {
-      // 保持错误捕获
+      // Keep the picker open; the parent owns user-facing error state.
     }
   }
 

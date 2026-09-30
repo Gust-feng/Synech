@@ -41,6 +41,46 @@ test("saving a remote model catalog keeps a user-configured model id outside the
   });
 });
 
+test("explicit model clearing survives reload while an empty discovery catalog preserves manual selection", async () => {
+  await withDirectory(async (directory) => {
+    const { configCenter } = createLocalConfigCenter({ configDirectory: directory });
+    await configCenter.createModelProviderProfile({
+      profileId: "custom_clearing",
+      label: "Custom clearing",
+      baseUrl: "https://connect.example.invalid/v1",
+      protocolKind: "openai_compatible_chat_completions",
+    });
+    for (const profileId of ["default", "custom_clearing"]) {
+      await configCenter.activateModelProviderProfile(profileId);
+      await configCenter.updateModelProviderConfig({ profileId, model: "manually-configured-unknown" });
+      const emptyCatalog = {
+        profileId,
+        baseUrl: "https://connect.example.invalid/v1",
+        modelsPath: "/models",
+        fetchedAt: "2026-09-30T00:00:00.000Z",
+        models: [],
+      };
+      await configCenter.upsertModelProviderModelCatalog(emptyCatalog);
+      let reopened = createLocalConfigCenter({ configDirectory: directory }).configCenter;
+      assert.equal((await reopened.getModelProviderConfig()).model, "manually-configured-unknown");
+
+      // An empty model alone is not an explicit clear request.
+      await configCenter.updateModelProviderConfig(parseConfigUpdate({ profileId, model: "" }));
+      assert.equal((await configCenter.getModelProviderConfig()).model, "manually-configured-unknown");
+
+      // The existing UI save payload requests clearing explicitly.
+      const cleared = await configCenter.updateModelProviderConfig(
+        parseConfigUpdate({ profileId, model: "", clearModel: true }),
+      );
+      assert.equal(cleared.model, undefined);
+      await configCenter.upsertModelProviderModelCatalog(emptyCatalog);
+      reopened = createLocalConfigCenter({ configDirectory: directory }).configCenter;
+      assert.equal((await reopened.getModelProviderConfig()).model, undefined);
+      assert.deepEqual(await reopened.listModelProviderModelCatalogs(), []);
+    }
+  });
+});
+
 test("piProviderId prefills on built-in slots and round-trips on custom profiles", async () => {
   await withDirectory(async (directory) => {
     const { configCenter } = createLocalConfigCenter({ configDirectory: directory });

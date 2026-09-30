@@ -7,6 +7,7 @@ import { ModelPickerPanel } from "./model-picker-panel";
 import { ModelProviderForm } from "./provider-form";
 import { ProviderLogo } from "./settings-icons";
 import { ModelProviderList, ProviderDirectory } from "./provider-list";
+import { modelProviderFormId } from "./settings-projection";
 import {
   useModelProviderManagerState,
   type ModelProviderManagerOptions,
@@ -93,7 +94,7 @@ export function ModelProviderManager(props: ModelProviderManagerProps): React.Re
             setDirectoryOpen(false);
           }}
         />
-      ) : catalogState.pickerOpenFor === selectedItem.key ? (
+      ) : catalogState.pickerOpenFor === modelProviderFormId(selectedItem) ? (
         <ModelPickerPanel
           item={selectedItem}
           availableModels={catalogState.availableCandidates}
@@ -164,6 +165,10 @@ export function ModelProviderManager(props: ModelProviderManagerProps): React.Re
         <ModelProviderForm
           item={selectedItem}
           modelForm={selectedForm}
+          piProviderIds={(props.config?.modelProviderMarket?.presets ?? []).flatMap((preset) => [
+            ...(preset.piProviderIds ?? []),
+            ...(preset.piProviderId === undefined ? [] : [preset.piProviderId]),
+          ])}
           revealed={revealed}
           revealBusy={revealBusy}
           saving={props.saving}

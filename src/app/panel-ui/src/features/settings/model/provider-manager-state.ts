@@ -58,7 +58,7 @@ export function useModelProviderManagerState(props: ModelProviderManagerOptions)
   const providerOrderRef = useRef<readonly string[]>([]);
   const lastActiveProfileIdRef = useRef<string | undefined>(undefined);
   const selectedKeyRef = useRef(selectedKey);
-  const previousSelectedKeyRef = useRef<string | undefined>(undefined);
+  const previousSelectedProfileIdRef = useRef<string | undefined>(undefined);
   const saveQueue = useProviderSaveQueue(props.onSave);
   const revealRef = useRef(props.onRevealModelApiKey);
   revealRef.current = props.onRevealModelApiKey;
@@ -118,9 +118,9 @@ export function useModelProviderManagerState(props: ModelProviderManagerOptions)
   }, [activeProfileId, items, selectedKey]);
 
   useEffect(() => {
-    const nextKey = selectedItem?.key;
-    const switchedProvider = previousSelectedKeyRef.current !== nextKey;
-    previousSelectedKeyRef.current = nextKey;
+    const nextProfileId = selectedItem === undefined ? undefined : modelProviderFormId(selectedItem);
+    const switchedProvider = previousSelectedProfileIdRef.current !== nextProfileId;
+    previousSelectedProfileIdRef.current = nextProfileId;
     if (switchedProvider) {
       // 挑选语义只属于打开时的厂商：切换供应商即清空选择面板与名称草稿
       catalogState.setPickerOpenFor(undefined);
@@ -359,7 +359,6 @@ export function useModelProviderManagerState(props: ModelProviderManagerOptions)
     setModelForm: props.setModelForm,
     upsertModelFormDraft,
     saveModelImmediately: saveQueue.commit,
-    saveProvider: saveQueue.save,
     onFetchModels: props.onFetchModels,
     onSaveModelCatalog: props.onSaveModelCatalog,
   });

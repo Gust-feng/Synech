@@ -3,6 +3,7 @@ import type { ModelProviderModelCatalog } from "@panel-api/config";
 import {
   filterModelCatalogItems,
   modelCatalogItemsWithConfiguredModel,
+  modelProviderFormId,
   type ModelProviderListItem,
   type ModelProviderModelItem,
 } from "./settings-projection";
@@ -27,6 +28,7 @@ export function useModelCatalogState(input: {
   readonly visibleFetchedCandidates: readonly ModelProviderModelItem[];
   readonly showSavedCount: boolean;
   readonly showModelSearch: boolean;
+  /** Stable profile id, including the future profile id of an unsaved preset. */
   readonly pickerOpenFor: string | undefined;
   readonly setPickerOpenFor: Dispatch<SetStateAction<string | undefined>>;
   readonly availableCandidates: readonly ModelProviderModelItem[];
@@ -46,8 +48,8 @@ export function useModelCatalogState(input: {
     [input.selectedCatalog?.models, input.selectedCatalog?.label, input.selectedItem?.model, input.selectedItem?.title]
   );
   const savedModelIds = useMemo(() => new Set(catalogModels.map((model) => model.id)), [catalogModels]);
-  const profileKey = input.selectedItem?.profileId ?? input.selectedItem?.presetId;
-  const fetchedCatalog = profileKey === undefined ? undefined : fetchedCatalogs[profileKey];
+  const profileId = input.selectedItem === undefined ? undefined : modelProviderFormId(input.selectedItem);
+  const fetchedCatalog = profileId === undefined ? undefined : fetchedCatalogs[profileId];
   const fetchedCandidates = (fetchedCatalog?.models ?? []).filter((model) => !savedModelIds.has(model.id));
   const normalizedModelQuery = modelQuery.trim().toLowerCase();
   const hasModelQuery = normalizedModelQuery.length > 0;
