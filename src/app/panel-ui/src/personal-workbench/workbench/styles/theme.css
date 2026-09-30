@@ -52,7 +52,7 @@
   --reading-sans: "Noto Sans SC", Inter, system-ui, -apple-system, sans-serif;
   --reading-serif: "Noto Serif SC", Georgia, "Songti SC", serif;
   --reading-font: var(--reading-sans);
-  --reading-width: 680px;
+  --reading-width: min(920px, 86%);
   --reading-body-size: 16px;
 
   /* Stable workbench type roles. Reading content scales independently. */

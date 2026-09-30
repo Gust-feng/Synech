@@ -2,7 +2,13 @@ import { resolvePanelDesktopIconPath } from "../panel-server/panel-assets.js";
 import { DESKTOP_APP_NAME, PRODUCT_CHROMIUM_PARTITION } from "./panel-desktop-identity.js";
 import type { PanelLaunchArgs } from "../panel-server/panel-launch-args.js";
 import type { PanelServerStartOptions } from "../panel-server/request-handler.js";
-import { DESKTOP_WORKBENCH_HEIGHT, DESKTOP_WORKBENCH_WIDTH } from "./panel-desktop-window-geometry.js";
+import {
+  DEFAULT_WORKBENCH_MIN_HEIGHT,
+  DEFAULT_WORKBENCH_MIN_WIDTH,
+  DESKTOP_WORKBENCH_HEIGHT,
+  DESKTOP_WORKBENCH_WIDTH,
+  type WorkbenchGeometry,
+} from "./panel-desktop-window-geometry.js";
 import type { PanelContextAttachmentSelection, PanelExternalResourceTarget, StartedPanelServer } from "../panel-server/index.js";
 import type { BrowserAutomation } from "../tool-center/adapters/browser-tool.js";
 
@@ -207,14 +213,16 @@ function showPanelDesktopWindow(window: PanelDesktopWindowHandle): void {
   window.show();
 }
 
-export function createPanelDesktopWindowOptions(): PanelDesktopWindowOptions {
+export function createPanelDesktopWindowOptions(
+  geometry?: Partial<WorkbenchGeometry>,
+): PanelDesktopWindowOptions {
   return {
     title: DESKTOP_APP_NAME,
     icon: resolvePanelDesktopIconPath(),
-    width: DESKTOP_WORKBENCH_WIDTH,
-    height: DESKTOP_WORKBENCH_HEIGHT,
-    minWidth: 960,
-    minHeight: 640,
+    width: geometry?.width ?? DESKTOP_WORKBENCH_WIDTH,
+    height: geometry?.height ?? DESKTOP_WORKBENCH_HEIGHT,
+    minWidth: geometry?.minWidth ?? DEFAULT_WORKBENCH_MIN_WIDTH,
+    minHeight: geometry?.minHeight ?? DEFAULT_WORKBENCH_MIN_HEIGHT,
     frame: false,
     transparent: false,
     resizable: true,

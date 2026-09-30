@@ -170,7 +170,7 @@ export function KnowledgePageContent({
     return (
       <div
         className="h-full w-full overflow-y-auto px-6 py-10 text-sm"
-        style={{ maxWidth: 'var(--reading-width, 680px)', color: 'var(--ui-text-3, #aba39b)' }}
+        style={{ maxWidth: 'var(--reading-width)', color: 'var(--ui-text-3, #aba39b)' }}
       >
         这个对象已不存在(可能已被删除)。可以把它移出知识库。
       </div>
@@ -180,7 +180,7 @@ export function KnowledgePageContent({
     const note = getNote(page.refId)!
     return (
       <div className="h-full w-full overflow-y-auto">
-        <div className="mx-auto px-6 py-10 reading-prose" style={{ maxWidth: 'var(--reading-width, 680px)' }}>
+        <div className="mx-auto px-6 py-10 reading-prose" style={{ maxWidth: 'var(--reading-width)' }}>
           {note.bodyMarkdown.trim() ? (
             <MarkdownDocumentSurface markdown={note.bodyMarkdown} sourceVersion={`${note.id}:${note.updatedAt}`} />
           ) : (

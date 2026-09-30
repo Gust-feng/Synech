@@ -31,8 +31,8 @@ export function ConversationPage(props: ConversationPageProps) {
           {props.content}
         </ConversationScrollArea>
 
-        <div className="shrink-0 px-6 pb-3">
-          <div className="ui-conversation-composer-frame mx-auto" style={{ maxWidth: 'var(--reading-width)' }}>
+        <div className="shrink-0 px-6 pb-6 pt-2">
+          <div className="ui-conversation-composer-frame mx-auto" style={{ width: '100%', maxWidth: 'var(--reading-width)' }}>
             <ConversationComposer input={props.input} />
           </div>
         </div>

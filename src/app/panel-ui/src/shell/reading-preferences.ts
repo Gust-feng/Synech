@@ -15,9 +15,9 @@ const STORAGE_KEY = panelStorageKey('reading.preferences')
 const DEFAULTS: ReadingPrefs = { font: 'sans', width: 'standard', size: 'medium' }
 
 export const WIDTH_PX: Record<ReadingWidth, number> = {
-  narrow: 560,
-  standard: 680,
-  wide: 820,
+  narrow: 680,
+  standard: 920,
+  wide: 1140,
 }
 
 export const SIZE_PX: Record<ReadingSize, number> = {
@@ -56,7 +56,7 @@ export function applyPrefs(prefs: ReadingPrefs): void {
   if (typeof document === 'undefined') return
   const root = document.documentElement
   root.style.setProperty('--reading-font', prefs.font === 'serif' ? 'var(--reading-serif)' : 'var(--reading-sans)')
-  root.style.setProperty('--reading-width', `${WIDTH_PX[prefs.width]}px`)
+  root.style.setProperty('--reading-width', `min(${WIDTH_PX[prefs.width]}px, 86%)`)
   root.style.setProperty('--reading-body-size', `${readingBodySizePx(prefs)}px`)
 }
 

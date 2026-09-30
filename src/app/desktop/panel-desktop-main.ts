@@ -5,6 +5,7 @@ import {
   app,
   dialog,
   ipcMain,
+  screen,
   shell,
   type IpcMainEvent,
   type IpcMainInvokeEvent,
@@ -13,6 +14,7 @@ import {
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { calculateProportionalWorkbenchGeometry } from "./panel-desktop-window-geometry.js";
 import { parsePanelDesktopArgs } from "../panel-server/panel-launch-args.js";
 import { createElectronBrowserAutomation } from "./panel-desktop-browser-automation.js";
 import { createDesktopLocalPreferenceStore, type DesktopLocalPreferenceStore } from "./panel-desktop-local-preferences.js";
@@ -303,11 +305,28 @@ function currentPanelDialogWindow(): BrowserWindow | undefined {
 function createElectronPanelWindow(
   options: ReturnType<typeof createPanelDesktopWindowOptions> = createPanelDesktopWindowOptions(),
 ) {
+  let resolvedOptions = options;
+  if (app.isReady()) {
+    try {
+      const primaryDisplay = screen.getPrimaryDisplay();
+      const geometry = calculateProportionalWorkbenchGeometry(primaryDisplay?.workArea);
+      resolvedOptions = {
+        ...options,
+        width: geometry.width,
+        height: geometry.height,
+        minWidth: geometry.minWidth,
+        minHeight: geometry.minHeight,
+      };
+    } catch {
+      // 降级使用传入的默认几何参数
+    }
+  }
+
   const mainWindow = new BrowserWindow({
-    ...options,
+    ...resolvedOptions,
     show: false,
     webPreferences: {
-      ...options.webPreferences,
+      ...resolvedOptions.webPreferences,
       preload: getPanelDesktopPreloadPath(),
     },
   });

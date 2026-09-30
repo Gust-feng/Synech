@@ -1,11 +1,16 @@
 .ui-agent-home {
   position: relative;
   isolation: isolate;
-  min-height: 0;
+  height: 100%;
+  min-height: 100%;
   flex: 1;
   overflow-y: auto;
   background: var(--ui-canvas, #f4f2ef);
-  padding: clamp(96px, 24vh, 216px) 24px clamp(48px, 10vh, 96px);
+  padding: clamp(32px, 6vh, 64px) clamp(24px, 4vw, 64px) clamp(28px, 5vh, 48px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
 }
 
 .ui-agent-home__backdrop {
@@ -18,6 +23,8 @@
 
 .ui-agent-home__backdrop svg {
   display: block;
+  width: 100%;
+  height: 100%;
   min-width: 100%;
   min-height: 100%;
 }
@@ -37,7 +44,7 @@ html[data-style='default'][data-color='dark'] .ui-agent-home__scene--dark {
 .ui-agent-home__stage {
   position: relative;
   z-index: 1;
-  width: min(760px, 100%);
+  width: min(920px, 86%);
   margin: 0 auto;
 }
 
@@ -47,8 +54,8 @@ html[data-style='default'][data-color='dark'] .ui-agent-home__scene--dark {
 
 .ui-agent-home__ambient {
   position: relative;
-  max-width: 620px;
-  margin: 0 18px 28px;
+  max-width: min(780px, 100%);
+  margin: 0 0 28px;
   color: color-mix(
     in srgb,
     var(--ui-text-1, #2d2b29) 78%,
@@ -60,7 +67,7 @@ html[data-style='default'][data-color='dark'] .ui-agent-home__scene--dark {
   letter-spacing: 0;
   line-height: 1.56;
   text-wrap: pretty;
-  transform: translateX(-12px);
+  transform: none;
 }
 
 .ui-agent-home__ambient-reserve {
@@ -93,7 +100,7 @@ html[data-style='default'][data-color='dark'] .ui-agent-home__scene--dark {
 
 .ui-agent-home__composer,
 .ui-agent-home__context {
-  transform: translateX(-12px);
+  transform: none;
 }
 
 .ui-agent-home__context {

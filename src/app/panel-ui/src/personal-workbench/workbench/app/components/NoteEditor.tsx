@@ -296,12 +296,12 @@ export function NoteEditor({ note, onSave, onOpenFocus, onClose, onRestoreAsNew 
         </div>
       )}
 
-      <div className="shrink-0 mx-auto w-full px-6 pt-8" style={{ maxWidth: 'var(--reading-width, 680px)' }}>
+      <div className="shrink-0 mx-auto w-full px-6 pt-8" style={{ maxWidth: 'var(--reading-width)' }}>
         <input aria-label="笔记名称" value={title} onChange={(event) => { setTitle(event.target.value); scheduleSave({ title: event.target.value }) }} placeholder="无标题" spellCheck={false} className="w-full outline-none bg-transparent reading-prose" style={{ color: 'var(--ui-text-1, #292722)', fontSize: 22, fontWeight: 600 }} />
       </div>
 
       <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto px-6 py-4 pb-24" style={{ maxWidth: 'var(--reading-width, 680px)' }}>
+        <div className="mx-auto px-6 py-4 pb-24" style={{ maxWidth: 'var(--reading-width)' }}>
           {incomingChanges !== undefined ? <NoteDiff changes={incomingChanges} /> : sourceMode ? (
             <textarea value={sourceBody} onChange={(event) => { setSourceBody(event.target.value); scheduleSave({ bodyMarkdown: event.target.value }) }} className="w-full outline-none bg-transparent resize-none text-sm leading-relaxed" style={{ color: 'var(--ui-text-1, #292722)', minHeight: '60vh', fontFamily: '"JetBrains Mono", "Fira Code", ui-monospace, monospace', fontSize: 13, lineHeight: 1.7 }} spellCheck={false} />
           ) : <EditorContent editor={editor} />}

@@ -127,7 +127,7 @@ export function ConversationScrollArea(props: {
         <div
           ref={contentRef}
           className={`ui-conversation-scroll-content ${props.contentClassName}`}
-          style={{ maxWidth: 'var(--reading-width)' }}
+          style={{ width: '100%', maxWidth: 'var(--reading-width)' }}
         >
           {props.children}
         </div>
