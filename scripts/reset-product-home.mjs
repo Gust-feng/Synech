@@ -3,39 +3,71 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import readline from "node:readline/promises";
+import { pathToFileURL } from "node:url";
 
-const args = parseArgs(process.argv.slice(2));
-const target = resolveProductHome(args.home);
-assertSafeProductHome(target);
+const runtimeLeaseModule = await import(pathToFileURL(
+  process.env.SYNECH_RUNTIME_LEASE_MODULE ??
+    path.resolve("dist/app/panel-server/product-home-runtime-lease.js"),
+));
 
-console.log(`Synech Product Home reset target:\n${target}`);
-const exists = await lstat(target).then(() => true, (error) => {
-  if (error?.code === "ENOENT") return false;
-  throw error;
-});
-if (!exists) {
-  console.log("Nothing to reset; the Product Home does not exist.");
-  process.exit(0);
-}
+await main();
 
-let confirmation = args.confirm;
-if (confirmation === undefined) {
-  if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    throw new Error("Interactive confirmation is unavailable. Pass --confirm with the exact absolute target path.");
-  }
-  const prompt = readline.createInterface({ input: process.stdin, output: process.stdout });
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const target = resolveProductHome(args.home);
+  assertSafeProductHome(target);
+
+  let lease;
   try {
-    confirmation = (await prompt.question("Type the exact absolute path above to confirm deletion:\n> ")).trim();
+    lease = await runtimeLeaseModule.acquireProductHomeRuntimeLease(target);
+  } catch (error) {
+    if (error?.code === "product_home_in_use") {
+      console.error(JSON.stringify({
+        ok: false,
+        status: "rejected",
+        code: error.code,
+        productHome: target,
+        holder: error.holder,
+      }, null, 2));
+      process.exitCode = 2;
+      return;
+    }
+    throw error;
+  }
+
+  try {
+    console.log(`Synech Product Home reset target:\n${target}`);
+    const exists = await lstat(target).then(() => true, (error) => {
+      if (error?.code === "ENOENT") return false;
+      throw error;
+    });
+    if (!exists) {
+      console.log("Nothing to reset; the Product Home does not exist.");
+      return;
+    }
+
+    let confirmation = args.confirm;
+    if (confirmation === undefined) {
+      if (!process.stdin.isTTY || !process.stdout.isTTY) {
+        throw new Error("Interactive confirmation is unavailable. Pass --confirm with the exact absolute target path.");
+      }
+      const prompt = readline.createInterface({ input: process.stdin, output: process.stdout });
+      try {
+        confirmation = (await prompt.question("Type the exact absolute path above to confirm deletion:\n> ")).trim();
+      } finally {
+        prompt.close();
+      }
+    }
+    if (path.resolve(confirmation) !== target) {
+      throw new Error("Confirmation did not exactly match the resolved Synech Product Home; nothing was deleted.");
+    }
+
+    await rm(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    console.log(`Removed Synech Product Home: ${target}`);
   } finally {
-    prompt.close();
+    await lease.release();
   }
 }
-if (path.resolve(confirmation) !== target) {
-  throw new Error("Confirmation did not exactly match the resolved Synech Product Home; nothing was deleted.");
-}
-
-await rm(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
-console.log(`Removed Synech Product Home: ${target}`);
 
 function parseArgs(values) {
   let home;

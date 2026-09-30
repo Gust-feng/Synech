@@ -18,6 +18,19 @@ export type ProductHomeRuntimeLease = {
   release(): Promise<void>;
 };
 
+export type ProductHomeRuntimeLeaseInspection =
+  | { readonly status: "available" }
+  | { readonly status: "held"; readonly holder: ProductHomeRuntimeLeaseHolder };
+
+export class ProductHomeRuntimeLeaseProbeError extends Error {
+  readonly code = "product_home_lease_check_failed" as const;
+
+  constructor(readonly productHome: string, options?: ErrorOptions) {
+    super(`Could not verify whether the Synech Product Home is in use: ${productHome}`, options);
+    this.name = "ProductHomeRuntimeLeaseProbeError";
+  }
+}
+
 export class ProductHomeInUseError extends Error {
   readonly code = "product_home_in_use" as const;
 
@@ -57,9 +70,22 @@ export async function acquireProductHomeRuntimeLease(
       return runtimeLease(server, endpoint, holder);
     } catch (error) {
       if (!isAddressInUse(error)) throw error;
-      const activeHolder = await readLeaseHolder(endpoint);
-      if (activeHolder !== undefined || process.platform === "win32" || attempt > 0) {
-        throw new ProductHomeInUseError(resolvedHome, activeHolder);
+      let inspection: ProductHomeRuntimeLeaseInspection;
+      try {
+        inspection = await inspectProductHomeRuntimeLease(resolvedHome);
+      } catch (probeError) {
+        if (probeError instanceof ProductHomeRuntimeLeaseProbeError) {
+          // The endpoint is occupied but its holder cannot be proven. Treat it
+          // as in use so callers can never delete through an unverifiable lease.
+          throw new ProductHomeInUseError(resolvedHome);
+        }
+        throw probeError;
+      }
+      if (inspection.status === "held" || process.platform === "win32" || attempt > 0) {
+        throw new ProductHomeInUseError(
+          resolvedHome,
+          inspection.status === "held" ? inspection.holder : undefined,
+        );
       }
       // Unix socket paths may survive an unclean process exit. A refused
       // endpoint has no live owner, so remove only this exact hashed socket and retry once.
@@ -67,6 +93,19 @@ export async function acquireProductHomeRuntimeLease(
     }
   }
   throw new ProductHomeInUseError(resolvedHome);
+}
+
+/**
+ * Checks the same OS-owned endpoint held by PanelHost. A probe failure is not
+ * treated as availability: callers that might delete Product Home data must
+ * fail closed unless the endpoint is definitely absent or returns a valid
+ * holder response.
+ */
+export function inspectProductHomeRuntimeLease(
+  productHome: string,
+): Promise<ProductHomeRuntimeLeaseInspection> {
+  const resolvedHome = path.resolve(productHome);
+  return probeLeaseEndpoint(runtimeLeaseEndpoint(resolvedHome), resolvedHome);
 }
 
 function runtimeLease(
@@ -91,6 +130,9 @@ function runtimeLease(
 function createLeaseServer(holder: ProductHomeRuntimeLeaseHolder): Server {
   const payload = `${JSON.stringify(holder)}\n`;
   return createServer((socket) => {
+    // A probe may time out and destroy its client socket before the holder
+    // payload is flushed. EPIPE is transport cleanup, not a lease failure.
+    socket.on("error", () => undefined);
     socket.end(payload);
   });
 }
@@ -125,26 +167,43 @@ function close(server: Server): Promise<void> {
   });
 }
 
-function readLeaseHolder(endpoint: string): Promise<ProductHomeRuntimeLeaseHolder | undefined> {
-  return new Promise((resolve) => {
+function probeLeaseEndpoint(
+  endpoint: string,
+  productHome: string,
+): Promise<ProductHomeRuntimeLeaseInspection> {
+  return new Promise((resolve, reject) => {
     const socket = createConnection(endpoint);
     let settled = false;
     let value = "";
-    const timer = setTimeout(() => finish(undefined), 1_000);
-    const finish = (holder: ProductHomeRuntimeLeaseHolder | undefined) => {
+    const timer = setTimeout(() => finish(new ProductHomeRuntimeLeaseProbeError(productHome)), 1_000);
+    const finish = (error?: Error, inspection?: ProductHomeRuntimeLeaseInspection) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       socket.destroy();
-      resolve(holder);
+      if (error !== undefined) reject(error);
+      else resolve(inspection!);
     };
     socket.setEncoding("utf8");
     socket.on("data", (chunk) => {
       value += chunk;
-      if (value.length > 8_192) finish(undefined);
+      if (value.length > 8_192) finish(new ProductHomeRuntimeLeaseProbeError(productHome));
     });
-    socket.once("end", () => finish(parseLeaseHolder(value)));
-    socket.once("error", () => finish(undefined));
+    socket.once("end", () => {
+      const holder = parseLeaseHolder(value);
+      if (holder === undefined) {
+        finish(new ProductHomeRuntimeLeaseProbeError(productHome));
+        return;
+      }
+      finish(undefined, { status: "held", holder });
+    });
+    socket.once("error", (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT" || error.code === "ECONNREFUSED") {
+        finish(undefined, { status: "available" });
+        return;
+      }
+      finish(new ProductHomeRuntimeLeaseProbeError(productHome, { cause: error }));
+    });
   });
 }
 
