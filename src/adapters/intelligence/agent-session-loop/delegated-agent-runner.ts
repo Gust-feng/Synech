@@ -59,7 +59,6 @@ import {
   type HarnessProjectionResultPort,
 } from "./harness-event-projector.js";
 import type { AgentSessionLoopOptions } from "./contracts.js";
-import { agentRuntimeExecutionEnv } from "../pi-agent/runtime-environment.js";
 import { toHarnessTool } from "../pi-agent/harness-tool-bridge.js";
 
 type ProjectedHarnessToolResult = ReturnType<typeof harnessToolResult>;
@@ -219,142 +218,223 @@ async function runDelegatedAgent(input: {
   const boundary = delegatedToolBoundary(input.loopInput.tools, input.invocation);
   const metrics: DelegatedAgentExecutionMetrics = { modelRounds: 0, toolCallCount: 0, usage: {} };
   const sessionId = `delegated-agent:${parentInvocationId}`;
-  const session = input.dependencies?.createSession === undefined
-    ? await new MemorySessionRepo().create({ id: sessionId }, TODO_CONTEXT)
-    : await input.dependencies.createSession(sessionId);
-  const toolDefinitions = boundary.definitions
-    .filter((definition) => boundary.permission.allowedTools.includes(definition.name));
-  const bindings = new ToolInvocationBindingTable();
-  const acceptedRequests = new AcceptedNestedToolRequestRegistry();
-  const assertAccepted = (request: ToolCallRequest): void => {
-    if (acceptedRequests.matches(request)) return;
-    input.facts.maintenance.fail(
-      "nested_tool_request_not_accepted",
-      `Nested tool request ${toolInvocationId(request)} reached execution without owner acceptance.`,
-    );
+  let sessionRepo: MemorySessionRepo | undefined;
+  let session: Session | undefined;
+  let harness: AgentHarness<undefined> | undefined;
+  let lane: AgentLane | undefined;
+  let operationId: string | undefined;
+  let projectionFailure: { readonly code: string; readonly error: string } | undefined;
+  let abortRequest: Promise<void> | undefined;
+  const cleanups: (() => void)[] = [];
+  let result!: ToolCallResult;
+  const requestAbort = (): void => {
+    if (lane === undefined || operationId === undefined || abortRequest !== undefined) return;
+    // Pi closes the active drive's effect gate synchronously, before persisting
+    // cancellation. Do not await its event delivery from an event callback.
+    abortRequest = lane.requestAbort(operationId, TODO_CONTEXT).then((requested) => {
+      if (!requested.ok) throw requested.error;
+    });
+    void abortRequest.catch(() => undefined);
   };
-  const tools = toolDefinitions.map((definition) => input.createMechanicalTool({
-    definition,
-    boundary,
-    onToolInvoked: () => { metrics.toolCallCount += 1; },
-    bindings,
-    assertAccepted,
-  }));
-  const visibilityHost = {
-    abortSignal: input.loopInput.abortSignal,
-    resolveInvocationId: (providerCallId: string) => bindings.get(providerCallId),
-    onToolRequested: input.facts.run.emitToolRequested,
-    onToolInvoked: () => { metrics.toolCallCount += 1; },
-    acceptResult: input.facts.results.acceptForDelivery,
-    projectResult: input.facts.results.project,
-    recordMaintenanceFailure: input.facts.maintenance.record,
+  const recordProjectionFailure = (error: unknown, code = "runtime_projection_failed"): void => {
+    if (projectionFailure !== undefined) return;
+    projectionFailure = { code, error: errorMessage(error) };
+    requestAbort();
+    input.facts.maintenance.record(projectionFailure);
   };
-  const harnessTools = createToolVisibilitySession({
-    tools,
-    metadataByName: new Map(toolDefinitions.map((definition) => [definition.name, definition.metadata] as const)),
-    visibilityPlan: narrowToolVisibilityPlan(
-      input.loopInput.toolVisibilityPlan,
-      input.invocation.allowedTools,
-      toolDefinitions,
-      input.options.toolDefinitionTokenCounter,
-    ),
-    host: visibilityHost,
+  const projectionFailureResult = (failure: NonNullable<typeof projectionFailure>): ToolCallResult => ({
+    ...delegatedAgentFailure(input.request, failure.error, false, input.startedAt, metrics, failure.code),
+    errorDomain: "runtime_error",
   });
-  const latestAssistant: { current?: Extract<AgentMessage, { readonly role: "assistant" }> } = {};
-  const harnessOptions: AgentHarnessOptions<undefined> = {
-    session,
-    models: input.options.modelRegistry,
-    model: input.options.selectedModel,
-    thinkingLevel: input.options.thinkingLevel,
-    systemPrompt: input.invocation.instructions,
-    tools: harnessTools.tools.map((tool) => toHarnessTool(tool, input.abortSignal)),
-    activeToolNames: [...harnessTools.activeToolNames],
+  const cleanup = async (action: () => void | Promise<void>): Promise<boolean> => {
+    try {
+      await action();
+      return true;
+    } catch (error) {
+      if (result.status === "completed") {
+        result = {
+          ...delegatedAgentFailure(input.request, error, false, input.startedAt, metrics, "sub_agent_cleanup_failed"),
+          errorDomain: "runtime_error",
+        };
+      }
+      input.facts.maintenance.record({ code: "sub_agent_cleanup_failed", error: errorMessage(error) });
+      return false;
+    }
   };
-  const runContext = withAbortSignal(input.abortSignal, TODO_CONTEXT);
-  const runtime = await createDelegatedRuntime(harnessOptions, runContext, input.dependencies);
-  const harness = runtime.harness;
-  const lane = runtime.lane;
-  harnessTools.bind?.(lane);
-  await lane.setActiveTools([...harnessTools.activeToolNames], TODO_CONTEXT);
-  attachDelegatedHarnessHooks({
-    harness,
-    lane,
-    session,
-    parentInvocationId,
-    loopInput: input.loopInput,
-    options: input.options,
-    abortSignal: input.abortSignal,
-    metadataByName: harnessTools.metadataByName,
-    latestAssistant,
-    metrics,
-    bindings,
-    acceptedRequests,
-    facts: input.facts,
-  });
-  const handleAbort = (): void => {
-    void lane.inspectExecution(TODO_CONTEXT).then(async (execution) => {
-      if (execution.current === null) return;
-      await lane.requestAbort(execution.current.id, TODO_CONTEXT);
-    }).catch(() => undefined);
-  };
-  input.abortSignal.addEventListener("abort", handleAbort, { once: true });
-  if (input.abortSignal.aborted) handleAbort();
   try {
+    if (input.dependencies?.createSession === undefined) {
+      sessionRepo = new MemorySessionRepo();
+      session = await sessionRepo.create({ id: sessionId }, TODO_CONTEXT);
+    } else {
+      session = await input.dependencies.createSession(sessionId);
+    }
+    const toolDefinitions = boundary.definitions
+      .filter((definition) => boundary.permission.allowedTools.includes(definition.name));
+    const bindings = new ToolInvocationBindingTable();
+    const acceptedRequests = new AcceptedNestedToolRequestRegistry();
+    const assertAccepted = (request: ToolCallRequest): void => {
+      if (acceptedRequests.matches(request)) return;
+      input.facts.maintenance.fail(
+        "nested_tool_request_not_accepted",
+        `Nested tool request ${toolInvocationId(request)} reached execution without owner acceptance.`,
+      );
+    };
+    const tools = toolDefinitions.map((definition) => input.createMechanicalTool({
+      definition,
+      boundary,
+      onToolInvoked: () => { metrics.toolCallCount += 1; },
+      bindings,
+      assertAccepted,
+    }));
+    const visibilityHost = {
+      abortSignal: input.abortSignal,
+      resolveInvocationId: (providerCallId: string) => bindings.get(providerCallId),
+      onToolRequested: input.facts.run.emitToolRequested,
+      onToolInvoked: () => { metrics.toolCallCount += 1; },
+      acceptResult: input.facts.results.acceptForDelivery,
+      projectResult: input.facts.results.project,
+      recordMaintenanceFailure: input.facts.maintenance.record,
+    };
+    const harnessTools = createToolVisibilitySession({
+      tools,
+      metadataByName: new Map(toolDefinitions.map((definition) => [definition.name, definition.metadata] as const)),
+      visibilityPlan: narrowToolVisibilityPlan(
+        input.loopInput.toolVisibilityPlan,
+        input.invocation.allowedTools,
+        toolDefinitions,
+        input.options.toolDefinitionTokenCounter,
+      ),
+      host: visibilityHost,
+    });
+    const latestAssistant: { current?: Extract<AgentMessage, { readonly role: "assistant" }> } = {};
+    const harnessOptions: AgentHarnessOptions<undefined> = {
+      session,
+      models: input.options.modelRegistry,
+      model: input.options.selectedModel,
+      thinkingLevel: input.options.thinkingLevel,
+      ...(input.options.compactionSettings === undefined ? {} : { compaction: input.options.compactionSettings }),
+      systemPrompt: input.invocation.instructions,
+      tools: harnessTools.tools.map((tool) => toHarnessTool(tool, input.abortSignal)),
+      activeToolNames: [...harnessTools.activeToolNames],
+    };
+    const runContext = withAbortSignal(input.abortSignal, TODO_CONTEXT);
+    const runtime = input.dependencies?.createHarness === undefined
+      ? await AgentHarness.create(harnessOptions, runContext)
+      : await input.dependencies.createHarness(harnessOptions, runContext);
+    harness = runtime.harness;
+    lane = "lane" in runtime ? runtime.lane : await harness.lane("main", runContext);
+    harnessTools.bind?.(lane);
+    await lane.setActiveTools([...harnessTools.activeToolNames], TODO_CONTEXT);
+    attachDelegatedHarnessHooks({
+      harness,
+      lane,
+      parentInvocationId,
+      loopInput: input.loopInput,
+      options: input.options,
+      abortSignal: input.abortSignal,
+      metadataByName: harnessTools.metadataByName,
+      latestAssistant,
+      metrics,
+      bindings,
+      acceptedRequests,
+      facts: input.facts,
+      cleanups,
+      beforeDrive: (runId) => {
+        operationId = runId;
+        if (projectionFailure !== undefined || input.abortSignal.aborted) requestAbort();
+      },
+      recordProjectionFailure,
+      isProjectionFailed: () => projectionFailure !== undefined,
+    });
+    const handleAbort = requestAbort;
+    input.abortSignal.addEventListener("abort", handleAbort, { once: true });
+    cleanups.push(() => input.abortSignal.removeEventListener("abort", handleAbort));
+    if (input.abortSignal.aborted) handleAbort();
     const runResult = await lane.prompt(input.invocation.input, undefined, runContext);
-    if (!runResult.ok) throw runResult.error;
-    if (input.abortSignal.aborted || runResult.value.status === "aborted") {
-      return delegatedAgentFailure(
+    await abortRequest;
+    if (projectionFailure !== undefined) {
+      result = projectionFailureResult(projectionFailure);
+    } else if (!runResult.ok) {
+      throw runResult.error;
+    } else if (input.abortSignal.aborted || runResult.value.status === "aborted") {
+      result = delegatedAgentFailure(
         input.request,
         input.abortSignal.reason,
         true,
         input.startedAt,
         metrics,
       );
-    }
-    if (runResult.value.status === "failed") {
-      return delegatedAgentFailure(
-        input.request,
-        runResult.value.error?.message ?? "Pi delegated run failed without a diagnostic message.",
-        false,
-        input.startedAt,
-        metrics,
-      );
-    }
-    const assistant = latestAssistant.current;
-    if (assistant === undefined) {
-      return delegatedAgentFailure(
-        input.request,
-        "Pi delegated run completed without an assistant message.",
-        false,
-        input.startedAt,
-        metrics,
-      );
-    }
-    if (assistant.stopReason !== "stop") {
-      return delegatedAgentProjectedFailure(
-        assistant,
+    } else if (runResult.value.status === "suspended") {
+      const inspected = await lane.inspectExecution(TODO_CONTEXT);
+      if (inspected.current?.id !== runResult.value.operationId) {
+        throw Object.assign(new Error("Pi delegated suspended operation no longer owns its lane."), {
+          code: "deferred_settlement_mismatch",
+        });
+      }
+      const aborted = await lane.abort(TODO_CONTEXT);
+      if (!aborted.ok) throw aborted.error;
+      result = {
+        ...delegatedAgentFailure(
+          input.request,
+          "Deferred delegated runs are not supported.",
+          false,
+          input.startedAt,
+          metrics,
+          "deferred_unsupported",
+        ),
+        errorDomain: "runtime_error",
+      };
+    } else if (runResult.value.status === "failed") {
+      const assistant = latestAssistant.current;
+      result = assistant !== undefined && (assistant.stopReason === "error" || assistant.stopReason === "length")
+        ? delegatedAgentProjectedFailure(
+            assistant, input.request, input.startedAt, metrics, input.options.selectedModel.contextWindow,
+          )
+        : delegatedAgentFailure(
+            input.request,
+            runResult.value.error?.message ?? "Pi delegated run failed without a diagnostic message.",
+            false,
+            input.startedAt,
+            metrics,
+          );
+    } else {
+      result = delegatedAgentCompletedResult(
+        latestAssistant.current,
         input.request,
         input.startedAt,
         metrics,
         input.options.selectedModel.contextWindow,
       );
     }
-    return {
-      ...input.request,
-      output: assistantText(assistant),
-      status: "completed",
-      delegatedExecution: delegatedExecutionMetadata(metrics),
-      durationMs: Math.max(0, Date.now() - input.startedAt),
-    };
+  } catch (error) {
+    result = projectionFailure === undefined
+      ? delegatedAgentFailure(input.request, error, input.abortSignal.aborted, input.startedAt, metrics)
+      : projectionFailureResult(projectionFailure);
   } finally {
-    input.abortSignal.removeEventListener("abort", handleAbort);
+    const requestedAbort = abortRequest;
+    if (requestedAbort !== undefined) await cleanup(() => requestedAbort);
+    await cleanup(async () => {
+      if (lane === undefined) return;
+      const inspected = await lane.inspectExecution(TODO_CONTEXT);
+      if (inspected.current === null) return;
+      const aborted = await lane.abort(TODO_CONTEXT);
+      if (!aborted.ok) throw aborted.error;
+    });
+    for (const unsubscribe of cleanups.reverse()) await cleanup(unsubscribe);
+    const ownedHarness = harness;
+    const ownedSession = session;
+    const ownedRepo = sessionRepo;
+    const harnessClosed = ownedHarness !== undefined && await cleanup(() => ownedHarness.close(TODO_CONTEXT));
+    if (!harnessClosed && ownedSession !== undefined) await cleanup(() => ownedSession.close(TODO_CONTEXT));
+    if (ownedRepo !== undefined) await cleanup(() => ownedRepo.close(TODO_CONTEXT));
   }
+  if (projectionFailure !== undefined) result = projectionFailureResult(projectionFailure);
+  return result;
 }
 
 function attachDelegatedHarnessHooks(input: {
   readonly harness: AgentHarness;
   readonly lane: AgentLane;
-  readonly session: Session;
   readonly latestAssistant: { current?: Extract<AgentMessage, { readonly role: "assistant" }> };
   readonly parentInvocationId: string;
   readonly loopInput: DelegatedLoopContext;
@@ -365,27 +445,35 @@ function attachDelegatedHarnessHooks(input: {
   readonly bindings: ToolInvocationBindingTable;
   readonly acceptedRequests: AcceptedNestedToolRequestRegistry;
   readonly facts: DelegatedAgentFactPorts;
+  readonly cleanups: (() => void)[];
+  readonly beforeDrive: (operationId: string) => void;
+  readonly recordProjectionFailure: (error: unknown, code?: string) => void;
+  readonly isProjectionFailed: () => boolean;
 }): void {
   const pendingRequests = new Map<string, PendingToolRequest>();
   const preparedToolCallIds = new Set<string>();
-  attachProviderPayloadHook(input.harness, input.lane, input.options, input.metadataByName);
+  const unsubscribePayload = attachProviderPayloadHook(
+    input.harness, input.lane, input.options, input.metadataByName,
+  );
+  if (unsubscribePayload !== undefined) input.cleanups.push(unsubscribePayload);
+  input.cleanups.push(input.harness.hooks.on("before_drive", ({ runId }) => input.beforeDrive(runId)));
   // Compaction is owned by Pi. Synech only contributes the text-only guard here.
-  input.harness.hooks.on("transform_context", async ({ messages }) => ({
+  input.cleanups.push(input.harness.hooks.on("transform_context", async ({ messages }) => ({
     messages: [
       ...replaceUnsupportedImageBlocks(
         messages,
         input.options.selectedModel.input.includes("image"),
       ),
     ],
-  }));
-  input.harness.hooks.on("after_tool", ({ details }) => {
+  })));
+  input.cleanups.push(input.harness.hooks.on("after_tool", ({ details }) => {
     const result = toolResultFromDetails(details);
     return result === undefined ? undefined : { isError: result.status !== "completed" };
-  });
-  input.harness.hooks.on("before_tool", ({ toolCallId }) => {
+  }));
+  input.cleanups.push(input.harness.hooks.on("before_tool", ({ toolCallId }) => {
     preparedToolCallIds.add(toolCallId);
     return undefined;
-  });
+  }));
   const projectEvent = async (event: HarnessEvent): Promise<void> => {
     if (event.type === "tool_end") {
       await projectToolExecutionEnd({
@@ -474,20 +562,21 @@ function attachDelegatedHarnessHooks(input: {
     input.metrics.usage = mergeModelUsage(input.metrics.usage, usage);
     input.facts.run.observeUsage(usage);
   }
-  // Returning the projection makes the delegated harness await it before the
-  // next request or tool execution, so nested invocation binding and tool-result
-  // acceptance never lag behind the lane. A rejected projection is recorded as a
-  // maintenance failure instead of escaping as an unhandled rejection.
+  // Pi awaits delivery but isolates listener errors. Explicit cancellation,
+  // not a thrown listener error, prevents the drive from admitting more work.
   const observe = async (event: HarnessEvent): Promise<void> => {
+    if (input.isProjectionFailed()) return;
     try {
       await projectEvent(event);
     } catch (error) {
-      input.facts.maintenance.fail("runtime_projection_failed", errorMessage(error));
+      input.recordProjectionFailure(error);
       throw error;
     }
   };
-  input.harness.events.on("tool_end", (event) => observe(event));
-  input.harness.events.on("message_end", (event) => observe(event));
+  input.cleanups.push(input.harness.events.on("tool_end", (event) => observe(event)));
+  input.cleanups.push(input.harness.events.on("message_end", (event) => observe(event)));
+  input.cleanups.push(input.harness.events.on("handler_error", (event) =>
+    input.recordProjectionFailure(event.error, "runtime_handler_failed")));
 }
 
 function validateDelegatedToolBoundary(
@@ -602,6 +691,47 @@ function errorFactsCode(error: unknown): string | undefined {
   return typeof code === "string" && code.length > 0 ? code : undefined;
 }
 
+function delegatedAgentCompletedResult(
+  assistant: AssistantMessage | undefined,
+  request: ToolCallRequest,
+  startedAt: number,
+  metrics: DelegatedAgentExecutionMetrics,
+  contextWindow: number,
+): ToolCallResult {
+  if (assistant === undefined) {
+    return delegatedAgentFailure(
+      request, "Pi delegated run completed without an assistant message.",
+      false, startedAt, metrics, "final_assistant_missing",
+    );
+  }
+  if (assistant.stopReason === "error" || assistant.stopReason === "length") {
+    return delegatedAgentProjectedFailure(assistant, request, startedAt, metrics, contextWindow);
+  }
+  if (assistant.content.some((block) => block.type === "toolCall")) {
+    return delegatedAgentFailure(
+      request, "Pi delegated run completed with tool use instead of a final assistant response.",
+      false, startedAt, metrics, "final_assistant_is_tool_use",
+    );
+  }
+  if (assistant.stopReason !== "stop") {
+    return delegatedAgentProjectedFailure(assistant, request, startedAt, metrics, contextWindow);
+  }
+  const text = assistantText(assistant);
+  if (text.trim().length === 0) {
+    return delegatedAgentFailure(
+      request, "Pi delegated run completed with an empty assistant response.",
+      false, startedAt, metrics, "final_assistant_empty",
+    );
+  }
+  return {
+    ...request,
+    output: text,
+    status: "completed",
+    delegatedExecution: delegatedExecutionMetadata(metrics),
+    durationMs: Math.max(0, Date.now() - startedAt),
+  };
+}
+
 /**
  * 子 agent 与根 loop 共用同一套 provider 失败投影（根侧见 agent-session-loop.ts
  * 的 finalResult）：鉴权失败、拒答、上下文溢出与长度截断都落在结构化
@@ -658,16 +788,4 @@ function uniqueStrings(values: readonly string[]): readonly string[] {
 
 function abortMessage(reason: unknown): string {
   return reason === undefined ? "cancelled" : errorMessage(reason);
-}
-
-async function createDelegatedRuntime(
-  options: AgentHarnessOptions<undefined>,
-  context: ReturnType<typeof withAbortSignal>,
-  dependencies: DelegatedAgentRunnerDependencies | undefined,
-): Promise<{ readonly harness: AgentHarness<undefined>; readonly lane: AgentLane }> {
-  const created = dependencies?.createHarness === undefined
-    ? await AgentHarness.create(options, context)
-    : await dependencies.createHarness(options, context);
-  const lane = await created.harness.lane("main", context);
-  return { harness: created.harness, lane };
 }

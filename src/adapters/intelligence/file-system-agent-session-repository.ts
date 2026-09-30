@@ -1,12 +1,13 @@
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { z } from "zod";
 import {
   JsonlSessionRepo,
   type Session,
   type JsonlSessionMetadata,
 } from "@earendil-works/pi-agent-core";
 import { TODO_CONTEXT } from "@earendil-works/pi-agent-core/harness/context";
-import { appendList, list } from "@earendil-works/pi-agent-core/harness/session";
+import { appendList, list, SessionUnknownTargetError } from "@earendil-works/pi-agent-core/harness/session";
 import {
   agentRuntimeExecutionEnv,
   type AgentRuntimeEnvironment,
@@ -122,12 +123,11 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
   async acquire(ref: AgentSessionRef): Promise<AgentSessionLease> {
     this.validateRef(ref);
     return this.runInSessionAccess(ref.sessionId, async () => {
-      const metadata = this.metadataFromRef(ref);
       const fence = this.writeFence(ref.sessionId);
       let generation: SessionStorageGenerationLease<JsonlSessionMetadata>;
       try {
         generation = await fence.acquire(async () => {
-          await this.assertSessionExists(ref);
+          const metadata = await this.readSessionMetadata(ref);
           return this.openValidatedSession(ref, metadata);
         });
       } catch (error) {
@@ -148,33 +148,60 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
         throw error;
       }
       this.beginWriter(ref, generation.session);
+      let revocation: { readonly target: AgentSessionCheckpointRef | null; readonly promise: Promise<void> } | undefined;
+      let releasePromise: Promise<void> | undefined;
       return {
         ref,
         session: generation.session,
-        recordCheckpoint: (kind, entryRef) => this.recordCheckpointOnWriter(ref, kind, entryRef),
-        revokeTo: async (target) => {
-          if (target === null) {
-            await generation.revokeTo(null);
-            return;
+        recordCheckpoint: (kind, entryRef) => this.mintCheckpoint(generation.session, ref, kind, entryRef),
+        revokeTo: (target) => {
+          if (revocation !== undefined) {
+            const previous = revocation.target;
+            if (previous === null ? target === null : target !== null &&
+                previous.sessionId === target.sessionId &&
+                previous.checkpointId === target.checkpointId && previous.kind === target.kind) {
+              return revocation.promise;
+            }
+            return Promise.reject(new SessionGenerationError(
+              "generation_revoked",
+              "The Session generation already has a different recovery checkpoint.",
+            ));
           }
-          this.assertCheckpointIdentity(ref, target);
-          const index = await readEntireCheckpointIndex(generation.session);
-          const entryId = recordedCheckpointEntryId(index, target);
-          if (entryId === undefined) {
-            throw new AgentSessionRepositoryError(
-              "agent_session_checkpoint_unknown",
-              "Agent session " + ref.sessionId + " has no recorded checkpoint " + target.checkpointId + ".",
-            );
-          }
-          await generation.revokeTo(entryId);
+          // Register resolution and rollback together before either can yield.
+          // Release waits outside the fence queue, which rollback itself needs.
+          const ownedTarget = target === null ? null : { ...target };
+          const promise = Promise.resolve().then(async () => {
+            if (ownedTarget === null) {
+              await generation.revokeTo(null);
+              return;
+            }
+            this.assertCheckpointIdentity(ref, ownedTarget);
+            const index = await readEntireCheckpointIndex(generation.session);
+            const entryId = recordedCheckpointEntryId(index, ownedTarget);
+            if (entryId === undefined) {
+              throw new AgentSessionRepositoryError(
+                "agent_session_checkpoint_unknown",
+                "Agent session " + ref.sessionId + " has no recorded checkpoint " + ownedTarget.checkpointId + ".",
+              );
+            }
+            await generation.revokeTo(entryId);
+          });
+          const attempt = { target: ownedTarget, promise };
+          revocation = attempt;
+          void promise.catch(() => {
+            if (revocation === attempt) revocation = undefined;
+          });
+          return promise;
         },
-        release: () => this.runInSessionAccess(ref.sessionId, async () => {
-          // Keep the writer registered when close fails. The fence remains
-          // poisoned in that case, and a read must not race the still-open
-          // provider handle by opening a second Session.
-          await generation.release();
-          this.endWriter(ref);
-        }),
+        release: () => {
+          releasePromise ??= this.runInSessionAccess(ref.sessionId, async () => {
+            // Close even after a failed rollback; the fence retains its poison.
+            await revocation?.promise.catch(() => undefined);
+            await generation.release();
+            this.endWriter(ref, generation.session);
+          });
+          return releasePromise;
+        },
       };
     });
   }
@@ -184,8 +211,8 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
     this.writerSessions.set(ref.sessionId, session);
   }
 
-  private endWriter(ref: AgentSessionRef): void {
-    this.writerSessions.delete(ref.sessionId);
+  private endWriter(ref: AgentSessionRef, session: Session<JsonlSessionMetadata>): void {
+    if (this.writerSessions.get(ref.sessionId) === session) this.writerSessions.delete(ref.sessionId);
   }
 
   /**
@@ -246,9 +273,15 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
     const entryRef = await this.resolveTranscriptEntry(ref, target);
     const lease = await this.acquire(ref);
     try {
-      const active = await getMainLeafId(lease.session);
-      if (active !== entryRef.entryId) {
+      try {
         await moveMainTip(lease.session, entryRef.entryId);
+      } catch (error) {
+        if (!(error instanceof SessionUnknownTargetError)) throw error;
+        throw new AgentSessionRepositoryError(
+          "agent_session_ref_invalid",
+          `Agent session checkpoint ${target.checkpointId} does not name a durable entry.`,
+          { cause: error },
+        );
       }
       const restored = await getMainLeafId(lease.session);
       if (restored !== entryRef.entryId) {
@@ -325,12 +358,13 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
       // the atomic path through the lease.
       const lease = await this.acquire(ref);
       try {
-        return await lease.recordCheckpoint(kind, entryRef);
+        return await this.mintCheckpoint(lease.session, ref, kind, entryRef, true);
       } finally {
         await lease.release();
       }
     }
-    return this.mintCheckpoint(session, ref, kind, entryRef);
+    this.assertMetadataMatches(ref, session.metadata);
+    return this.mintCheckpoint(session, ref, kind, entryRef, true);
   }
 
   /**
@@ -346,26 +380,38 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
     ref: AgentSessionRef,
     kind: AgentSessionCheckpointKind,
     entryRef: TranscriptEntryRef,
+    requireDurableEntry = false,
   ): Promise<AgentSessionCheckpointRef> {
-    const recorded = await readEntireCheckpointIndex(session);
-    const ordinal = recorded.filter((record) => record.kind === kind).length + 1;
-    const checkpoint: AgentSessionCheckpointRef = {
-      sessionId: ref.sessionId,
-      checkpointId: kind + "#" + ordinal,
-      kind,
-    };
-    await session.mutate(
-      (mutator) => mutator.commit(
+    this.assertEntryBelongsToSession(ref, entryRef);
+    requireNonEmpty(entryRef.entryId, "entryId");
+    return session.mutate(async (mutator) => {
+      const recorded = await readEntireCheckpointIndex(mutator);
+      if (requireDurableEntry && !(await mutator.getEntries([entryRef.entryId], TODO_CONTEXT)).has(entryRef.entryId)) {
+        throw new AgentSessionRepositoryError(
+          "agent_session_ref_invalid",
+          `Agent session recovery entry ${entryRef.entryId} does not exist.`,
+        );
+      }
+      // Live message_end carries a preallocated id before Pi commits the entry.
+      const ordinal = recorded.filter((record) => record.kind === kind).length + 1;
+      const checkpoint: AgentSessionCheckpointRef = {
+        sessionId: ref.sessionId,
+        checkpointId: kind + "#" + ordinal,
+        kind,
+      };
+      if (recorded.some((record) => record.checkpointId === checkpoint.checkpointId)) {
+        throw checkpointIndexConflict(`Checkpoint ${checkpoint.checkpointId} is already recorded.`);
+      }
+      await mutator.commit(
         [appendList(checkpointIndexAddress(), {
           checkpointId: checkpoint.checkpointId,
           kind,
           entryId: entryRef.entryId,
         })],
         TODO_CONTEXT,
-      ),
-      TODO_CONTEXT,
-    );
-    return checkpoint;
+      );
+      return checkpoint;
+    }, TODO_CONTEXT);
   }
 
   /** Durable checkpoint index; an absent index simply means no checkpoint yet. */
@@ -384,6 +430,7 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
     checkpoints: readonly AgentSessionCheckpointRef[],
   ): Promise<readonly RecordedCheckpoint[]> {
     if (checkpoints.length === 0) return [];
+    for (const checkpoint of checkpoints) this.assertCheckpointIdentity(ref, checkpoint);
     const index = await this.readCheckpointIndex(ref);
     return checkpoints.map((checkpoint) => {
       const entryId = recordedCheckpointEntryId(index, checkpoint);
@@ -650,6 +697,13 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
         "Agent session assistant entry is not on the active branch.",
       );
     }
+    const assistantEntry = await session.getEntry(assistantEntryRef.entryId, TODO_CONTEXT);
+    if (assistantEntry?.type !== "message" || assistantEntry.message.role !== "assistant") {
+      throw new AgentSessionRepositoryError(
+        "agent_session_ref_invalid",
+        "Agent session pending checkpoint does not name a durable assistant entry.",
+      );
+    }
     const activeLeafId = await getMainLeafId(session);
     if ((recovery?.entryId ?? null) !== activeLeafId) {
       throw new AgentSessionRepositoryError(
@@ -687,8 +741,8 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
       }
       try {
         await this.writeFence(ref.sessionId).runWhenIdle(async () => {
-          await this.assertSessionExists(ref);
-          const session = await this.openValidatedSession(ref, this.metadataFromRef(ref));
+          const persistedMetadata = await this.readSessionMetadata(ref);
+          const session = await this.openValidatedSession(ref, persistedMetadata);
           const metadata = session.metadata;
           await session.close(TODO_CONTEXT);
           await this.jsonlRepository.delete(metadata, TODO_CONTEXT);
@@ -727,6 +781,7 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
         `Agent session ${legacyHeader.id} uses legacy v3 JSONL; back up the Product Home, then explicitly reset the entire Product Home before creating new sessions.`,
       );
     }
+    this.assertMetadataMatches(ref, metadata);
     const session = await this.jsonlRepository.open(metadata, TODO_CONTEXT);
     try {
       this.assertMetadataMatches(ref, session.metadata);
@@ -768,14 +823,14 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
    */
   private async openForRead(ref: AgentSessionRef): Promise<Session<JsonlSessionMetadata>> {
     this.validateRef(ref);
-    await this.assertSessionExists(ref);
+    const metadata = await this.readSessionMetadata(ref);
     if (this.writerSessions.has(ref.sessionId)) {
       throw new AgentSessionRepositoryError(
         "agent_session_writer_active",
         `Agent session ${ref.sessionId} cannot be read while its writer is active.`,
       );
     }
-    return this.openValidatedSession(ref, this.metadataFromRef(ref));
+    return this.openValidatedSession(ref, metadata);
   }
 
   private assertEntryBelongsToSession(ref: AgentSessionRef, entryRef: TranscriptEntryRef): void {
@@ -797,30 +852,20 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
     };
   }
 
-  private metadataFromRef(ref: AgentSessionRef): JsonlSessionMetadata {
-    return {
-      id: ref.sessionId,
-      cwd: ref.sessionCwd,
-      storageVersion: 1,
-      createdAt: Date.parse(ref.createdAt),
-      path: this.pathFromStorageKey(ref.storageKey),
-      modifiedAt: Date.now(),
-    };
-  }
-
   /**
    * Pi 0.87 removed the typed not-found error, so existence is proven through
    * the repository listing instead of matching provider error text.
    */
-  private async assertSessionExists(ref: AgentSessionRef): Promise<void> {
-    const exists = (await this.jsonlRepository.list({ cwd: ref.sessionCwd }, TODO_CONTEXT))
-      .some((metadata) => metadata.id === ref.sessionId);
-    if (!exists) {
+  private async readSessionMetadata(ref: AgentSessionRef): Promise<JsonlSessionMetadata> {
+    const metadata = (await this.jsonlRepository.list({ cwd: ref.sessionCwd }, TODO_CONTEXT))
+      .find((metadata) => metadata.id === ref.sessionId);
+    if (metadata === undefined) {
       throw new AgentSessionRepositoryError(
         "agent_session_not_found",
         `Agent session ${ref.sessionId} was not found.`,
       );
     }
+    return metadata;
   }
 
   private validateRef(ref: AgentSessionRef): void {
@@ -908,6 +953,15 @@ type StoredCheckpoint = {
   readonly entryId: string;
 };
 
+const storedCheckpointSchema = z.object({
+  checkpointId: z.string().min(1),
+  kind: z.enum([
+    "run_started", "input_committed", "assistant_tool_calls_committed",
+    "tool_results_committed", "compaction_committed", "assistant_response_committed",
+  ]),
+  entryId: z.string().min(1),
+});
+
 type RecordedCheckpoint = {
   readonly checkpoint: AgentSessionCheckpointRef;
   readonly entryRef: TranscriptEntryRef;
@@ -929,22 +983,37 @@ function checkpointIndexAddress(): ReturnType<typeof list<StoredCheckpoint>> {
  * silently stop resolving its newest records without paging by seq cursor.
  */
 async function readEntireCheckpointIndex(
-  session: Session<JsonlSessionMetadata>,
+  reader: Pick<Session, "readList">,
 ): Promise<readonly StoredCheckpoint[]> {
   const records: StoredCheckpoint[] = [];
+  const checkpointIds = new Set<string>();
   let cursor: { seq: number } | undefined;
   for (;;) {
-    const page = await session.readList(
+    const page = await reader.readList(
       checkpointIndexAddress(),
       { limit: 10_000, ...(cursor === undefined ? {} : { cursor }) },
       TODO_CONTEXT,
     );
     if (page.length === 0) break;
-    for (const element of page) records.push(element.value);
+    for (const element of page) {
+      const parsed = storedCheckpointSchema.safeParse(element.value);
+      if (!parsed.success) {
+        throw checkpointIndexConflict("Agent session checkpoint index contains an invalid record.", parsed.error);
+      }
+      if (checkpointIds.has(parsed.data.checkpointId)) {
+        throw checkpointIndexConflict(`Checkpoint ${parsed.data.checkpointId} is recorded more than once.`);
+      }
+      checkpointIds.add(parsed.data.checkpointId);
+      records.push(parsed.data);
+    }
     if (page.length < 10_000) break;
     cursor = { seq: page[page.length - 1]!.seq };
   }
   return records;
+}
+
+function checkpointIndexConflict(message: string, cause?: unknown): AgentSessionRepositoryError {
+  return new AgentSessionRepositoryError("agent_session_checkpoint_conflict", message, { cause });
 }
 
 /** Transcript position recorded for one checkpoint, or undefined when unmapped. */

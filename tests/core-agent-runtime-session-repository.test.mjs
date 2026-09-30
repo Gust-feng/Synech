@@ -3,14 +3,16 @@ import test from "node:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { TODO_CONTEXT } from "@earendil-works/pi-agent-core/harness/context";
+import { appendList, branchTip, insertEntry, list, setValue } from "@earendil-works/pi-agent-core/harness/session";
 
-import {
-  FileSystemAgentSessionRepository,
-} from "../dist/adapters/intelligence/file-system-agent-session-repository.js";
-import { AgentSessionRepositoryError } from "../dist/app/model-runtime/agent-session.js";
-import { createAgentRuntimeEnvironment } from "../dist/adapters/intelligence/pi-agent/runtime-environment.js";
+const outputRoot = path.resolve(process.env.SYNECH_TEST_DIST ?? "dist");
+const { FileSystemAgentSessionRepository } = await import(pathToFileURL(path.join(outputRoot, "adapters/intelligence/file-system-agent-session-repository.js")));
+const { AgentSessionRepositoryError } = await import(pathToFileURL(path.join(outputRoot, "app/model-runtime/agent-session.js")));
+const { createAgentRuntimeEnvironment } = await import(pathToFileURL(path.join(outputRoot, "adapters/intelligence/pi-agent/runtime-environment.js")));
+const { SessionGenerationError } = await import(pathToFileURL(path.join(outputRoot, "adapters/intelligence/session-write-fence.js")));
 
 function createRepository() {
   const root = mkdtempSync(path.join(tmpdir(), "synech-agent-session-"));
@@ -751,5 +753,204 @@ test("Agent session repository deduplicates and rejects foreign checkpoints", as
     assert.deepEqual(await repo.locateSessionCheckpoints({ sessionRef: a, checkpoints: [] }), []);
   } finally {
     await cleanup();
+  }
+});
+
+test("Agent session repository allocates concurrent checkpoints atomically across index pages", async () => {
+  const { repo, cleanup } = createRepository();
+  try {
+    const ref = await repo.create({ sessionId: "checkpoint-concurrent", sessionCwd: process.cwd() });
+    const lease = await repo.acquire(ref);
+    await seedBranch(lease.session, [assistantMessage("first"), assistantMessage("second")]);
+    const positions = await repo.activeTranscriptPositions(ref);
+    const address = list("synech.checkpoint", "recorded");
+    await lease.session.mutate((mutator) => mutator.commit(
+      Array.from({ length: 10_001 }, (_, index) => appendList(address, {
+        checkpointId: "assistant_response_committed#" + (index + 1),
+        kind: "assistant_response_committed",
+        entryId: positions[0].entryId,
+      })),
+      TODO_CONTEXT,
+    ), TODO_CONTEXT);
+
+    const checkpoints = await Promise.all(positions.map((entryRef) =>
+      lease.recordCheckpoint("assistant_response_committed", entryRef)));
+    assert.deepEqual(checkpoints.map((checkpoint) => checkpoint.checkpointId), [
+      "assistant_response_committed#10002", "assistant_response_committed#10003",
+    ]);
+    await lease.release();
+    const entries = await repo.readAssistantEntriesByCheckpoint({ sessionRef: ref, checkpoints });
+    assert.deepEqual(entries.map((entry) => entry.text), ["first", "second"]);
+
+    const recovery = await repo.acquire(ref);
+    await recovery.session.appendList(address, {
+      checkpointId: "assistant_response_committed#1",
+      kind: "assistant_response_committed",
+      entryId: positions[1].entryId,
+    }, TODO_CONTEXT);
+    await recovery.release();
+    await assert.rejects(() => repo.moveActiveCheckpoint(ref, checkpoints[1]), (error) =>
+      error instanceof AgentSessionRepositoryError && error.code === "agent_session_checkpoint_conflict");
+    assert.deepEqual(await repo.activeTranscriptPositions(ref), positions);
+  } finally {
+    cleanup();
+  }
+});
+
+test("Agent session repository keeps checkpoint and release callbacks owned by their generation", async () => {
+  const { repo, cleanup } = createRepository();
+  try {
+    const ref = await repo.create({ sessionId: "checkpoint-generation", sessionCwd: process.cwd() });
+    const first = await repo.acquire(ref);
+    await seedBranch(first.session, [userMessage("first")]);
+    const entryRef = (await repo.activeTranscriptPositions(ref))[0];
+    await first.revokeTo(null);
+    const revoked = (error) => error instanceof SessionGenerationError && error.code === "generation_revoked";
+    await assert.rejects(() => first.recordCheckpoint("input_committed", entryRef), revoked);
+    await first.release();
+    // An old callback must neither take a new writer nor use the successor.
+    await assert.rejects(() => first.recordCheckpoint("input_committed", entryRef), revoked);
+    const second = await repo.acquire(ref);
+    await assert.rejects(() => first.recordCheckpoint("input_committed", entryRef), revoked);
+    await first.release();
+    assert.deepEqual(await repo.activeTranscriptPositions(ref), []);
+    await assert.rejects(() => repo.acquire(ref), (error) =>
+      error instanceof AgentSessionRepositoryError && error.code === "agent_session_writer_active");
+    assert.deepEqual(await second.session.readList(list("synech.checkpoint", "recorded"), undefined, TODO_CONTEXT), []);
+    await second.release();
+  } finally {
+    cleanup();
+  }
+});
+
+test("Agent session repository waits for checkpoint resolution before same-turn release in either order", { timeout: 5000 }, async () => {
+  const { repo, cleanup } = createRepository();
+  try {
+    for (const releaseFirst of [false, true]) {
+      const ref = await repo.create({ sessionId: "revoke-release-" + releaseFirst, sessionCwd: process.cwd() });
+      const lease = await repo.acquire(ref);
+      const branch = await seedBranch(lease.session, [userMessage("accepted")]);
+      const accepted = (await repo.activeTranscriptPositions(ref))[0];
+      const checkpoint = await lease.recordCheckpoint("input_committed", accepted);
+      await branch.appendMessage(userMessage("unaccepted"), TODO_CONTEXT);
+      await Promise.all(releaseFirst
+        ? [lease.release(), lease.revokeTo(checkpoint)]
+        : [lease.revokeTo(checkpoint), lease.release()]);
+      const successor = await repo.acquire(ref);
+      assert.deepEqual(await repo.activeTranscriptPositions(ref), [accepted]);
+      await successor.release();
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test("Agent session repository accepts live precommit assistant and tool-result checkpoints", async () => {
+  const { repo, cleanup } = createRepository();
+  try {
+    const ref = await repo.create({ sessionId: "checkpoint-precommit", sessionCwd: process.cwd() });
+    const lease = await repo.acquire(ref);
+    await seedBranch(lease.session, [userMessage("go")]);
+    let parentId = (await repo.activeTranscriptPositions(ref))[0].entryId;
+    for (const [kind, message] of [
+      ["assistant_tool_calls_committed", assistantMessage("", [
+        { type: "toolCall", id: "call", name: "Tool", arguments: {} },
+      ])],
+      ["tool_results_committed", {
+        role: "toolResult", toolCallId: "call", toolName: "Tool",
+        content: [{ type: "text", text: "result" }], isError: false, timestamp: Date.now(),
+      }],
+      ["assistant_response_committed", assistantMessage("answer")],
+    ]) {
+      const entryId = lease.session.idGenerator.next();
+      const checkpoint = await lease.recordCheckpoint(kind, { sessionId: ref.sessionId, entryId });
+      assert.equal(await lease.session.getEntry(entryId, TODO_CONTEXT), undefined);
+      await lease.session.mutate((mutator) => mutator.commit([
+        insertEntry({ id: entryId, parentId, type: "message", message }),
+        setValue(branchTip("main"), entryId),
+      ], TODO_CONTEXT), TODO_CONTEXT);
+      const located = await repo.locateSessionCheckpoints({ sessionRef: ref, checkpoints: [checkpoint] });
+      assert.equal(located.length, 1);
+      parentId = entryId;
+    }
+    await lease.release();
+  } finally {
+    cleanup();
+  }
+});
+
+test("Agent session repository rejects dangling durable restore and recovery mappings without changing the tip", { timeout: 5000 }, async () => {
+  const { repo, cleanup } = createRepository();
+  try {
+    const ref = await repo.create({ sessionId: "checkpoint-dangling", sessionCwd: process.cwd() });
+    const lease = await repo.acquire(ref);
+    await seedBranch(lease.session, [userMessage("accepted")]);
+    const positions = await repo.activeTranscriptPositions(ref);
+    const entryRef = { sessionId: ref.sessionId, entryId: "never-committed" };
+    const checkpoint = await lease.recordCheckpoint("assistant_response_committed", entryRef);
+    const invalid = (error) => error instanceof AgentSessionRepositoryError && error.code === "agent_session_ref_invalid";
+    await assert.rejects(() => repo.recordSessionCheckpoint({ sessionRef: ref, kind: "input_committed", entryRef }), invalid);
+    await lease.release();
+    await assert.rejects(() => repo.moveActiveCheckpoint(ref, checkpoint), invalid);
+    assert.deepEqual(await repo.activeTranscriptPositions(ref), positions);
+    await assert.rejects(() => repo.recordSessionCheckpoint({ sessionRef: ref, kind: "input_committed", entryRef }), invalid);
+    const recovery = await repo.acquire(ref);
+    const revoking = recovery.revokeTo(checkpoint);
+    await Promise.all([
+      assert.rejects(() => revoking, (error) =>
+        error instanceof SessionGenerationError && error.code === "generation_revoke_failed"),
+      recovery.release(),
+    ]);
+    assert.deepEqual(await repo.activeTranscriptPositions(ref), positions);
+    await assert.rejects(() => repo.acquire(ref), (error) =>
+      error instanceof AgentSessionRepositoryError && error.code === "agent_session_revoke_failed");
+  } finally {
+    cleanup();
+  }
+});
+
+test("Agent session repository rejects persisted checkpoint conflicts and malformed records", async () => {
+  const { repo, cleanup } = createRepository();
+  try {
+    for (const malformed of [false, true]) {
+      const ref = await repo.create({ sessionId: "checkpoint-invalid-" + malformed, sessionCwd: process.cwd() });
+      const lease = await repo.acquire(ref);
+      await seedBranch(lease.session, [userMessage("first"), userMessage("second")]);
+      const positions = await repo.activeTranscriptPositions(ref);
+      const checkpoint = await lease.recordCheckpoint("input_committed", positions[0]);
+      await lease.session.appendList(list("synech.checkpoint", "recorded"), malformed ? {
+        checkpointId: "input_committed#2", kind: "input_committed", entryId: null,
+      } : {
+        checkpointId: checkpoint.checkpointId, kind: checkpoint.kind, entryId: positions[1].entryId,
+      }, TODO_CONTEXT);
+      const conflict = (error) => error instanceof AgentSessionRepositoryError && error.code === "agent_session_checkpoint_conflict";
+      await assert.rejects(() => lease.recordCheckpoint("input_committed", positions[1]), conflict);
+      await lease.release();
+      await assert.rejects(() => repo.moveActiveCheckpoint(ref, checkpoint), conflict);
+      assert.deepEqual(await repo.activeTranscriptPositions(ref), positions);
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test("Agent session repository checks header-derived metadata before opening or deleting", async () => {
+  const { repo, cleanup } = createRepository();
+  try {
+    const ref = await repo.create({ sessionId: "metadata-persisted", sessionCwd: process.cwd() });
+    for (const changed of [
+      { ...ref, createdAt: new Date(Date.parse(ref.createdAt) + 60_000).toISOString() },
+      { ...ref, storageKey: "other.jsonl" },
+    ]) {
+      const mismatch = (error) => error instanceof AgentSessionRepositoryError && error.code === "agent_session_metadata_mismatch";
+      await assert.rejects(() => repo.acquire(changed), mismatch);
+      await assert.rejects(() => repo.activeTranscriptPositions(changed), mismatch);
+      await assert.rejects(() => repo.delete(changed), mismatch);
+    }
+    assert.deepEqual(await repo.activeTranscriptPositions(ref), []);
+    const lease = await repo.acquire(ref);
+    await lease.release();
+  } finally {
+    cleanup();
   }
 });

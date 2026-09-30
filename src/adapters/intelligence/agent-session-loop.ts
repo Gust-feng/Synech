@@ -219,8 +219,7 @@ export function createAgentSessionLoop(options: AgentSessionLoopOptions): AgentL
       // operations. A LaneBusy here means that invariant was not restored;
       // aborting and retrying would hide the race and could touch another run.
       const started = promptLane();
-      const run = started.then(async (result) => {
-        await rootEvents.settleProjectionFailure(lane);
+      const run = started.finally(() => rootEvents.settleProjectionFailure(lane)).then(async (result) => {
         if (!result.ok) {
           throw new PiRunFailure(result.error.message, piAdmissionErrorCode(result.error), { cause: result.error });
         }

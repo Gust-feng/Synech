@@ -82,6 +82,7 @@ export class RootHarnessEventProjector {
   private startCheckpoint: AgentSessionCheckpointRef | null = null;
   private currentUsage: ModelUsage = {};
   private currentMaintenanceFailure: { readonly code: string; readonly error: string } | undefined;
+  private attachedLane: AgentLane | undefined;
   private projectionAbort?: Promise<void>;
   private currentToolRequestAcceptanceFailure: unknown;
   private currentAssistant: Extract<AgentMessage, { readonly role: "assistant" }> | undefined;
@@ -140,6 +141,7 @@ export class RootHarnessEventProjector {
     lane: AgentLane,
     metadataByName: ReadonlyMap<string, ToolDefinition["metadata"]>,
   ): void {
+    this.attachedLane = lane;
     attachProviderPayloadHook(harness, lane, this.options.loopOptions, metadataByName);
     // Product context contributions enter through the runtime hook, not by
     // re-running compaction at the request boundary: Pi owns the threshold and
@@ -163,8 +165,14 @@ export class RootHarnessEventProjector {
       this.timing.startRequest();
       return undefined;
     });
-    harness.hooks.on("before_drive", () => {
-      if (this.currentMaintenanceFailure !== undefined) {
+    harness.hooks.on("before_drive", async () => {
+      if (this.currentMaintenanceFailure === undefined) return undefined;
+      // Let Pi reconcile the durable cancellation instead of faulting its
+      // harness; shared maintenance ports may not have requested abort yet.
+      this.abortCurrentOperation(lane);
+      await this.projectionAbort;
+      const execution = await lane.inspectExecution(TODO_CONTEXT);
+      if (execution.current?.status !== "aborting") {
         throw new Error(this.currentMaintenanceFailure.error);
       }
       return undefined;
@@ -211,7 +219,10 @@ export class RootHarnessEventProjector {
     // Abort publishes events itself. Waiting here would deadlock the event bus
     // against its current delivery; the drive gate also rejects further work.
     this.projectionAbort ??= lane.inspectExecution(TODO_CONTEXT).then(async (execution) => {
-      if (execution.current === null) return;
+      if (execution.current === null) {
+        this.projectionAbort = undefined;
+        return;
+      }
       const result = await lane.requestAbort(execution.current.id, TODO_CONTEXT);
       if (!result.ok) throw result.error;
     }).catch(() => undefined);
@@ -322,7 +333,9 @@ export class RootHarnessEventProjector {
   }
 
   recordMaintenanceFailure(failure: { readonly code: string; readonly error: string }): void {
-    this.currentMaintenanceFailure ??= failure;
+    if (this.currentMaintenanceFailure !== undefined) return;
+    this.currentMaintenanceFailure = failure;
+    if (this.attachedLane !== undefined) this.abortCurrentOperation(this.attachedLane);
   }
 
   failMaintenance(code: string, message: string): never {
@@ -574,9 +587,9 @@ export function attachProviderPayloadHook(
     | "toolDefinitionTokenCounter"
   >,
   metadataByName: ReadonlyMap<string, ToolDefinition["metadata"]>,
-): void {
+): (() => void) | undefined {
   if (options.transformProviderPayload === undefined && options.onProviderToolDefinitionMetrics === undefined) return;
-  harness.hooks.on("before_payload", async ({ model, payload }) => {
+  return harness.hooks.on("before_payload", async ({ model, payload }) => {
     const tools = await activeModelVisibleToolDefinitions(harness, lane, metadataByName);
     const transformedPayload = options.transformProviderPayload?.({ model, payload, tools }) ?? payload;
     observeProviderToolDefinitionMetrics(options, tools, model);

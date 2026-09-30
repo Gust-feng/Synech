@@ -1,6 +1,6 @@
 import type { Branch, Session, SessionMetadata } from "@earendil-works/pi-agent-core";
 import { TODO_CONTEXT, type Context } from "@earendil-works/pi-agent-core/harness/context";
-import { branchTip, setValue } from "@earendil-works/pi-agent-core/harness/session";
+import { branchTip, setValue, SessionUnknownTargetError } from "@earendil-works/pi-agent-core/harness/session";
 
 export type SessionGenerationErrorCode =
   | "generation_active"
@@ -155,16 +155,21 @@ export class SessionWriteFence {
     }
 
     const operation = this.enqueue(async () => {
-      if (generation.status === "released" || generation.status === "revoked") return;
+      if (generation.status === "released") throw this.revokedError(generation);
+      if (generation.status === "revoked") return;
       if (this.currentGeneration !== generation) throw this.revokedError(generation);
       try {
         generation.status = "revoking";
-        if (await getMainLeafId(generation.session) !== resolvedTargetLeafId) {
-          await generation.session.mutate(
-            (mutator) => mutator.commit([setValue(branchTip("main"), resolvedTargetLeafId)], TODO_CONTEXT),
-            TODO_CONTEXT,
-          );
-        }
+        await generation.session.mutate(async (mutator) => {
+          if (resolvedTargetLeafId !== null &&
+              !(await mutator.getEntries([resolvedTargetLeafId], TODO_CONTEXT)).has(resolvedTargetLeafId)) {
+            throw new SessionUnknownTargetError(resolvedTargetLeafId);
+          }
+          const tip = await mutator.getValue(branchTip("main"), TODO_CONTEXT);
+          if ((tip?.value ?? null) !== resolvedTargetLeafId) {
+            await mutator.commit([setValue(branchTip("main"), resolvedTargetLeafId)], TODO_CONTEXT);
+          }
+        }, TODO_CONTEXT);
         generation.status = "revoked";
         generation.revokedLeafId = resolvedTargetLeafId;
       } catch (error) {
@@ -316,10 +321,14 @@ export async function getMainBranch(session: Session): Promise<Branch | undefine
 
 /** Moves the active `main` branch tip through one atomic Pi value commit. */
 export async function moveMainTip(session: Session, targetLeafId: string | null): Promise<void> {
-  await session.mutate(
-    (mutator) => mutator.commit([setValue(branchTip("main"), targetLeafId)], TODO_CONTEXT),
-    TODO_CONTEXT,
-  );
+  await session.mutate(async (mutator) => {
+    if (targetLeafId !== null && !(await mutator.getEntries([targetLeafId], TODO_CONTEXT)).has(targetLeafId)) {
+      throw new SessionUnknownTargetError(targetLeafId);
+    }
+    if ((await mutator.getValue(branchTip("main"), TODO_CONTEXT))?.value !== targetLeafId) {
+      await mutator.commit([setValue(branchTip("main"), targetLeafId)], TODO_CONTEXT);
+    }
+  }, TODO_CONTEXT);
 }
 
 /** Appends one AgentMessage to the active `main` branch. */

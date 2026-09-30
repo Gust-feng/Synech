@@ -1,16 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { MemorySessionRepo } from "@earendil-works/pi-agent-core";
 import { TODO_CONTEXT } from "@earendil-works/pi-agent-core/harness/context";
 import { value } from "@earendil-works/pi-agent-core/harness/session";
 
-import {
+const outputRoot = path.resolve(process.env.SYNECH_TEST_DIST ?? "dist");
+const {
   SessionGenerationError,
   SessionWriteFence,
   appendMainMessage,
   getMainLeafId,
-} from "../dist/adapters/intelligence/session-write-fence.js";
+} = await import(pathToFileURL(path.join(outputRoot, "adapters/intelligence/session-write-fence.js")));
 
 function userMessage(text) {
   return { role: "user", content: text, timestamp: Date.now() };
@@ -299,4 +302,40 @@ test("Session fence admits a new writer once the restored leaf is proven", async
   const reopened = await fence.acquire(async () => session);
   assert.equal(await getMainLeafId(session), leaves[1]);
   await reopened.release();
+});
+
+test("Session fence rejects nonexistent recovery targets and retains poison after release", async () => {
+  const { repo, session, leaves } = await createSessionWithLeaves("fence-dangling", 2);
+  const { fence, lease } = await acquire(session);
+  await assert.rejects(() => lease.revokeTo("missing-entry"), (error) =>
+    error instanceof SessionGenerationError && error.code === "generation_revoke_failed" &&
+    error.cause?.targetId === "missing-entry");
+  assert.equal(await getMainLeafId(session), leaves[1]);
+  await lease.release();
+  await assert.rejects(() => fence.acquire(() => reopen(repo, session)), (error) =>
+    error instanceof SessionGenerationError && error.code === "generation_revoke_failed");
+});
+
+test("Session fence never reports success when a queued release overtakes revocation", async () => {
+  const { repo, session, leaves } = await createSessionWithLeaves("fence-late-revoke", 2);
+  const { lease } = await acquire(session);
+  let closeStarted;
+  let finishClose;
+  const closing = new Promise((resolve) => { closeStarted = resolve; });
+  const closeBarrier = new Promise((resolve) => { finishClose = resolve; });
+  const originalClose = session.close.bind(session);
+  session.close = async (...args) => {
+    closeStarted();
+    await closeBarrier;
+    return originalClose(...args);
+  };
+  const releasing = lease.release();
+  await closing;
+  const rejected = assert.rejects(() => lease.revokeTo(leaves[0]), (error) =>
+    error instanceof SessionGenerationError && error.code === "generation_revoked");
+  finishClose();
+  await Promise.all([releasing, rejected]);
+  const reopened = await reopen(repo, session);
+  assert.equal(await getMainLeafId(reopened), leaves[1]);
+  await reopened.close(TODO_CONTEXT);
 });

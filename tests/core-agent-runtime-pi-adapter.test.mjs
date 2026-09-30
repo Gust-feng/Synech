@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
-import { MemorySessionRepo } from "@earendil-works/pi-agent-core";
+import { AgentHarness, MemorySessionRepo } from "@earendil-works/pi-agent-core";
 import { TODO_CONTEXT } from "@earendil-works/pi-agent-core/harness/context";
 
 import { createAgentSessionLoop } from "../dist/adapters/intelligence/agent-session-loop.js";
@@ -490,6 +490,59 @@ test("Pi Adapter refuses to execute after release", async () => {
   );
 });
 
+test("Pi Adapter settles a rejected input checkpoint before returning", { timeout: 5000 }, async () => {
+  const session = await createSession("adapter-input-projection-failed");
+  const recorded = [];
+  const checkpoints = [];
+  const models = createModels([textStream("Must not be requested.")]);
+  const loop = createAgentSessionLoop({
+    agentSession: session,
+    modelRegistry: models,
+    selectedModel: MODEL,
+    compactionSettings: COMPACTION,
+  });
+
+  let recreated;
+  try {
+    const outcome = await loop.execute(createInput(toolBoundary(recorded), recorded, {
+      onSessionWriteCheckpoint(checkpoint) {
+        checkpoints.push(checkpoint);
+        if (checkpoint.kind === "input_entry_committed") {
+          throw new Error("Product input checkpoint could not be persisted.");
+        }
+      },
+    }));
+
+    assert.equal(outcome.status, "failed");
+    assert.equal(outcome.errorCode, "runtime_projection_failed");
+    assert.equal(outcome.error, "Product input checkpoint could not be persisted.");
+    assert.equal(models.requested, 0, "a rejected input checkpoint must not reach the provider");
+    assert.equal(recorded.length, 0, "a rejected input checkpoint must not execute tools");
+    assert.equal(
+      checkpoints.some((checkpoint) => checkpoint.kind === "assistant_response_entry_committed"),
+      false,
+    );
+    // Recreate without driving: the next loop's startup recovery must not hide
+    // an operation left open by the failed projection.
+    recreated = await AgentHarness.create({
+      session,
+      models,
+      model: MODEL,
+      tools: [],
+      compaction: COMPACTION,
+    }, TODO_CONTEXT);
+    assert.equal(recreated.open.length, 0, "the failed run must have durably settled its operation");
+    const lane = await recreated.harness.lane("main", TODO_CONTEXT);
+    assert.equal((await lane.inspectExecution(TODO_CONTEXT)).current, null);
+  } finally {
+    try {
+      await loop.release();
+    } finally {
+      await recreated?.harness.close(TODO_CONTEXT);
+    }
+  }
+});
+
 test("Pi Adapter stops after a durable projection fails", { timeout: 5000 }, async () => {
   const session = await createSession("adapter-projection-failed");
   const recorded = [];
@@ -503,18 +556,130 @@ test("Pi Adapter stops after a durable projection fails", { timeout: 5000 }, asy
     selectedModel: MODEL,
     compactionSettings: COMPACTION,
   });
-  const outcome = await loop.execute(createInput(toolBoundary(recorded), recorded, {
-    onSessionWriteCheckpoint(checkpoint) {
-      if (checkpoint.kind === "assistant_tool_call_entry_committed") {
-        throw new Error("Product checkpoint could not be persisted.");
-      }
-    },
-  }));
-  assert.equal(outcome.status, "failed");
-  assert.equal(outcome.errorCode, "runtime_projection_failed");
-  assert.equal(models.requested, 1, "projection failure must stop further model requests");
-  assert.equal(recorded.length, 0, "an unaccepted checkpoint must not execute tools");
-  await loop.release();
+  let recreated;
+  try {
+    const outcome = await loop.execute(createInput(toolBoundary(recorded), recorded, {
+      onSessionWriteCheckpoint(checkpoint) {
+        if (checkpoint.kind === "assistant_tool_call_entry_committed") {
+          throw new Error("Product checkpoint could not be persisted.");
+        }
+      },
+    }));
+    assert.equal(outcome.status, "failed");
+    assert.equal(outcome.errorCode, "runtime_projection_failed");
+    assert.equal(outcome.error, "Product checkpoint could not be persisted.");
+    assert.equal(models.requested, 1, "projection failure must stop further model requests");
+    assert.equal(recorded.length, 0, "an unaccepted checkpoint must not execute tools");
+    recreated = await AgentHarness.create({
+      session,
+      models,
+      model: MODEL,
+      tools: [],
+      compaction: COMPACTION,
+    }, TODO_CONTEXT);
+    assert.equal(recreated.open.length, 0, "projection failure must not leave an open operation");
+  } finally {
+    try {
+      await loop.release();
+    } finally {
+      await recreated?.harness.close(TODO_CONTEXT);
+    }
+  }
+});
+
+test("Pi Adapter cancels a parallel child after delegated request acceptance fails", { timeout: 5000 }, async () => {
+  const session = await createSession("adapter-delegated-projection-failed");
+  const recorded = [];
+  const childDefinition = { ...DEFINITION, name: "AdapterChildTool" };
+  const definitions = [DEFINITION, childDefinition];
+  const parentStream = createAssistantMessageEventStream();
+  parentStream.push({ type: "start", partial: emptyPartial() });
+  parentStream.push({
+    type: "done",
+    reason: "toolUse",
+    message: assistantMessage([
+      { type: "toolCall", id: "call-parent-a", name: DEFINITION.name, arguments: { value: "delegate-a" } },
+      { type: "toolCall", id: "call-parent-b", name: DEFINITION.name, arguments: { value: "delegate-b" } },
+    ], { stopReason: "toolUse" }),
+  });
+  const models = createModels([
+    parentStream,
+    toolCallStream({ type: "toolCall", id: "call-child-a", name: childDefinition.name, arguments: { value: "hi" } }),
+    toolCallStream({ type: "toolCall", id: "call-child-b", name: childDefinition.name, arguments: { value: "hi" } }),
+    textStream("Must not be requested."),
+  ]);
+  const loop = createAgentSessionLoop({
+    agentSession: session,
+    modelRegistry: models,
+    selectedModel: MODEL,
+    compactionSettings: COMPACTION,
+  });
+  const boundary = toolBoundary(recorded);
+  let markSiblingStarted;
+  const siblingStarted = new Promise((resolve) => { markSiblingStarted = resolve; });
+  let siblingAborted = false;
+  let recreated;
+  try {
+    const outcome = await loop.execute(createInput({
+      ...boundary,
+      definitions,
+      permission: { ...boundary.permission, allowedTools: definitions.map((definition) => definition.name) },
+      gateway: {
+        ...boundary.gateway,
+        list: () => definitions,
+        has: (name) => definitions.some((definition) => definition.name === name),
+        deliverResult: async (result) => result,
+        async execute(request, context) {
+          recorded.push(request);
+          markSiblingStarted();
+          await new Promise((resolve) => {
+            if (context.abortSignal.aborted) resolve();
+            else context.abortSignal.addEventListener("abort", resolve, { once: true });
+          });
+          siblingAborted = true;
+          return { ...request, status: "cancelled", output: undefined, error: "Sibling cancelled.", durationMs: 0 };
+        },
+      },
+    }, recorded, {
+      agentTools: [{
+        toolName: DEFINITION.name,
+        resolve: async () => ({
+          agentName: "adapter-child",
+          instructions: "You are the child adapter contract test agent.",
+          input: "Run the child tool.",
+          callerAgentId: "adapter-child",
+          allowedTools: [childDefinition.name],
+        }),
+      }],
+      onNestedToolRequestsAccepted: async (requests) => {
+        if (requests.some((request) => request.providerCallId === "call-child-a")) {
+          await siblingStarted;
+          throw new Error("Nested requests could not be persisted.");
+        }
+      },
+    }));
+    assert.equal(outcome.status, "failed");
+    assert.equal(outcome.errorCode, "runtime_projection_failed");
+    assert.equal(outcome.error, "Nested requests could not be persisted.");
+    assert.equal(models.requested, 3, "child maintenance failure must stop sibling and parent follow-up requests");
+    assert.deepEqual(recorded.map((request) => request.providerCallId), ["call-child-b"],
+      "only the accepted sibling request may execute");
+    assert.equal(siblingAborted, true, "the sibling must receive cancellation while the parent awaits tools");
+    recreated = await AgentHarness.create({
+      session,
+      models,
+      model: MODEL,
+      tools: [],
+      compaction: COMPACTION,
+    }, TODO_CONTEXT);
+    assert.equal(recreated.open.length, 0, "child maintenance failure must durably settle the parent");
+  } finally {
+    try {
+      await loop.release();
+    } finally {
+      await recreated?.harness.close(TODO_CONTEXT);
+    }
+  }
 });
 
 test("Pi Adapter lets the owner finish accepting a tool round before the tool executes", async () => {
