@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import { builtinModules } from "node:module";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
 import ts from "typescript";
 
 const root = process.cwd();
@@ -166,7 +165,7 @@ for (const file of files) {
   }
 }
 
-checkMigrationChecksumHistory();
+checkDataBaseline();
 checkStaleAllowlistEntries();
 
 if (violations.length > 0) {
@@ -492,44 +491,40 @@ function parentLexicalScope(scope) {
   return scope?.parent === undefined ? undefined : lexicalScope(scope.parent);
 }
 
-function checkMigrationChecksumHistory() {
+function checkDataBaseline() {
   const manifestPath = path.join(root, "docs", "architecture", "data-baseline.json");
   const current = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-  const baseRef = process.env.BASELINE_BASE_REF?.trim() || "HEAD";
-  let previous;
-  try {
-    previous = JSON.parse(execFileSync(
-      "git",
-      ["show", `${baseRef}:docs/architecture/data-baseline.json`],
-      { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
-    ));
-  } catch {
-    return;
-  }
-  if (previous.dataFormatId === "synech/v1-baseline-5" && current.dataFormatId === "synech/v1") {
-    // The published v1.0.1 ledger is adopted exactly once by the narrow runtime
-    // conversion in sqlite-v1-release-upgrade.ts. From synech/v1 onward every
-    // migration checksum is immutable and new versions are appended only.
-    return;
-  }
-  if (previous.dataFormatId !== current.dataFormatId) {
+  if (current.productNamespace !== "synech" || current.dataFormatId !== "synech/v1") {
     violations.push({
-      rule: "data-format-id-immutable",
+      rule: "data-format-identity",
       file: "docs/architecture/data-baseline.json",
       line: 1,
-      message: `Released data format cannot change from ${previous.dataFormatId} to ${current.dataFormatId}`,
+      message: "The target data baseline must use namespace synech and format synech/v1",
     });
-    return;
   }
-  for (const [identity, checksum] of Object.entries(previous.migrationChecksums ?? {})) {
-    if (current.migrationChecksums?.[identity] !== checksum) {
+  // Unreleased owner schemas are complete version 1 definitions, not a
+  // compatibility contract with Git history. Fresh startup verifies the SQL.
+  for (const [owner, version] of Object.entries(current.migrationOwners)) {
+    if (version !== 1) {
       violations.push({
-        rule: "migration-checksum-immutable",
+        rule: "target-schema-version",
         file: "docs/architecture/data-baseline.json",
         line: 1,
-        message: `Applied migration ${identity} checksum cannot be changed or removed`,
+        message: `Unreleased schema owner ${owner} must define only version 1`,
       });
     }
+  }
+  const expected = Object.keys(current.migrationOwners).map((owner) => `${owner}/1`).sort();
+  const actual = Object.keys(current.migrationChecksums).sort();
+  if (JSON.stringify(actual) !== JSON.stringify(expected) ||
+      !Object.values(current.migrationChecksums).every((checksum) => /^[a-f0-9]{64}$/u.test(checksum)) ||
+      !/^[a-f0-9]{64}$/u.test(current.schemaFingerprint)) {
+    violations.push({
+      rule: "target-schema-checksums",
+      file: "docs/architecture/data-baseline.json",
+      line: 1,
+      message: "The target baseline must have one SHA-256 checksum per owner/1 and a schema fingerprint",
+    });
   }
 }
 

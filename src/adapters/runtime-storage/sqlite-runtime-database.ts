@@ -4,10 +4,6 @@ import { stat } from "node:fs/promises";
 import path from "node:path";
 import { backup, DatabaseSync } from "node:sqlite";
 import { PRODUCT_DATA_FORMAT_ID, PRODUCT_NAMESPACE } from "../../platform/product-identity.js";
-import {
-  RELEASED_V101_DATA_FORMAT_ID,
-  upgradeReleasedV101Database,
-} from "./sqlite-v1-release-upgrade.js";
 
 export type SqliteMigration = {
   readonly version: number;
@@ -76,10 +72,6 @@ export class SqliteRuntimeDatabase {
       if (existingTables.length > 0 && !hasIdentityTable) {
         throw new Error("SQLite database is missing the product identity marker and belongs to an incompatible namespace.");
       }
-      connection.exec("PRAGMA journal_mode = WAL");
-      connection.exec("PRAGMA foreign_keys = ON");
-      connection.exec("PRAGMA synchronous = NORMAL");
-      connection.exec("PRAGMA busy_timeout = 5000");
       const identityTable = connection.prepare(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
       ).get(PRODUCT_IDENTITY_TABLE);
@@ -100,29 +92,24 @@ export class SqliteRuntimeDatabase {
           VALUES (?, ?)
         `).run(PRODUCT_NAMESPACE, PRODUCT_DATA_FORMAT_ID);
       } else {
-        let identity = connection.prepare(`
+        const identity = connection.prepare(`
           SELECT product_namespace AS productNamespace, data_format_id AS dataFormatId
           FROM ${PRODUCT_IDENTITY_TABLE}
           ORDER BY rowid LIMIT 1
         `).get() as { readonly productNamespace?: unknown; readonly dataFormatId?: unknown } | undefined;
-        if (identity?.productNamespace === PRODUCT_NAMESPACE &&
-            identity.dataFormatId === RELEASED_V101_DATA_FORMAT_ID &&
-            upgradeReleasedV101Database(connection)) {
-          identity = connection.prepare(`
-            SELECT product_namespace AS productNamespace, data_format_id AS dataFormatId
-            FROM ${PRODUCT_IDENTITY_TABLE}
-            ORDER BY rowid LIMIT 1
-          `).get() as { readonly productNamespace?: unknown; readonly dataFormatId?: unknown } | undefined;
-        }
         if (identity?.productNamespace !== PRODUCT_NAMESPACE || identity.dataFormatId !== PRODUCT_DATA_FORMAT_ID) {
           throw new SqliteRuntimeDatabaseIdentityError(
             `SQLite database ${filePath} uses data format ${String(identity?.dataFormatId)} ` +
             `(namespace ${String(identity?.productNamespace)}); expected ${PRODUCT_DATA_FORMAT_ID} ` +
             `(namespace ${PRODUCT_NAMESPACE}). ` +
-            "Only the exact published Synech v1.0.1 ledger can be upgraded automatically; back up and reset other incompatible data explicitly.",
+            "Development data is not upgraded automatically; preserve any needed files before explicitly resetting incompatible data.",
           );
         }
       }
+      connection.exec("PRAGMA journal_mode = WAL");
+      connection.exec("PRAGMA foreign_keys = ON");
+      connection.exec("PRAGMA synchronous = NORMAL");
+      connection.exec("PRAGMA busy_timeout = 5000");
       connection.exec(`
         CREATE TABLE IF NOT EXISTS schema_migrations (
           owner TEXT NOT NULL,
@@ -173,7 +160,7 @@ export class SqliteRuntimeDatabase {
       const checksum = sqliteMigrationChecksum(migration);
       if (stored.checksum !== checksum) {
         throw new SqliteMigrationIntegrityError(
-          `SQLite migration ${owner}/${stored.version} checksum does not match the immutable migration ledger.`,
+          `SQLite migration ${owner}/${stored.version} checksum does not match the current schema definition.`,
         );
       }
     }
