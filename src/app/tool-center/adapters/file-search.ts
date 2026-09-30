@@ -11,7 +11,7 @@ import {
   isLikelyBinaryPath,
   MAX_LOCAL_WORKSPACE_FILE_BYTES,
   positiveInteger,
-  resolveAuthorizedWorkspacePath,
+  runAuthorizedWorkspaceAccess,
   safeRefToken,
   shouldSkipEntry,
   stringOrFallback,
@@ -19,6 +19,7 @@ import {
   toWorkspaceRelative,
   truncateText,
   type LocalWorkspaceToolOptions,
+  type AuthorizedLocalWorkspacePath,
 } from "./local-workspace-common.js";
 import { assertSandboxAllowed, sandboxRequest } from "./local-workspace-sandbox.js";
 import { listGlobFiles } from "./directory-listing.js";
@@ -71,6 +72,7 @@ type SearchInput = {
   readonly context: ToolExecutionContext;
   readonly sandboxPolicy: SandboxPolicy;
   readonly pathAuthorization: LocalWorkspaceToolOptions["pathAuthorization"];
+  readonly mutationCoordinator: NonNullable<LocalWorkspaceToolOptions["mutationCoordinator"]>;
   readonly outputTokenCounter?: ToolOutputTokenCounter;
 };
 
@@ -79,13 +81,23 @@ export async function globLocalFiles(input: SearchInput): Promise<unknown> {
   const record = asRecord(input.value);
   const pattern = stringOrFallback(record.pattern, "");
   if (pattern.length === 0) throw new Error("Glob requires a non-empty pattern.");
-  const target = await resolveAuthorizedWorkspacePath(
-    input.rootDirectory,
-    stringOrFallback(record.path, "."),
-    "search",
-    input.context,
-    input.pathAuthorization,
-  );
+  return runAuthorizedWorkspaceAccess({
+    rootDirectory: input.rootDirectory,
+    requestedPath: stringOrFallback(record.path, "."),
+    operation: "search",
+    context: input.context,
+    authorization: input.pathAuthorization,
+    coordinator: input.mutationCoordinator,
+    access: (target) => executeGlob(input, record, pattern, target),
+  });
+}
+
+async function executeGlob(
+  input: SearchInput,
+  record: Readonly<Record<string, unknown>>,
+  pattern: string,
+  target: AuthorizedLocalWorkspacePath,
+): Promise<unknown> {
   const pathFacts = authorizedPathFacts(target);
   assertSandboxAllowed(input.sandboxPolicy, sandboxRequest("search", target.rootDirectory, target.relativePath));
   const stat = await fs.stat(target.absolutePath);
@@ -123,13 +135,23 @@ export async function grepLocalFiles(input: SearchInput & {
   const record = asRecord(input.value);
   const query = stringOrFallback(record.query, "");
   if (query.length === 0) throw new Error("grep requires a non-empty query.");
-  const target = await resolveAuthorizedWorkspacePath(
-    input.rootDirectory,
-    stringOrFallback(record.path, "."),
-    "search",
-    input.context,
-    input.pathAuthorization,
-  );
+  return runAuthorizedWorkspaceAccess({
+    rootDirectory: input.rootDirectory,
+    requestedPath: stringOrFallback(record.path, "."),
+    operation: "search",
+    context: input.context,
+    authorization: input.pathAuthorization,
+    coordinator: input.mutationCoordinator,
+    access: (target) => executeGrep(input, record, query, target),
+  });
+}
+
+async function executeGrep(
+  input: SearchInput & { readonly ripgrepSearch?: RipgrepSearchRunner | false },
+  record: Readonly<Record<string, unknown>>,
+  query: string,
+  target: AuthorizedLocalWorkspacePath,
+): Promise<unknown> {
   const pathFacts = authorizedPathFacts(target);
   assertSandboxAllowed(input.sandboxPolicy, sandboxRequest("search", target.rootDirectory, target.relativePath));
   const limit = Math.min(MAX_GREP_MATCHES, positiveInteger(record.limit) ?? MAX_GREP_MATCHES);

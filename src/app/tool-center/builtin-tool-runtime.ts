@@ -126,9 +126,9 @@ export function createAgentToolRegistry(
   });
   const baseToolScopes = options.baseToolScopes ?? ["agent-basic"];
   const executors: readonly ToolExecutor[] = [
-    createLocalReadFileTool(workspaceRoot, { sandboxPolicy, outputTokenCounter: options.outputTokenCounter, pathAuthorization: options.workspacePathAuthorization }),
-    createLocalGlobTool(workspaceRoot, { sandboxPolicy, outputTokenCounter: options.outputTokenCounter, pathAuthorization: options.workspacePathAuthorization }),
-    createLocalGrepFilesTool(workspaceRoot, { sandboxPolicy, outputTokenCounter: options.outputTokenCounter, pathAuthorization: options.workspacePathAuthorization }),
+    createLocalReadFileTool(workspaceRoot, { sandboxPolicy, mutationCoordinator, outputTokenCounter: options.outputTokenCounter, pathAuthorization: options.workspacePathAuthorization }),
+    createLocalGlobTool(workspaceRoot, { sandboxPolicy, mutationCoordinator, outputTokenCounter: options.outputTokenCounter, pathAuthorization: options.workspacePathAuthorization }),
+    createLocalGrepFilesTool(workspaceRoot, { sandboxPolicy, mutationCoordinator, outputTokenCounter: options.outputTokenCounter, pathAuthorization: options.workspacePathAuthorization }),
     createLocalWriteFileTool(workspaceRoot, { sandboxPolicy, mutationCoordinator, pathAuthorization: options.workspacePathAuthorization }),
     createLocalEditFileTool(workspaceRoot, { sandboxPolicy, mutationCoordinator, pathAuthorization: options.workspacePathAuthorization }),
     createLocalShellCommandTool(workspaceRoot, {
@@ -136,6 +136,7 @@ export function createAgentToolRegistry(
       commandShell,
       processRegistry: options.processRegistry,
       commandLogDirectory: options.commandLogDirectory,
+      mutationCoordinator,
       pathAuthorization: options.workspacePathAuthorization,
     }),
     ...managedProcessExecutors(options, workspaceRoot, sandboxPolicy, commandShell),

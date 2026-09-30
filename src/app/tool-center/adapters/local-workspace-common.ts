@@ -93,6 +93,58 @@ export async function runAuthorizedWorkspaceMutation<T>(input: {
   });
 }
 
+/**
+ * Revalidates a frozen grant while holding the shared filesystem path lease.
+ * Read/search/foreground execute are access operations, but they still need
+ * the same mount and membership check as mutations at the I/O boundary.
+ */
+export async function runAuthorizedWorkspaceAccess<T>(input: {
+  readonly rootDirectory: string;
+  readonly requestedPath: string;
+  readonly operation: Extract<LocalWorkspacePathOperation, "read" | "search" | "execute">;
+  readonly context: ToolExecutionContext;
+  readonly authorization?: LocalWorkspacePathAuthorization;
+  readonly coordinator: import("./local-workspace-mutation-coordinator.js").LocalWorkspaceMutationCoordinator;
+  readonly access: (target: AuthorizedLocalWorkspacePath) => Promise<T>;
+}): Promise<T> {
+  const resolve = async () => await resolveAuthorizedWorkspacePath(
+    input.rootDirectory,
+    input.requestedPath,
+    input.operation,
+    input.context,
+    input.authorization,
+  );
+  const initial = await resolve();
+  return await input.coordinator.runExclusive(initial.absolutePath, async () => {
+    const current = await resolve();
+    if (!sameAuthorizedMutationTarget(initial, current)) {
+      throw new Error("The authorized filesystem source changed while the request was waiting for its path lease.");
+    }
+    return await input.access(current);
+  });
+}
+
+export function workspaceBackgroundAuthorizationError(): Error & {
+  readonly code: string;
+  readonly facts: Readonly<Record<string, string | boolean>>;
+} {
+  const error = new Error(
+    "Background workspace commands are not supported while authorization is bound to a revocable Workspace reference.",
+  ) as Error & {
+    readonly code: string;
+    readonly facts: Readonly<Record<string, string | boolean>>;
+  };
+  Object.assign(error, {
+    code: "workspace_background_authorization_unsupported",
+    facts: {
+      code: "workspace_background_authorization_unsupported",
+      authorizationScope: "workspace",
+      doNotBlindlyRetry: true,
+    },
+  });
+  return error;
+}
+
 function sameAuthorizedMutationTarget(
   left: AuthorizedLocalWorkspacePath,
   right: AuthorizedLocalWorkspacePath,

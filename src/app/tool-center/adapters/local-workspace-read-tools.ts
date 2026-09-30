@@ -4,6 +4,7 @@ import {
   type LocalWorkspaceToolOptions,
 } from "./local-workspace-common.js";
 import { createLocalWorkspaceSandboxPolicy } from "./local-workspace-sandbox.js";
+import { InMemoryLocalWorkspaceMutationCoordinator } from "./local-workspace-mutation-coordinator.js";
 import { readLocalFile } from "./file-read.js";
 import {
   globLocalFiles,
@@ -32,6 +33,7 @@ export function createLocalReadFileTool(
   options: LocalWorkspaceReadToolOptions = {},
 ): ToolExecutor {
   const sandboxPolicy = options.sandboxPolicy ?? createLocalWorkspaceSandboxPolicy();
+  const mutationCoordinator = options.mutationCoordinator ?? new InMemoryLocalWorkspaceMutationCoordinator();
   return {
     definition: {
       name: "Read",
@@ -80,6 +82,7 @@ export function createLocalReadFileTool(
       context,
       sandboxPolicy,
       pathAuthorization: options.pathAuthorization,
+      mutationCoordinator,
       outputTokenCounter: options.outputTokenCounter,
     }),
   };
@@ -90,6 +93,7 @@ export function createLocalGlobTool(
   options: LocalWorkspaceReadToolOptions = {},
 ): ToolExecutor {
   const sandboxPolicy = options.sandboxPolicy ?? createLocalWorkspaceSandboxPolicy();
+  const mutationCoordinator = options.mutationCoordinator ?? new InMemoryLocalWorkspaceMutationCoordinator();
   return {
     definition: {
       name: "Glob",
@@ -118,6 +122,7 @@ export function createLocalGlobTool(
       context,
       sandboxPolicy,
       pathAuthorization: options.pathAuthorization,
+      mutationCoordinator,
       outputTokenCounter: options.outputTokenCounter,
     }),
   };
@@ -128,6 +133,7 @@ export function createLocalGrepFilesTool(
   options: LocalWorkspaceReadToolOptions = {},
 ): ToolExecutor {
   const sandboxPolicy = options.sandboxPolicy ?? createLocalWorkspaceSandboxPolicy();
+  const mutationCoordinator = options.mutationCoordinator ?? new InMemoryLocalWorkspaceMutationCoordinator();
   return {
     definition: {
       name: "Grep",
@@ -161,6 +167,7 @@ export function createLocalGrepFilesTool(
       context,
       sandboxPolicy,
       pathAuthorization: options.pathAuthorization,
+      mutationCoordinator,
       outputTokenCounter: options.outputTokenCounter,
       ripgrepSearch: options.ripgrepSearch,
     }),

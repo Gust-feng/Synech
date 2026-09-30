@@ -22,14 +22,15 @@ import {
 import { toSanitizedCommandShellConfig } from "../../config-center/command-shell-settings.js";
 import {
   asRecord,
-  type AuthorizedLocalWorkspacePath,
   DEFAULT_LOCAL_WORKSPACE_ROOT,
   positiveInteger,
-  resolveAuthorizedWorkspacePath,
+  runAuthorizedWorkspaceAccess,
   safeRefToken,
   throwIfAborted,
+  workspaceBackgroundAuthorizationError,
   type LocalWorkspaceToolOptions,
 } from "./local-workspace-common.js";
+import { InMemoryLocalWorkspaceMutationCoordinator } from "./local-workspace-mutation-coordinator.js";
 import {
   assertSandboxAllowed,
   createLocalWorkspaceSandboxPolicy,
@@ -98,6 +99,7 @@ export function createLocalShellCommandTool(
   options: LocalWorkspaceCommandToolOptions = {}
 ): ToolExecutor {
   const sandboxPolicy = options.sandboxPolicy ?? createLocalWorkspaceSandboxPolicy();
+  const mutationCoordinator = options.mutationCoordinator ?? new InMemoryLocalWorkspaceMutationCoordinator();
   const commandShell = normalizeCommandShellConfig(options.commandShell);
   const portOccupantProbe = options.portOccupantProbe ?? createPlatformPortOccupantProbe();
   const maxBackgroundLogBytes = positiveSafeIntegerOrFallback(
@@ -119,122 +121,133 @@ export function createLocalShellCommandTool(
       );
       const background = record.background === true;
       const lifetime = background ? processLifetime(record.lifetime) : "run";
-      const cwd = await resolveCommandCwd(
+      return runAuthorizedWorkspaceAccess({
         rootDirectory,
-        record.cwd,
-        context,
-        options.pathAuthorization,
-      );
-      const displayedCwd = options.pathAuthorization === undefined ? cwd.relativePath : cwd.absolutePath;
-      const processFacts = commandProcessFacts(options.processRegistry, context, cwd);
-      assertSandboxAllowed(sandboxPolicy, {
+        requestedPath: typeof record.cwd === "string" && record.cwd.trim().length > 0 ? record.cwd : ".",
         operation: "execute",
-        workspaceRoot: cwd.rootDirectory,
-        relativePath: cwd.relativePath,
-        command: normalized.command,
-        commandLine: normalized.commandLine,
-        args: normalized.directArgs,
-        bytes: timeoutMs,
-      });
-      const executeDirectly = normalized.directProgram !== undefined &&
-        await shouldExecuteDirectly({
-          command: normalized.directProgram,
-          rootDirectory: options.pathAuthorization === undefined ? rootDirectory : cwd.absolutePath,
-          platform: commandShell.platform,
-        });
-      const startedAt = Date.now();
-      const externalPortOccupantProbe = externalOnlyPortOccupantProbe(options.processRegistry, portOccupantProbe);
-      const preStartPortFact = await probePreStartWaitPort({
-        waitForPort,
-        abortSignal: context.abortSignal,
-        portOccupantProbe,
-      });
-      const preStartPortOccupancy = portOccupancyFromPreStartFact(preStartPortFact, options.processRegistry);
-      throwIfAborted(context.abortSignal);
-      if (background && preStartPortOccupancy !== undefined) {
-        return commandToolOutput({
-          command: normalized.command,
-          commandLine: normalized.commandLine,
-          directArgs: normalized.directArgs,
-          shell: commandShell,
-          result: commandNotStartedForOccupiedPort({
-            cwd: cwd.relativePath,
-            waitForPort,
-            preStartPortOccupancy,
-            startedAt,
-          }),
-          lifetime,
-          truncated: false,
-        });
-      }
-      const rawOutcome = background
-        ? normalized.directProgram === undefined || !executeDirectly
-          ? await runBackgroundShellCommand({
-              shell: commandShell,
-              commandLine: normalized.commandLine,
-              workingDirectory: cwd.absolutePath,
-              relativeCwd: displayedCwd,
-              waitMs: backgroundWaitMs,
-              lifetime,
-              maxLogBytes: maxBackgroundLogBytes,
-              commandLogDirectory: options.commandLogDirectory,
-              processFacts,
-            })
-          : await runBackgroundProgramCommand({
-              shell: commandShell,
+        context,
+        authorization: options.pathAuthorization,
+        coordinator: mutationCoordinator,
+        access: async (cwd) => {
+          const stat = await fs.stat(cwd.absolutePath);
+          if (!stat.isDirectory()) {
+            throw new Error(`shell cwd must be a directory: ${cwd.absolutePath}`);
+          }
+          if (background && cwd.resourceScope !== undefined) {
+            throw workspaceBackgroundAuthorizationError();
+          }
+          const displayedCwd = options.pathAuthorization === undefined ? cwd.relativePath : cwd.absolutePath;
+          const processFacts = commandProcessFacts(options.processRegistry, context, cwd);
+          assertSandboxAllowed(sandboxPolicy, {
+            operation: "execute",
+            workspaceRoot: cwd.rootDirectory,
+            relativePath: cwd.relativePath,
+            command: normalized.command,
+            commandLine: normalized.commandLine,
+            args: normalized.directArgs,
+            bytes: timeoutMs,
+          });
+          const executeDirectly = normalized.directProgram !== undefined &&
+            await shouldExecuteDirectly({
               command: normalized.directProgram,
-              args: normalized.directArgs,
-              commandLine: normalized.commandLine,
-              workingDirectory: cwd.absolutePath,
-              relativeCwd: displayedCwd,
-              waitMs: backgroundWaitMs,
-              lifetime,
-              maxLogBytes: maxBackgroundLogBytes,
-              commandLogDirectory: options.commandLogDirectory,
-              processFacts,
-            })
-        : normalized.directProgram === undefined || !executeDirectly
-          ? await runForegroundShellCommand({
-              shell: commandShell,
-              commandLine: normalized.commandLine,
-              workingDirectory: cwd.absolutePath,
-              relativeCwd: displayedCwd,
-              timeoutMs,
-              context,
-              commandLogDirectory: options.commandLogDirectory,
-              processFacts,
-            })
-          : await runForegroundProgramCommand({
-              command: normalized.directProgram,
-              args: normalized.directArgs,
-              commandLine: normalized.commandLine,
-              workingDirectory: cwd.absolutePath,
-              relativeCwd: displayedCwd,
-              timeoutMs,
-              context,
-              commandLogDirectory: options.commandLogDirectory,
-              processFacts,
+              rootDirectory: options.pathAuthorization === undefined ? rootDirectory : cwd.absolutePath,
+              platform: commandShell.platform,
             });
-      const result = await enrichCommandResult({
-        result: rawOutcome.result,
-        waitForPort,
-        waitForPortTimeoutMs,
-        preStartPortFact,
-        startedAt,
-        abortSignal: context.abortSignal,
-        processRegistry: options.processRegistry,
-        processId: rawOutcome.processId,
-        portOccupantProbe: externalPortOccupantProbe,
-      });
-      return commandToolOutput({
-        command: normalized.command,
-        commandLine: normalized.commandLine,
-        directArgs: normalized.directArgs,
-        shell: commandShell,
-        result,
-        processId: rawOutcome.processId,
-        lifetime,
-        truncated: false,
+          const startedAt = Date.now();
+          const externalPortOccupantProbe = externalOnlyPortOccupantProbe(options.processRegistry, portOccupantProbe);
+          const preStartPortFact = await probePreStartWaitPort({
+            waitForPort,
+            abortSignal: context.abortSignal,
+            portOccupantProbe,
+          });
+          const preStartPortOccupancy = portOccupancyFromPreStartFact(preStartPortFact, options.processRegistry);
+          throwIfAborted(context.abortSignal);
+          if (background && preStartPortOccupancy !== undefined) {
+            return commandToolOutput({
+              command: normalized.command,
+              commandLine: normalized.commandLine,
+              directArgs: normalized.directArgs,
+              shell: commandShell,
+              result: commandNotStartedForOccupiedPort({
+                cwd: cwd.relativePath,
+                waitForPort,
+                preStartPortOccupancy,
+                startedAt,
+              }),
+              lifetime,
+              truncated: false,
+            });
+          }
+          const rawOutcome = background
+            ? normalized.directProgram === undefined || !executeDirectly
+              ? await runBackgroundShellCommand({
+                  shell: commandShell,
+                  commandLine: normalized.commandLine,
+                  workingDirectory: cwd.absolutePath,
+                  relativeCwd: displayedCwd,
+                  waitMs: backgroundWaitMs,
+                  lifetime,
+                  maxLogBytes: maxBackgroundLogBytes,
+                  commandLogDirectory: options.commandLogDirectory,
+                  processFacts,
+                })
+              : await runBackgroundProgramCommand({
+                  shell: commandShell,
+                  command: normalized.directProgram,
+                  args: normalized.directArgs,
+                  commandLine: normalized.commandLine,
+                  workingDirectory: cwd.absolutePath,
+                  relativeCwd: displayedCwd,
+                  waitMs: backgroundWaitMs,
+                  lifetime,
+                  maxLogBytes: maxBackgroundLogBytes,
+                  commandLogDirectory: options.commandLogDirectory,
+                  processFacts,
+                })
+            : normalized.directProgram === undefined || !executeDirectly
+              ? await runForegroundShellCommand({
+                  shell: commandShell,
+                  commandLine: normalized.commandLine,
+                  workingDirectory: cwd.absolutePath,
+                  relativeCwd: displayedCwd,
+                  timeoutMs,
+                  context,
+                  commandLogDirectory: options.commandLogDirectory,
+                  processFacts,
+                })
+              : await runForegroundProgramCommand({
+                  command: normalized.directProgram,
+                  args: normalized.directArgs,
+                  commandLine: normalized.commandLine,
+                  workingDirectory: cwd.absolutePath,
+                  relativeCwd: displayedCwd,
+                  timeoutMs,
+                  context,
+                  commandLogDirectory: options.commandLogDirectory,
+                  processFacts,
+                });
+          const result = await enrichCommandResult({
+            result: rawOutcome.result,
+            waitForPort,
+            waitForPortTimeoutMs,
+            preStartPortFact,
+            startedAt,
+            abortSignal: context.abortSignal,
+            processRegistry: options.processRegistry,
+            processId: rawOutcome.processId,
+            portOccupantProbe: externalPortOccupantProbe,
+          });
+          return commandToolOutput({
+            command: normalized.command,
+            commandLine: normalized.commandLine,
+            directArgs: normalized.directArgs,
+            shell: commandShell,
+            result,
+            processId: rawOutcome.processId,
+            lifetime,
+            truncated: false,
+          });
+        },
       });
     },
   };
@@ -557,26 +570,6 @@ function commandNotStartedForOccupiedPort(input: {
     stderrOmittedChars: 0,
     truncated: false,
   };
-}
-
-async function resolveCommandCwd(
-  rootDirectory: string,
-  value: unknown,
-  context: ToolExecutionContext,
-  authorization: LocalWorkspaceCommandToolOptions["pathAuthorization"],
-): Promise<AuthorizedLocalWorkspacePath> {
-  const target = await resolveAuthorizedWorkspacePath(
-    rootDirectory,
-    typeof value === "string" && value.trim().length > 0 ? value : ".",
-    "execute",
-    context,
-    authorization,
-  );
-  const stat = await fs.stat(target.absolutePath);
-  if (!stat.isDirectory()) {
-    throw new Error(`shell cwd must be a directory: ${target.absolutePath}`);
-  }
-  return target;
 }
 
 async function enrichCommandResult(input: {
