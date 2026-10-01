@@ -140,7 +140,7 @@ export function createAgentToolRegistry(
       pathAuthorization: options.workspacePathAuthorization,
     }),
     ...managedProcessExecutors(options, workspaceRoot, sandboxPolicy, commandShell),
-    ...contextAttachmentExecutors(options, workspaceRoot),
+    ...contextAttachmentExecutors(options, workspaceRoot, mutationCoordinator),
     createHttpRequestTool({ outputStore: options.toolOutputStore }),
     createBrowserSnapshotTool({
       ...(options.browserAutomation === undefined ? {} : { automation: options.browserAutomation }),
@@ -192,6 +192,7 @@ export function createAgentToolRegistry(
 function contextAttachmentExecutors(
   options: CreateAgentToolRegistryOptions,
   workspaceRoot: string,
+  mutationCoordinator: LocalWorkspaceMutationCoordinator,
 ): readonly ToolExecutor[] {
   if (options.runContext !== undefined
     && attachmentEntries(options.runContext).length === 0
@@ -206,6 +207,8 @@ function contextAttachmentExecutors(
       : resolvedSupportsVisionInput(options.modelCapabilities) === true,
     resolveManagedAttachmentPath: options.resolveManagedAttachmentPath,
     readAuthorization: options.contextAttachmentReadAuthorization,
+    pathAuthorization: options.workspacePathAuthorization,
+    mutationCoordinator,
   });
 }
 

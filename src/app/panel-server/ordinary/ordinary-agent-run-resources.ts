@@ -317,6 +317,9 @@ export function createOrdinaryAgentRunResourceAcquirer(
           workspaceRoot: resources.workspaceRoot,
           resolveManagedAttachmentPath: resources.resolveManagedAttachmentPath,
           readAuthorization: options.contextAttachmentReadAuthorization,
+          pathAuthorization: workspacePathAuthorization,
+          mutationCoordinator: resources.fileMutationCoordinator,
+          abortSignal: input.abortSignal,
         });
         sessionLease = await options.sessionRepository.acquire(input.sessionRef);
         const activeSessionLease = sessionLease;

@@ -11,6 +11,7 @@ import {
   archiveTargetExtension,
   assertAttachmentAuthorized,
   attachmentTitle,
+  guardContextAttachmentTool,
   requireAttachmentEntry,
   resolveAttachmentTarget,
   statAttachmentTarget,
@@ -28,7 +29,7 @@ const MAX_ARCHIVE_LIST_ENTRIES = 200;
 export function createInspectContextAttachmentArchiveTool(
   options: ContextAttachmentToolOptions = {},
 ): ToolExecutor {
-  return {
+  return guardContextAttachmentTool(options, {
     definition: {
       name: "AttachmentInspectArchive",
       description: "Inspect a ZIP archive context attachment and return bounded internal entry metadata without extracting files.",
@@ -127,7 +128,7 @@ export function createInspectContextAttachmentArchiveTool(
             },
       };
     },
-  };
+  });
 }
 
 function unsupportedArchiveResult(input: {

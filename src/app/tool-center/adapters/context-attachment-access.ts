@@ -8,6 +8,18 @@ import { stringOrUndefined } from "../../../kernel/values/index.js";
  */
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import type { ToolExecutionContext, ToolExecutor } from "../../../domain/tools/index.js";
+import {
+  asRecord,
+  resolveWorkspacePath,
+  runAuthorizedWorkspaceAccess,
+  throwIfAborted,
+  type LocalWorkspacePathAuthorization,
+} from "./local-workspace-common.js";
+import {
+  InMemoryLocalWorkspaceMutationCoordinator,
+  type LocalWorkspaceMutationCoordinator,
+} from "./local-workspace-mutation-coordinator.js";
 import type { OrdinaryRunContext, OrdinaryRunContextReference } from "../../../domain/ordinary/index.js";
 import {
   managedAttachmentId,
@@ -23,6 +35,8 @@ export type ContextAttachmentToolOptions = {
   readonly supportsVisionInput?: boolean;
   readonly resolveManagedAttachmentPath?: (attachmentId: string) => Promise<string | undefined>;
   readonly readAuthorization?: ContextAttachmentReadAuthorization;
+  readonly pathAuthorization?: LocalWorkspacePathAuthorization;
+  readonly mutationCoordinator?: LocalWorkspaceMutationCoordinator;
 };
 
 /** The attachment tools need only the frozen reference and permission facts. */
@@ -31,6 +45,8 @@ export type ContextAttachmentRunContext = Pick<OrdinaryRunContext, "goalId" | "c
 /** Optional run-scoped live deny layered over the frozen run-context grant. */
 export type ContextAttachmentReadAuthorization = {
   assertReadAllowed(attachmentId: string): void | Promise<void>;
+  /** Owner references use live filesystem grants; explicit user uploads/files keep their own authority. */
+  appliesPathAuthorization?(attachmentId: string): boolean;
 };
 
 export type AttachmentEntry = {
@@ -128,6 +144,85 @@ export function assertAttachmentAuthorized(entry: AttachmentEntry): void {
   if (!entry.authorized) {
     throw new Error("The selected context attachment is not authorized for reading in this run.");
   }
+}
+
+/** All attachment I/O shares the ordinary file tools' lease and live authority. */
+export function guardContextAttachmentTool(
+  options: ContextAttachmentToolOptions,
+  executor: ToolExecutor,
+): ToolExecutor {
+  const coordinator = options.mutationCoordinator ?? new InMemoryLocalWorkspaceMutationCoordinator();
+  return {
+    ...executor,
+    async execute(input, context) {
+      throwIfAborted(context.abortSignal);
+      const record = asRecord(input);
+      const entry = requireAttachmentEntry(options.runContext, record);
+      return runContextAttachmentRead({
+        ...options,
+        mutationCoordinator: coordinator,
+        entry,
+        requestedPath: stringOrUndefined(record.path),
+        context,
+      }, async () => executor.execute(input, context));
+    },
+  };
+}
+
+/** Shared by on-demand tools and automatic model image input. */
+export async function runContextAttachmentRead<T>(
+  input: ContextAttachmentToolOptions & {
+    readonly entry: AttachmentEntry;
+    readonly requestedPath?: string;
+    readonly context: ToolExecutionContext;
+  },
+  read: (target: AttachmentTarget) => Promise<T>,
+): Promise<T> {
+  throwIfAborted(input.context.abortSignal);
+  assertAttachmentAuthorized(input.entry);
+  const workspaceRoot = input.workspaceRoot ?? process.cwd();
+  let currentTarget: AttachmentTarget;
+  return runAuthorizedWorkspaceAccess({
+    rootDirectory: workspaceRoot,
+    requestedPath: input.requestedPath ?? ".",
+    operation: "read",
+    context: input.context,
+    coordinator: input.mutationCoordinator ?? new InMemoryLocalWorkspaceMutationCoordinator(),
+    authorization: {
+      async resolve() {
+        throwIfAborted(input.context.abortSignal);
+        const target = await resolveAttachmentTarget({
+          ...input,
+          workspaceRoot,
+          requireFile: false,
+          projectPathRequired: false,
+        });
+        const parsed = parseContextReference(input.entry.ref.ref, input.entry.ref.kind);
+        const uploaded = parsed?.scheme === "uploaded_attachment" ||
+          managedAttachmentId(input.entry.ref.ref) !== undefined;
+        const usePathAuthorization = !uploaded &&
+          (input.readAuthorization?.appliesPathAuthorization?.(input.entry.attachmentId) ?? true);
+        const authorized = !usePathAuthorization ? undefined : await input.pathAuthorization?.resolve({
+          requestedPath: target.targetAbsolutePath,
+          operation: "read",
+          workspaceRoot,
+          context: input.context,
+        });
+        currentTarget = target;
+        return {
+          absolutePath: target.targetAbsolutePath,
+          relativePath: target.targetPath,
+          rootDirectory: target.rootAbsolutePath,
+          resourceScope: authorized?.resourceScope,
+          resourceId: authorized?.resourceId,
+        };
+      },
+    },
+    access: async () => {
+      throwIfAborted(input.context.abortSignal);
+      return read(currentTarget);
+    },
+  });
 }
 
 export async function resolveAttachmentTarget(input: {
@@ -296,16 +391,7 @@ async function resolveAttachmentRoot(
 }
 
 function resolveInsideRoot(rootAbsolutePath: string, requestedPath: string): { readonly absolutePath: string; readonly relativePath: string } {
-  const root = path.resolve(rootAbsolutePath);
-  const absolutePath = path.resolve(root, requestedPath);
-  const relative = path.relative(root, absolutePath);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error("Attachment-relative path is outside the selected attachment boundary.");
-  }
-  return {
-    absolutePath,
-    relativePath: toPortableRelativePath(relative.length === 0 ? "." : relative),
-  };
+  return resolveWorkspacePath(rootAbsolutePath, requestedPath);
 }
 
 function isUserVisibleAttachmentRef(ref: OrdinaryRunContextReference, runContext: ContextAttachmentRunContext): boolean {
@@ -408,9 +494,4 @@ function modelSafeRef(ref: string, pathGranted: boolean): string | undefined {
     return pathGranted ? ref : undefined;
   }
   return ref;
-}
-
-
-function toPortableRelativePath(value: string): string {
-  return value.split(path.sep).join("/");
 }

@@ -40,6 +40,7 @@ import {
   attachmentEntries,
   attachmentSummary,
   attachmentTitle,
+  guardContextAttachmentTool,
   requireAttachmentEntry,
   resolveAttachmentTarget,
   statAttachmentTarget,
@@ -115,7 +116,7 @@ export function createListContextAttachmentsTool(options: ContextAttachmentToolO
 }
 
 export function createReadContextAttachmentTextTool(options: ContextAttachmentToolOptions = {}): ToolExecutor {
-  return {
+  return guardContextAttachmentTool(options, {
     definition: {
       name: "AttachmentRead",
       description: "Read a text file attachment, or a focused text file inside an attached project, using attachmentId instead of a local path.",
@@ -249,11 +250,11 @@ export function createReadContextAttachmentTextTool(options: ContextAttachmentTo
         continuation,
       };
     },
-  };
+  });
 }
 
 export function createReadContextAttachmentPdfTextTool(options: ContextAttachmentToolOptions = {}): ToolExecutor {
-  return {
+  return guardContextAttachmentTool(options, {
     definition: {
       name: "AttachmentReadPdf",
       description: "Extract best-effort text from a text-native PDF context attachment using attachmentId instead of a local path.",
@@ -388,11 +389,11 @@ export function createReadContextAttachmentPdfTextTool(options: ContextAttachmen
             },
       };
     },
-  };
+  });
 }
 
 export function createListContextAttachmentFilesTool(options: ContextAttachmentToolOptions = {}): ToolExecutor {
-  return {
+  return guardContextAttachmentTool(options, {
     definition: {
       name: "AttachmentListFiles",
       description: "List files under an attached project folder using attachmentId and attachment-relative paths.",
@@ -439,6 +440,7 @@ export function createListContextAttachmentFilesTool(options: ContextAttachmentT
       const limit = Math.min(MAX_LIST_ENTRIES, positiveInteger(record.limit) ?? MAX_LIST_ENTRIES);
       const offset = boundedOffset(record.offset, MAX_LIST_OFFSET);
       const listed = await listDirectoryTree({
+        abortSignal: context.abortSignal,
         absolutePath: target.targetAbsolutePath,
         rootAbsolutePath: target.rootAbsolutePath,
         maxDepth: depth,
@@ -510,11 +512,11 @@ export function createListContextAttachmentFilesTool(options: ContextAttachmentT
             },
       };
     },
-  };
+  });
 }
 
 export function createSearchContextAttachmentFilesTool(options: ContextAttachmentToolOptions = {}): ToolExecutor {
-  return {
+  return guardContextAttachmentTool(options, {
     definition: {
       name: "AttachmentSearchFiles",
       description: "Search text files inside an attached project or text attachment using attachmentId and attachment-relative paths.",
@@ -562,6 +564,7 @@ export function createSearchContextAttachmentFilesTool(options: ContextAttachmen
       const collectedMatches: SearchMatch[] = [];
       const facts = createSearchFacts();
       await searchPath({
+        abortSignal: context.abortSignal,
         absolutePath: target.targetAbsolutePath,
         rootAbsolutePath: target.rootAbsolutePath,
         normalizedQuery: query.toLowerCase(),
@@ -639,7 +642,7 @@ export function createSearchContextAttachmentFilesTool(options: ContextAttachmen
             },
       };
     },
-  };
+  });
 }
 
 function unsupportedPdfResult(input: {

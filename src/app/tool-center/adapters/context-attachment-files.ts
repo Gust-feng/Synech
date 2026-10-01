@@ -3,7 +3,9 @@ import path from "node:path";
 import {
   isLikelyBinaryPath,
   MAX_LOCAL_WORKSPACE_FILE_BYTES,
+  resolveWorkspacePath,
   shouldSkipEntry,
+  throwIfAborted,
   truncateText,
 } from "./local-workspace-common.js";
 
@@ -52,6 +54,7 @@ export async function listDirectoryTree(input: {
   readonly maxDepth: number;
   readonly limit: number;
   readonly offset: number;
+  readonly abortSignal?: AbortSignal;
 }): Promise<{
   readonly entries: readonly DirectoryEntry[];
   readonly totalEntries: number;
@@ -67,34 +70,48 @@ export async function listDirectoryTree(input: {
   let unreadableDirectories = 0;
 
   async function visit(directory: string, currentDepth: number): Promise<void> {
+    throwIfAborted(input.abortSignal);
     if (currentDepth >= input.maxDepth) {
       return;
     }
+    resolveWorkspacePath(input.rootAbsolutePath, directory);
+    throwIfAborted(input.abortSignal);
     const children = await fs.readdir(directory, { withFileTypes: true }).catch((error: unknown) => {
+      throwIfAborted(input.abortSignal);
       unreadableDirectories += 1;
       pushUnreadableDirectorySample(input.rootAbsolutePath, directory, error, unreadableSamples);
       return undefined;
     });
+    throwIfAborted(input.abortSignal);
     if (children === undefined) {
       return;
     }
     children.sort((left, right) => left.name.localeCompare(right.name));
     for (const child of children) {
+      throwIfAborted(input.abortSignal);
       const absoluteChild = path.join(directory, child.name);
       const entryDepth = currentDepth + 1;
-      const stat = await fs.stat(absoluteChild).catch(() => undefined);
+      // Link entries are visible in the listing without inspecting their targets.
+      const stat = child.isSymbolicLink()
+        ? undefined
+        : await fs.lstat(absoluteChild).catch(() => {
+            throwIfAborted(input.abortSignal);
+            return undefined;
+          });
+      throwIfAborted(input.abortSignal);
+      const isSymbolicLink = child.isSymbolicLink() || stat?.isSymbolicLink() === true;
       const entryIndex = totalEntries;
       totalEntries += 1;
       if (entryIndex >= input.offset && entries.length < input.limit) {
         entries.push({
           path: toAttachmentRelative(input.rootAbsolutePath, absoluteChild),
           name: child.name,
-          kind: directoryEntryKind(child),
-          bytes: stat?.size,
+          kind: isSymbolicLink ? "symlink" : directoryEntryKind(child),
+          bytes: isSymbolicLink ? undefined : stat?.size,
           depth: entryDepth,
         });
       }
-      if (child.isDirectory()) {
+      if (child.isDirectory() && stat?.isDirectory() === true && !isSymbolicLink) {
         await visit(absoluteChild, entryDepth);
       }
     }
@@ -140,38 +157,58 @@ export async function searchPath(input: {
   readonly matches: SearchMatch[];
   readonly facts: SearchFacts;
   readonly isRoot?: boolean;
+  readonly abortSignal?: AbortSignal;
 }): Promise<void> {
+  throwIfAborted(input.abortSignal);
   if (input.matches.length >= input.limit) {
     return;
   }
   const isRoot = input.isRoot ?? true;
-  const stat = await fs.stat(input.absolutePath).catch((error: unknown) => {
+  // An explicitly authorized entry may itself be a link; only discovered
+  // descendants are skipped. Validate its real boundary before following it.
+  if (isRoot) resolveWorkspacePath(input.rootAbsolutePath, input.absolutePath);
+  const stat = await (isRoot ? fs.stat(input.absolutePath) : fs.lstat(input.absolutePath)).catch((error: unknown) => {
+    throwIfAborted(input.abortSignal);
     if (isRoot) {
       throw error;
     }
     recordSkipped(input, "unreadable", undefined, error);
     return undefined;
   });
+  throwIfAborted(input.abortSignal);
   if (stat === undefined) {
     return;
   }
+  if (stat.isSymbolicLink()) {
+    recordSkipped(input, "symlink");
+    return;
+  }
+  resolveWorkspacePath(input.rootAbsolutePath, input.absolutePath);
   if (stat.isDirectory()) {
+    throwIfAborted(input.abortSignal);
     const entries = await fs.readdir(input.absolutePath, { withFileTypes: true }).catch((error: unknown) => {
+      throwIfAborted(input.abortSignal);
       if (isRoot) {
         throw error;
       }
       recordSkipped(input, "unreadable_directory", undefined, error);
       return undefined;
     });
+    throwIfAborted(input.abortSignal);
     if (entries === undefined) {
       return;
     }
     entries.sort((left, right) => left.name.localeCompare(right.name));
     for (const entry of entries) {
+      throwIfAborted(input.abortSignal);
       if (input.matches.length >= input.limit) {
         return;
       }
       const childPath = path.join(input.absolutePath, entry.name);
+      if (entry.isSymbolicLink()) {
+        recordSkipped({ ...input, absolutePath: childPath }, "symlink");
+        continue;
+      }
       if (shouldSkipEntry(entry.name)) {
         recordSkipped({
           ...input,
@@ -195,14 +232,23 @@ export async function searchPath(input: {
     recordSkipped(input, "too_large", stat.size);
     return;
   }
-  if (isLikelyBinaryPath(input.absolutePath) || await fileHasNulByte(input.absolutePath, stat.size)) {
+  throwIfAborted(input.abortSignal);
+  resolveWorkspacePath(input.rootAbsolutePath, input.absolutePath);
+  if (isLikelyBinaryPath(input.absolutePath) || await fileHasNulByte(input.absolutePath, stat.size, input.abortSignal)) {
     recordSkipped(input, "binary", stat.size);
     return;
   }
-  const raw = await fs.readFile(input.absolutePath, "utf8").catch((error: unknown) => {
+  throwIfAborted(input.abortSignal);
+  resolveWorkspacePath(input.rootAbsolutePath, input.absolutePath);
+  const raw = await fs.readFile(input.absolutePath, {
+    encoding: "utf8",
+    signal: input.abortSignal,
+  }).catch((error: unknown) => {
+    throwIfAborted(input.abortSignal);
     recordSkipped(input, "unreadable", stat.size, error);
     return undefined;
   });
+  throwIfAborted(input.abortSignal);
   if (raw === undefined) {
     return;
   }
@@ -233,14 +279,20 @@ export function createSearchFacts(): SearchFacts {
   };
 }
 
-export async function fileHasNulByte(filePath: string, size: number): Promise<boolean> {
-  const handle = await fs.open(filePath, "r").catch(() => undefined);
+export async function fileHasNulByte(filePath: string, size: number, abortSignal?: AbortSignal): Promise<boolean> {
+  throwIfAborted(abortSignal);
+  const handle = await fs.open(filePath, "r").catch(() => {
+    throwIfAborted(abortSignal);
+    return undefined;
+  });
   if (handle === undefined) {
     return false;
   }
   try {
+    throwIfAborted(abortSignal);
     const probe = Buffer.alloc(Math.min(size, 8192));
     await handle.read(probe, 0, probe.length, 0);
+    throwIfAborted(abortSignal);
     return probe.includes(0);
   } finally {
     await handle.close();
@@ -262,7 +314,7 @@ function recordSkipped(
   if (reason === "unreadable") input.facts.skippedUnreadableFiles += 1;
   if (reason === "skipped_directory" || reason === "unreadable_directory") {
     input.facts.skippedDirectories += 1;
-  } else if (reason === "not_file") {
+  } else if (reason === "not_file" || reason === "symlink") {
     input.facts.skippedOtherEntries += 1;
   } else {
     input.facts.skippedFiles += 1;

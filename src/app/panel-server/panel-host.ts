@@ -640,6 +640,8 @@ function assemblePanelHost(input: {
   });
   const spaceRevocationOverlay = spaceReferenceRuntimeGuard.revocationOverlay;
   const contextAttachmentReadAuthorization = {
+    appliesPathAuthorization: (attachmentId: string) =>
+      spaceReferenceIdFromAttachmentId(attachmentId) !== undefined,
     async assertReadAllowed(attachmentId: string): Promise<void> {
       spaceRevocationOverlay.assertReadAllowed(attachmentId);
       const referenceId = spaceReferenceIdFromAttachmentId(attachmentId);

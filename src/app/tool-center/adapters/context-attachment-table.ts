@@ -14,6 +14,7 @@ import { readAttachmentTextFile } from "./context-attachment-text.js";
 import {
   assertAttachmentAuthorized,
   attachmentTitle,
+  guardContextAttachmentTool,
   isSupportedSpreadsheetTarget,
   requireAttachmentEntry,
   resolveAttachmentTarget,
@@ -51,7 +52,7 @@ type ParsedDelimitedTable = {
 
 type ParsedAttachmentTable = ParsedDelimitedTable | ParsedSpreadsheetTable;
 export function createInspectContextAttachmentTableTool(options: ContextAttachmentToolOptions = {}): ToolExecutor {
-  return {
+  return guardContextAttachmentTool(options, {
     definition: {
       name: "AttachmentInspectTable",
       description: "Inspect a CSV, TSV, or XLSX context attachment and return sheet, column, row-count, and sample-row facts.",
@@ -133,11 +134,11 @@ export function createInspectContextAttachmentTableTool(options: ContextAttachme
         sampleRows: samples,
       };
     },
-  };
+  });
 }
 
 export function createReadContextAttachmentTableTool(options: ContextAttachmentToolOptions = {}): ToolExecutor {
-  return {
+  return guardContextAttachmentTool(options, {
     definition: {
       name: "AttachmentReadTable",
       description: "Read a bounded row window from a CSV, TSV, or XLSX context attachment as structured table rows.",
@@ -249,7 +250,7 @@ export function createReadContextAttachmentTableTool(options: ContextAttachmentT
         truncated: hasMoreAfter,
       };
     },
-  };
+  });
 }
 
 async function loadTableTarget(

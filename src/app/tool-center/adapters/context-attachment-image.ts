@@ -14,6 +14,7 @@ import {
 import {
   assertAttachmentAuthorized,
   attachmentTitle,
+  guardContextAttachmentTool,
   requireAttachmentEntry,
   resolveAttachmentTarget,
   statAttachmentTarget,
@@ -30,7 +31,7 @@ const MAX_IMAGE_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 export function createReadContextAttachmentImageTool(
   options: ContextAttachmentToolOptions = {},
 ): ToolExecutor {
-  return {
+  return guardContextAttachmentTool(options, {
     definition: {
       name: "AttachmentReadImage",
       description: "Read an image context attachment as an ephemeral model vision input using attachmentId instead of a local path.",
@@ -126,7 +127,7 @@ export function createReadContextAttachmentImageTool(
         }),
       ]);
     },
-  };
+  });
 }
 
 function unsupportedImageResult(input: {
