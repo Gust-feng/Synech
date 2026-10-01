@@ -106,7 +106,10 @@ export class ToolResultRetention {
   }
 
   envelopeTokens(result: ToolCallResult): number | undefined {
-    return this.outputTokenCounter?.countText(JSON.stringify(toolResultMessage(result)));
+    // This is the text delivery budget. Binary attachments travel separately;
+    // their base64 bytes are not text tokens or recoverable through ReadOutput.
+    const { attachments: _attachments, ...envelope } = toolResultMessage(result);
+    return this.outputTokenCounter?.countText(JSON.stringify(envelope));
   }
 
   async prepareResult(result: ToolCallResult, context: DeliveryContext): Promise<ToolCallResult> {
@@ -262,7 +265,10 @@ export class ToolResultRetention {
         high = requestedLength - 1;
       }
     }
-    return { ...result, output: { ...output, contentPreview: best } };
+    return {
+      ...result,
+      output: copyToolModelAttachments(output, { ...output, contentPreview: best }),
+    };
   }
 }
 

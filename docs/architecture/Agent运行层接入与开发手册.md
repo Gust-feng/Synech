@@ -309,6 +309,7 @@ Adapter 转换为 Pi tool result
 - approval-required 不能被 Adapter 吞掉或自动批准；
 - 工具结果是否进入账本，由 Synech owner 决定；
 - 工具证据、大结果 continuation 和审计仍由 ToolCenter 拥有；
+- ToolCenter 的文本结果预算只计算文本 envelope，不把图片等二进制附件的 Base64 当成文本 token；图片输入预算由模型上下文策略负责。结果正规化、留存和预览缩略必须保留带外附件，`ReadOutput` 只承接文本证据，不能替代图片投递；
 - pi 新工具签名只在 Adapter 内部适配。
 
 ## 8. 产品事件模型
