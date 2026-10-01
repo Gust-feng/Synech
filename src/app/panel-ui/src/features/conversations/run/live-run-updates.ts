@@ -9,7 +9,7 @@ import {
   appStateWithAppendOnlyRunEvents,
   appStateWithObservedRunEvent,
   appStateWithObservedRunProjection,
-  canApplyRunSubscriptionToAppState,
+  createRunObservationGuard,
   createAppendOnlyRunEventBatcher,
 } from "./observation-state";
 import {
@@ -109,23 +109,31 @@ export function createLiveRunUpdateController(
   };
 
   function startPolling(subscription: LiveRunSubscription): void {
+    if (!subscriptionIsCurrent(subscription)) return;
     appendOnlyBatcher.clear();
     const { runId } = subscription;
     stopLiveUpdates(options.pollTimer, options.streamRef, options.fallbackPollRef);
+    let pollingTimer: number | undefined;
+    const pollingIsCurrent = (): boolean =>
+      subscriptionIsCurrent(subscription) &&
+      pollingTimer !== undefined && options.pollTimer.current === pollingTimer;
     let lastCursor = subscription.cursor;
     const tick = async (): Promise<void> => {
-      if (!subscriptionIsCurrent(subscription) || options.fallbackPollRef.current !== undefined) return;
+      if (!pollingIsCurrent() || options.fallbackPollRef.current !== undefined) return;
       const abortController = new AbortController();
       options.fallbackPollRef.current = abortController;
+      const requestIsCurrent = (): boolean =>
+        pollingIsCurrent() && !abortController.signal.aborted &&
+        options.fallbackPollRef.current === abortController;
       try {
         const runView = await fetchOrdinaryRunView(runId, lastCursor, abortController.signal);
-        if (abortController.signal.aborted || !subscriptionIsCurrent(subscription)) return;
+        if (!requestIsCurrent()) return;
         lastCursor = runView.replay.cursor.token;
-        await applyRunViewProjection(subscription, runView);
+        await applyRunViewProjection(subscription, runView, false, requestIsCurrent);
       } catch (error) {
-        if (abortController.signal.aborted || isAbortError(error) || !subscriptionIsCurrent(subscription)) return;
+        if (isAbortError(error) || !requestIsCurrent()) return;
         options.setApp((previous) =>
-          canApplyToState(previous, subscription)
+          pollingIsCurrent() && canApplyToState(previous, subscription)
             ? {
                 ...previous,
                 error: error instanceof Error ? error.message : "刷新运行状态失败。",
@@ -138,15 +146,21 @@ export function createLiveRunUpdateController(
         }
       }
     };
+    pollingTimer = window.setInterval(() => void tick(), FALLBACK_POLL_INTERVAL_MS);
+    options.pollTimer.current = pollingTimer;
     void tick();
-    options.pollTimer.current = window.setInterval(() => void tick(), FALLBACK_POLL_INTERVAL_MS);
   }
 
   function startLiveUpdates(subscription: LiveRunSubscription): void {
+    const guard = createRunObservationGuard(options, subscription);
+    if (!guard.canStart()) return;
     appendOnlyBatcher.clear();
     const { runId } = subscription;
     stopLiveUpdates(options.pollTimer, options.streamRef, options.fallbackPollRef);
     options.activeRunIdRef.current = runId;
+    let ownedStream: EventSource | undefined;
+    const isCurrent = (): boolean =>
+      guard.isCurrent() && options.streamRef.current === ownedStream;
     let lastCursor = subscription.cursor;
     let streamDeliveredEvent = false;
     let reconciliationStarted = false;
@@ -154,18 +168,19 @@ export function createLiveRunUpdateController(
     let liveRunSettled = false;
     let streamWork = Promise.resolve();
     const refreshAfterEvent = async (event: RunEvent, cursor: OrdinaryRunCursor): Promise<void> => {
-      if (!subscriptionIsCurrent(subscription)) return;
+      if (!isCurrent()) return;
       // The SSE id is the backend cursor for every activity included in the frame.
       // Advance it before reconciliation so coalesced deltas are not replayed individually.
       lastCursor = cursor;
       if (isLiveAppendOnlyEvent(event)) {
-        if (subscriptionIsCurrent(subscription)) {
+        if (isCurrent()) {
           appendOnlyBatcher.enqueue({ subscription, event });
         }
         return;
       }
       appendOnlyBatcher.flush();
       const runView = await fetchOrdinaryRunView(runId, lastCursor);
+      if (!isCurrent()) return;
       lastCursor = runView.replay.cursor.token;
       const run = runView.run;
       const workView = ordinaryWorkViewFromRunView(runView);
@@ -173,7 +188,7 @@ export function createLiveRunUpdateController(
       const detail = runView.detail;
       if (run !== undefined && !shouldKeepRefreshing(run.status)) {
         const settled = await loadSettledRunProjection({ runId, run, workView, capabilityResolution });
-        if (!subscriptionIsCurrent(subscription)) return;
+        if (!isCurrent()) return;
         liveRunSettled = true;
         stopLiveUpdates(options.pollTimer, options.streamRef, options.fallbackPollRef);
         commitSettledProjection(subscription, settled, (previous) => appStateWithObservedRunEvent(previous, {
@@ -197,7 +212,7 @@ export function createLiveRunUpdateController(
         }
         return;
       }
-      if (subscriptionIsCurrent(subscription)) {
+      if (isCurrent()) {
         options.setApp((previous) =>
           canApplyToState(previous, subscription)
             ? appStateWithObservedRunEvent(previous, {
@@ -214,18 +229,18 @@ export function createLiveRunUpdateController(
     };
     const stopBootstrapPolling = (): void => stopPolling(options.pollTimer);
     const reconcile = async (): Promise<void> => {
-      if (!subscriptionIsCurrent(subscription)) return;
+      if (!isCurrent()) return;
       const runView = await fetchOrdinaryRunView(runId, lastCursor);
+      if (!isCurrent()) return;
       lastCursor = runView.replay.cursor.token;
-      await applyRunViewProjection(subscription, runView);
+      await applyRunViewProjection(subscription, runView, false, isCurrent);
     };
     const startReconciliationPolling = (): void => {
-      if (reconciliationStarted || liveRunSettled || !subscriptionIsCurrent(subscription)) return;
+      if (reconciliationStarted || liveRunSettled || !isCurrent()) return;
       reconciliationStarted = true;
       stopPolling(options.pollTimer);
       options.pollTimer.current = window.setInterval(() => {
-        if (!subscriptionIsCurrent(subscription)) {
-          stopPolling(options.pollTimer);
+        if (!isCurrent()) {
           return;
         }
         if (Date.now() - lastStreamSignalAt >= STREAM_STALE_AFTER_MS) {
@@ -236,6 +251,7 @@ export function createLiveRunUpdateController(
       }, STREAM_RECONCILIATION_POLL_INTERVAL_MS);
     };
     const noteStreamSignal = (): void => {
+      if (!isCurrent()) return;
       lastStreamSignalAt = Date.now();
       streamDeliveredEvent = true;
       if (!reconciliationStarted) {
@@ -247,7 +263,7 @@ export function createLiveRunUpdateController(
       let attempts = 0;
       let inFlight = false;
       const poll = async (): Promise<void> => {
-        if (streamDeliveredEvent || inFlight || !subscriptionIsCurrent(subscription)) {
+        if (streamDeliveredEvent || inFlight || !isCurrent()) {
           return;
         }
         attempts += 1;
@@ -257,18 +273,20 @@ export function createLiveRunUpdateController(
           // Once SSE has delivered any signal, its ordered stream owns live progress.
           // An older bootstrap response may contain the same raw deltas that SSE
           // already delivered as one coalesced frame, so applying it would duplicate text.
-          if (streamDeliveredEvent || !subscriptionIsCurrent(subscription)) {
+          if (streamDeliveredEvent || !isCurrent()) {
             return;
           }
           lastCursor = runView.replay.cursor.token;
-          await applyRunViewProjection(subscription, runView);
+          await applyRunViewProjection(subscription, runView, false, isCurrent);
           if (runView.replay.events.length > 0 && !streamDeliveredEvent) {
             attempts = 0;
           }
+        } catch {
+          fallback();
         } finally {
           inFlight = false;
           if (
-            subscriptionIsCurrent(subscription) &&
+            isCurrent() &&
             (streamDeliveredEvent || attempts >= STREAM_BOOTSTRAP_POLL_LIMIT)
           ) {
             stopBootstrapPolling();
@@ -279,19 +297,21 @@ export function createLiveRunUpdateController(
       options.pollTimer.current = window.setInterval(() => void poll(), STREAM_BOOTSTRAP_POLL_INTERVAL_MS);
     };
     const fallback = (): void => {
-      if (liveRunSettled) return;
+      if (liveRunSettled || !isCurrent()) return;
       appendOnlyBatcher.flush();
       startPolling({ ...subscription, cursor: lastCursor });
     };
     const refreshAfterReset = async (resetCursor: OrdinaryRunCursor): Promise<void> => {
-      if (!subscriptionIsCurrent(subscription)) return;
+      if (!isCurrent()) return;
       lastCursor = resetCursor;
       appendOnlyBatcher.clear();
       const runView = await fetchOrdinaryRunView(runId, undefined);
+      if (!isCurrent()) return;
       lastCursor = runView.replay.cursor.token;
-      await applyRunViewProjection(subscription, runView, true);
+      await applyRunViewProjection(subscription, runView, true, isCurrent);
     };
     const enqueueStreamWork = (work: () => Promise<void>): void => {
+      if (!isCurrent()) return;
       streamWork = streamWork.then(work, work).catch(() => fallback());
     };
     const stream = openOrdinaryRunStream({
@@ -312,6 +332,7 @@ export function createLiveRunUpdateController(
       startPolling(subscription);
       return;
     }
+    ownedStream = stream;
     options.streamRef.current = stream;
     startBootstrapPolling();
   }
@@ -319,14 +340,16 @@ export function createLiveRunUpdateController(
   async function applyRunViewProjection(
     subscription: LiveRunSubscription,
     runView: Awaited<ReturnType<typeof fetchOrdinaryRunView>>,
-    forceReset = false,
+    forceReset: boolean,
+    isCurrent: () => boolean,
   ): Promise<void> {
+    if (!isCurrent()) return;
     const reset = forceReset || runView.replay.reset;
     if (reset) appendOnlyBatcher.clear();
     else appendOnlyBatcher.flush();
     const { runId } = subscription;
     if (!isObservedRunSettled(runView.run)) {
-      if (subscriptionIsCurrent(subscription)) {
+      if (isCurrent()) {
         options.setApp((previous) =>
           canApplyToState(previous, subscription)
             ? appStateWithObservedRunProjection(previous, {
@@ -349,7 +372,7 @@ export function createLiveRunUpdateController(
       workView: ordinaryWorkViewFromRunView(runView),
       capabilityResolution: runView.capabilityResolution,
     });
-    if (!subscriptionIsCurrent(subscription)) return;
+    if (!isCurrent()) return;
     stopLiveUpdates(options.pollTimer, options.streamRef, options.fallbackPollRef);
     commitSettledProjection(subscription, settled, (previous) => appStateWithObservedRunProjection(previous, {
       runId,
@@ -376,20 +399,11 @@ export function createLiveRunUpdateController(
   return { startLiveUpdates, startPolling };
 
   function subscriptionIsCurrent(subscription: LiveRunSubscription): boolean {
-    return options.mountedRef.current &&
-      options.activeRunIdRef.current === subscription.runId &&
-      options.viewEpochRef.current === subscription.epoch;
+    return createRunObservationGuard(options, subscription).isCurrent();
   }
 
   function canApplyToState(previous: AppState, subscription: LiveRunSubscription): boolean {
-    return canApplyRunSubscriptionToAppState({
-      previous,
-      activeRunId: options.activeRunIdRef.current,
-      currentEpoch: options.viewEpochRef.current,
-      runId: subscription.runId,
-      conversationId: subscription.conversationId,
-      epoch: subscription.epoch,
-    });
+    return createRunObservationGuard(options, subscription).isCurrent(previous);
   }
 
   function canApplyAppendOnlyToState(previous: AppState, subscription: LiveRunSubscription): boolean {

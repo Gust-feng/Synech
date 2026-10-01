@@ -22,6 +22,48 @@ import type {
 export { mergeRunEvents };
 export { createAppendOnlyRunEventBatcher };
 
+export type RunObservationIdentity = {
+  readonly runId: string;
+  readonly conversationId?: string;
+  readonly epoch: number;
+};
+
+export function sameRunObservationIdentity(
+  left: RunObservationIdentity | undefined,
+  right: RunObservationIdentity | undefined,
+): boolean {
+  return left !== undefined && right !== undefined &&
+    left.runId === right.runId &&
+    left.conversationId === right.conversationId &&
+    left.epoch === right.epoch;
+}
+
+export function createRunObservationGuard(
+  refs: {
+    readonly mountedRef: { readonly current: boolean };
+    readonly activeRunIdRef: { readonly current: string | undefined };
+    readonly viewEpochRef: { readonly current: number };
+  },
+  captured: RunObservationIdentity,
+) {
+  const identity = { ...captured };
+  const canStart = (): boolean =>
+    refs.mountedRef.current && refs.viewEpochRef.current === identity.epoch;
+  return {
+    identity,
+    canStart,
+    isCurrent(previous?: Pick<AppState, "conversation">): boolean {
+      return canStart() && refs.activeRunIdRef.current === identity.runId &&
+        (previous === undefined || canApplyRunSubscriptionToAppState({
+          previous,
+          activeRunId: refs.activeRunIdRef.current,
+          currentEpoch: refs.viewEpochRef.current,
+          ...identity,
+        }));
+    },
+  };
+}
+
 export function canApplyRunSubscriptionToAppState(input: {
   readonly previous: Pick<AppState, "conversation">;
   readonly activeRunId: string | undefined;

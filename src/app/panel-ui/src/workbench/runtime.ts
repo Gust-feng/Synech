@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useConversationSummaryRefresh } from "../features/conversations/conversation-refresh";
 import { useConversationProjectionChanges } from "../features/conversations/conversation-projection-changes";
 import { createAppRunController } from "../features/conversations/run/controller";
@@ -12,6 +12,7 @@ import { createAppSidebarConversationController } from "../features/conversation
 import { createAppSettingsController, type AppSettingsController } from "../features/settings/controllers/settings-controller";
 import { createAppComposerController } from "../features/conversations/composer-controller";
 import { shouldKeepRefreshing, stopLiveUpdates } from "../features/conversations/run/runtime-controls";
+import { sameRunObservationIdentity, type RunObservationIdentity } from "../features/conversations/run/observation-state";
 import { resetTranscriptCache } from "../features/conversations/transcript/store";
 import {
   contextWindowUsageFrom,
@@ -102,7 +103,7 @@ export type AppWorkbenchRuntime = {
 export function useAppWorkbenchRuntime(options: AppWorkbenchRuntimeOptions): AppWorkbenchRuntime {
   const mountedRef = useRef(true);
   const { state: bootstrap, retry: retryBootstrap } = useAppBootstrap({ mountedRef, setApp: options.setApp });
-  const [confirmationBusy, setConfirmationBusy] = useState(false);
+  const [pendingConfirmationIdentity, setPendingConfirmationIdentity] = useState<RunObservationIdentity>();
   const [contextBusy, setContextBusy] = useState(false);
   const [savingModel, setSavingModel] = useState(false);
   const [savingEnvironment, setSavingEnvironment] = useState(false);
@@ -155,6 +156,19 @@ export function useAppWorkbenchRuntime(options: AppWorkbenchRuntimeOptions): App
   }, []);
 
   const currentRun = useMemo(() => projectCurrentRun(options.app), currentRunProjectionDeps(options.app));
+  const confirmationIdentity = useMemo(() => currentRun.run === undefined ? undefined : ({
+    runId: currentRun.run.runId,
+    conversationId: options.app.conversation?.conversationId,
+    epoch: viewEpochRef.current,
+  }), [currentRun.run?.runId, options.app.conversation?.conversationId, viewEpochRef.current]);
+  const confirmationBusy = sameRunObservationIdentity(pendingConfirmationIdentity, confirmationIdentity);
+  const setConfirmationBusy = useCallback<React.Dispatch<React.SetStateAction<boolean>>>((update) => {
+    setPendingConfirmationIdentity((previous) => {
+      const owned = sameRunObservationIdentity(previous, confirmationIdentity);
+      const busy = typeof update === "function" ? update(owned) : update;
+      return busy ? confirmationIdentity : owned ? undefined : previous;
+    });
+  }, [confirmationIdentity]);
   const hasNormalConversationContext = options.app.conversation !== undefined || currentRun.run !== undefined;
   const latestModelUsage = useMemo(
     () => latestModelUsageFromEvents(currentRun.events) ?? latestModelUsageFromTranscript(currentRun.transcriptNodes),
@@ -214,6 +228,7 @@ export function useAppWorkbenchRuntime(options: AppWorkbenchRuntimeOptions): App
     refreshSpaceConversations: options.refreshSpaceConversations,
   }), [
     confirmationBusy,
+    setConfirmationBusy,
     options.aiMode,
     options.app,
     options.attachments,

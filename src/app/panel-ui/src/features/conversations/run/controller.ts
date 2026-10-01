@@ -15,6 +15,7 @@ import type { AppState } from "../../../workbench/state";
 import type { ContextAttachment } from "../../../contracts/context";
 import type { ConversationSummary } from "../../../contracts/conversation";
 import type { OrdinaryRun } from "../../../contracts/run";
+import { createRunObservationGuard } from "./observation-state";
 
 export type AppRunController = {
   readonly activeRunIdRef: React.MutableRefObject<string | undefined>;
@@ -118,15 +119,20 @@ export function createAppRunController(options: AppRunControllerOptions): AppRun
 
   async function cancelRun(): Promise<void> {
     if (currentRunId === undefined) return;
-    const cancellationEpoch = options.viewEpochRef.current;
+    const guard = createRunObservationGuard(options, {
+      runId: currentRunId,
+      conversationId: options.app.conversation?.conversationId,
+      epoch: options.viewEpochRef.current,
+    });
+    if (!guard.isCurrent(options.app)) return;
     options.setCancellingRunId(currentRunId);
     stopLiveUpdates(options.pollTimer, options.streamRef, options.fallbackPollRef);
     try {
       const response = await postJson<{ readonly run: OrdinaryRun }>(`/api/ordinary/runs/${encodeURIComponent(currentRunId)}/cancel`, {});
-      if (!options.mountedRef.current) return;
+      if (!guard.isCurrent()) return;
       options.activeRunIdRef.current = currentRunId;
       options.setApp((previous) => {
-        if (previous.run?.runId !== currentRunId) return previous;
+        if (!guard.isCurrent(previous)) return previous;
         return {
           ...previous,
           run: response.run,
@@ -140,22 +146,26 @@ export function createAppRunController(options: AppRunControllerOptions): AppRun
         workView: options.app.workView,
         capabilityResolution: options.app.capabilityResolution,
       }).then((settled) => {
-        if (!options.mountedRef.current || options.viewEpochRef.current !== cancellationEpoch) return;
-        options.setApp((previous) => previous.run?.runId === currentRunId
+        if (!guard.isCurrent()) return;
+        options.setApp((previous) => guard.isCurrent(previous)
           ? appStateWithSettledRunProjection(previous, settled)
           : previous);
       }).catch(() => undefined);
       void refreshConversations().catch(() => undefined);
     } catch {
-      if (!options.mountedRef.current) return;
-      options.setCancellingRunId((pending) => pending === currentRunId ? undefined : pending);
+      if (!guard.isCurrent()) return;
       const current = options.app.run;
       if (current?.runId === currentRunId && shouldKeepRefreshing(current.status)) {
         liveUpdates.startLiveUpdates({
           runId: currentRunId,
           conversationId: options.app.conversation?.conversationId,
-          epoch: options.viewEpochRef.current,
+          epoch: guard.identity.epoch,
         });
+      }
+    } finally {
+      // Clear only this run's marker; a newer cancellation owns a different id.
+      if (options.mountedRef.current) {
+        options.setCancellingRunId((pending) => pending === currentRunId ? undefined : pending);
       }
     }
   }
@@ -170,6 +180,7 @@ export function createAppRunController(options: AppRunControllerOptions): AppRun
       setConfirmationBusy: options.setConfirmationBusy,
       setApp: options.setApp,
       mountedRef: options.mountedRef,
+      activeRunIdRef: options.activeRunIdRef,
       viewEpochRef: options.viewEpochRef,
       refreshConversations,
       startLiveUpdates: liveUpdates.startLiveUpdates,
