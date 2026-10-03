@@ -488,15 +488,24 @@
 }
 
 .mcp-service-empty {
-  border: 1px dashed var(--empty-state-border);
-  border-radius: var(--radius-xl);
+  display: flex;
+  flex-direction: column;
+  min-height: 190px;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  border: 1px solid var(--empty-state-border);
+  border-radius: 8px;
   background: var(--empty-state-bg);
-  padding: 18px;
+  padding: 28px;
   color: var(--muted);
   font-size: 13px;
   text-align: center;
-  box-shadow: var(--empty-state-shadow);
 }
+
+.mcp-empty-mark { display: grid; flex: 0 0 auto; width: 56px; height: 56px; place-items: center; border: 1px solid var(--content-border); border-radius: 8px; background: var(--surface); color: var(--secondary); }
+.mcp-empty-copy { min-width: 0; }
+.mcp-empty-copy h4 { margin: 0; color: var(--fg); font-size: 14px; font-weight: var(--weight-label); }
 
 .mcp-status-pill {
   display: inline-flex;
@@ -917,10 +926,12 @@
 
 .mcp-form-grid textarea,
 .mcp-form-section > label textarea {
-  min-height: 54px;
+  height: 96px;
+  min-height: 96px;
   padding: 8px 10px;
   line-height: 1.5;
-  resize: vertical;
+  resize: none;
+  overflow-y: auto;
 }
 
 .mcp-form-grid input::placeholder,
@@ -982,7 +993,7 @@
   grid-template-rows: auto minmax(0, 1fr) auto;
   overflow: hidden;
   border: 1px solid var(--subpanel-border);
-  border-radius: var(--radius-2xl);
+  border-radius: 8px;
   background: var(--subpanel-bg);
   box-shadow: var(--subpanel-shadow);
   backdrop-filter: var(--subpanel-backdrop-filter);
@@ -1019,7 +1030,7 @@
 .mcp-subpanel-title {
   display: flex;
   min-width: 0;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 10px;
 }
@@ -1047,7 +1058,7 @@
   justify-content: flex-end;
   border-top: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
   background: var(--subpanel-footer-bg);
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 8px;
   min-height: 56px;
   padding: 10px 20px;
@@ -1060,34 +1071,62 @@
 .mcp-subpanel-footer-actions {
   display: flex;
   min-width: 0;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: flex-end;
   gap: 8px;
 }
 
-.mcp-subpanel-footer .page-action-button {
-  min-width: 92px;
-  height: 34px;
-  border-radius: var(--radius-lg);
+@media (max-width: 420px) {
+  .mcp-subpanel-overlay { padding: 8px; }
+  .mcp-subpanel-footer .mcp-panel-button { min-width: 0; padding: 0 8px; }
+  .mcp-subpanel-footer .mcp-panel-button.icon-only { width: 32px; padding: 0; }
+}
+
+.mcp-panel-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  gap: 6px;
+  min-width: 76px;
+  height: 36px;
+  border: 1px solid var(--field-border);
+  border-radius: 6px;
+  background: var(--field-bg);
+  color: var(--fg);
   padding: 0 14px;
   font-size: 13px;
   font-weight: var(--weight-label);
   white-space: nowrap;
+  line-height: 1;
 }
 
-.mcp-subpanel-footer .page-action-button.primary {
+.mcp-panel-button svg { flex: 0 0 auto; }
+.mcp-panel-button:hover:not(:disabled) { border-color: var(--field-hover-border); background: var(--field-hover-bg); }
+.mcp-panel-button:focus-visible { outline: 2px solid var(--field-focus-border); outline-offset: 2px; }
+.mcp-panel-button.quiet { background: transparent; border-color: transparent; }
+.mcp-panel-button.primary {
   min-width: 124px;
+  border-color: var(--fg);
+  background: var(--fg);
+  color: var(--surface);
 }
 
-.mcp-subpanel-footer .page-action-button:disabled {
+.mcp-panel-button.primary:hover:not(:disabled) { background: color-mix(in oklch, var(--fg) 90%, var(--accent-strong)); }
+.mcp-panel-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
   box-shadow: none;
 }
 
-.mcp-subpanel-footer .page-action-button.primary:disabled {
+.mcp-panel-button.primary:disabled {
   border-color: var(--field-border);
   background: var(--content-surface-muted);
   color: color-mix(in oklch, var(--muted) 72%, transparent);
 }
+
+.mcp-panel-button.danger { border-color: var(--danger-border); background: var(--danger-soft); color: var(--status-danger); }
+.mcp-panel-button.icon-only { width: 36px; min-width: 36px; padding: 0; }
 
 .page-action-button.danger {
   border-color: var(--danger-border);
@@ -1940,8 +1979,7 @@
     grid-template-columns: 1fr;
   }
 
-  .mcp-board-header,
-  .mcp-subpanel-header {
+  .mcp-board-header {
     align-items: stretch;
     flex-direction: column;
   }
@@ -1974,14 +2012,8 @@
     padding-left: 16px;
   }
 
-  .mcp-subpanel-footer .page-action-button {
-    flex: 1 1 120px;
-  }
-
-  .mcp-subpanel-footer.split,
   .mcp-subpanel-footer-actions {
-    align-items: stretch;
-    justify-content: stretch;
+    gap: 6px;
   }
 
   .mcp-tool-auth-header,
