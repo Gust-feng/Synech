@@ -3,7 +3,7 @@ import type { ModelForm } from "./settings-projection";
 
 const PROVIDER_SAVE_DELAY_MS = 700;
 
-export function useProviderSaveQueue(onSave: (form?: ModelForm) => Promise<void>) {
+export function useProviderSaveQueue(onSave: (form: ModelForm) => Promise<void>) {
   const onSaveRef = useRef(onSave);
   const timerRef = useRef<number | undefined>(undefined);
   const pendingRef = useRef<ModelForm | undefined>(undefined);
@@ -28,12 +28,21 @@ export function useProviderSaveQueue(onSave: (form?: ModelForm) => Promise<void>
   }
 
   async function commit(form: ModelForm): Promise<void> {
+    if (pendingRef.current?.profileId === form.profileId) {
+      discard(form.profileId);
+    } else {
+      flush();
+    }
+    await onSaveRef.current(form);
+  }
+
+  function discard(profileId: string): void {
+    if (pendingRef.current?.profileId !== profileId) return;
     if (timerRef.current !== undefined) {
       window.clearTimeout(timerRef.current);
       timerRef.current = undefined;
     }
     pendingRef.current = undefined;
-    await onSaveRef.current(form);
   }
 
   function flush(): void {
@@ -49,6 +58,7 @@ export function useProviderSaveQueue(onSave: (form?: ModelForm) => Promise<void>
   return {
     schedule,
     commit,
+    discard,
     flush,
     save: (form: ModelForm) => onSaveRef.current(form),
   };

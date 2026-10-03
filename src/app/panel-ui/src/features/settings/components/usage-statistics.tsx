@@ -1,3 +1,4 @@
+import { SvgMark } from "../../../components/svg-mark";
 import React, { useRef, useState } from "react";
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import {
@@ -6,7 +7,6 @@ import {
   Cpu,
   Database,
   RefreshCw,
-  SlidersHorizontal,
 } from "lucide-react";
 import type {
   UsageStatistics,
@@ -22,7 +22,6 @@ import "./usage-statistics.css";
 
 export { preloadUsageStatistics } from "../../../workbench/usage-statistics-query";
 
-type HeatmapMetric = "messages" | "runs" | "tokens";
 type LatencyTone = "is-fast" | "is-warning" | "is-danger" | "is-neutral";
 
 export function UsageStatisticsSettings(): React.ReactElement {
@@ -143,19 +142,32 @@ function UsageStatisticsContent(props: {
 }
 
 function OverviewView(props: { readonly statistics: UsageStatistics }): React.ReactElement {
-  const [heatmapMetric, setHeatmapMetric] = useState<HeatmapMetric>("messages");
   const totals = props.statistics.totals;
-  const days = projectHeatmapDays(heatmapDays(props.statistics.dailyActivity), heatmapMetric);
+  const days = projectHeatmapDays(heatmapDays(props.statistics.dailyActivity));
+  const windowTotal = days.reduce((sum, day) => sum + dailyTokenUsage(day), 0);
   return (
     <div className="usage-v3-overview">
-      <div className="usage-v3-heatmap-layout">
-        <section className="usage-v3-heatmap" aria-label="最近 182 天使用热力图">
-          <div className="usage-v3-heatmap-chart">
-            <UsageHeatmap days={days} />
+      <section className="usage-v3-heatmap-layout" aria-label="最近 182 天 Token 用量热力图">
+        <div className="usage-v3-heatmap-heading">
+          <div className="usage-v3-heatmap-title"><h4>Token 用量</h4><span>最近 182 天</span></div>
+          <span className="usage-v3-heatmap-total">合计 <strong>{formatCompactNumber(windowTotal)}</strong> Token</span>
+        </div>
+        <div className="usage-v3-heatmap">
+          <UsageHeatmap days={days} />
+        </div>
+        <div className="usage-v3-heatmap-footer">
+          <span className="usage-v3-heatmap-range">{days[0]?.date} 至 {days.at(-1)?.date}</span>
+          <div className="usage-v3-control-legend" aria-label="每日 Token 用量刻度">
+            <span>每日</span>
+            {[0, ...TOKEN_HEATMAP_THRESHOLDS].map((minimum, level) => (
+              <span key={level} className="usage-v3-legend-step">
+                <i className="usage-v3-heatmap-cell" data-level={level} aria-hidden="true" />
+                {formatCompactNumber(minimum)}{level > 0 ? "+" : ""}
+              </span>
+            ))}
           </div>
-        </section>
-        <HeatmapControlsCard metric={heatmapMetric} onMetricChange={setHeatmapMetric} />
-      </div>
+        </div>
+      </section>
 
       <div className="usage-v3-card-grid" aria-label="使用统计汇总">
         <ActivityCard totals={totals} days={props.statistics.dailyActivity} />
@@ -167,61 +179,27 @@ function OverviewView(props: { readonly statistics: UsageStatistics }): React.Re
   );
 }
 
-function HeatmapControlsCard(props: {
-  readonly metric: HeatmapMetric;
-  readonly onMetricChange: (metric: HeatmapMetric) => void;
-}): React.ReactElement {
-  return (
-    <section className="usage-v3-rhythm-card">
-      <div className="usage-v3-card-heading">
-        <span className="usage-v3-card-icon usage-v3-card-icon--quiet"><SlidersHorizontal size={18} /></span>
-        <h4>热力视图</h4>
-      </div>
-      <span className="usage-v3-heatmap-control-label">着色依据</span>
-      <div className="usage-v3-heatmap-modes" role="radiogroup" aria-label="热力图着色依据">
-        {HEATMAP_METRICS.map((option) => (
-          <button
-            key={option.id}
-            type="button"
-            role="radio"
-            aria-checked={props.metric === option.id}
-            className={props.metric === option.id ? "is-active" : ""}
-            onClick={() => props.onMetricChange(option.id)}
-          >
-            {option.label}
-          </button>
-        ))}
-      </div>
-      <div className="usage-v3-control-legend" aria-label="活跃度图例">
-        <span>少</span>
-        {[0, 1, 2, 3, 4, 5].map((level) => (
-          <i key={level} className="usage-v3-heatmap-cell" data-level={level} aria-hidden="true" />
-        ))}
-        <span>多</span>
-      </div>
-    </section>
-  );
+const TOKEN_HEATMAP_THRESHOLDS = [1, 10_000, 50_000, 200_000, 1_000_000] as const;
+
+function heatmapValueLabel(day: UsageStatisticsDailyActivity): string {
+  return `${dailyTokenUsage(day).toLocaleString("zh-CN")} Token`;
 }
 
-const HEATMAP_METRICS: readonly { readonly id: HeatmapMetric; readonly label: string }[] = [
-  { id: "messages", label: "消息" },
-  { id: "runs", label: "运行" },
-  { id: "tokens", label: "Token" },
-];
-
-function UsageHeatmap(props: { readonly days: readonly UsageStatisticsDailyActivity[] }): React.ReactElement {
+function UsageHeatmap(props: {
+  readonly days: readonly UsageStatisticsDailyActivity[];
+}): React.ReactElement {
   const visualRef = useRef<HTMLDivElement>(null);
   const [hovered, setHovered] = useState<{ readonly day: UsageStatisticsDailyActivity; readonly left: number; readonly top: number; readonly placement: "above" | "below" }>();
 
   const showTooltip = (event: { readonly currentTarget: HTMLElement }, day: UsageStatisticsDailyActivity): void => {
-    if (!hasDayActivity(day) || visualRef.current === null) return;
+    if (visualRef.current === null) return;
     const target = event.currentTarget.getBoundingClientRect();
     const visual = visualRef.current.getBoundingClientRect();
     const top = target.top - visual.top;
     const above = top > 58;
     setHovered({
       day,
-      left: target.left - visual.left + target.width / 2,
+      left: Math.max(90, Math.min(visual.width - 90, target.left - visual.left + target.width / 2)),
       top: above ? top - 8 : target.bottom - visual.top + 8,
       placement: above ? "above" : "below",
     });
@@ -240,19 +218,18 @@ function UsageHeatmap(props: { readonly days: readonly UsageStatisticsDailyActiv
             key={day.date}
             className="usage-v3-heatmap-cell"
             data-level={day.level}
-            aria-label={`${day.date}，${day.messageCount} 条消息`}
+            aria-label={`${day.date}，${heatmapValueLabel(day)}`}
             onMouseEnter={(event) => showTooltip(event, day)}
             onFocus={(event) => showTooltip(event, day)}
             onBlur={() => setHovered(undefined)}
-            tabIndex={hasDayActivity(day) ? 0 : -1}
+            tabIndex={dailyTokenUsage(day) > 0 ? 0 : -1}
           />
         ))}
       </div>
       {hovered !== undefined && (
         <div className={`usage-v3-heatmap-tooltip ${hovered.placement}`} style={{ left: hovered.left, top: hovered.top }} role="status">
           <strong>{hovered.day.date}</strong>
-          <span>消息 {formatCompactNumber(hovered.day.messageCount)} · 运行 {formatCompactNumber(hovered.day.runCount)}</span>
-          <span>Token {formatCompactNumber(hovered.day.inputTokens + hovered.day.outputTokens)}</span>
+          <span>{heatmapValueLabel(hovered.day)}</span>
         </div>
       )}
     </div>
@@ -316,7 +293,7 @@ function RequestCard(props: {
           <div className="usage-v3-primary-model-row">
             <span className="usage-v3-primary-model-identity">
               <span className="usage-v3-primary-model-icon" aria-hidden="true">
-                {primaryModelIcon === undefined ? <Cpu size={13} /> : <span dangerouslySetInnerHTML={{ __html: primaryModelIcon }} />}
+                {primaryModelIcon === undefined ? <Cpu size={13} /> : <SvgMark svg={primaryModelIcon} />}
               </span>
               <span>{primaryModel.model}</span>
             </span>
@@ -437,7 +414,7 @@ function ModelUsageCard(props: { readonly model: UsageStatisticsModelBreakdown }
       <header className="usage-v3-model-card-heading">
         <span className="usage-v3-model-identity">
           <span className="usage-v3-model-icon" aria-hidden="true">
-            {iconSvg === undefined ? <Cpu size={16} /> : <span dangerouslySetInnerHTML={{ __html: iconSvg }} />}
+            {iconSvg === undefined ? <Cpu size={16} /> : <SvgMark svg={iconSvg} />}
           </span>
           <strong>{model.model}</strong>
         </span>
@@ -521,10 +498,6 @@ function activityTrend(days: readonly UsageStatisticsDailyActivity[]): readonly 
   return [...Array.from({ length: Math.max(0, 14 - recent.length) }, () => 0), ...recent];
 }
 
-function hasDayActivity(day: UsageStatisticsDailyActivity): boolean {
-  return day.messageCount > 0 || day.runCount > 0 || day.inputTokens > 0 || day.outputTokens > 0 || day.cacheSavedTokens > 0;
-}
-
 function miniBarHeight(value: number, values: readonly number[]): number {
   const maximum = Math.max(1, ...values);
   return value === 0 ? 8 : Math.max(18, Math.round((value / maximum) * 100));
@@ -548,7 +521,6 @@ function UsageStatisticsLoading(): React.ReactElement {
       <div className="usage-v3-toolbar usage-v3-skeleton-toolbar" />
       <div className="usage-v3-heatmap-layout">
         <div className="usage-v3-skeleton usage-v3-skeleton-heatmap" />
-        <div className="usage-v3-skeleton usage-v3-skeleton-rhythm" />
       </div>
       <div className="usage-v3-card-grid">
         {Array.from({ length: 4 }, (_, index) => <div key={index} className="usage-v3-skeleton usage-v3-skeleton-card" />)}
@@ -575,30 +547,15 @@ function heatmapDays(days: readonly UsageStatisticsDailyActivity[]): readonly Us
 
 function projectHeatmapDays(
   days: readonly UsageStatisticsDailyActivity[],
-  metric: HeatmapMetric,
 ): readonly UsageStatisticsDailyActivity[] {
-  const values = days.map((day) => heatmapMetricValue(day, metric));
-  const positiveValues = values.filter((value) => value > 0).sort((left, right) => left - right);
-  return days.map((day, index) => ({
+  return days.map((day) => ({
     ...day,
-    level: heatmapLevel(values[index] ?? 0, positiveValues),
+    level: TOKEN_HEATMAP_THRESHOLDS.filter((minimum) => dailyTokenUsage(day) >= minimum).length as UsageStatisticsDailyActivity["level"],
   }));
 }
 
-function heatmapMetricValue(day: UsageStatisticsDailyActivity, metric: HeatmapMetric): number {
-  if (metric === "runs") return day.runCount;
-  if (metric === "tokens") return day.inputTokens + day.outputTokens;
-  return day.messageCount;
-}
-
-function heatmapLevel(value: number, positiveValues: readonly number[]): 0 | 1 | 2 | 3 | 4 | 5 {
-  if (value <= 0 || positiveValues.length === 0) return 0;
-  let rank = 0;
-  for (const candidate of positiveValues) {
-    if (candidate > value) break;
-    rank += 1;
-  }
-  return Math.min(5, Math.max(1, Math.ceil((rank / positiveValues.length) * 5))) as 1 | 2 | 3 | 4 | 5;
+function dailyTokenUsage(day: UsageStatisticsDailyActivity): number {
+  return day.inputTokens + day.outputTokens;
 }
 
 function heatmapMonthLabels(days: readonly UsageStatisticsDailyActivity[]): readonly {
@@ -613,7 +570,10 @@ function heatmapMonthLabels(days: readonly UsageStatisticsDailyActivity[]): read
     const monthKey = `${date.getFullYear()}-${date.getMonth()}`;
     if (monthKey === previousMonth) continue;
     previousMonth = monthKey;
-    labels.push({ label: `${date.getMonth() + 1}月`, left: days.length <= 1 ? 0 : (index / (days.length - 1)) * 100 });
+    const column = Math.floor(index / 7);
+    const columnCount = Math.ceil(days.length / 7);
+    if (columnCount - column < 2) continue;
+    labels.push({ label: `${date.getMonth() + 1}月`, left: ((column + 0.5) / columnCount) * 100 });
   }
   return labels;
 }

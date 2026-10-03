@@ -6,11 +6,15 @@ import {
   type VisibleAiMode,
 } from "./config-projection";
 import type { McpServerForm, ModelForm, ToolForm } from "./components/types";
-import type { CommandShellKind, ConfigResponse, ModelProviderModelCatalog, SkillTriggerMode } from "@panel-api/config";
+import type { CommandShellKind, ConfigResponse, ModelConfiguration, ModelProviderModelCatalog, SkillTriggerMode } from "@panel-api/config";
 import type { SkillDefinition } from "../../contracts/skills";
 import type { SubAgentDefinition } from "../../contracts/sub-agents";
 import type { McpEnvironmentCheckResponse, McpReferenceResponse, McpServerPreset, ToolsResponse } from "@panel-api/tools";
 import { parseModelOptionId } from "./model/options";
+
+export function fetchModelProviderConfig(): Promise<ConfigResponse> {
+  return getJson<ConfigResponse>("/api/config");
+}
 
 export async function saveModelProviderConfig(input: {
   readonly config: ConfigResponse | undefined;
@@ -20,25 +24,26 @@ export async function saveModelProviderConfig(input: {
   const existingProfile = input.config?.profiles?.some((profile) => profile.profileId === input.form.profileId) === true;
   const preset = existingProfile
     ? undefined
-    : input.config?.modelProviderMarket?.presets?.find((item) => item.presetId === input.form.profileId);
+    : input.config?.modelProviderMarket?.presets?.find((item) => item.presetId === (input.form.presetId ?? input.form.profileId));
   if (preset !== undefined) {
     const created = await postJson<ConfigResponse>("/api/config/model-profiles", {
-      profileId: preset.presetId,
+      profileId: input.form.profileId,
       label: input.form.label.trim() || preset.label,
       logoDataUrl: input.form.logoCleared ? undefined : input.form.logoDataUrl,
       clearLogoDataUrl: input.form.logoCleared,
       providerKind: preset.providerKind,
       protocolKind: input.form.protocolKind || preset.protocolKind,
       piProviderId: input.form.piProviderId.trim() || preset.piProviderId,
+      connection: input.form.connection ?? preset.connection,
       baseUrl: input.form.baseUrl || preset.baseUrl,
       model: input.form.model,
       clearModel: input.form.model.trim().length === 0,
-      apiKey: input.form.apiKeyCleared ? undefined : input.form.apiKey,
+      apiKey: modelApiKey(input.form),
       defaultAiMode: input.aiMode,
     });
     return mergeConfigResponse(
       created,
-      await postJson<ConfigResponse>(`/api/config/model-profiles/${encodeURIComponent(preset.presetId)}/activate`, {})
+      await postJson<ConfigResponse>(`/api/config/model-profiles/${encodeURIComponent(input.form.profileId)}/activate`, {})
     );
   }
 
@@ -50,10 +55,11 @@ export async function saveModelProviderConfig(input: {
     baseUrl: input.form.baseUrl,
     protocolKind: input.form.protocolKind,
     piProviderId: input.form.piProviderId.trim(),
+    connection: input.form.connection,
     clearPiProviderId: input.form.piProviderId.trim().length === 0,
     model: input.form.model,
     clearModel: input.form.model.trim().length === 0,
-    apiKey: input.form.apiKeyCleared ? undefined : input.form.apiKey,
+    apiKey: modelApiKey(input.form),
     clearApiKey: input.form.apiKeyCleared,
     defaultAiMode: input.aiMode,
   });
@@ -78,11 +84,12 @@ export async function createCustomModelProviderProfile(input: {
     providerKind: "openai_compatible",
     protocolKind: input.form.protocolKind || "openai_compatible_chat_completions",
     piProviderId: input.form.piProviderId.trim(),
+    connection: input.form.connection,
     baseUrl: input.form.baseUrl,
     model: input.form.model,
     clearModel: input.form.model.trim().length === 0,
     defaultAiMode: input.aiMode,
-    apiKey: input.form.apiKey,
+    apiKey: modelApiKey(input.form),
   });
   const profileId = created.profile?.profileId ?? created.config?.profileId ?? label;
   return mergeConfigResponse(
@@ -93,6 +100,17 @@ export async function createCustomModelProviderProfile(input: {
 
 export async function saveModelProviderOrder(order: readonly string[]): Promise<ConfigResponse> {
   return postJson<ConfigResponse>("/api/config/model-provider-order", { order });
+}
+
+export async function saveModelConfiguration(input: {
+  readonly profileId: string;
+  readonly modelId: string;
+  readonly settings: ModelConfiguration | null;
+}): Promise<ConfigResponse> {
+  return postJson<ConfigResponse>(
+    `/api/config/model-profiles/${encodeURIComponent(input.profileId)}/model-settings`,
+    { modelId: input.modelId, settings: input.settings },
+  );
 }
 
 export async function deleteModelProviderProfile(input: {
@@ -160,6 +178,7 @@ export async function selectModelProviderModel(input: {
       baseUrl: profile.baseUrl ?? "",
       protocolKind: profile.protocolKind ?? "openai_compatible_chat_completions",
       piProviderId: profile.piProviderId ?? "",
+      connection: profile.connection,
       model: parsed.modelId,
       apiKey: "",
       apiKeyCleared: false,
@@ -393,6 +412,11 @@ function splitListInput(value: string): readonly string[] {
     .split(/[\n,]+/u)
     .map((item) => item.trim())
     .filter((item) => item.length > 0);
+}
+
+function modelApiKey(form: ModelForm): string | undefined {
+  if (form.apiKeyCleared || form.protocolKind === "native" && form.connection?.authMode !== "api_key") return undefined;
+  return form.apiKey;
 }
 
 function effectiveMcpServerId(form: McpServerForm): string {

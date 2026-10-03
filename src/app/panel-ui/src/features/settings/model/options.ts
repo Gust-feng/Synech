@@ -44,8 +44,7 @@ export function modelOptionsFromConfig(
       return rankDelta === 0 ? left.index - right.index : rankDelta;
     })
     .flatMap(({ profile }) => {
-      const savedCatalog = catalogs[profile.profileId];
-      const catalog = savedCatalog?.modelsPath === "pi-catalog" ? undefined : savedCatalog;
+      const catalog = catalogs[profile.profileId];
       const identity = resolveModelProviderIdentity({
         title: profile.label ?? catalog?.label,
         profileId: profile.profileId,
@@ -133,7 +132,8 @@ function modelProfileHasId(profile: ConfigModelProfile): profile is ConfigModelP
 
 function modelProfileIsSelectable(profile: ConfigModelProfileWithId): boolean {
   return profile.enabled !== false &&
-    profile.secretConfigured === true &&
+    (profile.secretConfigured === true ||
+      (profile.protocolKind === "native" && profile.connection?.authMode === "ambient")) &&
     profile.defaultAiMode !== "none";
 }
 

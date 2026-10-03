@@ -1,6 +1,7 @@
 import React from "react";
 import {
   ChevronDown,
+  Bot,
   Code2,
   FileText,
   FlaskConical,
@@ -20,11 +21,7 @@ export function SubAgentSettings(props: {
   const enabledCount = props.subAgents.filter((subAgent) => subAgent.enabled).length;
   return (
     <section className="sub-agent-settings">
-      <header className="sub-agent-toolbar">
-        <div className="sub-agent-toolbar-copy">
-          <strong>{props.subAgents.length} 个专家助手</strong>
-          <span>Agent 会根据任务按需调用</span>
-        </div>
+      {props.subAgents.length > 0 && <header className="sub-agent-toolbar">
         <div className="sub-agent-toolbar-actions">
           <span className="sub-agent-count">{enabledCount} / {props.subAgents.length} 启用</span>
           <button
@@ -37,11 +34,17 @@ export function SubAgentSettings(props: {
             {props.refreshing ? "刷新中" : "刷新"}
           </button>
         </div>
-      </header>
+      </header>}
       {props.subAgents.length === 0 ? (
-        <div className="sub-agent-empty">暂无 Sub Agent</div>
+        <div className="sub-agent-empty">
+          <Bot size={30} aria-hidden="true" />
+          <strong>暂无子智能体</strong>
+          <button type="button" className="sub-agent-refresh-button" onClick={props.onRefresh} disabled={props.refreshing}>
+            <RefreshCw size={14} />{props.refreshing ? "刷新中" : "重新扫描"}
+          </button>
+        </div>
       ) : (
-        <div className="sub-agent-list" aria-label="Sub Agent 列表">
+        <div className="sub-agent-list" aria-label="子智能体列表">
           {props.subAgents.map((subAgent) => (
             <SubAgentRow
               key={subAgent.id}

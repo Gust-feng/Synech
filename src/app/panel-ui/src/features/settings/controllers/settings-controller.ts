@@ -45,6 +45,8 @@ export type AppSettingsControllerOptions = {
   readonly setSavingEnvironment: React.Dispatch<React.SetStateAction<boolean>>;
   readonly setSavingOrdinaryAgentPrompt: React.Dispatch<React.SetStateAction<boolean>>;
   readonly setSavingTools: React.Dispatch<React.SetStateAction<boolean>>;
+  readonly setSavingWebSearch: React.Dispatch<React.SetStateAction<boolean>>;
+  readonly setSavingSkillTrigger: React.Dispatch<React.SetStateAction<boolean>>;
 };
 
 export function createAppSettingsController(options: AppSettingsControllerOptions): AppSettingsController {
@@ -71,6 +73,8 @@ export function createAppSettingsController(options: AppSettingsControllerOption
     setSavingEnvironment: options.setSavingEnvironment,
     setSavingOrdinaryAgentPrompt: options.setSavingOrdinaryAgentPrompt,
     setSavingTools: options.setSavingTools,
+    setSavingWebSearch: options.setSavingWebSearch,
+    setSavingSkillTrigger: options.setSavingSkillTrigger,
   });
   const mcp = createMcpSettingsController({
     ...context,

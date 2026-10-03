@@ -1,6 +1,8 @@
 import {
   createModelCollectionChannel,
-  createModelProviderBinding,
+  createModelProviderBindingAsync,
+  createNativeModelProviderCollection,
+  publishNativeModelRegistry,
   fetchOpenAICompatibleModelCatalog,
   type ModelProviderBinding,
 } from "../../../adapters/intelligence/index.js";
@@ -40,6 +42,8 @@ import type { PanelModelCatalogFetch } from "../types.js";
  */
 
 export type AuxiliaryModelChannelInput = {
+  readonly configCenter?: ConfigCenter;
+  readonly abortSignal?: AbortSignal;
   readonly resolved: ResolvedModelRuntimeConfig;
   readonly profileId: SanitizedModelProviderConfig["profileId"];
   readonly providerKind: ModelProviderKind;
@@ -70,6 +74,7 @@ export function createConfigCenterApiKeyResolver(input: {
 }): () => Promise<string | undefined> {
   const { configCenter, provider, mode } = input;
   return async () => {
+    if (mode === "native") return configCenter.getModelProviderApiKey(provider.profileId);
     try {
       const current = await configCenter.createModelRuntimeEnvironment({
         modelProvider: provider,
@@ -92,7 +97,9 @@ export function createConfigCenterApiKeyResolver(input: {
  * maxTokens / thinkingLevelMap / reasoning / cost 由 adapter 在 pi 真实 catalog 中
  * 精确匹配后直接使用，调用点不传能力、也不在此重定义模型能力。
  */
-export function createFrozenProviderBinding(input: {
+export async function createFrozenProviderBinding(input: {
+  readonly configCenter?: ConfigCenter;
+  readonly abortSignal?: AbortSignal;
   readonly resolved: ResolvedModelRuntimeConfig;
   readonly profileId: SanitizedModelProviderConfig["profileId"];
   readonly piProviderId?: string;
@@ -102,27 +109,43 @@ export function createFrozenProviderBinding(input: {
    * 读取；调用点是否冻结 key 由自己显式声明，本配方不补齐也不丢弃。
    */
   readonly apiKey?: string;
-}): ModelProviderBinding {
-  return createModelProviderBinding({
+}): Promise<ModelProviderBinding> {
+  const credentialStore = input.resolved.protocol === "native" && input.configCenter !== undefined
+    ? await input.configCenter.createModelProviderCredentialStore(input.profileId)
+    : undefined;
+  const binding = await createModelProviderBindingAsync({
     protocol: input.resolved.protocol,
     baseUrl: input.resolved.baseUrl,
     model: input.resolved.model,
     profileId: input.profileId,
+    secretUpdatedAt: input.resolved.secretUpdatedAt,
     ...(input.apiKey === undefined ? {} : { apiKey: input.apiKey }),
     resolveApiKey: input.resolveApiKey,
+    ...(credentialStore === undefined ? {} : { credentialStore }),
+    ...(input.resolved.connection === undefined ? {} : { connection: input.resolved.connection }),
     ...((input.piProviderId ?? input.resolved.piProviderId) === undefined
       ? {}
       : { piProviderId: input.piProviderId ?? input.resolved.piProviderId }),
     providerProfileId: input.resolved.providerProfileId,
     requestSettings: input.resolved.requestSettings,
+    modelConfiguration: input.resolved.modelConfiguration,
     enableWebSearch: input.resolved.enableWebSearch,
-  });
+  }, { signal: input.abortSignal });
+  if (input.resolved.protocol === "native" && input.configCenter !== undefined) {
+    await publishCurrentNativeRegistry(input.configCenter, input.profileId, {
+      providerId: binding.selectedModel.provider,
+      modelRegistry: binding.catalogRegistry ?? binding.modelRegistry,
+    }, input.abortSignal);
+  }
+  return binding;
 }
 
-export function createAuxiliaryModelChannel(
+export async function createAuxiliaryModelChannel(
   input: AuxiliaryModelChannelInput,
-): IntelligenceChannel {
-  const binding = createFrozenProviderBinding({
+): Promise<IntelligenceChannel> {
+  const binding = await createFrozenProviderBinding({
+    ...(input.configCenter === undefined ? {} : { configCenter: input.configCenter }),
+    ...(input.abortSignal === undefined ? {} : { abortSignal: input.abortSignal }),
     resolved: input.resolved,
     profileId: input.profileId,
     resolveApiKey: input.resolveApiKey,
@@ -130,6 +153,7 @@ export function createAuxiliaryModelChannel(
     ...(input.piProviderId === undefined ? {} : { piProviderId: input.piProviderId }),
   });
   return createModelCollectionChannel({
+    protocolKind: input.resolved.protocol,
     modelRegistry: binding.modelRegistry,
     selectedModel: binding.selectedModel,
     transformProviderPayload: binding.transformProviderPayload,
@@ -140,10 +164,75 @@ export function createAuxiliaryModelChannel(
 }
 
 export async function fetchPanelModelCatalog(input: {
-  readonly profile: Pick<SanitizedModelProviderConfig, "profileId" | "label" | "baseUrl" | "piProviderId">;
-  readonly apiKey: string;
+  readonly configCenter?: ConfigCenter;
+  readonly profile: Pick<SanitizedModelProviderConfig, "profileId" | "label" | "baseUrl" | "piProviderId"> &
+    Partial<Pick<SanitizedModelProviderConfig, "protocolKind" | "connection" | "secretUpdatedAt">>;
+  readonly apiKey?: string;
   readonly fetch?: PanelModelCatalogFetch;
   readonly abortSignal?: AbortSignal;
 }): Promise<ModelProviderModelCatalog> {
-  return fetchOpenAICompatibleModelCatalog(input);
+  if (input.profile.protocolKind === "native") {
+    if (input.configCenter === undefined) throw new Error("Native catalog discovery requires the profile credential owner.");
+    const credentialStore = await input.configCenter.createModelProviderCredentialStore(input.profile.profileId);
+    const { providerId, modelRegistry } = createNativeModelProviderCollection({
+      profileId: input.profile.profileId,
+      secretUpdatedAt: input.profile.secretUpdatedAt,
+      piProviderId: input.profile.piProviderId,
+      baseUrl: input.profile.baseUrl,
+      connection: input.profile.connection,
+      credentialStore,
+    });
+    const refreshed = await modelRegistry.refresh({
+      providers: [providerId],
+      allowNetwork: true,
+      force: true,
+      signal: input.abortSignal,
+    });
+    if (refreshed.aborted) throw new Error("Native model discovery was cancelled.");
+    const refreshFailure = refreshed.errors.get(providerId);
+    if (refreshFailure !== undefined) throw refreshFailure;
+    if (await modelRegistry.getAuth(providerId, { signal: input.abortSignal }) === undefined) {
+      throw new ModelRuntimeConfigurationError({
+        code: "missing_api_key",
+        message: "模型服务尚未完成身份验证。",
+        summaryInput: { enabled: true, mode: "native", providerId, protocolKind: "native" },
+      });
+    }
+    const available = await modelRegistry.getAvailable(providerId, { signal: input.abortSignal });
+    await publishCurrentNativeRegistry(input.configCenter, input.profile.profileId, {
+      providerId,
+      modelRegistry,
+    }, input.abortSignal);
+    return {
+      profileId: input.profile.profileId,
+      label: input.profile.label,
+      baseUrl: input.profile.baseUrl,
+      modelsPath: "/pi-catalog",
+      fetchedAt: new Date().toISOString(),
+      models: available.map((model) => ({
+        id: model.id,
+        displayName: model.name,
+        owner: input.profile.piProviderId,
+      })),
+    };
+  }
+  if (input.apiKey === undefined) throw new Error("Custom model discovery requires an API key.");
+  return fetchOpenAICompatibleModelCatalog({ ...input, apiKey: input.apiKey });
+}
+
+async function publishCurrentNativeRegistry(
+  configCenter: ConfigCenter,
+  profileId: string,
+  collection: Pick<ModelProviderBinding, "modelRegistry"> & { readonly providerId: string },
+  signal?: AbortSignal,
+): Promise<void> {
+  const profile = (await configCenter.listModelProviderProfiles()).find((item) => item.profileId === profileId);
+  if (profile === undefined) throw new Error("The model connection was removed during model discovery.");
+  await publishNativeModelRegistry({
+    profileId: profile.profileId,
+    piProviderId: profile.piProviderId,
+    baseUrl: profile.baseUrl,
+    connection: profile.connection,
+    secretUpdatedAt: profile.secretUpdatedAt,
+  }, collection, { signal });
 }

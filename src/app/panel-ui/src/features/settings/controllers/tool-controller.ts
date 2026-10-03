@@ -13,6 +13,8 @@ import {
 } from "../config-actions";
 import {
   mergeConfigResponse,
+  reconcileWebSearchForm,
+  webSearchFormFromConfig,
   type ComposerToolConfirmationPolicy,
 } from "../config-projection";
 import type { ToolForm } from "../components/types";
@@ -41,6 +43,8 @@ export type ToolSettingsControllerOptions = SettingsControllerContext & {
   readonly setSavingEnvironment: React.Dispatch<React.SetStateAction<boolean>>;
   readonly setSavingOrdinaryAgentPrompt: React.Dispatch<React.SetStateAction<boolean>>;
   readonly setSavingTools: React.Dispatch<React.SetStateAction<boolean>>;
+  readonly setSavingWebSearch: React.Dispatch<React.SetStateAction<boolean>>;
+  readonly setSavingSkillTrigger: React.Dispatch<React.SetStateAction<boolean>>;
 };
 
 export function createToolSettingsController(options: ToolSettingsControllerOptions): ToolSettingsController {
@@ -164,7 +168,7 @@ export function createToolSettingsController(options: ToolSettingsControllerOpti
   }
 
   async function saveSkillTriggerMode(mode: SkillTriggerMode): Promise<void> {
-    options.setSavingTools(true);
+    options.setSavingSkillTrigger(true);
     try {
       const response = await saveSkillTriggerConfig(mode);
       if (options.mountedRef.current) {
@@ -183,7 +187,7 @@ export function createToolSettingsController(options: ToolSettingsControllerOpti
       }
       throw error;
     } finally {
-      if (options.mountedRef.current) options.setSavingTools(false);
+      if (options.mountedRef.current) options.setSavingSkillTrigger(false);
     }
   }
 
@@ -196,7 +200,7 @@ export function createToolSettingsController(options: ToolSettingsControllerOpti
   }
 
   async function persistTools(nextToolForm: ToolForm): Promise<void> {
-    options.setSavingTools(true);
+    options.setSavingWebSearch(true);
     try {
       const response = await saveToolSettings(nextToolForm);
       if (options.mountedRef.current) {
@@ -206,9 +210,11 @@ export function createToolSettingsController(options: ToolSettingsControllerOpti
             ...response,
             mcpCatalog: response.mcpCatalog ?? previous.tools?.mcpCatalog,
           },
+          error: undefined,
         }));
-        if (nextToolForm.apiKey.trim().length > 0) {
-          options.setToolForm((previous) => ({ ...previous, apiKey: "" }));
+        if (response.tools?.webSearch !== undefined) {
+          const savedForm = webSearchFormFromConfig(response.tools.webSearch);
+          options.setToolForm((previous) => reconcileWebSearchForm(previous, nextToolForm, savedForm));
         }
       }
     } catch (error) {
@@ -219,7 +225,7 @@ export function createToolSettingsController(options: ToolSettingsControllerOpti
         }));
       }
     } finally {
-      if (options.mountedRef.current) options.setSavingTools(false);
+      if (options.mountedRef.current) options.setSavingWebSearch(false);
     }
   }
 

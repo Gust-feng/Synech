@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ModelProviderModelCatalog } from "@panel-api/config";
 import { removeRecordKey, useModelCatalogState } from "./catalog-state";
 import {
@@ -27,6 +27,8 @@ export function useProviderCatalogActions(options: ProviderCatalogActionsOptions
     readonly type: "error" | "success";
     readonly message: string;
   } | undefined>(undefined);
+  const selectedProfileRef = useRef<string | undefined>(undefined);
+  selectedProfileRef.current = options.selectedItem === undefined ? undefined : modelProviderFormId(options.selectedItem);
 
   useEffect(() => {
     setFetchFeedback(undefined);
@@ -48,6 +50,7 @@ export function useProviderCatalogActions(options: ProviderCatalogActionsOptions
           ...previous,
           [catalog.profileId]: catalog,
         }));
+        if (selectedProfileRef.current !== profileId) return;
         if (catalog.models.length > 0) {
           options.catalogState.setPickerOpenFor(profileId);
           setFetchFeedback(undefined);
@@ -58,12 +61,14 @@ export function useProviderCatalogActions(options: ProviderCatalogActionsOptions
           });
         }
       } else {
+        if (selectedProfileRef.current !== profileId) return;
         setFetchFeedback({
           type: "error",
           message: "获取模型失败，请检查 Base URL、API Key 与网络连通性",
         });
       }
     } catch (error) {
+      if (selectedProfileRef.current !== profileId) return;
       const message = error instanceof Error ? error.message : "获取模型失败，请检查厂商配置与网络";
       setFetchFeedback({ type: "error", message });
     } finally {
@@ -98,11 +103,7 @@ export function useProviderCatalogActions(options: ProviderCatalogActionsOptions
     if (selectedItem === undefined) return;
     const profileId = selectedItem.profileId ?? modelProviderFormId(selectedItem);
     const nextModels = [...catalogState.catalogModels.filter((item) => item.id !== model.id), model];
-    try {
-      await saveCatalogModels(nextModels);
-    } catch {
-      return;
-    }
+    await saveCatalogModels(nextModels);
     catalogState.setFetchedCatalogs((previous) => {
       const current = previous[profileId];
       if (current === undefined) return previous;
@@ -114,7 +115,7 @@ export function useProviderCatalogActions(options: ProviderCatalogActionsOptions
         },
       };
     });
-    if (selectedForm.model.trim().length === 0) {
+    if (selectedProfileRef.current === profileId && selectedForm.model.trim().length === 0) {
       selectCatalogModel(model.id);
     }
   }
@@ -137,10 +138,10 @@ export function useProviderCatalogActions(options: ProviderCatalogActionsOptions
     const { selectedItem, selectedForm, catalogState } = options;
     if (selectedItem === undefined) return;
     const nextForm = modelFormForProviderItem({ ...selectedForm, model: modelId }, selectedItem);
-    await options.saveModelImmediately(nextForm);
     options.setModelForm(nextForm);
     options.upsertModelFormDraft(nextForm);
     catalogState.setSelectedModelRowId(modelId || undefined);
+    await options.saveModelImmediately(nextForm);
   }
 
   function selectCatalogModel(modelId: string): void {
@@ -196,7 +197,9 @@ export function useProviderCatalogActions(options: ProviderCatalogActionsOptions
         await saveSelectedModel(nextModels[0]?.id ?? "");
       }
       await saveCatalogModels(nextModels);
-      catalogState.setPickerOpenFor(undefined);
+      if (selectedProfileRef.current === modelProviderFormId(selectedItem)) {
+        catalogState.setPickerOpenFor(undefined);
+      }
     } catch {
       // Keep the picker open; the parent owns user-facing error state.
     }

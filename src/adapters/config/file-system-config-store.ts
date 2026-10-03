@@ -73,7 +73,7 @@ export class FileSystemLocalDevSecretStore implements LocalDevSecretStore {
   writeSecret(secretRef: string, value: string): Promise<SecretMetadata> {
     return this.enqueueMutation(async () => {
       const current = await this.readSecretsFile();
-      const updatedAt = new Date().toISOString();
+      const updatedAt = secretMutationTimestamp(current);
       const next: LocalDevSecretsFile = {
         version: 1,
         secrets: {
@@ -93,7 +93,7 @@ export class FileSystemLocalDevSecretStore implements LocalDevSecretStore {
       if (current.secrets[secretRef] === undefined) {
         return { configured: false };
       }
-      const updatedAt = new Date().toISOString();
+      const updatedAt = secretMutationTimestamp(current);
       const remainingSecrets = Object.fromEntries(
         Object.entries(current.secrets).filter(([candidateRef]) => candidateRef !== secretRef)
       );
@@ -126,6 +126,11 @@ export class FileSystemLocalDevSecretStore implements LocalDevSecretStore {
     }
     return parseSecretsFile(raw, this.secretsPath);
   }
+}
+
+function secretMutationTimestamp(current: LocalDevSecretsFile): string {
+  // Connection-scoped catalogs use this revision; rapid writes and clock rollback must not reuse it.
+  return new Date(Math.max(Date.now(), Date.parse(current.updatedAt) + 1)).toISOString();
 }
 
 async function readJsonFile(filePath: string): Promise<unknown | undefined> {
@@ -178,7 +183,7 @@ async function quarantineFile(filePath: string): Promise<string | undefined> {
 
 function parseSecretsFile(raw: unknown, filePath: string): LocalDevSecretsFile {
   const record = strictRecord(raw, ["version", "secrets", "updatedAt"], filePath);
-  if (record.version !== 1 || typeof record.updatedAt !== "string") {
+  if (record.version !== 1 || typeof record.updatedAt !== "string" || !Number.isFinite(Date.parse(record.updatedAt))) {
     throw new FileSystemLocalDevSecretStoreError(filePath);
   }
   const rawSecrets = strictRecord(record.secrets, undefined, filePath);
@@ -187,7 +192,9 @@ function parseSecretsFile(raw: unknown, filePath: string): LocalDevSecretsFile {
     const secretRecord = strictRecord(secret, ["value", "updatedAt"], filePath);
     const value = stringOrUndefined(secretRecord.value);
     const updatedAt = stringOrUndefined(secretRecord.updatedAt);
-    if (value === undefined || updatedAt === undefined) throw new FileSystemLocalDevSecretStoreError(filePath);
+    if (value === undefined || updatedAt === undefined || !Number.isFinite(Date.parse(updatedAt))) {
+      throw new FileSystemLocalDevSecretStoreError(filePath);
+    }
     secrets[secretRef] = { value, updatedAt };
   }
   return {

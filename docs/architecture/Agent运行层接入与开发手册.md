@@ -233,53 +233,58 @@ pi commit queue 只能保证写入串行，不能替代 Synech 的世代语义�
 
 ## 6A. 模型事实与模型接入
 
-本节冻结模型侧边界，决策全文见 `adr/0004-pi-only-model-facts.md` 与 `adr/0005-model-protocol-adapter.md`。
+本节冻结模型侧边界，当前自动匹配与用户设置由 ADR 0010 / 0011 接续 ADR 0004 / 0005。
 
 ### 6A.1 三层职责
 
 ```text
 远程 /models 接口  → 只负责发现当前连接暴露了哪些模型 ID
-Pi 真实 catalog   → 只负责已知模型的语义、能力、协议与 transport
-Synech            → 只负责连接配置、产品展示、权限、审批、账本与运行语义
+Pi 真实 catalog   → 自动模型能力默认值、原生运行与 transport 编码
+ConfigCenter      → 连接配置与每模型显式用户设置
+Synech Adapter    → 有效能力与连接 transport 装配，保留原始上游 ID
 ```
 
-三者不可互相顶替：远程列表不是能力事实源，Pi 目录不是连接配置源，Synech 不重述前两者的任何事实。
+三者不可互相顶替：远程列表不是能力事实源，Pi 目录不是连接配置源，用户设置不是 Pi 已确认事实。目录刷新不覆盖 `modelSettings`。
 
 ### 6A.2 二态事实
 
-模型 ID 在**连接显式声明的 `piProviderId`** 作用域内被 pi 真实 catalog 精确命中时为已知模型，运行事实逐字段取自真实 `Model<Api>`；未命中时为未确认模型。
+原生/显式连接作用域精确匹配；自定义模型自动按完整 ID 匹配，未命中时从左逐段去除路径前缀并精确匹配，最长剩余 ID 优先，保留目录自身命名空间。原厂目录优先，冲突不取第一条，不剥离版本/型号后缀，不提供手动标准模型选择。命中时目录事实逐字段来自真实 `Model<Api>`，未命中时仍为未确认模型。
 
 | | 已知 | 未确认 |
 | --- | --- | --- |
 | Adapter 内部 | `KnownPiModel`：持真实 `Model<Api>` | `UnknownDiscoveredModel`：零能力字段 |
 | 产品层契约 | `ConfirmedModelFacts` | `UnconfirmedModelFacts = { status, modelId }` |
-| transport | 由真实 `Model.api` 决定 | 连接级默认 transport，ID 原样发送 |
-| 上下文 / 输出上限 / 视觉 / 推理档位 | 真实值 | 无任何投影 |
+| transport | 原生保持真实 `Model.api`；自定义使用连接协议 | 连接协议，ID 原样发送 |
+| 上下文 / 输出上限 / 视觉 / 推理档位 | Pi 默认，可叠加稀疏用户配置 | 上下文默认预算 256K；其余仅显式用户配置 |
 
 已知与未确认不得合并为同一个伪造事实类型。产品层出现 pi 类型即为边界破坏。
 
 ### 6A.3 未确认模型的运行口径
 
 - 正常展示、可选择、可保存、可发送；不显示"匹配失败"，不被 UI 过滤，运行开始不得被 `model_not_in_pi_catalog` 拦截；
-- 不得伪造 `contextWindow` / `maxOutputTokens` / 视觉 / 推理档位 / `compat`；
-- Pi 的 `Model` 类型要求数值字段非空，Adapter 为此保留内部常量。这些常量**不是产品事实**，不得外溢到产品层 DTO / UI，也不得被当成对模型的承诺；
-- 应用侧压缩门禁只接受"已确认的上下文窗口"：未确认传 `undefined`，即不按猜测值触发压缩；
-- 不做模糊匹配、不按 model ID 猜厂商、不在多个 Provider 中取第一条同名模型。
+- 不得伪造已确认的上下文 / 输出上限 / 视觉 / 推理档位 / `compat`；
+- 未填写的上下文使用 256,000 tokens 产品预算，UI 明确显示默认值；用户输出上限保持可选。未知 OpenAI-compatible 模型保持 Pi transport 的省略路径；Anthropic Messages 要求请求携带 `max_tokens`，未知模型未配置时使用 4,096 tokens 请求预算，显式设置优先。这些默认值不是模型能力承诺（ADR 0014）；
+- 压缩与工具可见性使用当前 run 冻结的有效窗口；用户窗口 > Pi 窗口 > 产品默认预算使用同一口径；
+- 不做关键词包含/版本剥离匹配，不在实质冲突的多个 Provider 中取第一条同名模型。
 
 ### 6A.4 transport 集合
 
-产品可服务的 transport 是显式白名单，与 pi 的 api 一一对应。新增 transport 必须先确认 Pi 已提供该 transport 及目标模型事实，再扩展白名单；Pi 声明了产品没有的 api 时，binding 在构造期显式失败，不静默降级、不回退连接协议。
+自定义连接使用配置的 Chat Completions / Responses / Messages transport；目录关联不更换接口或原始模型 ID。同协议才复用目录 compat，不跨协议复制参数。原生服务保持真实 Pi API，不以兼容协议替换。
+
+原生服务接入见 ADR 0008：产品连接声明 `native` 模式，Adapter 按内部 provider 身份复用 Pi factory，保留各模型真实 API、模型专属地址、鉴权、订阅过滤和动态目录刷新。`native` 是产品边界的路由模式，不是新增网络协议。自定义服务仍提供三种兼容连接协议与手动模型 ID；官方模板不要求用户选择底层协议。秘密按连接与认证方式分槽存储，切换认证方式不删除另一槽的凭据；Pi OAuth 刷新复用 ConfigCenter 的串行凭据入口；取消、删除或改变连接身份后，旧登录/刷新不得回写。
+
+生命周期收口见 ADR 0009。交互登录由应用层管理，宿主按实例装配和释放，HTTP 仅负责请求映射。工具渐进可见性只在实际模型有已接入的成本表示时启用，不因 `native` 标签整体禁用；Anthropic 使用真实 `input_schema` 格式。请求前估算不推导缓存/鉴权修饰字段；实际工具统计读取 Pi 已组装的 payload，无法辨识的格式不伪造数值。
 
 ### 6A.5 推理档位
 
-运行级推理档位直接派生自 Pi 的档位名，排除 `off`。产品不维护自己的档位集合：UI 与请求校验都只呈现当前模型真实 `thinkingLevelMap` 支持的档位。档位映射与 clamp 由 pi 完成，产品只表达"请求哪一档"。
+产品固定显示低、中、高、极高、最高五档，沿用 Pi 的 `low/medium/high/xhigh/max` 编码，只呈现有效模型支持的子集。原始 Pi 事实保留 `off/minimal`，二者不进入产品选项。用户可在每个连接的每个模型上显式调整集合。UI、工具与运行从同一有效配置派生；具体编码与 clamp 交给 Pi，产品不开放任意请求 JSON 编辑器。
 
 ### 6A.6 不得重新引入的结构
 
 - 构建期生成/镜像的模型目录快照及配套脚本；
-- 用户对 model id 的能力覆写层（它会在同一模型上形成第二个事实源）。将来若需用户侧上限，建模为独立的运行限制，不得伪装成模型能力；
-- 每个模型或每个连接的协议用户选择（transport 由模型 api 或连接默认值决定，不由用户逐模型挑选）；
-- 固定档位表与 Synech 自维护的厂商参数方言层。
+- 将用户配置冒充 Pi 已确认事实，或把 Pi 全目录默认值复制进设置；
+- 每个模型的协议用户选择，以及官方原生模板内的协议用户选择（自定义服务的连接协议独立于模型关联）；
+- 将产品五档误当成所有模型都支持，或增加 Synech 自维护的厂商参数编码。
 
 ## 7. 工具接入模型
 
@@ -309,7 +314,8 @@ Adapter 转换为 Pi tool result
 - approval-required 不能被 Adapter 吞掉或自动批准；
 - 工具结果是否进入账本，由 Synech owner 决定；
 - 工具证据、大结果 continuation 和审计仍由 ToolCenter 拥有；
-- ToolCenter 的文本结果预算只计算文本 envelope，不把图片等二进制附件的 Base64 当成文本 token；图片输入预算由模型上下文策略负责。结果正规化、留存和预览缩略必须保留带外附件，`ReadOutput` 只承接文本证据，不能替代图片投递；
+- ToolCenter 的文本结果预算只计算文本 envelope，不把图片等二进制附件的 Base64 当成文本 token；图片输入预算由模型上下文策略负责。live `ToolExecutionResult.modelAttachments` 是显式字段，不附着在 JSON output 的隐藏 Symbol 上；正规化分别处理输出和附件，留存/缩略只替换 `output`，`ReadOutput` 只承接文本证据，不能替代图片投递（ADR 0012）；
+- Pi Adapter 在产品回调、最终结果和 Pi tool details 出口显式生成 durable `ToolCallResult`，只保留既有 `modelAttachmentRefs`。图片字节仅写入 Pi Session content，不复制到 Run、Panel、结果留存文件或 details。恢复继续使用引用与 Session 校验，无新 schema、迁移或第二图片存储；
 - 附件按需读取和用户图片自动输入共用读取守卫与文件工具的路径锁。owner 引用在锁内复用冻结/当前来源身份及 mountVersion 校验，用户显式文件与上传附件保留各自的结构化授权；不得把上传存储路径加入通用可写 grant。目录遍历校验真实路径边界、跳过链接并传播取消；
 - pi 新工具签名只在 Adapter 内部适配。
 
@@ -355,6 +361,14 @@ run_cancelled
 阈值判断和压缩运行交给 pi；Synech 不在请求边界重复触发压缩。Pi 0.87.1 的摘要请求由 `convertToLlm`、`serializeConversation` 生成文本，不直接发送原始图片块；Synech 不另建图片摘要器，也不记录虚构的图片替换计数。普通模型请求的非视觉输入占位、Memory background、Skill context 等产品输入贡献通过 Adapter hook 注入，不能与原生压缩混为一谈。压缩失败转换为 Synech 结构化 runtime failure。
 
 恢复时 Synech 先依据产品账本判断允许恢复到哪个 checkpoint，Adapter 再把 opaque checkpoint 转换为 pi 内部恢复位置。不能直接依据当前 pi leaf 推断产品是否允许恢复。Pi commit queue 不能替代世代栅栏。
+
+ADR 0014 约束产品装配与恢复顺序：先确定本次有效模型，再一起冻结能力和工具目录。工作区 `ViewImage` 使用与 `Read` 相同的锁内路径授权；附件图片工具保留附件身份授权；二者共享图片读取与显式附件构造政策。
+
+取消停止 Pi operation 后，产品仍需释放运行资源、关闭 Session 并结算已接受结果。删除不能仅等待取消任务返回后直接移除 Run：先完成 finalization，失败保留 Run、附件和会话供重试。Pi 工具结果先写入 pending entry，再进入 transcript；异常退出后的图片恢复必须从对应 assistant 工具批次取回，验证调用身份、文本、状态和全部图片哈希后才能改变活动分支。图片字节仅存于 Pi Session，不重执行工具。
+
+Ordinary 驻留的 Run 集合同时决定对话可见性、轮次和提交幂等。统计和 Memory 读取不得把它作为临时显示缓存驱逐；`releaseTerminalRunCaches` 仅释放可重建的活动流。捕获空起点不等于写入 Session：首条输入写入前取消的 Run 仍是可见产品轮次；多个 Run 定位到同一 Session 位置时按产品 ordinal 排序。重复删除已不存在的 Session 视为完成，其他身份、元数据及活动 writer 错误继续上抛。
+
+后续轮次进入 Session 后，仍沿该轮次的 predecessor 链保留此前没有 Session 记录的取消或失败轮次。可见性只能补回当前分支的这些前序轮次及待运行后继，不能把回滚后已退出活动分支的 transcript 轮次重新显示出来。
 
 ## 10. 旧 Session 与数据迁移
 
@@ -444,3 +458,11 @@ git diff --check
 重点验证：ToolCenter 授权仍在 Adapter 前生效；用户取消不会变成 Provider failure；工具结果只接受一次；世代撤销后旧写入不能继续；产品 checkpoint 不依赖 pi entry ID；pi retry 不重复创建产品 run；compaction 沿用 Pi 原生语义且不丢失 Memory contribution；Adapter release 后不会继续发送产品事件；不支持的旧数据明确拒绝且不修改原数据。
 
 完成定义：产品层只依赖 Synech Runtime Port；Pi 依赖集中在 Adapter；产品身份不再使用 pi entry ID；产品账本和 Pi transcript owner 明确；ToolCenter、审批、权限、取消和终态语义未被 Pi 接管；Fake Runtime 与 Adapter contract tests 通过；文档、ADR、基线、类型和实现一致；没有隐式兼容层或平行事实源。
+
+### 恢复会话后的 Run 模型配置
+
+Pi `AgentHarness.create` 的 model/thinkingLevel 只作为新 lane 的初始值；恢复已有 lane 时会读取 Session 中上一次的配置。Ordinary Pi Adapter 必须在收敛遗留 operation 后、提交本轮 prompt 前，通过 `lane.setModel` 和 `lane.setThinkingLevel` 应用本轮冻结的模型与推理档位。未配置推理档位时明确使用 `off`，避免继承上一轮设置。模型切换保留同一 Session 的对话历史，不通过重建会话或注册历史模型绕过配置同步。
+
+恢复后的模型身份、推理档位和活动工具列表须与本轮配置一致；通过 Pi getter 比较后，仅对发生变化的字段调用 setter，避免无变化续聊重复提交 lane 配置。模型同名但能力或请求参数改变时，运行使用本轮新建的 registry 与 hooks，不从历史 lane 复制模型对象或 Provider 参数。分支回退仅移动 transcript，不作为恢复本轮模型配置的来源。
+
+本地运行时 `model_unavailable`、`configured_tools_unavailable` 可按结构化错误码显示装配失败提示；保留原始诊断，不将它们推断为厂商服务下线。Provider 返回的错误文案继续原样呈现，不通过英文字符串匹配判断原因。

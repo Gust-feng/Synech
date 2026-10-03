@@ -31,6 +31,12 @@
     box-shadow var(--motion-fast-duration) var(--motion-ease-standard);
 }
 
+.appearance-theme-option {
+  min-height: 72px;
+  justify-items: center;
+  gap: 8px;
+}
+
 .appearance-preference-option span {
   font-size: 13px;
   font-weight: var(--weight-label);
@@ -96,3 +102,20 @@
     grid-template-columns: 1fr;
   }
 }
+
+.appearance-icon-card { display: grid; gap: var(--space-3); }
+.appearance-icon-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
+.appearance-icon-option { display: grid; justify-items: start; gap: 7px; min-width: 0; padding: 16px; border: 1px solid var(--field-border); border-radius: var(--radius-lg); background: var(--field-bg); color: var(--fg); text-align: left; }
+.appearance-icon-option:hover { background: var(--field-hover-bg); border-color: var(--field-hover-border); }
+.appearance-icon-option.active { background: var(--accent-soft); border-color: var(--field-focus-border); }
+.appearance-icon-option:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.appearance-icon-sample { display: flex; align-items: center; gap: 16px; margin: 3px 0 10px; color: var(--ui-text-2); }
+.appearance-icon-sample > span { display: inline-flex; width: 20px; height: 20px; align-items: center; justify-content: center; }
+.appearance-icon-sample svg { display: block; width: 20px; height: 20px; }
+.appearance-icon-sample[data-preview-style="brand"] [data-model-icon-variant="brand"] { display: inline; }
+.appearance-icon-sample[data-preview-style="brand"] [data-model-icon-variant="monochrome"] { display: none; }
+.appearance-icon-sample[data-preview-style="monochrome"] [data-model-icon-variant="brand"] { display: none; }
+.appearance-icon-sample[data-preview-style="monochrome"] [data-model-icon-variant="monochrome"] { display: inline; }
+.appearance-icon-label { font-size: 13px; font-weight: 500; }
+.appearance-icon-option small { color: var(--muted); font-size: 11px; }
+@media (max-width: 520px) { .appearance-icon-options { grid-template-columns: 1fr; } }

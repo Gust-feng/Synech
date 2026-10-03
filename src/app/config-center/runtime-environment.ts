@@ -7,12 +7,12 @@ import type {
   WebSearchRuntimeConfig,
 } from "../../domain/config/index.js";
 import { collectMcpRuntimeSecretRefs } from "./mcp-settings-service.js";
+import { readModelProviderKey } from "./model-provider-credentials.js";
 import {
   toSanitizedInformationAccessConfig,
   toWebSearchRuntimeConfig,
 } from "./projections.js";
 import {
-  DEFAULT_MODEL_PROVIDER_BASE_URL,
   normalizeBaseUrl,
   normalizeInformationAccessSettings,
   requireActiveModelProfile,
@@ -39,13 +39,16 @@ export async function createModelRuntimeEnvironment(
   input: CreateModelRuntimeEnvironmentInput,
 ): Promise<ModelRuntimeConfigEnvironment> {
   const modelProvider = input.modelProvider ?? requireActiveModelProfile(settings);
-  const apiKey = await secretStore.readSecret(modelProvider.secretRef);
+  const storedProfile = settings.modelProfiles.find((profile) => profile.secretRef === modelProvider.secretRef);
+  const apiKey = storedProfile === undefined
+    ? undefined
+    : await readModelProviderKey(secretStore, storedProfile);
   const informationAccess = normalizeInformationAccessSettings(settings.informationAccess, settings.updatedAt);
   const webProvider = input.informationAccess?.web.provider ?? informationAccess.webSearch.provider;
   return {
     SYNECH_MODEL_API_KEY: apiKey,
     SYNECH_MODEL_NAME: modelProvider.model,
-    SYNECH_MODEL_BASE_URL: normalizeBaseUrl(modelProvider.baseUrl) ?? DEFAULT_MODEL_PROVIDER_BASE_URL,
+    SYNECH_MODEL_BASE_URL: normalizeBaseUrl(modelProvider.baseUrl),
     SYNECH_MODEL_BUILTIN_WEB_SEARCH: webProvider === "model_builtin" ? "true" : undefined,
     OPENAI_API_KEY: undefined,
   };

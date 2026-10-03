@@ -3,9 +3,11 @@ import {
   catalogRecordFromList,
   createCustomModelProviderProfile,
   deleteModelProviderProfile,
+  fetchModelProviderConfig,
   fetchModelProviderCatalog,
   mergeCatalogsIntoConfig,
   revealModelProviderApiKey,
+  saveModelConfiguration as postModelConfiguration,
   saveModelProviderCatalog,
   saveModelProviderConfig,
   saveModelProviderOrder,
@@ -13,10 +15,13 @@ import {
 } from "../config-actions";
 import { mergeConfigResponse, type VisibleAiMode } from "../config-projection";
 import type { ModelForm } from "../components/types";
-import type { ConfigResponse, ModelProviderModelCatalog } from "@panel-api/config";
+import type { ConfigResponse, ModelConfiguration, ModelProviderModelCatalog } from "@panel-api/config";
 import type { SettingsControllerContext } from "./controller-types";
+import { createModelProviderAuthActions } from "./model-auth-controller";
+import type { ModelProviderAuthActions } from "../model/provider-auth-state";
 
 export type ModelSettingsController = {
+  readonly modelProviderAuth: ModelProviderAuthActions;
   readonly saveModelConfig: (nextModelForm?: ModelForm) => Promise<void>;
   readonly createCustomModelProfile: (nextModelForm?: ModelForm) => Promise<void>;
   readonly reorderModelProviders: (order: readonly string[]) => Promise<void>;
@@ -25,6 +30,7 @@ export type ModelSettingsController = {
   readonly selectComposerModel: (modelOptionId: string) => Promise<void>;
   readonly fetchModelsForProfile: (profileId?: string) => Promise<ModelProviderModelCatalog | undefined>;
   readonly saveModelCatalog: (profileId: string, catalog: ModelProviderModelCatalog) => Promise<void>;
+  readonly saveModelConfiguration: (profileId: string, modelId: string, settings: ModelConfiguration | null) => Promise<void>;
 };
 
 export type ModelSettingsControllerOptions = SettingsControllerContext & {
@@ -87,7 +93,9 @@ export function createModelSettingsController(options: ModelSettingsControllerOp
       });
       if (options.mountedRef.current) {
         options.setApp((previous) => ({ ...previous, config: mergeConfigResponse(previous.config, activated) }));
-        options.setModelForm((previous) => ({ ...previous, apiKey: "", apiKeyCleared: false, logoCleared: false }));
+        options.setModelForm((previous) => previous.profileId === nextModelForm.profileId
+          ? { ...previous, apiKey: "", apiKeyCleared: false, logoCleared: false }
+          : previous);
       }
     } catch (error) {
       if (options.mountedRef.current) {
@@ -207,10 +215,12 @@ export function createModelSettingsController(options: ModelSettingsControllerOp
   ): Promise<void> {
     options.setSavingModel(true);
     try {
+      // Earlier queued saves may have changed the active service since the click.
+      const config = await fetchModelProviderConfig();
       const response = await deleteModelProviderProfile({
-        config: options.app.config,
+        config,
         profileId,
-        fallbackProfileId,
+        fallbackProfileId: config.config?.profileId === profileId ? fallbackProfileId : undefined,
       });
       if (options.mountedRef.current) {
         if (response.modelCatalogs !== undefined) {
@@ -223,13 +233,22 @@ export function createModelSettingsController(options: ModelSettingsControllerOp
         }));
       }
     } catch (error) {
+      let failure = error;
+      try {
+        const snapshot = await fetchModelProviderConfig();
+        if (options.mountedRef.current) {
+          options.setApp((previous) => ({ ...previous, config: mergeConfigResponse(previous.config, snapshot) }));
+        }
+      } catch (refreshError) {
+        failure = new AggregateError([error, refreshError], "模型服务删除失败，配置刷新失败，请重试。");
+      }
       if (options.mountedRef.current) {
         options.setApp((previous) => ({
           ...previous,
-          error: error instanceof Error ? error.message : "模型服务删除失败。",
+          error: failure instanceof Error ? failure.message : "模型服务删除失败。",
         }));
       }
-      throw error;
+      throw failure;
     } finally {
       if (options.mountedRef.current) options.setSavingModel(false);
     }
@@ -306,7 +325,31 @@ export function createModelSettingsController(options: ModelSettingsControllerOp
   }
 
 
+  async function saveModelConfiguration(
+    profileId: string,
+    modelId: string,
+    settings: ModelConfiguration | null,
+  ): Promise<void> {
+    const save = options.modelSaveQueueRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        const response = await postModelConfiguration({ profileId, modelId, settings });
+        if (!options.mountedRef.current) return;
+        if (response.modelCatalogs !== undefined) {
+          options.setModelCatalogs(catalogRecordFromList(response.modelCatalogs));
+        }
+        options.setApp((previous) => ({
+          ...previous,
+          config: mergeConfigResponse(previous.config, response),
+        }));
+      });
+    options.modelSaveQueueRef.current = save.catch(() => undefined);
+    // The editor owns busy/error state; capability edits never activate a profile.
+    await save;
+  }
+
   return {
+    modelProviderAuth: createModelProviderAuthActions(options),
     saveModelConfig,
     createCustomModelProfile,
     reorderModelProviders,
@@ -315,6 +358,7 @@ export function createModelSettingsController(options: ModelSettingsControllerOp
     selectComposerModel,
     fetchModelsForProfile,
     saveModelCatalog,
+    saveModelConfiguration,
   };
 }
 
@@ -325,13 +369,9 @@ function mergeSavedModelForm(
 ): ModelForm {
   const savedProfile = response.profile ?? response.config;
   const savedProfileId = savedProfile?.profileId ?? submitted.profileId;
-  if (current.profileId !== submitted.profileId && current.profileId !== savedProfileId) {
-    return {
-      ...current,
-      apiKeyCleared: false,
-      logoCleared: false,
-    };
-  }
+  if (current.profileId !== submitted.profileId) return current;
+  const submittedFields = Object.keys(submitted) as (keyof ModelForm)[];
+  if (submittedFields.some((field) => current[field] !== submitted[field])) return current;
   if (savedProfile === undefined) {
     return {
       ...current,
@@ -348,7 +388,8 @@ function mergeSavedModelForm(
     logoDataUrl: savedProfile.logoDataUrl ?? "",
     baseUrl: savedProfile.baseUrl ?? submitted.baseUrl,
     protocolKind: savedProfile.protocolKind ?? submitted.protocolKind,
-    piProviderId: savedProfile.piProviderId ?? submitted.piProviderId,
+    piProviderId: savedProfile.piProviderId ?? "",
+    connection: savedProfile.connection,
     model: savedProfile.model ?? "",
     apiKey: submitted.apiKeyCleared ? "" : current.apiKey,
     apiKeyCleared: false,

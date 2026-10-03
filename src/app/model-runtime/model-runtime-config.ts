@@ -1,5 +1,6 @@
 import type { IntelligenceChannel } from "../../domain/intelligence/index.js";
-import type { SanitizedModelProviderConfig } from "../../domain/config/index.js";
+import type { ModelConfiguration, ModelProviderConnectionSettings, SanitizedModelProviderConfig } from "../../domain/config/index.js";
+import { modelConfigurationForId } from "../../domain/config/index.js";
 import type { ProviderProtocolProfileId } from "../../domain/config/index.js";
 import type { ModelRuntimeMode, OrdinaryModelRuntimeMode } from "./contracts.js";
 
@@ -53,16 +54,21 @@ export type ResolvedModelRuntimeConfig = {
   readonly protocol:
     | typeof ANTHROPIC_MESSAGES_PROTOCOL
     | typeof OPENAI_COMPATIBLE_PROTOCOL
-    | typeof OPENAI_RESPONSES_PROTOCOL;
+    | typeof OPENAI_RESPONSES_PROTOCOL
+    | "native";
   readonly providerId:
     | typeof ANTHROPIC_MESSAGES_PROVIDER_ID
     | typeof OPENAI_COMPATIBLE_PROVIDER_ID
-    | typeof OPENAI_RESPONSES_PROVIDER_ID;
+    | typeof OPENAI_RESPONSES_PROVIDER_ID
+    | "native";
   readonly baseUrl: string;
   readonly apiKey: string;
   readonly model: string;
   readonly piProviderId?: string;
+  readonly connection?: ModelProviderConnectionSettings;
+  readonly secretUpdatedAt?: string;
   readonly requestSettings?: SanitizedModelProviderConfig["openAI"];
+  readonly modelConfiguration?: ModelConfiguration;
   readonly providerProfileId?: ProviderProtocolProfileId;
   readonly enableWebSearch: boolean;
   readonly summaryInput: ModelRuntimeSummaryInput;
@@ -74,8 +80,8 @@ export function resolveModelRuntimeConfig(input: {
   readonly env: ModelRuntimeEnvironment;
   readonly modelProvider?: Pick<
     SanitizedModelProviderConfig,
-    "profileId" | "piProviderId" | "baseUrl" | "model" | "openAI"
-  >;
+    "profileId" | "piProviderId" | "baseUrl" | "model" | "openAI" | "connection" | "modelSettings"
+  > & Partial<Pick<SanitizedModelProviderConfig, "secretUpdatedAt">>;
 }): ResolvedModelRuntimeConfig {
   const apiKey = firstNonBlank(
     input.env.SYNECH_MODEL_API_KEY,
@@ -88,10 +94,10 @@ export function resolveModelRuntimeConfig(input: {
     input.env.SYNECH_MODEL_BASE_URL,
   );
   const transport = transportFactsForMode(input.mode);
-  const baseUrl = configuredBaseUrl ??
-    (input.mode === "anthropic-messages"
-      ? undefined
-      : OPENAI_COMPATIBLE_DEFAULT_BASE_URL);
+  const baseUrl = configuredBaseUrl ?? (input.mode === "native" ? "" :
+    input.modelProvider === undefined && input.mode !== "anthropic-messages"
+      ? OPENAI_COMPATIBLE_DEFAULT_BASE_URL
+      : undefined);
   const summaryInput: ModelRuntimeSummaryInput = {
     enabled: true,
     mode: input.mode,
@@ -101,7 +107,15 @@ export function resolveModelRuntimeConfig(input: {
     model,
   };
 
-  if (apiKey === undefined) {
+  if (input.mode === "native" && firstNonBlank(input.modelProvider?.piProviderId) === undefined) {
+    throw new ModelRuntimeConfigurationError({
+      code: "unsupported_provider_protocol",
+      message: "Native model connections require a declared service provider; no network request was attempted.",
+      summaryInput,
+    });
+  }
+
+  if (apiKey === undefined && input.mode !== "native") {
     throw new ModelRuntimeConfigurationError({
       code: "missing_api_key",
       message:
@@ -131,10 +145,13 @@ export function resolveModelRuntimeConfig(input: {
     protocol: transport.protocol,
     providerId: transport.providerId,
     baseUrl,
-    apiKey,
+    apiKey: apiKey ?? "",
     model,
     piProviderId: input.modelProvider?.piProviderId,
+    ...(input.modelProvider?.connection === undefined ? {} : { connection: input.modelProvider.connection }),
+    ...(input.modelProvider?.secretUpdatedAt === undefined ? {} : { secretUpdatedAt: input.modelProvider.secretUpdatedAt }),
     requestSettings: input.modelProvider?.openAI,
+    modelConfiguration: modelConfigurationForId(input.modelProvider?.modelSettings, model),
     providerProfileId: providerProfileIdFromConfig(input.modelProvider?.profileId),
     enableWebSearch: enabledFlag(input.env.SYNECH_MODEL_BUILTIN_WEB_SEARCH),
     summaryInput,
@@ -158,6 +175,8 @@ function transportFactsForMode(mode: ResolvedModelRuntimeMode): {
   readonly protocol: ResolvedModelRuntimeConfig["protocol"];
 } {
   switch (mode) {
+    case "native":
+      return { providerId: "native", protocol: "native" };
     case "anthropic-messages":
       return {
         providerId: ANTHROPIC_MESSAGES_PROVIDER_ID,

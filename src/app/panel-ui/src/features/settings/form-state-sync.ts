@@ -3,6 +3,8 @@ import {
   catalogRecordFromList,
   normalizeComposerToolConfirmationPolicy,
   normalizeVisibleAiMode,
+  reconcileWebSearchForm,
+  webSearchFormFromConfig,
   visibleConfigBaseUrl,
   visibleConfigLabel,
   type ComposerReasoningEffort,
@@ -38,6 +40,7 @@ export type AppFormStateSyncOptions = {
 
 export function useAppFormStateSync(options: AppFormStateSyncOptions): void {
   const lastActiveProfileIdRef = useRef<string | undefined>(undefined);
+  const lastWebSearchFormRef = useRef<ToolForm | undefined>(undefined);
 
   useEffect(() => {
     const activeProfileId = options.app.config?.config?.profileId;
@@ -45,9 +48,8 @@ export function useAppFormStateSync(options: AppFormStateSyncOptions): void {
       lastActiveProfileIdRef.current = activeProfileId;
       options.setAiMode(normalizeVisibleAiMode(options.app.config!.config!.defaultAiMode));
       options.setModelForm((previous) => {
-        // 保存厂商配置本身就会激活该厂商；当表单已经指向新激活的 profile 时，
-        // 用户正在编辑（例如刚输入的 API Key）不能被整体重置覆盖。
-        if (previous.profileId === activeProfileId) return previous;
+        // The settings editor owns browsing; active-model changes only seed an empty form.
+        if (previous.profileId.length > 0) return previous;
         return {
           profileId: activeProfileId,
           label: visibleConfigLabel(options.app.config!.config!),
@@ -56,6 +58,7 @@ export function useAppFormStateSync(options: AppFormStateSyncOptions): void {
           baseUrl: visibleConfigBaseUrl(options.app.config!.config!),
           protocolKind: options.app.config!.config!.protocolKind ?? "openai_compatible_chat_completions",
           piProviderId: options.app.config!.config!.piProviderId ?? "",
+          connection: options.app.config!.config!.connection,
           model: options.app.config!.config!.model ?? "",
           apiKey: "",
           apiKeyCleared: false,
@@ -78,14 +81,12 @@ export function useAppFormStateSync(options: AppFormStateSyncOptions): void {
   useEffect(() => {
     const webSearch = options.app.tools?.tools?.webSearch;
     if (webSearch !== undefined) {
-      options.setToolForm({
-        provider: webSearch.provider === "none" ? "model_builtin" : (webSearch.provider ?? "tavily"),
-        apiKey: "",
-        maxResults: String(webSearch.maxResults ?? 5),
-        engineId: webSearch.engineId ?? "",
-      });
+      const previousForm = lastWebSearchFormRef.current;
+      const nextForm = webSearchFormFromConfig(webSearch);
+      lastWebSearchFormRef.current = nextForm;
+      options.setToolForm((current) => reconcileWebSearchForm(current, previousForm, nextForm));
     }
-  }, [options.app.tools]);
+  }, [options.app.tools?.tools?.webSearch, options.setToolForm]);
 
   useEffect(() => {
     options.setMcpServerForm((previous) => {

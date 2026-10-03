@@ -26,6 +26,7 @@ import { NativeIntelligenceChannel } from "../../kernel/intelligence/channel.js"
 import { pendingModelOutputValidation } from "../../kernel/intelligence/validation.js";
 import { modelUsageFromProvider } from "./provider-result-projection.js";
 import type { ModelProviderPayloadTransformer } from "./model-provider-binding.js";
+import { piModelTransport } from "./pi-model-facts.js";
 
 export type ModelCollectionChannelOptions = {
   readonly modelRegistry: Models;
@@ -34,6 +35,8 @@ export type ModelCollectionChannelOptions = {
   readonly transformProviderPayload?: ModelProviderPayloadTransformer;
   readonly supportedPurposes?: readonly ModelPurpose[];
   readonly providerKind?: ModelProviderKind;
+  /** Native connections retain their product identity even when Pi uses a compatible API. */
+  readonly protocolKind?: ModelProvider["protocolKind"];
 };
 
 /**
@@ -58,7 +61,7 @@ class ModelCollectionProvider implements ModelProvider {
   constructor(private readonly options: ModelCollectionChannelOptions) {
     this.providerId = options.selectedModel.provider;
     this.providerKind = options.providerKind ?? "openai_compatible";
-    this.protocolKind = protocolForModel(options.selectedModel);
+    this.protocolKind = options.protocolKind ?? protocolForModel(options.selectedModel);
     this.model = options.selectedModel.id;
   }
 
@@ -308,13 +311,17 @@ function assistantFailureFacts(assistant: AssistantMessage): {
   readonly name?: string | number;
 } {
   const diagnostic = (assistant.diagnostics ?? []).find(
-    (entry) => entry.error !== undefined || typeof entry.details?.status === "number",
+    (entry) => entry.error !== undefined ||
+      typeof entry.details?.status === "number" ||
+      typeof entry.details?.errorCode === "string" ||
+      typeof entry.details?.code === "string",
   );
   if (diagnostic === undefined) return {};
   const status = diagnostic.details?.status;
+  const code = diagnostic.error?.code ?? diagnostic.details?.errorCode ?? diagnostic.details?.code;
   return {
     ...(typeof status === "number" && Number.isFinite(status) ? { status: Math.trunc(status) } : {}),
-    ...(diagnostic.error?.code === undefined ? {} : { code: diagnostic.error.code }),
+    ...(typeof code === "string" || typeof code === "number" ? { code } : {}),
     ...(diagnostic.error?.name === undefined ? {} : { name: diagnostic.error.name }),
   };
 }
@@ -418,8 +425,7 @@ function parseJsonObject(value: string): Readonly<Record<string, unknown>> | und
 }
 
 function protocolForModel(model: Model<Api>): ModelProvider["protocolKind"] {
-  if (model.api === "anthropic-messages") return "anthropic_messages";
-  if (model.api === "openai-completions") return "openai_compatible_chat_completions";
-  if (model.api === "openai-responses") return "openai_responses";
+  const protocol = piModelTransport(model.api);
+  if (protocol !== undefined) return protocol;
   throw new Error(`Pi model collection channel does not support API ${model.api}.`);
 }

@@ -1,5 +1,6 @@
 import type { ModelFacts, ResolvedModelCapabilities, SanitizedModelProviderConfig } from "../../../domain/config/index.js";
-import { resolveDiscoveredModelFacts } from "../../../adapters/intelligence/pi-model-facts.js";
+import { modelFactsFromPiModel } from "../../../adapters/intelligence/pi-model-facts.js";
+import { resolveConfiguredModel } from "../../../adapters/intelligence/model-catalog-binding.js";
 import { resolveModelCapabilities } from "../../model-runtime/model-capability-registry.js";
 
 /**
@@ -17,13 +18,21 @@ import { resolveModelCapabilities } from "../../model-runtime/model-capability-r
 export type ModelCapabilityResolvableProfile = Pick<
   SanitizedModelProviderConfig,
   "profileId" | "providerKind" | "model" | "piProviderId"
->;
+> & Partial<Pick<SanitizedModelProviderConfig, "baseUrl" | "connection" | "secretUpdatedAt" | "protocolKind" | "modelSettings">>;
 
 export function resolveModelFactsForProfile(profile: ModelCapabilityResolvableProfile): ModelFacts {
-  return resolveDiscoveredModelFacts({
+  const resolution = resolveConfiguredModel({
     piProviderId: profile.piProviderId,
     modelId: profile.model,
+    profileId: profile.profileId,
+    baseUrl: profile.baseUrl,
+    connection: profile.connection,
+    secretUpdatedAt: profile.secretUpdatedAt,
+    protocolKind: profile.protocolKind,
   });
+  return resolution.status === "known"
+    ? modelFactsFromPiModel(resolution)
+    : { status: "unconfirmed", modelId: resolution.modelId };
 }
 
 export function resolveModelCapabilitiesForProfile(input: {

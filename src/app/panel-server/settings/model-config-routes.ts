@@ -1,19 +1,18 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import {
-  listBuiltinModelProviderPresets,
-  listBuiltinProviderProtocolProfiles,
-} from "../../../domain/config/index.js";
-import {
   getPiModelCatalogGeneratedAt,
   listPiProviderCatalog,
 } from "../../../adapters/intelligence/index.js";
 import { fetchPanelModelCatalog } from "./model-provider-adapter.js";
+import { handlePanelModelAuthRoute } from "./model-auth-routes.js";
+import { ModelRuntimeConfigurationError } from "../../model-runtime/model-runtime-config.js";
 import { PanelHttpError, readJsonBody, writeJson } from "../http-utils.js";
 import {
   parseConfigUpdate,
   parseCreateModelProfile,
   parseModelCatalogUpdate,
+  parseModelConfigurationUpdate,
   parseModelProviderOrderUpdate,
 } from "../request-parsers.js";
 import {
@@ -33,6 +32,7 @@ export async function handlePanelModelConfigRoute(
   response: ServerResponse,
   url: URL,
 ): Promise<boolean> {
+  if (await handlePanelModelAuthRoute(runtime.modelProviderAuth, request, response, url)) return true;
   if (request.method === "GET" && url.pathname === "/api/config/pi-model-providers") {
     writeJson(response, 200, {
       ok: true,
@@ -70,8 +70,7 @@ export async function handlePanelModelConfigRoute(
     writeJson(response, 200, {
       ok: true,
       status: "completed",
-      presets: listBuiltinModelProviderPresets(),
-      providerProtocolProfiles: listBuiltinProviderProtocolProfiles(),
+      ...modelProviderMarketPayload(),
       profiles: await runtime.configCenter.listModelProviderProfiles(),
       activeProfile: await runtime.configCenter.getModelProviderConfig(),
       modelProviderOrder: await runtime.configCenter.getModelProviderOrder(),
@@ -146,8 +145,39 @@ export async function handlePanelModelConfigRoute(
     }
   }
 
+  const modelSettingsMatch = /^\/api\/config\/model-profiles\/([^/]+)\/model-settings$/.exec(url.pathname);
+  if (request.method === "POST" && modelSettingsMatch !== null) {
+    const body = await readJsonBody(request);
+    try {
+      const profile = await runtime.configCenter.updateModelConfiguration({
+        ...parseModelConfigurationUpdate(body),
+        profileId: decodeURIComponent(modelSettingsMatch[1] ?? ""),
+      });
+      invalidateCapabilityCache(runtime);
+      writeJson(response, 200, {
+        ok: true,
+        status: "completed",
+        profile,
+        config: await runtime.configCenter.getModelProviderConfig(),
+        profiles: await runtime.configCenter.listModelProviderProfiles(),
+        modelCatalogs: await runtime.configCenter.listModelProviderModelCatalogs(),
+        modelCapabilityProfiles: await modelCapabilityProfilesPayload(runtime),
+        capabilities: await runtime.capabilityCenter.snapshot(),
+      });
+      return true;
+    } catch (error) {
+      throw configCenterHttpError(error);
+    }
+  }
+
   const modelProfileModelsMatch = /^\/api\/config\/model-profiles\/([^/]+)\/models$/.exec(url.pathname);
   if (request.method === "GET" && modelProfileModelsMatch !== null) {
+    const controller = new AbortController();
+    const abortDiscovery = () => {
+      if (!response.writableEnded) controller.abort();
+    };
+    request.once("aborted", abortDiscovery);
+    response.once("close", abortDiscovery);
     try {
       const profileId = decodeURIComponent(modelProfileModelsMatch[1] ?? "");
       const profile = (await runtime.configCenter.listModelProviderProfiles())
@@ -156,10 +186,13 @@ export async function handlePanelModelConfigRoute(
         throw new PanelHttpError(404, "model_profile_not_found", "未找到模型配置。");
       }
       const apiKey = await runtime.configCenter.getModelProviderApiKey(profile.profileId);
-      if (apiKey === undefined) {
+      if (apiKey === undefined && profile.protocolKind !== "native") {
         throw new PanelHttpError(400, "missing_model_provider_key", "获取模型列表前需要先保存该厂商的 API Key。");
       }
-      const catalog = await fetchPanelModelCatalog({ profile, apiKey, fetch: runtime.modelCatalogFetch });
+      const catalog = await fetchPanelModelCatalog({
+        configCenter: runtime.configCenter, profile, apiKey, fetch: runtime.modelCatalogFetch,
+        abortSignal: controller.signal,
+      });
       writeJson(response, 200, {
         ok: true,
         status: "completed",
@@ -174,7 +207,15 @@ export async function handlePanelModelConfigRoute(
       return true;
     } catch (error) {
       if (error instanceof PanelHttpError) throw error;
-      throw new PanelHttpError(502, "model_catalog_failed", "模型列表获取失败，请检查厂商地址、密钥和网络。");
+      if (error instanceof ModelRuntimeConfigurationError) {
+        throw new PanelHttpError(400, "missing_model_provider_auth", "该模型服务尚未完成身份验证。");
+      }
+      const failure = new PanelHttpError(502, "model_catalog_failed", "模型列表获取失败，请检查服务连接、身份验证和网络。");
+      failure.cause = error;
+      throw failure;
+    } finally {
+      request.removeListener("aborted", abortDiscovery);
+      response.removeListener("close", abortDiscovery);
     }
   }
 
@@ -252,7 +293,7 @@ export async function handlePanelModelConfigRoute(
   const deleteProfileMatch = /^\/api\/config\/model-profiles\/([^/]+)$/.exec(url.pathname);
   if (request.method === "DELETE" && deleteProfileMatch !== null) {
     try {
-      const profiles = await runtime.configCenter.deleteModelProviderProfile(
+      const profiles = await runtime.modelProviderAuth.deleteProfile(
         decodeURIComponent(deleteProfileMatch[1] ?? ""),
       );
       invalidateCapabilityCache(runtime);

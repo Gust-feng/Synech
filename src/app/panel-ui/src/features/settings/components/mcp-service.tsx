@@ -1,5 +1,5 @@
 import React from "react";
-import { Link2, Plus, Save, Trash2, X } from "lucide-react";
+import { Link2, Plug, Plus, Save, Trash2, X } from "lucide-react";
 import type { McpEnvironmentCheckResponse, McpReferenceResponse, ToolsResponse } from "@panel-api/tools";
 import { SettingsSelectControl } from "./select-control";
 import type { McpServerForm } from "./types";
@@ -106,7 +106,7 @@ function McpServiceBoard(props: {
       <header className="mcp-board-header">
         <div>
           <div className="mcp-board-title-row">
-            <h3>已连接服务</h3>
+            <h3>服务连接</h3>
             <span>{catalog.length}</span>
           </div>
         </div>
@@ -124,8 +124,15 @@ function McpServiceBoard(props: {
         </button>
       </header>
       <div className="mcp-service-card-grid" aria-label="MCP 服务列表">
-        {catalog.length === 0 ? (
-          <div className="mcp-service-empty">暂无服务</div>
+        {props.tools === undefined ? (
+          <div className="mcp-service-empty" role="status" aria-busy="true">正在加载服务</div>
+        ) : catalog.length === 0 ? (
+          <div className="mcp-service-empty">
+            <span className="mcp-empty-mark" aria-hidden="true"><Plug size={26} /></span>
+            <div className="mcp-empty-copy">
+              <h4>尚未添加 MCP 服务</h4>
+            </div>
+          </div>
         ) : catalog.map((server) => {
           const selected = panelMode === "edit" && server.serverId === props.form.serverId;
           const serverStatus = mcpRuntimeStatusLabel(server.runtimeStatus ?? server.availability);
@@ -433,8 +440,9 @@ function McpServerPanel(props: {
           {editing && props.selectedServer !== undefined && (
             <button
               type="button"
-              className="page-action-button danger icon-only"
+              className="mcp-panel-button danger icon-only"
               aria-label="删除服务"
+              title="删除服务"
               onClick={() => props.onDelete?.(props.selectedServer?.serverId ?? "")}
               disabled={props.saving}
             >
@@ -442,15 +450,15 @@ function McpServerPanel(props: {
             </button>
           )}
           <div className="mcp-subpanel-footer-actions">
-            <button type="button" className="page-action-button" onClick={props.onCancel} disabled={props.saving}>
+            <button type="button" className="mcp-panel-button quiet" onClick={props.onCancel} disabled={props.saving}>
               {editing ? "关闭" : "取消"}
             </button>
-            <button type="button" className="page-action-button" onClick={() => void props.onSave(props.form)} disabled={props.saving || !canSave}>
+            <button type="button" className="mcp-panel-button" onClick={() => void props.onSave(props.form)} disabled={props.saving || !canSave}>
               <Save size={14} />
               保存
             </button>
-            <button type="button" className="page-action-button primary" onClick={() => void props.onSaveAndTest(props.form)} disabled={props.saving || !canTest}>
-              {editing && <Link2 size={14} />}
+            <button type="button" className="mcp-panel-button primary" onClick={() => void props.onSaveAndTest(props.form)} disabled={props.saving || !canTest}>
+              <Link2 size={14} />
               {props.saving ? "保存中" : editing ? "测试连接" : "保存并测试"}
             </button>
           </div>
@@ -686,6 +694,7 @@ function McpConnectionFields(props: {
               参数
               <textarea
                 id={`${props.fieldPrefix}-args`}
+                rows={4}
                 aria-label="参数"
                 value={props.form.args}
                 spellCheck={false}
@@ -700,6 +709,7 @@ function McpConnectionFields(props: {
               环境变量
               <textarea
                 id={`${props.fieldPrefix}-env`}
+                rows={4}
                 aria-label="环境变量"
                 value={props.form.envSecretRefs}
                 spellCheck={false}

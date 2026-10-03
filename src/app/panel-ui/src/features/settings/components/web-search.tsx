@@ -37,9 +37,9 @@ export function WebSearchSettings(props: {
       title="网络搜索"
       busy={props.saving === true}
     >
-      <div className="service-config-grid web-search-config-grid">
-        <label>
-          搜索服务
+      <div className="capability-preference-list">
+        <div className="capability-preference-row">
+          <label className="capability-preference-copy" htmlFor="web-search-provider"><strong>搜索服务</strong></label>
           <SettingsSelectControl
             id="web-search-provider"
             ariaLabel="搜索服务"
@@ -55,11 +55,13 @@ export function WebSearchSettings(props: {
             ]}
             onChange={(value) => updateForm({ ...props.toolForm, provider: value, apiKey: "" })}
           />
-        </label>
+        </div>
         {externalProvider && (
-          <label>
-            {webSearchApiKeyLabel(provider)}
+          <div className="capability-preference-row">
+            <label className="capability-preference-copy" htmlFor="web-search-api-key"><strong>{webSearchApiKeyLabel(provider)}</strong></label>
             <input
+              id="web-search-api-key"
+              className="capability-field-control"
               type="password"
               value={props.toolForm.apiKey}
               spellCheck={false}
@@ -75,12 +77,14 @@ export function WebSearchSettings(props: {
               }}
               placeholder={configured ? SAVED_API_KEY_MASK : "请输入密钥"}
             />
-          </label>
+          </div>
         )}
         {externalProvider && provider === "google" && (
-          <label>
-            Engine ID
+          <div className="capability-preference-row">
+            <label className="capability-preference-copy" htmlFor="web-search-engine"><strong>Engine ID</strong></label>
             <input
+              id="web-search-engine"
+              className="capability-field-control"
               type="text"
               value={props.toolForm.engineId}
               spellCheck={false}
@@ -90,12 +94,14 @@ export function WebSearchSettings(props: {
               onChange={(event) => updateForm({ ...props.toolForm, engineId: event.target.value })}
               placeholder="cx"
             />
-          </label>
+          </div>
         )}
         {externalProvider && (
-          <label className="web-search-max-results">
-            结果数
+          <div className="capability-preference-row">
+            <label className="capability-preference-copy" htmlFor="web-search-result-limit"><strong>最多返回结果</strong></label>
             <input
+              id="web-search-result-limit"
+              className="capability-field-control capability-number-control"
               type="number"
               min={1}
               max={webSearchMaxResults(provider)}
@@ -106,7 +112,7 @@ export function WebSearchSettings(props: {
               autoCapitalize="off"
               onChange={(event) => updateForm({ ...props.toolForm, maxResults: event.target.value })}
             />
-          </label>
+          </div>
         )}
       </div>
     </CapabilitySettingsSection>

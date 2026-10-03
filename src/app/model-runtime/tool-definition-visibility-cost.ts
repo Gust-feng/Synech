@@ -10,18 +10,21 @@ export type ModelVisibleToolDefinitionSerialization = {
   readonly api: "anthropic-messages" | "openai-completions" | "openai-responses";
   /** OpenAI-compatible Chat providers may reject the optional `strict` field. */
   readonly includeStrict: boolean;
+  readonly anthropicEagerInput?: boolean;
 };
 
 export function toolDefinitionSerializationApiForProtocol(
   protocolKind: ConfiguredModelProtocolKind,
-): ModelVisibleToolDefinitionSerialization["api"] {
+): ModelVisibleToolDefinitionSerialization["api"] | undefined {
   switch (protocolKind) {
+    case "native":
+      return undefined;
+    case "anthropic_messages":
+      return "anthropic-messages";
     case "openai_compatible_chat_completions":
       return "openai-completions";
     case "openai_responses":
       return "openai-responses";
-    case "anthropic_messages":
-      return "anthropic-messages";
     default: {
       const unsupportedProtocolKind: never = protocolKind;
       throw new Error(`Model visible tool definitions do not support protocol kind ${JSON.stringify(unsupportedProtocolKind)}.`);
@@ -42,9 +45,9 @@ export type ProgressiveToolVisibilityCostGate = {
 };
 
 /**
- * Progressive tool visibility is only an optimization; without a confirmed
- * context window there is no honest threshold, so the gate is disabled instead
- * of guessing one.
+ * Progressive tool visibility uses the frozen effective context budget, including
+ * an explicit user setting or the product default for an unconfirmed model.
+ * It changes exposure cost, not the authorized tool set or catalog facts.
  */
 export function progressiveToolVisibilityCostGate(
   contextWindowTokens: number | undefined,
@@ -68,15 +71,27 @@ export function progressiveToolVisibilityCostGate(
 }
 
 /**
- * Uses the same definition fields that Pi sends to providers. Output schemas and
- * execution metadata are deliberately absent because they do not consume model
- * context at this boundary.
+ * Pre-request cost estimate for Synech's non-constrained tools. Runtime metrics
+ * use the assembled provider payload instead. Cache/auth decorations are not
+ * inferred here; capability and schema fields follow the frozen Pi model.
  */
 export function serializeModelVisibleToolDefinitions(
   definitions: readonly ToolDefinition[],
   serialization: ModelVisibleToolDefinitionSerialization,
 ): readonly Readonly<Record<string, unknown>>[] {
   assertSupportedDefinitionSerializationApi(serialization.api);
+  if (serialization.api === "anthropic-messages") {
+    return definitions.map((definition) => ({
+      name: definition.name,
+      description: modelVisibleToolDescription(definition),
+      ...(serialization.anthropicEagerInput === false ? {} : { eager_input_streaming: true }),
+      input_schema: {
+        type: "object",
+        properties: definition.inputSchema.properties ?? {},
+        required: definition.inputSchema.required ?? [],
+      },
+    }));
+  }
   if (serialization.api === "openai-completions") {
     return definitions.map((definition) => ({
       type: "function",

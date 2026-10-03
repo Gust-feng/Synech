@@ -12,40 +12,35 @@ import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.l
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
 import type {
   OpenAIModelRequestSettings,
+  ModelConfiguration,
   ProviderProtocolProfileId,
 } from "../../domain/config/index.js";
 import type { ModelProtocolKind } from "../../domain/intelligence/index.js";
-import { resolveDiscoveredModel } from "./pi-model-facts.js";
+import { DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS } from "../../domain/config/model-configuration.js";
+import { configurePiModel, resolveConfiguredModel } from "./model-catalog-binding.js";
 import { configuredOpenAIParallelToolCalls } from "./openai-request-settings.js";
 import {
   applyOpenAICompatibleChatRequestPolicy,
   resolveOpenAICompatibleChatDialect,
 } from "./openai-compatible-chat-protocol.js";
 import type { ToolDefinition } from "../../domain/tools/index.js";
+import {
+  createNativeModelProviderCollection,
+  nativeModelProviderRegistryId,
+  type NativeModelProviderCollection,
+  type NativeModelProviderOptions,
+} from "./native-model-provider.js";
 
 /**
- * 未知发现模型的 transport 必需常量。
- *
- * pi 的 Model 类型要求 contextWindow / maxTokens / cost / input 等字段非空，
- * 但这些值**不是产品事实**：未知模型不得伪造上下文窗口、输出上限或能力。常量
- * 只存在于 adapter 内部，绝不得外溢到产品层 DTO / UI；产品层的「未确认」投影
- * 不携带任何数字。
+ * 未确认模型使用产品上下文预算；输出按 transport 省略或使用请求默认值。
+ * 这些运行默认值不得变成已确认的目录事实。
  */
-/**
- * 未确认模型的 transport 必需数值。
- *
- * pi 的 `Model` 类型要求这些字段是数字，但「Pi 未识别」意味着 Synech 没有任何
- * 事实可填。这里的取值准则只有一条：**不得让 Synech 的猜测变成对模型的限制**。
- * 因此 contextWindow 取一个明确的「无窗口事实」哨兵，只参与上游溢出判定，
- * 不构成任何承诺；maxTokens 取 0，让 pi 走各自的缺省路径，而不是把 Synech 的
- * 猜测当作输出上限发给上游。产品层看不到这两个常量（未确认投影只带 modelId）。
- */
-const UNCONFIRMED_MODEL_CONTEXT_WINDOW = Number.MAX_SAFE_INTEGER;
 const UNCONFIRMED_MODEL_MAX_OUTPUT_TOKENS = 0;
-const PROVIDER_ID_PREFIX = "synech";
+// Messages requires a request budget, not a user-declared model capacity.
+const DEFAULT_ANTHROPIC_REQUEST_OUTPUT_TOKENS = 4_096;
 type ProviderApiKind = "anthropic-messages" | "openai-completions" | "openai-responses";
 
-export type ModelProviderBindingOptions = {
+export type ModelProviderBindingOptions = NativeModelProviderOptions & {
   /** 连接级默认 transport；只有未知发现模型使用它。 */
   readonly protocol: ModelProtocolKind;
   readonly baseUrl: string;
@@ -55,19 +50,21 @@ export type ModelProviderBindingOptions = {
   readonly apiKey?: string;
   readonly resolveApiKey?: () => string | undefined | Promise<string | undefined>;
   /**
-   * 连接显式声明的 pi-ai provider id。非空时已知模型按此 provider 在 pi 真实
-   * 目录中精确匹配；为空时该模型的全部运行事实按「Pi 未识别」处理。
+   * 连接显式声明的目录作用域；未声明时自定义模型逐模型自动匹配。
    */
   readonly piProviderId?: string;
   /** 连接级 vendor 家族（连接显式事实，用于 pi 无 compat 的请求字段策略）。 */
   readonly providerProfileId?: ProviderProtocolProfileId;
   readonly requestSettings?: OpenAIModelRequestSettings;
+  readonly modelConfiguration?: ModelConfiguration;
   /** Enables the Responses provider's hosted web-search tool for this frozen run. */
   readonly enableWebSearch?: boolean;
 };
 
 export type ModelProviderBinding = {
   readonly modelRegistry: Models;
+  /** Native catalog facts stay unmodified even when run-local lookup applies user settings. */
+  readonly catalogRegistry?: Models;
   readonly selectedModel: Model<Api>;
   /** 本次冻结请求的思考档位；pi 按模型真实 thinkingLevelMap 翻译并 clamp。 */
   readonly thinkingLevel: ThinkingLevel;
@@ -90,11 +87,10 @@ export type ModelProviderBindingFactories = {
 /**
  * Builds one provider collection from the frozen run configuration.
  *
- * 二态解析：模型 ID 在连接显式声明的 `piProviderId` 作用域内被 pi 真实 catalog
- * 精确命中时，直接使用真实 Pi Model 的 api / compat / input / contextWindow /
- * maxTokens / thinkingLevelMap / reasoning / cost，只用连接事实覆盖 baseUrl /
- * auth / provider 注册键；未命中时不伪造任何能力，只用连接级默认 transport 把
- * 模型 ID 原样注册，请求是否成功由真实上游决定。
+ * Catalog lookup supplies automatic defaults; sparse per-model user settings
+ * override them for this connection only. Generic gateways always retain their
+ * declared API and exact upstream ID. Native services keep Pi's own transport,
+ * authentication and model policy.
  *
  * API key resolution stays at the provider boundary and runs for every model request.
  */
@@ -102,28 +98,31 @@ export function createModelProviderBinding(
   options: ModelProviderBindingOptions,
   factories: ModelProviderBindingFactories = {},
 ): ModelProviderBinding {
+  if (options.protocol === "native") {
+    const collection = createNativeModelProviderCollection(options);
+    const provider = collection.modelRegistry.getProvider(collection.providerId)!;
+    if (provider.refreshModels !== undefined || provider.filterModels !== undefined) {
+      throw new Error("This native provider requires createModelProviderBindingAsync initialization.");
+    }
+    return nativeBinding(options, collection);
+  }
   if (options.enableWebSearch === true && options.protocol === "anthropic_messages") {
     // 产品内建 Web Search 只在 Responses transport 上有对应物；不静默丢弃开关。
     throw new Error("Built-in web search is not supported by the Anthropic Messages protocol binding.");
   }
-  const discovered = resolveDiscoveredModel({
+  const discovered = resolveConfiguredModel({
     piProviderId: options.piProviderId,
     modelId: options.model,
+    protocolKind: options.protocol,
   });
-  const providerApiKind = discovered.status === "known"
-    ? supportedPiApiKind(discovered.model.api, options.model)
-    : resolveProviderApiKind(options.protocol);
-  if (discovered.status === "unknown" && providerApiKind === "anthropic-messages") {
-    throw new Error(
-      `Model ${options.model} is not present in the declared Pi provider catalog, so the Anthropic ` +
-      "Messages transport has no factual max_tokens to send. Configure a known Pi model or choose a " +
-      "non-Anthropic transport for this unconfirmed model.",
-    );
-  }
+  const providerApiKind = resolveProviderApiKind(options.protocol);
   const providerId = buildProviderId(options.profileId);
-  const configuredModel = discovered.status === "known"
-    ? knownProviderModel(discovered.model, options, providerId)
-    : unknownProviderModel(options, providerId, providerApiKind);
+  const configuredModel = configurePiModel(
+    discovered.status === "known"
+      ? knownProviderModel(discovered.model, options, providerId, providerApiKind)
+      : unknownProviderModel(options, providerId, providerApiKind),
+    options.modelConfiguration,
+  );
   const provider = createProvider({
     id: providerId,
     name: options.providerProfileId ?? "OpenAI-compatible",
@@ -181,27 +180,7 @@ export function createModelProviderBinding(
   };
 }
 
-/**
- * 已知模型的 transport 由真实 Pi Model.api 决定；产品为每个已接入 api 提供对应
- * transport。仍未接入的 api 在构造期显式失败，不静默降级、也不回退连接协议。
- */
-function supportedPiApiKind(api: Api, modelId: string): ProviderApiKind {
-  switch (api) {
-    case "openai-completions":
-      return "openai-completions";
-    case "openai-responses":
-      return "openai-responses";
-    case "anthropic-messages":
-      return "anthropic-messages";
-    default:
-      throw new Error(
-        `Pi model ${modelId} declares api ${JSON.stringify(api)}, which this product cannot serve; ` +
-        "the connection transport is not silently substituted for the model's real api.",
-      );
-  }
-}
-
-const PROVIDER_API_KIND_BY_PROTOCOL: Record<ModelProtocolKind, ProviderApiKind> = {
+const PROVIDER_API_KIND_BY_PROTOCOL: Partial<Record<ModelProtocolKind, ProviderApiKind>> = {
   openai_compatible_chat_completions: "openai-completions",
   openai_responses: "openai-responses",
   anthropic_messages: "anthropic-messages",
@@ -230,24 +209,129 @@ function providerStreamsForApi(
 }
 
 function buildProviderId(profileId: string): string {
-  const suffix = profileId.trim();
-  if (suffix.length === 0) {
-    throw new Error("Model provider profileId must not be blank.");
-  }
-  return `${PROVIDER_ID_PREFIX}-${suffix}`;
+  return nativeModelProviderRegistryId(profileId);
 }
 
-/** 已知模型：真实 Pi Model 原样保留，只覆盖 provider 注册键与连接 baseUrl。 */
+export type ModelProviderBindingInitializationOptions = {
+  readonly signal?: AbortSignal;
+  readonly allowNetwork?: boolean;
+  readonly forceRefresh?: boolean;
+};
+
+/** Dynamic native catalogs and subscription model policy must settle before selection. */
+export async function createModelProviderBindingAsync(
+  options: ModelProviderBindingOptions,
+  initialization: ModelProviderBindingInitializationOptions = {},
+): Promise<ModelProviderBinding> {
+  initialization.signal?.throwIfAborted();
+  if (options.protocol !== "native") return createModelProviderBinding(options);
+  const collection = createNativeModelProviderCollection(options);
+  const refresh = await collection.modelRegistry.refresh({
+    providers: [collection.providerId],
+    allowNetwork: initialization.allowNetwork ?? true,
+    force: initialization.forceRefresh,
+    signal: initialization.signal,
+  });
+  initialization.signal?.throwIfAborted();
+  const refreshError = refresh.errors.get(collection.providerId);
+  if (refreshError !== undefined) throw refreshError;
+  if (refresh.aborted) throw new Error("Native provider model initialization was cancelled.");
+  const auth = await collection.modelRegistry.getAuth(collection.providerId, {
+    signal: initialization.signal,
+  });
+  if (auth === undefined) throw new Error("The native model connection is not configured.");
+  const available = await collection.modelRegistry.getAvailable(collection.providerId, {
+    signal: initialization.signal,
+  });
+  initialization.signal?.throwIfAborted();
+  if (!available.some((model) => model.id === options.model)) {
+    throw new Error(
+      `Native model ${options.model} is unavailable for this connection. ` +
+      "Check the account and select a model from the native catalog; " +
+      "directory-external models require a custom protocol connection.",
+    );
+  }
+  return nativeBinding(options, collection);
+}
+
+function nativeBinding(
+  options: ModelProviderBindingOptions,
+  collection: NativeModelProviderCollection,
+): ModelProviderBinding {
+  const catalogModel = collection.modelRegistry.getModel(collection.providerId, options.model);
+  if (catalogModel === undefined) {
+    throw new Error(
+      `Pi native provider ${collection.piProviderId} does not declare model ${options.model}. ` +
+      "Use a custom protocol connection for directory-external models.",
+    );
+  }
+  const selectedModel = configurePiModel(catalogModel, options.modelConfiguration);
+  if (options.enableWebSearch === true && selectedModel.api !== "openai-responses") {
+    throw new Error("Built-in web search requires a native OpenAI Responses model.");
+  }
+  const payloadApiKind = selectedModel.api === "openai-completions"
+    ? "openai-completions"
+    : selectedModel.api === "openai-responses" ? "openai-responses" : undefined;
+  const usesOpenAIPayloadPolicy = payloadApiKind !== undefined &&
+    (options.requestSettings !== undefined || options.enableWebSearch === true);
+  const transformProviderPayload = usesOpenAIPayloadPolicy
+    ? createProviderPayloadTransformer(
+        options.requestSettings,
+        options.providerProfileId,
+        options.model,
+        options.enableWebSearch === true,
+        payloadApiKind,
+      )
+    : undefined;
+  return {
+    modelRegistry: configuredNativeRegistry(collection.modelRegistry, selectedModel),
+    catalogRegistry: collection.modelRegistry,
+    selectedModel,
+    thinkingLevel: thinkingLevelFromSettings(options.requestSettings?.reasoningEffort),
+    ...(transformProviderPayload === undefined ? {} : { transformProviderPayload }),
+  };
+}
+
+/** Preserve catalog capabilities, but never transplant another API's compat. */
 function knownProviderModel(
   model: Model<Api>,
   options: ModelProviderBindingOptions,
   providerId: string,
+  api: ProviderApiKind,
 ): Model<Api> {
+  const sameTransport = model.api === api;
   return {
     ...model,
+    id: options.model,
+    api,
     provider: providerId,
     baseUrl: options.baseUrl,
+    // Transport-specific compat values cannot cross API families.
+    compat: sameTransport ? model.compat : undefined,
+    thinkingLevelMap: sameTransport ? model.thinkingLevelMap : standardThinkingLevelMap(model),
+    headers: undefined,
   };
+}
+
+function standardThinkingLevelMap(model: Model<Api>): Model<Api>["thinkingLevelMap"] {
+  if (model.thinkingLevelMap === undefined) return undefined;
+  return Object.fromEntries(Object.entries(model.thinkingLevelMap).map(([level, value]) =>
+    [level, value === null ? null : level === "off" ? undefined : level],
+  ));
+}
+
+/** Harness resolves IDs through the registry; patch only this run's lookup. */
+function configuredNativeRegistry(registry: Models, selected: Model<Api>): Models {
+  return new Proxy(registry, {
+    get(target, property) {
+      if (property === "getModel") {
+        return (provider: string, id: string) =>
+          provider === selected.provider && id === selected.id ? selected : target.getModel(provider, id);
+      }
+      const value = Reflect.get(target, property);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
 }
 
 /** 未知模型：transport 必需常量 + 保守声明；不伪造任何能力，也不外溢为产品事实。 */
@@ -268,8 +352,10 @@ function unknownProviderModel(
     // model must never advertise image input.
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: UNCONFIRMED_MODEL_CONTEXT_WINDOW,
-    maxTokens: UNCONFIRMED_MODEL_MAX_OUTPUT_TOKENS,
+    contextWindow: DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS,
+    maxTokens: api === "anthropic-messages"
+      ? DEFAULT_ANTHROPIC_REQUEST_OUTPUT_TOKENS
+      : UNCONFIRMED_MODEL_MAX_OUTPUT_TOKENS,
   };
 }
 

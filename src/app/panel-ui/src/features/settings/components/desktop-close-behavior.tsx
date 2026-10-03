@@ -1,12 +1,12 @@
 import React, { useState } from "react";
+import { Monitor, PanelBottomClose, Power } from "lucide-react";
 import {
   DESKTOP_CLOSE_BEHAVIOR_PREFERENCE_NAME,
   parseDesktopCloseBehavior,
   type DesktopCloseBehavior,
 } from "@panel-api/desktop-lifecycle";
 import { readLocalPreference, writeLocalPreference } from "../../../shell/local-preferences";
-import { SettingRow } from "../../../components/workspace-common";
-import { SettingsSelectControl } from "./select-control";
+import { CapabilitySettingsSection } from "./capability-section";
 
 export function DesktopCloseBehaviorSettings(): React.ReactElement | null {
   const platform = typeof window === "undefined" ? "other" : window.desktopHost?.platform ?? "other";
@@ -16,12 +16,12 @@ export function DesktopCloseBehaviorSettings(): React.ReactElement | null {
 
   if (platform === "darwin") {
     return (
-      <section className="settings-card">
-        <h3>关闭窗口</h3>
-        <SettingRow label="应用行为">
-          <span className="settings-value">关闭窗口后继续运行，使用 ⌘Q 退出 Synech。</span>
-        </SettingRow>
-      </section>
+      <CapabilitySettingsSection icon={<Monitor size={16} />} title="桌面行为">
+        <div className="capability-preference-row">
+          <strong>关闭主窗口时</strong>
+          <span className="settings-value">保留后台运行</span>
+        </div>
+      </CapabilitySettingsSection>
     );
   }
 
@@ -35,21 +35,22 @@ export function DesktopCloseBehaviorSettings(): React.ReactElement | null {
   }
 
   return (
-    <section className="settings-card">
-      <h3>关闭窗口</h3>
-      <SettingRow label="关闭窗口时">
-        <SettingsSelectControl
-          id="desktop-close-behavior"
-          ariaLabel="关闭窗口时"
-          value={behavior}
-          options={[
-            { value: "quit", label: "退出 Synech" },
-            { value: "hide-to-tray", label: "关闭到通知区域" },
-          ]}
-          onChange={(value) => changeBehavior(value === "hide-to-tray" ? "hide-to-tray" : "quit")}
-        />
-      </SettingRow>
-      <p className="settings-value">关闭到通知区域后，Synech 会继续运行，可从托盘图标重新打开。</p>
-    </section>
+    <CapabilitySettingsSection icon={<Monitor size={16} />} title="桌面行为">
+      <div className="capability-preference-row">
+        <div className="capability-preference-copy"><strong id="desktop-close-label">关闭主窗口时</strong></div>
+        <div className="capability-choice-group" role="radiogroup" aria-labelledby="desktop-close-label">
+          <label>
+            <input type="radio" name="desktop-close-behavior" value="hide-to-tray"
+              checked={behavior === "hide-to-tray"} onChange={() => changeBehavior("hide-to-tray")} />
+            <span><PanelBottomClose size={15} />最小化到托盘</span>
+          </label>
+          <label>
+            <input type="radio" name="desktop-close-behavior" value="quit"
+              checked={behavior === "quit"} onChange={() => changeBehavior("quit")} />
+            <span><Power size={15} />退出应用</span>
+          </label>
+        </div>
+      </div>
+    </CapabilitySettingsSection>
   );
 }

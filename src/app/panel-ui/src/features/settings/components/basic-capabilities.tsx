@@ -7,25 +7,19 @@ import { CapabilitySettingsSection } from "./capability-section";
 
 export function BasicCapabilitiesSettings(props: {
   readonly config?: ConfigResponse;
-  readonly modelUsageDisplayEnabled: boolean;
-  readonly onModelUsageDisplayChange: (enabled: boolean) => void;
   readonly conversationFollowUpMode: ConversationFollowUpMode;
   readonly onConversationFollowUpModeChange: (mode: ConversationFollowUpMode) => void;
   readonly savingSkillTrigger?: boolean;
-  readonly onSaveSkillTriggerMode: (mode: SkillTriggerMode) => void;
+  readonly onSaveSkillTriggerMode: (mode: SkillTriggerMode) => Promise<void>;
   readonly savingOrdinaryAgentPrompt?: boolean;
   readonly onSaveOrdinaryAgentSystemPromptVariant: (variant: string) => Promise<void>;
 }): React.ReactElement {
   return (
     <CapabilitySettingsSection
       icon={<SlidersHorizontal size={16} />}
-      title="运行偏好"
+      title="对话与技能"
     >
       <div className="capability-preference-list">
-        <ModelUsageDisplaySettings
-          enabled={props.modelUsageDisplayEnabled}
-          onChange={props.onModelUsageDisplayChange}
-        />
         <ConversationFollowUpSettings
           mode={props.conversationFollowUpMode}
           onChange={props.onConversationFollowUpModeChange}
@@ -45,28 +39,6 @@ export function BasicCapabilitiesSettings(props: {
   );
 }
 
-function ModelUsageDisplaySettings(props: {
-  readonly enabled: boolean;
-  readonly onChange: (enabled: boolean) => void;
-}): React.ReactElement {
-  return (
-    <div className="capability-preference-row" aria-label="回答展示">
-      <div className="capability-preference-copy">
-        <strong>回答展示</strong>
-        <span>模型 token 信息</span>
-      </div>
-      <button
-        type="button"
-        className="capability-toggle"
-        aria-pressed={props.enabled}
-        onClick={() => props.onChange(!props.enabled)}
-      >
-        {props.enabled ? "显示" : "隐藏"}
-      </button>
-    </div>
-  );
-}
-
 function ConversationFollowUpSettings(props: {
   readonly mode: ConversationFollowUpMode;
   readonly onChange: (mode: ConversationFollowUpMode) => void;
@@ -74,16 +46,15 @@ function ConversationFollowUpSettings(props: {
   return (
     <div className="capability-preference-row" aria-label="默认追加方式">
       <div className="capability-preference-copy">
-        <strong>默认追加方式</strong>
-        <span>运行中发送新消息时</span>
+        <strong>运行中发送消息</strong>
       </div>
       <SettingsSelectControl
         id="conversation-follow-up-mode"
-        ariaLabel="默认追加方式"
+        ariaLabel="运行中发送消息"
         value={props.mode}
         options={[
-          { value: "queue", label: "排队" },
-          { value: "guide", label: "引导" },
+          { value: "queue", label: "排队等待" },
+          { value: "guide", label: "引导当前任务" },
         ]}
         onChange={(value) => props.onChange(value as ConversationFollowUpMode)}
       />
@@ -94,7 +65,7 @@ function ConversationFollowUpSettings(props: {
 function SkillTriggerSettings(props: {
   readonly config?: ConfigResponse;
   readonly saving?: boolean;
-  readonly onSave: (mode: SkillTriggerMode) => void;
+  readonly onSave: (mode: SkillTriggerMode) => Promise<void>;
 }): React.ReactElement {
   const persistedMode = props.config?.skillTrigger?.mode ?? "keyword";
   const [draftMode, setDraftMode] = React.useState<SkillTriggerMode>(persistedMode);
@@ -106,21 +77,20 @@ function SkillTriggerSettings(props: {
   const updateMode = (value: string): void => {
     const mode = skillTriggerModeFromValue(value);
     setDraftMode(mode);
-    props.onSave(mode);
+    void props.onSave(mode).catch(() => setDraftMode(persistedMode));
   };
 
   return (
     <div className="capability-preference-row" aria-busy={props.saving === true}>
       <div className="capability-preference-copy">
-        <strong>Skills 触发方式</strong>
-        <span>决定何时加载可用技能</span>
+        <strong>技能触发</strong>
       </div>
       <SettingsSelectControl
         id="skill-trigger-mode"
-        ariaLabel="Skills 触发方式"
+        ariaLabel="技能触发"
         value={draftMode}
         options={[
-          { value: "keyword", label: "显式/关键词触发" },
+          { value: "keyword", label: "显式调用或关键词" },
           { value: "model", label: "语义路由" },
         ]}
         onChange={updateMode}
@@ -153,22 +123,18 @@ function SystemPromptVariantSettings(props: {
 
   const updateVariant = (value: string): void => {
     setDraftVariant(value);
-    void props.onSave(value);
+    void props.onSave(value).catch(() => setDraftVariant(persistedVariant));
   };
 
   return (
     <div className="capability-preference-row" aria-busy={props.saving === true}>
       <div className="capability-preference-copy">
-        <strong>提示词偏好</strong>
-        <span>
-          {customPromptActive
-            ? "自定义提示词生效中，恢复默认后本偏好生效"
-            : "选择默认系统提示词的版本与默认回答语言"}
-        </span>
+        <strong>默认提示词语言</strong>
+        {customPromptActive && <span>当前使用自定义提示词</span>}
       </div>
       <SettingsSelectControl
         id="ordinary-agent-system-prompt-variant"
-        ariaLabel="提示词偏好"
+        ariaLabel="默认提示词语言"
         value={draftVariant}
         options={options}
         onChange={updateVariant}

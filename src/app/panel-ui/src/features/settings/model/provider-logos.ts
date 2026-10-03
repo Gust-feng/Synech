@@ -5,7 +5,7 @@ import {
   type ModelFamilyIdentity,
   type ModelProviderIdentity,
 } from "./model-family";
-import { decorativeSvg } from "../../../icon-svg";
+import { modelIconVariants } from "./icon-variants";
 
 export { resolveModelFamilyIdentity };
 export type { ModelFamilyIdentity, ModelProviderIdentity };
@@ -14,8 +14,8 @@ export type { ModelFamilyIdentity, ModelProviderIdentity };
  * Provider marks are discovered from `assets/providers/<brand>.svg`.
  *
  * Dropping a new SVG into that directory is the whole integration step: the
- * brand slug is the file name, so no registry edit is required. `<brand>.mono.svg`
- * files are the theme-safe fallbacks and are addressed separately.
+ * brand slug is the file name, so no registry edit is required. Canonical assets
+ * preserve native brand colours; `.mono.svg` variants follow the appearance preference.
  */
 const providerLogoModules = import.meta.glob("../../../assets/providers/*.svg", {
   query: "?raw",
@@ -33,6 +33,7 @@ export type ModelProviderLogoInput = {
   readonly vendor?: string;
   readonly profileId?: string;
   readonly presetId?: string;
+  readonly brandId?: string;
   /** Pi provider id, when the connection declares one. */
   readonly piProviderId?: string;
   readonly logoDataUrl?: string;
@@ -54,6 +55,8 @@ export type ModelProviderLogo = {
  * happens to point at a builtin provider's host must keep its own identity.
  */
 export function resolveModelProviderIdentity(input: ModelProviderLogoInput): ModelProviderIdentity {
+  const brandId = normalizeProviderSignal(input.brandId);
+  if (brandId.length > 0 && isBrandSlug(brandId)) return brandId;
   const signalIdentity = resolveModelProviderIdentityFromSignal(
     [input.presetId, input.vendor].filter(Boolean).join(" "),
   );
@@ -100,6 +103,7 @@ export function builtinProviderPresetId(input: {
   const explicitPreset = normalizeProviderSignal(input.presetId);
   if (explicitPreset.length > 0) return explicitPreset;
   const normalizedProfileId = normalizeProviderSignal(input.profileId);
+  if (normalizedProfileId === "default") return "openai";
   return BUILTIN_PROFILE_PRESET_IDS.has(normalizedProfileId) ? normalizedProfileId : undefined;
 }
 
@@ -131,14 +135,15 @@ const BUILTIN_PROFILE_PRESET_IDS: ReadonlySet<string> = new Set([
 ]);
 
 function buildProviderLogos(): Readonly<Record<string, string>> {
-  const logos: Record<string, string> = {};
+  const originals: Record<string, string> = {};
+  const monochrome: Record<string, string> = {};
   for (const [path, svg] of Object.entries(providerLogoModules)) {
-    if (isMonoAsset(path)) continue;
     const key = assetKeyFromPath(path);
     if (key.length === 0) continue;
-    logos[key] = decorativeSvg(svg);
+    if (isMonoAsset(path)) monochrome[key] = svg;
+    else originals[key] = svg;
   }
-  return logos;
+  return Object.fromEntries(Object.entries(originals).map(([key, svg]) => [key, modelIconVariants(svg, monochrome[key], "provider-" + key)]));
 }
 
 function assetKeyFromPath(path: string): string {

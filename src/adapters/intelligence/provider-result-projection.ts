@@ -76,11 +76,15 @@ export function providerFailureFromAssistant(
   if (assistant.stopReason !== "error") return undefined;
   const error = assistant.errorMessage ?? "Provider returned an error stop reason.";
   const diagnostic = [...(assistant.diagnostics ?? [])].reverse().find((item) =>
-    item.type === "provider_transport_failure" || item.type === "pi_messages_response_failure");
+    item.type === "provider_transport_failure" ||
+    item.type === "pi_messages_response_failure" ||
+    item.type === "bedrock_response_failure");
   const status = finiteInteger(diagnostic?.details?.status);
   // SDK errors carry the account-level and policy codes inside the response
   // body, not on the error object, so the body is the structured source.
-  const code = structuredProviderErrorCode(diagnostic) ?? stringOrNumber(diagnostic?.details?.code);
+  const code = structuredProviderErrorCode(diagnostic) ??
+    stringOrNumber(diagnostic?.details?.errorCode) ??
+    stringOrNumber(diagnostic?.details?.code);
   return {
     error,
     errorCode: modelFailureKindFromFacts({

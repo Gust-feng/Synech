@@ -1,14 +1,13 @@
 import {
   listBuiltinModelProviderPresets,
   listBuiltinProviderProtocolProfiles,
-  type ConfiguredModelProtocolKind,
   type ModelProviderPreset,
   type ModelProviderModelCatalog,
   type ResolvedModelCapabilities,
   type SanitizedModelProviderConfig,
 } from "../../../domain/config/index.js";
 import { listPiProviderCatalog } from "../../../adapters/intelligence/index.js";
-import type { ModelCapabilityProfile, ProductInfo } from "../../panel-api/config.js";
+import type { ModelCapabilityProfile, ModelProviderMarketWarning, ProductInfo } from "../../panel-api/config.js";
 import type { ToolsResponse } from "../../panel-api/tools.js";
 import { readProductPackageVersion } from "../../../platform/product-version.js";
 import { PRODUCT_DISPLAY_NAME } from "../../../platform/product-identity.js";
@@ -19,9 +18,11 @@ import { ConfigCenter, ConfigCenterValidationError } from "../../config-center/i
 import type { ToolCatalogSnapshot } from "../../tool-center/index.js";
 import { PanelHttpError } from "../http-utils.js";
 import type { PanelModelCatalogFetch } from "../types.js";
+import type { ModelProviderAuthApplication } from "../../model-service-auth/model-provider-auth-application.js";
 
 export type PanelConfigRouteRuntime = {
   readonly configCenter: ConfigCenter;
+  readonly modelProviderAuth: ModelProviderAuthApplication;
   readonly capabilityCenter: CapabilityCenter;
   readonly managedMcpBinDirectory: string;
   readonly configDirectory: string;
@@ -31,83 +32,105 @@ export type PanelConfigRouteRuntime = {
 
 export type PanelToolsConfig = NonNullable<ToolsResponse["tools"]>;
 
-export function modelProviderMarketPayload(): {
+export function modelProviderMarketPayload(
+  providers: readonly import("../../../adapters/intelligence/pi-model-catalog.js").PiProviderModelCatalog[] = listPiProviderCatalog(),
+): {
   readonly presets: ReturnType<typeof listBuiltinModelProviderPresets>;
   readonly providerProtocolProfiles: ReturnType<typeof listBuiltinProviderProtocolProfiles>;
+  readonly warnings: readonly ModelProviderMarketWarning[];
 } {
+  const warnings: ModelProviderMarketWarning[] = [];
   return {
-    presets: panelModelProviderPresets(),
+    presets: panelModelProviderPresets(providers, warnings),
     providerProtocolProfiles: listBuiltinProviderProtocolProfiles(),
+    warnings,
   };
 }
 
-function panelModelProviderPresets(): readonly ModelProviderPreset[] {
+function panelModelProviderPresets(
+  piProviders: readonly import("../../../adapters/intelligence/pi-model-catalog.js").PiProviderModelCatalog[],
+  warnings: ModelProviderMarketWarning[],
+): readonly ModelProviderPreset[] {
   const builtin = listBuiltinModelProviderPresets();
-  const piProviders = listPiProviderCatalog();
-
-  // One entry per brand. Pi splits several vendors into regional or plan-scoped
-  // providers (Moonshot AI / Moonshot AI CN / Kimi For Coding, Xiaomi Token Plan
-  // AMS/CN/SGP, Qwen Token Plan variants, MiniMax CN, Z.AI Coding CN, ...).
-  // Those are transport endpoints, not products: listing each one turned the
-  // provider list into three Moonshots, two identical MiniMax rows and four
-  // Xiaomi rows. They stay selectable through the connection's Pi provider
-  // field; the list shows the brand once.
   const brands = groupPiProvidersByBrand(piProviders);
-  const builtinBrands = new Set(
-    builtin.map((preset) => preset.piProviderId).filter((id): id is string => id !== undefined)
-      .map((id) => brandForPiProvider(id)),
+  const builtinProviderIds = new Set(
+    builtin.map((preset) => preset.piProviderId).filter((id): id is string => id !== undefined),
   );
+  const builtinBrands = new Set(
+    [...builtinProviderIds].map((id) => brandForPiProvider(id)),
+  );
+  const presetIds = new Set(builtin.map((preset) => preset.presetId));
 
-  const piOnly = brands
-    .filter((brand) => !builtinBrands.has(brand.brand))
+  const piOnly = [...brands]
     .sort(compareProviderTiers)
-    .map((brand): ModelProviderPreset => {
-      const models = brand.providers.flatMap((provider) => [...provider.models]);
-      const protocolKind = defaultProtocolForTransports(models.map((model) => model.transport));
-      const primary = brand.providers[0]!;
-      return {
-        presetId: brand.brand,
-        label: PI_BRAND_LABELS[brand.brand] ?? primary.providerName,
-        vendor: primary.providerName,
-        description: `Pi ${brand.brand} 连接模板；模型列表由当前连接实际返回。`,
+    .flatMap((brand) => brand.providers.flatMap((provider, index): ModelProviderPreset[] => {
+      if (builtinProviderIds.has(provider.providerId)) return [];
+      const primaryBrandSlot = !builtinBrands.has(brand.brand) && index === 0;
+      const preferredId = primaryBrandSlot ? brand.brand : provider.providerId;
+      // The MiniMax brand slot already points to CN; its international provider
+      // needs a distinct, stable profile identity.
+      const presetId = presetIds.has(preferredId) ? `pi-${provider.providerId}` : preferredId;
+      presetIds.add(presetId);
+      const label = PI_CONNECTION_LABELS[provider.providerId] ??
+        (primaryBrandSlot ? PI_BRAND_LABELS[brand.brand] : undefined) ??
+        provider.providerName;
+      return [{
+        presetId,
+        label,
+        vendor: provider.providerName,
+        description: `${label} 连接模板；模型列表由当前连接实际返回。`,
         providerKind: "openai_compatible",
-        protocolKind,
-        baseUrl: primary.baseUrl ?? "",
-        modelsPath: "/models",
-        supportedProtocolKinds: [...new Set<ConfiguredModelProtocolKind>([
-          protocolKind,
-          ...models.map((model) => protocolKindForTransport(model.transport)),
-        ])],
-        piProviderId: primary.providerId,
-        piProviderIds: brand.providers.map((provider) => provider.providerId),
-      };
-    });
+        protocolKind: "native",
+        baseUrl: provider.baseUrl ?? "",
+        modelsPath: "pi-catalog",
+        supportedProtocolKinds: ["native"],
+        piProviderId: provider.providerId,
+        piProviderIds: [provider.providerId],
+        ...servicePresentation(provider),
+      }];
+    }));
 
-  return [
-    ...builtin.map((preset) => {
-      if (preset.piProviderId === undefined) return preset;
-      const brand = brandForPiProvider(preset.piProviderId);
-      const providers = brands.find((item) => item.brand === brand)?.providers ?? [];
-      const providerIds = providers.length === 0 ? [preset.piProviderId] : providers.map((p) => p.providerId);
-      const models = providers.flatMap((provider) => [...provider.models]);
-      if (models.length === 0) return { ...preset, piProviderIds: providerIds };
-      return {
-        ...preset,
-        piProviderIds: providerIds,
-      };
-    }),
-    ...piOnly,
-  ];
+  return [...builtin.flatMap((preset): ModelProviderPreset[] => {
+    const provider = piProviders.find((candidate) => candidate.providerId === preset.piProviderId);
+    if (provider === undefined) {
+      warnings.push({
+        code: "model_service_unavailable",
+        presetId: preset.presetId,
+        message: `${preset.label} 的服务模板当前不可用；已有连接保留，仍可添加自定义服务。`,
+      });
+      return [];
+    }
+    return [{
+      ...preset,
+      protocolKind: "native",
+      baseUrl: provider.baseUrl ?? "",
+      modelsPath: "pi-catalog",
+      supportedProtocolKinds: ["native"],
+      piProviderIds: [provider.providerId],
+      ...servicePresentation(provider),
+    }];
+  }), ...piOnly];
 }
 
-/**
- * Model vendors before aggregation/托管 platforms.
- *
- * The list is one flat list on purpose — the user asked to keep adding a
- * provider a single obvious action — but the order decides what a user reads
- * first, and "a frontier model vendor" and "a gateway that resells other
- * people's models" are different things to be looking for.
- */
+function servicePresentation(
+  provider: import("../../../adapters/intelligence/pi-model-catalog.js").PiProviderModelCatalog,
+): Pick<ModelProviderPreset, "brandId" | "brandLabel" | "serviceLabel" | "connection" | "supportedAuthModes"> {
+  const brandId = brandForPiProvider(provider.providerId);
+  const authMode = provider.providerId === "amazon-bedrock"
+    ? "ambient" as const
+    : provider.providerId === "github-copilot" || provider.authModes.length === 1 && provider.authModes[0] === "oauth"
+      ? "oauth" as const
+      : "api_key" as const;
+  return {
+    brandId,
+    brandLabel: PI_BRAND_LABELS[brandId] ?? provider.providerName,
+    serviceLabel: PI_SERVICE_LABELS[provider.providerId] ?? "API 服务",
+    connection: { authMode },
+    supportedAuthModes: provider.authModes,
+  };
+}
+
+/** Directory order groups model vendors before hosted/gateway platforms. */
 const FRONTIER_MODEL_VENDORS: ReadonlySet<string> = new Set([
   "anthropic",
   "qwen",
@@ -136,6 +159,10 @@ type PiBrandGroup = {
  * ("Moonshot AI CN", "Z.AI Coding CN") rather than the product name.
  */
 const PI_BRAND_LABELS: Readonly<Record<string, string>> = {
+  openai: "OpenAI",
+  google: "Google",
+  cloudflare: "Cloudflare",
+  opencode: "OpenCode",
   qwen: "通义千问",
   xiaomi: "小米",
   moonshot: "月之暗面",
@@ -146,6 +173,46 @@ const PI_BRAND_LABELS: Readonly<Record<string, string>> = {
   "azure-openai": "Azure OpenAI",
   "ant-ling": "蚂蚁百灵",
   vercel: "Vercel AI Gateway",
+};
+
+const PI_SERVICE_LABELS: Readonly<Record<string, string>> = {
+  "openai": "官方 API",
+  "openai-codex": "ChatGPT 订阅 / Codex",
+  "google": "Gemini API",
+  "google-vertex": "Vertex AI",
+  "azure-openai-responses": "Azure OpenAI",
+  "amazon-bedrock": "Bedrock",
+  "github-copilot": "Copilot 订阅",
+  "cloudflare-ai-gateway": "AI Gateway",
+  "cloudflare-workers-ai": "Workers AI",
+  "moonshotai-cn": "API（国内）",
+  "moonshotai": "API（国际）",
+  "kimi-coding": "Kimi Coding",
+  "minimax-cn": "API（国内）",
+  "minimax": "API（国际）",
+  "zai-coding-cn": "Coding（国内）",
+  "zai": "Coding（国际）",
+  "qwen-token-plan": "Token Plan（国际）",
+  "qwen-token-plan-cn": "Token Plan（国内）",
+  "qwen-token-plan-individual": "Token Plan（个人）",
+  "xiaomi-token-plan-ams": "Token Plan（AMS）",
+  "xiaomi-token-plan-cn": "Token Plan（国内）",
+  "xiaomi-token-plan-sgp": "Token Plan（SGP）",
+  "opencode": "Zen",
+  "opencode-go": "Go",
+};
+
+const PI_CONNECTION_LABELS: Readonly<Record<string, string>> = {
+  "kimi-coding": "Kimi Coding",
+  moonshotai: "月之暗面（国际）",
+  minimax: "MiniMax（国际）",
+  zai: "智谱 AI（国际）",
+  "qwen-token-plan": "通义千问 Token Plan",
+  "qwen-token-plan-cn": "通义千问 Token Plan（国内）",
+  "qwen-token-plan-individual": "通义千问 Token Plan（个人）",
+  "xiaomi-token-plan-ams": "小米 Token Plan（AMS）",
+  "xiaomi-token-plan-cn": "小米 Token Plan（国内）",
+  "xiaomi-token-plan-sgp": "小米 Token Plan（SGP）",
 };
 
 /** Maps a Pi provider id onto the brand it belongs to. */
@@ -191,41 +258,6 @@ function groupPiProvidersByBrand(
     .sort((left, right) => left.brand.localeCompare(right.brand));
 }
 
-function protocolKindForTransport(
-  transport: import("../../../adapters/intelligence/pi-model-catalog.js").PiProviderModelCatalogItem["transport"],
-): ConfiguredModelProtocolKind {
-  switch (transport) {
-    case "anthropic_messages":
-      return "anthropic_messages";
-    case "openai_responses":
-      return "openai_responses";
-    case "openai_compatible_chat_completions":
-      return "openai_compatible_chat_completions";
-  }
-}
-
-/**
- * Default protocol for one brand's connection.
- *
- * A single-transport brand keeps its real transport. A multi-transport brand
- * (gateways that re-serve many vendors' models) defaults to OpenAI-compatible
- * chat completions: it is the broadest common denominator, and every confirmed
- * model still overrides it with its own Pi `Model.api` at binding time.
- *
- * Counting the dominant transport was wrong: it classified Fireworks and Vercel
- * AI Gateway as Anthropic Messages because most of their catalogued models
- * happen to speak that protocol, which would then be used for any model the
- * gateway lists but Pi does not know.
- */
-function defaultProtocolForTransports(
-  transports: readonly import("../../../adapters/intelligence/pi-model-catalog.js").PiProviderModelCatalogItem["transport"][],
-): ConfiguredModelProtocolKind {
-  const distinct = new Set(transports);
-  return distinct.size === 1
-    ? protocolKindForTransport([...distinct][0]!)
-    : "openai_compatible_chat_completions";
-}
-
 export function productInfoPayload(runtime: PanelConfigRouteRuntime): ProductInfo {
   return {
     name: PRODUCT_DISPLAY_NAME,
@@ -259,7 +291,6 @@ export async function modelCapabilityProfilesPayload(
   ]);
   const catalogsByProfileId = new Map<string, ModelProviderModelCatalog>();
   for (const catalog of savedCatalogs) {
-    if (catalog.modelsPath === "pi-catalog") continue;
     catalogsByProfileId.set(catalog.profileId, catalog);
   }
   if (options.extraCatalog !== undefined) {
@@ -312,7 +343,9 @@ function modelNamesForCapabilityProjection(
 
 function modelCapabilityWarnings(activeModel: SanitizedModelProviderConfig): readonly string[] {
   const warnings: string[] = [];
-  if (!activeModel.secretConfigured) warnings.push("当前模型 profile 未配置 API Key。");
+  if (!activeModel.secretConfigured && (activeModel.protocolKind !== "native" || activeModel.connection?.authMode === "api_key")) {
+    warnings.push("当前模型服务未配置 API Key。");
+  }
   if (activeModel.model === undefined) warnings.push("当前模型 profile 未填写模型名。");
   return warnings;
 }

@@ -10,6 +10,8 @@ import type {
   McpServerSecretValueInput,
   McpServerSettings,
   ModelProviderModelCatalog,
+  ModelProviderConnectionSettings,
+  ModelProviderCredentialStorePort,
   SettingsStore,
   SanitizedCommandShellConfig,
   SanitizedOrdinaryAgentPromptConfig,
@@ -24,6 +26,7 @@ import type {
   UpdateCommandShellConfigInput,
   UpdateOrdinaryAgentPromptConfigInput,
   UpdateModelProviderConfigInput,
+  UpdateModelConfigurationInput,
   UpdateSkillTriggerConfigInput,
   UpdateToolConfirmationConfigInput,
   UpdateToolStateInput,
@@ -38,6 +41,7 @@ import {
   normalizeInformationAccessSettings,
   normalizeLocalSettings,
   normalizeOptionalString,
+  normalizeProfileId,
   normalizePositiveInteger,
   normalizeRequiredConfigString,
   normalizeCommandShellUpdate,
@@ -55,6 +59,7 @@ import {
 import {
   toSanitizedInformationAccessConfig,
   toSanitizedOrdinaryAgentPromptConfig,
+  toSanitizedModelProfile,
   toSanitizedWebSearchConfig,
 } from "./projections.js";
 import {
@@ -85,6 +90,10 @@ import type {
   CreateModelRuntimeEnvironmentInput,
   ModelRuntimeConfigEnvironment,
 } from "./runtime-environment.js";
+import { modelProviderConnectionIdentity, modelProviderCredentialSecretRef, readModelProviderCredential } from "./model-provider-credentials.js";
+import { ConfigCenterValidationError } from "./config-center-error.js";
+import { parseModelProviderConnectionSettings } from "./model-provider-connection-settings.js";
+import { parseModelConfigurationUpdate } from "./model-configuration-schema.js";
 
 export { ConfigCenterValidationError } from "./config-center-error.js";
 export type {
@@ -105,6 +114,8 @@ export type CreateLocalConfigCenterOptions = {
 export class ConfigCenter {
   private mutationTail: Promise<void> = Promise.resolve();
   private settingsRead: Promise<LocalSettings> | undefined;
+  private readonly credentialGenerations = new Map<string, number>();
+  private readonly credentialMutationTails = new Map<string, Promise<void>>();
 
   constructor(private readonly options: ConfigCenterOptions) {}
 
@@ -120,8 +131,10 @@ export class ConfigCenter {
   }
 
   async getModelProviderApiKey(profileId?: string): Promise<string | undefined> {
-    const settings = await this.readOrCreateSettings();
-    return readModelProviderApiKey(settings, this.options.secretStore, profileId);
+    return this.runMutation(async () => {
+      const settings = await this.readOrCreateSettings();
+      return readModelProviderApiKey(settings, this.options.secretStore, profileId);
+    });
   }
 
   async listModelProviderProfiles(): Promise<readonly SanitizedModelProviderConfig[]> {
@@ -186,6 +199,7 @@ export class ConfigCenter {
   }
 
   async deleteModelProviderProfile(profileId: string): Promise<readonly SanitizedModelProviderConfig[]> {
+    profileId = normalizeProfileId(profileId);
     return this.runMutation(async () => {
       const current = await this.readOrCreateSettings();
       const change = await deleteModelProviderProfileSettings(
@@ -195,6 +209,7 @@ export class ConfigCenter {
         new Date().toISOString(),
       );
       await this.options.settingsStore.writeSettings(change.settings);
+      this.invalidateCredentialGeneration(profileId);
       return change.result;
     });
   }
@@ -211,8 +226,180 @@ export class ConfigCenter {
         new Date().toISOString(),
       );
       await this.options.settingsStore.writeSettings(change.settings);
+      const oldProfile = current.modelProfiles.find((profile) => profile.profileId === change.result.profileId);
+      const newProfile = change.settings.modelProfiles.find((profile) => profile.profileId === change.result.profileId);
+      if (oldProfile !== undefined && newProfile !== undefined &&
+          (modelProviderConnectionIdentity(oldProfile) !== modelProviderConnectionIdentity(newProfile) ||
+           input.apiKey !== undefined || input.clearApiKey === true)) {
+        this.invalidateCredentialGeneration(newProfile.profileId);
+      }
       return change.result;
     });
+  }
+
+  async updateModelConfiguration(input: UpdateModelConfigurationInput): Promise<SanitizedModelProviderConfig> {
+    const { profileId, modelId, settings } = parseModelConfigurationUpdate(input);
+    return this.runMutation(async () => {
+      const current = await this.readOrCreateSettings();
+      const profile = current.modelProfiles.find((item) => item.profileId === profileId);
+      if (profile === undefined) throw new ConfigCenterValidationError(`Model profile not found: ${profileId}`);
+      const modelSettings = Object.fromEntries([
+        ...Object.entries(profile.modelSettings ?? {}).filter(([id]) => id !== modelId),
+        ...(settings === undefined ? [] : [[modelId, settings] as const]),
+      ]);
+      const updatedAt = new Date().toISOString();
+      const updatedProfile = {
+        ...profile,
+        modelSettings: Object.keys(modelSettings).length === 0 ? undefined : modelSettings,
+        updatedAt,
+      };
+      const next = normalizeLocalSettings({
+        ...current,
+        modelProfiles: current.modelProfiles.map((item) => item.profileId === profileId ? updatedProfile : item),
+        updatedAt,
+      });
+      await this.options.settingsStore.writeSettings(next);
+      return toSanitizedModelProfile({ profile: updatedProfile, secretStore: this.options.secretStore });
+    });
+  }
+
+  async createModelProviderCredentialStore(
+    profileId: string,
+    scope: {
+      readonly rotateRevisionOnWrite?: boolean;
+      readonly onPublicationStarted?: () => void;
+      readonly preparePublication?: (input: {
+        readonly connection: ModelProviderConnectionSettings;
+        readonly credential: unknown;
+      }) => {
+        readonly connection: ModelProviderConnectionSettings;
+        readonly credential: unknown | undefined;
+      };
+    } = {},
+  ): Promise<ModelProviderCredentialStorePort> {
+    profileId = normalizeProfileId(profileId);
+    return this.runMutation(async () => {
+      const settings = await this.readOrCreateSettings();
+      const profile = settings.modelProfiles.find((item) => item.profileId === profileId);
+      if (profile === undefined) throw new ConfigCenterValidationError(`Model profile not found: ${profileId}`);
+      let identity = modelProviderConnectionIdentity(profile);
+      let generation = this.credentialGenerations.get(profileId) ?? 0;
+      const requireCurrent = async () => {
+        const current = await this.readOrCreateSettings();
+        const candidate = current.modelProfiles.find((item) => item.profileId === profileId);
+        if (candidate === undefined || modelProviderConnectionIdentity(candidate) !== identity ||
+            (this.credentialGenerations.get(profileId) ?? 0) !== generation) {
+          throw new ConfigCenterValidationError("Model credential operation belongs to a removed or changed connection.");
+        }
+        return candidate;
+      };
+      return {
+        read: (options) => this.runMutation(async () => {
+          options?.signal?.throwIfAborted();
+          const current = await requireCurrent();
+          return readModelProviderCredential(this.options.secretStore, current);
+        }),
+        modify: (update, options) => {
+          const operationIdentity = identity;
+          const operationGeneration = generation;
+          const requireOperationCurrent = async () => {
+            if (identity !== operationIdentity || generation !== operationGeneration ||
+                (this.credentialGenerations.get(profileId) ?? 0) !== operationGeneration) {
+              throw new ConfigCenterValidationError("Model credential operation was revoked before publication.");
+            }
+            return requireCurrent();
+          };
+          return this.runCredentialMutation(profileId, async () => {
+            options?.signal?.throwIfAborted();
+            const previous = await this.runMutation(async () => {
+              const current = await requireOperationCurrent();
+              return readModelProviderCredential(this.options.secretStore, current);
+            });
+            const next = await update(previous);
+            options?.signal?.throwIfAborted();
+            return this.runMutation(async () => {
+              options?.signal?.throwIfAborted();
+              const current = await requireOperationCurrent();
+              if (next === undefined) return previous;
+              if (current.protocolKind !== "native") {
+                throw new ConfigCenterValidationError("Native credential writes require a native connection.");
+              }
+              if (current.piProviderId === undefined || current.connection === undefined) {
+                throw new ConfigCenterValidationError("Native credential publication requires a service and authentication mode.");
+              }
+              const publication = scope.preparePublication === undefined
+                ? { connection: current.connection, credential: next }
+                : scope.preparePublication({ connection: current.connection, credential: next });
+              const connection = parseModelProviderConnectionSettings(publication.connection);
+              // No await may separate this final cancellation check from publication ownership.
+              options?.signal?.throwIfAborted();
+              scope.onPublicationStarted?.();
+              if (JSON.stringify(connection) !== JSON.stringify(current.connection) || scope.rotateRevisionOnWrite === true) {
+                const settings = await this.readOrCreateSettings();
+                const updatedAt = new Date().toISOString();
+                await this.options.settingsStore.writeSettings(normalizeLocalSettings({
+                  ...settings,
+                  modelProfiles: settings.modelProfiles.map((profile) => profile.profileId === profileId
+                    ? { ...profile, connection, updatedAt }
+                    : profile),
+                  updatedAt,
+                }));
+                this.invalidateCredentialGeneration(profileId);
+              }
+              if (publication.credential === undefined) {
+                await this.options.secretStore.deleteSecret(modelProviderCredentialSecretRef({ ...current, connection }));
+              } else {
+                const serialized = JSON.stringify(publication.credential);
+                if (serialized === undefined) throw new ConfigCenterValidationError("Model credential is not serializable.");
+                await this.options.secretStore.writeSecret(modelProviderCredentialSecretRef({ ...current, connection }), serialized);
+              }
+              identity = modelProviderConnectionIdentity({ ...current, connection });
+              generation = this.credentialGenerations.get(profileId) ?? 0;
+              return next;
+            });
+          });
+        },
+        delete: (options) => this.runMutation(async () => {
+          options?.signal?.throwIfAborted();
+          const current = await requireCurrent();
+          await this.options.secretStore.deleteSecret(modelProviderCredentialSecretRef(current));
+          const settings = await this.readOrCreateSettings();
+          const updatedAt = new Date().toISOString();
+          await this.options.settingsStore.writeSettings(normalizeLocalSettings({
+            ...settings,
+            modelProfiles: settings.modelProfiles.map((profile) => profile.profileId === profileId
+              ? { ...profile, updatedAt }
+              : profile),
+            updatedAt,
+          }));
+          this.invalidateCredentialGeneration(profileId);
+          generation = this.credentialGenerations.get(profileId) ?? 0;
+        }),
+      };
+    });
+  }
+
+  async invalidateModelProviderLogin(profileId: string): Promise<void> {
+    await this.runMutation(async () => {
+      this.invalidateCredentialGeneration(profileId);
+    });
+  }
+
+  private invalidateCredentialGeneration(profileId: string): void {
+    profileId = normalizeProfileId(profileId);
+    this.credentialGenerations.set(profileId, (this.credentialGenerations.get(profileId) ?? 0) + 1);
+  }
+
+
+  private runCredentialMutation<T>(profileId: string, operation: () => Promise<T>): Promise<T> {
+    const tail = this.credentialMutationTails.get(profileId) ?? Promise.resolve();
+    const result = tail.then(operation, operation);
+    const tracked = result.then(() => undefined, () => undefined);
+    this.credentialMutationTails.set(profileId, tracked);
+    void tracked.then(() => {
+      if (this.credentialMutationTails.get(profileId) === tracked) this.credentialMutationTails.delete(profileId);
+    });
+    return result;
   }
 
 
@@ -403,8 +590,10 @@ export class ConfigCenter {
   async createModelRuntimeEnvironment(
     input: CreateModelRuntimeEnvironmentInput = {}
   ): Promise<ModelRuntimeConfigEnvironment> {
-    const settings = await this.readOrCreateSettings();
-    return projectModelRuntimeEnvironment(settings, this.options.secretStore, input);
+    return this.runMutation(async () => {
+      const settings = await this.readOrCreateSettings();
+      return projectModelRuntimeEnvironment(settings, this.options.secretStore, input);
+    });
   }
 
   async createMcpRuntimeEnvironment(

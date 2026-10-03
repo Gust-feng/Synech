@@ -1,14 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { ConfigResponse, ModelProviderModelCatalog } from "@panel-api/config";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { ConfigResponse, ModelConfiguration, ModelProviderModelCatalog } from "@panel-api/config";
 import { resolveModelProviderIdentity } from "./provider-logos";
 import { useModelCatalogState } from "./catalog-state";
 import { useProviderCatalogActions } from "./provider-catalog-actions";
 import { useProviderSaveQueue } from "./provider-save-queue";
+import { useModelProviderAuthState, type ModelProviderAuthActions } from "./provider-auth-state";
 import { sameStringList } from "./settings-list-equality";
 import {
   modelFormFromProviderItem,
   modelProviderFormId,
   modelProviderItems,
+  modelProviderPresetItems,
   type ModelForm,
   type ModelProviderListItem,
 } from "./settings-projection";
@@ -16,11 +18,12 @@ import {
   addProviderKey,
   applyModelProviderProjectionDraft,
   modelFormForProviderItem,
-  nextCustomProfileId,
+  nextModelProviderProfileId,
   profileDraftFromModelForm,
   profileFromModelForm,
   reconcileModelProviderProjectionDraft,
   removeCreatedProfileDraft,
+  settleModelProviderProfileDraft,
   upsertProfileDraft,
   type ModelProviderProjectionDraft,
 } from "./provider-projection-draft";
@@ -30,6 +33,7 @@ import {
 } from "./provider-logo-input";
 
 export type ModelProviderManagerOptions = {
+  readonly authActions: ModelProviderAuthActions;
   readonly config?: ConfigResponse;
   readonly active?: boolean;
   readonly modelForm: ModelForm;
@@ -40,6 +44,7 @@ export type ModelProviderManagerOptions = {
   readonly onDeleteModelProvider: (profileId: string, fallbackProfileId?: string) => Promise<void>;
   readonly onFetchModels: (profileId?: string) => Promise<ModelProviderModelCatalog | undefined>;
   readonly onSaveModelCatalog: (profileId: string, catalog: ModelProviderModelCatalog) => Promise<void>;
+  readonly onSaveModelConfiguration: (profileId: string, modelId: string, settings: ModelConfiguration | null) => Promise<void>;
   readonly onRevealModelApiKey: (profileId: string) => Promise<string | undefined>;
   readonly modelCatalogs?: Readonly<Record<string, ModelProviderModelCatalog>>;
 };
@@ -54,12 +59,16 @@ export function useModelProviderManagerState(props: ModelProviderManagerOptions)
   const [revealed, setRevealed] = useState(false);
   const [revealBusy, setRevealBusy] = useState(false);
   const [selectedKey, setSelectedKey] = useState("");
+  const [mutationFailure, setMutationFailure] = useState<{
+    readonly message: string;
+    readonly retry?: () => void;
+  } | undefined>(undefined);
   const revealSeqRef = useRef(0);
   const providerOrderRef = useRef<readonly string[]>([]);
-  const lastActiveProfileIdRef = useRef<string | undefined>(undefined);
+  const deletedProfileIdsRef = useRef(new Set<string>());
   const selectedKeyRef = useRef(selectedKey);
   const previousSelectedProfileIdRef = useRef<string | undefined>(undefined);
-  const saveQueue = useProviderSaveQueue(props.onSave);
+  const saveQueue = useProviderSaveQueue(persistModelForm);
   const revealRef = useRef(props.onRevealModelApiKey);
   revealRef.current = props.onRevealModelApiKey;
   const modelFormRef = useRef(props.modelForm);
@@ -69,11 +78,11 @@ export function useModelProviderManagerState(props: ModelProviderManagerOptions)
   );
   const activeProfileId = projectedConfig?.config?.profileId ?? "";
   const providerItems = useMemo(() => modelProviderItems(projectedConfig), [projectedConfig]);
+  const providerItemsRef = useRef(providerItems);
+  providerItemsRef.current = providerItems;
   const items = providerItems;
   providerOrderRef.current = items.map((item) => item.key);
-  const visibleItems = items.filter((item) =>
-    item.configured || item.protectedBuiltin && CORE_PRESET_IDS.has(item.presetId ?? "") || item.key === selectedKey
-  );
+  const visibleItems = items;
   const filteredItems = visibleItems.filter((item) => {
     const normalized = query.trim().toLowerCase();
     if (normalized.length === 0) return true;
@@ -99,7 +108,7 @@ export function useModelProviderManagerState(props: ModelProviderManagerOptions)
   const hasApiKeyAction = hasKey || selectedSecretConfigured;
   const isActive = props.active !== false;
   modelFormRef.current = selectedForm;
-  selectedKeyRef.current = selectedKey;
+  selectedKeyRef.current = selectedItem?.key ?? "";
 
   useEffect(() => {
     setProviderDraft((previous) => reconcileModelProviderProjectionDraft(previous, props.config));
@@ -108,16 +117,11 @@ export function useModelProviderManagerState(props: ModelProviderManagerOptions)
   useEffect(() => {
     if (items.length === 0) return;
     const activeKey = items.find((item) => item.profileId === activeProfileId)?.key;
-    if (activeProfileId !== lastActiveProfileIdRef.current) {
-      lastActiveProfileIdRef.current = activeProfileId;
-      setSelectedKey(activeKey ?? items[0]!.key);
-      return;
-    }
     if (selectedKey.length > 0 && items.some((item) => item.key === selectedKey)) return;
     setSelectedKey(activeKey ?? items[0]!.key);
   }, [activeProfileId, items, selectedKey]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const nextProfileId = selectedItem === undefined ? undefined : modelProviderFormId(selectedItem);
     const switchedProvider = previousSelectedProfileIdRef.current !== nextProfileId;
     previousSelectedProfileIdRef.current = nextProfileId;
@@ -125,6 +129,11 @@ export function useModelProviderManagerState(props: ModelProviderManagerOptions)
       // 挑选语义只属于打开时的厂商：切换供应商即清空选择面板与名称草稿
       catalogState.setPickerOpenFor(undefined);
       catalogState.setModelNameDrafts({});
+      revealSeqRef.current += 1;
+      setRevealBusy(false);
+      setRevealed(false);
+      catalogState.setModelQuery("");
+      catalogState.setSelectedModelRowId(selectedItem?.model.trim() || undefined);
     }
     if (!isActive || selectedItem === undefined) return;
     if (props.modelForm.profileId === modelProviderFormId(selectedItem)) return;
@@ -136,38 +145,68 @@ export function useModelProviderManagerState(props: ModelProviderManagerOptions)
   }, [isActive, props.setModelForm, selectedItem, props.modelForm.profileId]);
 
   function selectItem(item: ModelProviderListItem): void {
+    if (item.key === selectedItem?.key) return;
     saveQueue.flush();
     setQuery("");
     setSelectedKey(item.key);
+    props.setModelForm(modelFormFromProviderItem(item));
+  }
+
+  function reportMutationFailure(error: unknown, fallback: string, retry?: () => void): void {
+    setMutationFailure({ message: error instanceof Error ? error.message : fallback, retry });
+  }
+
+  async function persistModelForm(form: ModelForm): Promise<void> {
+    const item = providerItemsRef.current.find((candidate) => candidate.profileId === form.profileId);
+    if (item === undefined || deletedProfileIdsRef.current.has(form.profileId)) return;
+    const submitted = profileDraftFromModelForm(form, item, item.profile?.secretConfigured === true);
+    setMutationFailure(undefined);
+    try {
+      await props.onSave(form);
+    } catch (error) {
+      reportMutationFailure(error, "模型服务保存失败。", () => {
+        const currentItem = providerItemsRef.current.find((candidate) => candidate.profileId === form.profileId);
+        if (currentItem === undefined) return;
+        const retryForm = modelFormRef.current.profileId === form.profileId ? modelFormRef.current : form;
+        void saveQueue.commit(retryForm).catch(() => undefined);
+      });
+      throw error;
+    } finally {
+      // Settle only this submission; a newer edit must survive an older response.
+      setProviderDraft((previous) => settleModelProviderProfileDraft(previous, submitted));
+    }
   }
 
   async function addProvider(item: ModelProviderListItem): Promise<void> {
-    if (item.presetId === undefined || item.profileId !== undefined) {
-      selectItem(item);
-      return;
-    }
-    saveQueue.flush();
-    const form = modelFormFromProviderItem(item);
-    await props.onSave(form);
-    setQuery("");
-    setSelectedKey(`profile:${item.presetId}`);
+    if (item.presetId === undefined) return;
+    const count = providerItems.filter((provider) => provider.presetId === item.presetId).length;
+    await createProvider({
+      ...modelFormFromProviderItem(item),
+      profileId: nextModelProviderProfileId(providerItems, providerDraft.createdProfiles),
+      label: count === 0 ? item.title : `${item.title} ${count + 1}`,
+    });
   }
 
   async function addCustomProvider(): Promise<void> {
-    saveQueue.flush();
-    const profileId = nextCustomProfileId(providerItems, providerDraft.createdProfiles);
     const nextForm: ModelForm = {
-      profileId,
+      profileId: nextModelProviderProfileId(providerItems, providerDraft.createdProfiles),
       label: "自定义服务",
       logoDataUrl: "",
       logoCleared: false,
-      baseUrl: "https://api.example.com/v1",
+      baseUrl: "",
       protocolKind: "openai_compatible_chat_completions",
       piProviderId: "",
       model: "",
       apiKey: "",
       apiKeyCleared: false,
     };
+    await createProvider(nextForm);
+  }
+
+  async function createProvider(nextForm: ModelForm): Promise<void> {
+    saveQueue.flush();
+    setQuery("");
+    const profileId = nextForm.profileId;
     const nextProfile = profileFromModelForm(nextForm, projectedConfig?.config?.defaultAiMode);
     const nextKey = `profile:${profileId}`;
     const previousOrder = providerOrderRef.current;
@@ -184,13 +223,15 @@ export function useModelProviderManagerState(props: ModelProviderManagerOptions)
     }));
     try {
       await props.onCreateCustomProfile(nextForm);
-      void props.onReorderModelProviders(providerOrderRef.current.length > 0 ? providerOrderRef.current : nextOrder).catch(() => {
+      void props.onReorderModelProviders(providerOrderRef.current.length > 0 ? providerOrderRef.current : nextOrder).catch((error) => {
         setProviderDraft((previous) => ({ ...previous, order: undefined }));
+        reportMutationFailure(error, "模型服务已添加，但排序保存失败。");
       });
-    } catch {
+    } catch (error) {
       providerOrderRef.current = previousOrder;
       setProviderDraft((previous) => removeCreatedProfileDraft(previous, profileId));
       setSelectedKey((current) => current === nextKey ? "" : current);
+      throw error;
     }
   }
 
@@ -206,13 +247,16 @@ export function useModelProviderManagerState(props: ModelProviderManagerOptions)
     setProviderDraft((previous) => ({ ...previous, order: completeOrder }));
     try {
       await props.onReorderModelProviders(completeOrder);
-    } catch {
+    } catch (error) {
       setProviderDraft((previous) => ({ ...previous, order: undefined }));
+      reportMutationFailure(error, "模型服务排序保存失败。");
     }
   }
 
   async function deleteProvider(item: ModelProviderListItem): Promise<void> {
     if (item.profileId === undefined) return;
+    setMutationFailure(undefined);
+    saveQueue.discard(item.profileId);
     saveQueue.flush();
     const deletingActive = item.profileId === activeProfileId;
     const fallbackItem =
@@ -222,15 +266,17 @@ export function useModelProviderManagerState(props: ModelProviderManagerOptions)
     if (deletingActive && fallbackProfile?.profileId === undefined) {
       try {
         await props.onDeleteModelProvider(item.profileId);
-      } catch {
-        // The parent owns user-facing error state.
+      } catch (error) {
+        reportMutationFailure(error, "模型服务删除失败。");
       }
       return;
     }
     const previousOrder = providerOrderRef.current;
+    const previousEditedProfile = providerDraft.editedProfiles.find((profile) => profile.profileId === item.profileId);
     const nextOrder = items.map((provider) => provider.key).filter((key) => key !== item.key);
     providerOrderRef.current = nextOrder;
-    const wasSelected = selectedKey === item.key;
+    const wasSelected = selectedItem?.key === item.key;
+    deletedProfileIdsRef.current.add(item.profileId);
     setProviderDraft((previous) => ({
       ...previous,
       createdProfiles: previous.createdProfiles.filter((profile) => profile.profileId !== item.profileId),
@@ -244,23 +290,39 @@ export function useModelProviderManagerState(props: ModelProviderManagerOptions)
       order: nextOrder,
     }));
     if (wasSelected) setSelectedKey(fallbackItem?.key ?? "");
+    if (wasSelected && fallbackItem !== undefined) props.setModelForm(modelFormFromProviderItem(fallbackItem));
     try {
       await props.onDeleteModelProvider(item.profileId, deletingActive ? fallbackProfile?.profileId : undefined);
-    } catch {
+    } catch (error) {
+      deletedProfileIdsRef.current.delete(item.profileId);
       providerOrderRef.current = previousOrder;
       setProviderDraft((previous) => ({
         ...previous,
+        editedProfiles: previousEditedProfile === undefined ? previous.editedProfiles
+          : upsertProfileDraft(previous.editedProfiles, previousEditedProfile),
         removedProfileIds: previous.removedProfileIds.filter((profileId) => profileId !== item.profileId),
         activeProfile: previous.activeProfile?.profileId === fallbackProfile?.profileId ? undefined : previous.activeProfile,
         order: previousOrder,
       }));
-      if (wasSelected) setSelectedKey((current) => current === (fallbackItem?.key ?? "") ? item.key : current);
+      if (wasSelected) {
+        setSelectedKey((current) => current === (fallbackItem?.key ?? "") ? item.key : current);
+        if (selectedKeyRef.current === fallbackItem?.key) props.setModelForm(selectedForm);
+      }
+      reportMutationFailure(error, "模型服务删除失败。");
     }
   }
 
   function updateModelForm(patch: Partial<ModelForm>): void {
     if (selectedItem === undefined) return;
-    const nextForm = modelFormForProviderItem({ ...selectedForm, ...patch }, selectedItem);
+    if (selectedItem.protocolKind === "native" && patch.protocolKind !== undefined && patch.protocolKind !== "native") return;
+    const authChanged = patch.connection !== undefined &&
+      patch.connection.authMode !== selectedForm.connection?.authMode;
+    if (authChanged) setRevealed(false);
+    const nextForm = modelFormForProviderItem({
+      ...selectedForm,
+      ...patch,
+      ...(authChanged ? { apiKey: "", apiKeyCleared: false } : {}),
+    }, selectedItem);
     props.setModelForm(nextForm);
     upsertModelFormDraft(nextForm);
     saveQueue.schedule(nextForm);
@@ -269,24 +331,27 @@ export function useModelProviderManagerState(props: ModelProviderManagerOptions)
   function updateProviderLogo(file: File | undefined): void {
     if (file === undefined || selectedItem === undefined) return;
     const targetItem = selectedItem;
-    const targetForm = selectedForm;
-    const targetSecretConfigured = selectedSecretConfigured;
     const mimeType = supportedLogoMimeType(file);
     if (mimeType === undefined) return;
     const reader = new FileReader();
     reader.addEventListener("load", () => {
+      const currentItem = providerItemsRef.current.find((item) => item.key === targetItem.key);
+      if (currentItem === undefined || deletedProfileIdsRef.current.has(modelProviderFormId(currentItem))) return;
       const logoDataUrl = logoDataUrlFromFileReaderResult(reader.result, mimeType);
       if (logoDataUrl === undefined) return;
-      const nextForm = modelFormForProviderItem({ ...targetForm, logoDataUrl, logoCleared: false }, targetItem);
+      const currentForm = selectedKeyRef.current === currentItem.key
+        ? modelFormRef.current
+        : modelFormFromProviderItem(currentItem);
+      const nextForm = modelFormForProviderItem({ ...currentForm, logoDataUrl, logoCleared: false }, currentItem);
       if (selectedKeyRef.current === targetItem.key) props.setModelForm(nextForm);
-      upsertModelFormDraftForItem(nextForm, targetItem, targetSecretConfigured);
+      upsertModelFormDraftForItem(nextForm, currentItem, currentItem.profile?.secretConfigured === true);
       void saveQueue.commit(nextForm).catch(() => undefined);
     });
     reader.readAsDataURL(file);
   }
 
   function upsertModelFormDraft(form: ModelForm): void {
-    if (selectedItem?.profileId === undefined) return;
+    if (selectedItem?.profileId === undefined || form.profileId !== modelFormRef.current.profileId) return;
     upsertModelFormDraftForItem(form, selectedItem, selectedSecretConfigured);
   }
 
@@ -296,6 +361,8 @@ export function useModelProviderManagerState(props: ModelProviderManagerOptions)
     secretConfigured: boolean,
   ): void {
     if (item.profileId === undefined) return;
+    if (deletedProfileIdsRef.current.has(item.profileId) ||
+      !providerItemsRef.current.some((candidate) => candidate.profileId === item.profileId)) return;
     const nextProfile = profileDraftFromModelForm(modelFormForProviderItem(form, item), item, secretConfigured);
     setProviderDraft((previous) => {
       const isCreatedProfile = previous.createdProfiles.some((profile) => profile.profileId === nextProfile.profileId);
@@ -325,7 +392,9 @@ export function useModelProviderManagerState(props: ModelProviderManagerOptions)
     setRevealBusy(true);
     try {
       const key = await revealRef.current(selectedProfileId);
-      if (seq !== revealSeqRef.current || selectedKeyRef.current !== selectedItem?.key) return;
+      if (seq !== revealSeqRef.current || selectedKeyRef.current !== selectedItem?.key ||
+        modelFormRef.current.apiKey !== selectedForm.apiKey ||
+        modelFormRef.current.apiKeyCleared !== selectedForm.apiKeyCleared) return;
       if (typeof key === "string" && key.length > 0) {
         const nextForm = modelFormForProviderItem({
           ...modelFormRef.current,
@@ -335,12 +404,15 @@ export function useModelProviderManagerState(props: ModelProviderManagerOptions)
         props.setModelForm(nextForm);
         setRevealed(true);
       }
+    } catch (error) {
+      reportMutationFailure(error, "API Key 读取失败。");
     } finally {
       if (seq === revealSeqRef.current) setRevealBusy(false);
     }
   }
 
   function setSelectedModelForm(form: ModelForm): void {
+    if (form.profileId !== modelFormRef.current.profileId) return;
     props.setModelForm(selectedItem === undefined ? form : modelFormForProviderItem(form, selectedItem));
   }
 
@@ -356,17 +428,40 @@ export function useModelProviderManagerState(props: ModelProviderManagerOptions)
     selectedForm,
     selectedCatalog,
     catalogState,
-    setModelForm: props.setModelForm,
+    setModelForm: setSelectedModelForm,
     upsertModelFormDraft,
     saveModelImmediately: saveQueue.commit,
     onFetchModels: props.onFetchModels,
-    onSaveModelCatalog: props.onSaveModelCatalog,
+    onSaveModelCatalog: async (profileId, catalog) => {
+      try {
+        await props.onSaveModelCatalog(profileId, catalog);
+      } catch (error) {
+        reportMutationFailure(error, "模型列表保存失败。");
+        throw error;
+      }
+    },
   });
+  const authState = useModelProviderAuthState({
+    item: selectedItem,
+    form: selectedForm,
+    actions: props.authActions,
+    saveModelImmediately: saveQueue.commit,
+  });
+  const authMode = selectedForm.connection?.authMode ?? "api_key";
+  const fetchDisabledReason = selectedForm.protocolKind === "native"
+    ? authMode === "oauth" && (authState.auth?.configured !== true || authState.auth?.authSession?.status === "pending")
+      ? "请先完成账号登录"
+      : authMode === "api_key" && !hasApiKeyAction
+        ? "请先填写 API Key"
+        : undefined
+    : selectedForm.baseUrl.trim().length === 0 ? "请先填写服务地址" : undefined;
 
   return {
     filteredItems,
-    showProviderSearch: visibleItems.length > 6,
-    catalogItems: items.filter((item) => !item.configured && !CORE_PRESET_IDS.has(item.presetId ?? "")),
+    showProviderSearch: visibleItems.length > 6 || query.trim().length > 0,
+    mutationFailure,
+    clearMutationFailure: () => setMutationFailure(undefined),
+    catalogItems: modelProviderPresetItems(projectedConfig),
     query,
     setQuery,
     selectedItem,
@@ -381,6 +476,9 @@ export function useModelProviderManagerState(props: ModelProviderManagerOptions)
     fetchFeedback: catalogActions.fetchFeedback,
     clearFetchFeedback: catalogActions.clearFetchFeedback,
     catalogState,
+    authState,
+    canFetchModels: fetchDisabledReason === undefined,
+    fetchDisabledReason,
     selectItem,
     addProvider,
     addCustomProvider,
@@ -399,5 +497,3 @@ export function useModelProviderManagerState(props: ModelProviderManagerOptions)
     addCatalogModel: catalogActions.addCatalogModel,
   };
 }
-
-const CORE_PRESET_IDS: ReadonlySet<string> = new Set(["openai", "anthropic", "deepseek", "moonshot", "glm", "minimax", "qwen"]);

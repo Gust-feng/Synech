@@ -1,6 +1,7 @@
 # ADR 0004：模型事实以 Pi 为唯一事实源（pi-only model facts）
 
 > 状态：Accepted（2026-09-28）
+> ADR 0010 接续并替代连接级限定匹配、禁止用户设置和自定义连接 transport 规则。Pi 仍是自动事实源；每模型目录关联与用户配置独立保存，用户值不标为 Pi 确认事实。本文相关旧规则保留为历史背景，不作为新实现依据。
 > 日期：2026-09-28
 > 关联：ADR 0001（其「pi 生成目录镜像」决策由本 ADR 作废，见该文首注记）；ADR 0005（模型协议 Adapter：`piProviderId` 匹配、连接级 transport 与构造期失败）；ADR 0003（Agent Runtime Provider 边界）
 > 影响面：`src/domain/config` 事实契约、`src/adapters/intelligence` 解析与 binding、`src/app/model-runtime` 能力解析、运行开始准入、模型设置面板投影

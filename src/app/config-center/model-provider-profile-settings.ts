@@ -10,6 +10,8 @@ import {
   parseOpenAIModelRequestSettings,
 } from "./openai-request-settings.js";
 import { ConfigSchemaValidationError, optionalString, safeConfigId } from "./settings-utils.js";
+import { parseModelProviderConnectionSettings } from "./model-provider-connection-settings.js";
+import { parseModelSettings } from "./model-configuration-schema.js";
 import {
   DEFAULT_MODEL_PROFILE_ID,
   DEFAULT_MODEL_PROVIDER_BASE_URL,
@@ -67,7 +69,9 @@ export function parseModelProfile(
     baseUrl,
     model: optionalString(record.model),
     openAI: parseOpenAIModelRequestSettings(record.openAI),
+    modelSettings: parseModelSettings(record.modelSettings),
     piProviderId: optionalString(record.piProviderId),
+    connection: parseModelProviderConnectionSettings(record.connection),
     defaultAiMode: normalizeProfileAiModeForProtocol(protocolKind),
     secretRef: optionalString(record.secretRef) ?? fallbacks.fallbackSecretRef,
     enabled: typeof record.enabled === "boolean" ? record.enabled : true,
@@ -94,6 +98,16 @@ export function normalizeModelProfile(
   const normalizedProtocolKind = normalizeProfileProtocol(protocolKind);
   const openAI =
     input.openAI === undefined ? fallback.openAI : normalizeOpenAIModelRequestSettings(input.openAI);
+  const connection = normalizedProtocolKind === "native"
+    ? parseModelProviderConnectionSettings(input.connection ?? fallback.connection)
+    : undefined;
+  if (normalizedProtocolKind === "native" && connection === undefined) {
+    throw new ConfigSchemaValidationError("Native model services require an explicit authentication mode.");
+  }
+  const piProviderId = normalizeOptionalString(input.piProviderId);
+  if (normalizedProtocolKind === "native" && piProviderId === undefined) {
+    throw new ConfigSchemaValidationError("Native model services require an explicit provider identity.");
+  }
   return {
     profileId: normalizeProfileId(input.profileId ?? fallback.profileId),
     label: normalizeOptionalString(input.label) ?? fallback.label,
@@ -102,11 +116,15 @@ export function normalizeModelProfile(
       : normalizeLogoDataUrl(input.logoDataUrl) ?? fallback.logoDataUrl,
     providerKind,
     protocolKind: normalizedProtocolKind,
-    baseUrl: normalizeBaseUrl(input.baseUrl) ?? fallback.baseUrl,
+    baseUrl: input.baseUrl === undefined ? fallback.baseUrl : normalizeBaseUrl(input.baseUrl),
     model: normalizeOptionalString(input.model) ?? fallback.model,
     // piProviderId 永远显式声明：不从其它 profile（含默认 profile）继承。
-    piProviderId: normalizeOptionalString(input.piProviderId),
+    piProviderId,
+    connection,
     openAI,
+    modelSettings: parseModelSettings(
+      input.modelSettings === undefined ? fallback.modelSettings : input.modelSettings,
+    ),
     defaultAiMode: normalizeProfileAiModeForProtocol(normalizedProtocolKind),
     secretRef: normalizeOptionalString(input.secretRef) ?? secretRefForProfile(input.profileId ?? fallback.profileId),
     enabled: input.enabled ?? fallback.enabled,
@@ -124,9 +142,9 @@ export function normalizeBuiltInModelProviderProfiles(
       return profile;
     }
     const providerKind = preset.providerKind;
-    const protocolKind = normalizeBuiltInProfileProtocol(preset);
+    const protocolKind = profile.protocolKind === "native" ? "native" : normalizeBuiltInProfileProtocol(preset);
     const defaultAiMode = normalizeProfileAiModeForProtocol(protocolKind);
-    const baseUrl = normalizeBuiltInProfileBaseUrl(profile, preset);
+    const baseUrl = protocolKind === "native" ? normalizeBaseUrl(profile.baseUrl) : normalizeBuiltInProfileBaseUrl(profile, preset);
     // Model validity comes from the profile's /models catalog. Provider
     // identity and Base URL are not model-name inference signals.
     const model = profile.model;
@@ -173,7 +191,8 @@ function parseModelProtocolKind(
   if (
     value === "anthropic_messages" ||
     value === "openai_responses" ||
-    value === "openai_compatible_chat_completions"
+    value === "openai_compatible_chat_completions" ||
+    value === "native"
   ) {
     return value;
   }
@@ -196,6 +215,8 @@ function normalizeProfileProtocol(
       return "openai_responses";
     case "openai_compatible_chat_completions":
       return "openai_compatible_chat_completions";
+    case "native":
+      return "native";
   }
 }
 
@@ -209,6 +230,8 @@ function normalizeProfileAiModeForProtocol(
       return "openai-compatible";
     case "openai_responses":
       return "openai-responses";
+    case "native":
+      return "native";
   }
 }
 
@@ -283,7 +306,9 @@ function sameModelProfile(left: ModelProviderProfileSettings, right: ModelProvid
     left.baseUrl === right.baseUrl &&
     left.model === right.model &&
     JSON.stringify(left.openAI ?? {}) === JSON.stringify(right.openAI ?? {}) &&
+    JSON.stringify(left.modelSettings) === JSON.stringify(right.modelSettings) &&
     left.piProviderId === right.piProviderId &&
+    JSON.stringify(left.connection) === JSON.stringify(right.connection) &&
     left.defaultAiMode === right.defaultAiMode &&
     left.secretRef === right.secretRef &&
     left.enabled === right.enabled;

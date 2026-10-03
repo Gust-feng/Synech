@@ -1,0 +1,3 @@
+[data-model-icon-variant="monochrome"] { display: none; }
+html[data-model-icon-style="monochrome"] [data-model-icon-variant="brand"] { display: none; }
+html[data-model-icon-style="monochrome"] [data-model-icon-variant="monochrome"] { display: inline; }

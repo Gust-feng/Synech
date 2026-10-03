@@ -16,7 +16,7 @@ export type ModelProviderProjectionDraft = {
   readonly order?: readonly string[];
 };
 
-export function nextCustomProfileId(
+export function nextModelProviderProfileId(
   items: readonly ModelProviderListItem[],
   createdProfiles: readonly ModelProviderProfileItem[],
 ): string {
@@ -58,15 +58,17 @@ export function applyModelProviderProjectionDraft(
     }
   }
   for (const profile of draft.editedProfiles) {
-    if (profile.profileId !== undefined && !removedProfileIds.has(profile.profileId)) {
+    if (profile.profileId !== undefined && profiles.has(profile.profileId) && !removedProfileIds.has(profile.profileId)) {
       profiles.set(profile.profileId, profile);
     }
   }
   const nextProfiles = [...profiles.values()];
+  const projectedActiveProfile = draft.activeProfile?.profileId !== undefined &&
+    profiles.has(draft.activeProfile.profileId) ? draft.activeProfile : undefined;
   const currentProfileId = config.config?.profileId;
   const currentConfigRemoved = currentProfileId !== undefined && removedProfileIds.has(currentProfileId);
   const activeProfile =
-    draft.activeProfile ??
+    projectedActiveProfile ??
     (currentConfigRemoved
       ? nextProfiles[0]
       : currentProfileId === undefined
@@ -96,10 +98,15 @@ export function reconcileModelProviderProjectionDraft(
   const nextEditedProfiles = draft.editedProfiles.filter((profile) => {
     if (profile.profileId === undefined) return false;
     const serverProfile = serverProfilesById.get(profile.profileId);
-    return serverProfile === undefined || !sameProjectedProfile(serverProfile, profile);
+    return serverProfile !== undefined && !sameProjectedProfile(serverProfile, profile);
   });
   const nextRemovedProfileIds = draft.removedProfileIds.filter((profileId) => serverProfileIds.has(profileId));
-  const nextActiveProfile = draft.activeProfile?.profileId === config.config?.profileId ? undefined : draft.activeProfile;
+  const activeProfileId = draft.activeProfile?.profileId;
+  const nextActiveProfile = activeProfileId === undefined ||
+    activeProfileId === config.config?.profileId ||
+    !serverProfileIds.has(activeProfileId) && !nextCreatedProfiles.some((profile) => profile.profileId === activeProfileId)
+    ? undefined
+    : draft.activeProfile;
   const nextOrder = sameStringList(draft.order, config.modelProviderOrder) ? undefined : draft.order;
   if (
     sameProfileList(nextCreatedProfiles, draft.createdProfiles) &&
@@ -130,6 +137,7 @@ export function profileFromModelForm(
     providerKind: "openai_compatible",
     protocolKind: form.protocolKind || "openai_compatible_chat_completions",
     piProviderId: form.piProviderId.trim() || undefined,
+    connection: form.connection,
     baseUrl: form.baseUrl,
     model: form.model,
     defaultAiMode,
@@ -150,8 +158,9 @@ export function profileDraftFromModelForm(
     logoDataUrl: item.protectedBuiltin ? item.logoDataUrl : logoDataUrlFromModelForm(form),
     providerKind: fallback?.providerKind ?? item.preset?.providerKind ?? "openai_compatible",
     protocolKind: form.protocolKind || fallback?.protocolKind || item.protocolKind,
-    piProviderId: form.piProviderId.trim() || fallback?.piProviderId,
-    baseUrl: form.baseUrl || fallback?.baseUrl || item.baseUrl,
+    piProviderId: form.piProviderId.trim() || undefined,
+    connection: form.connection,
+    baseUrl: form.baseUrl,
     model: form.model,
     defaultAiMode: fallback?.defaultAiMode,
     secretConfigured: form.apiKeyCleared
@@ -174,6 +183,19 @@ export function upsertProfileDraft(
     ...profiles.filter((profile) => profile.profileId !== nextProfile.profileId),
     nextProfile,
   ];
+}
+
+export function settleModelProviderProfileDraft(
+  draft: ModelProviderProjectionDraft,
+  submitted: ModelProviderProfileItem,
+): ModelProviderProjectionDraft {
+  const edited = draft.editedProfiles.find((profile) => profile.profileId === submitted.profileId);
+  if (edited === undefined || !sameProjectedProfile(edited, submitted)) return draft;
+  return {
+    ...draft,
+    editedProfiles: draft.editedProfiles.filter((profile) => profile.profileId !== submitted.profileId),
+    activeProfile: draft.activeProfile?.profileId === submitted.profileId ? undefined : draft.activeProfile,
+  };
 }
 
 export function removeCreatedProfileDraft(
@@ -219,9 +241,18 @@ function sameProjectedProfile(left: ModelProviderProfileItem, right: ModelProvid
     left.providerKind === right.providerKind &&
     left.protocolKind === right.protocolKind &&
     left.piProviderId === right.piProviderId &&
+    sameConnection(left.connection, right.connection) &&
     left.baseUrl === right.baseUrl &&
     left.model === right.model &&
-    left.defaultAiMode === right.defaultAiMode;
+    left.defaultAiMode === right.defaultAiMode &&
+    left.secretConfigured === right.secretConfigured;
+}
+
+function sameConnection(left: ModelForm["connection"], right: ModelForm["connection"]): boolean {
+  const leftFields = Object.entries(left ?? {});
+  const rightFields = Object.entries(right ?? {});
+  return leftFields.length === rightFields.length &&
+    leftFields.every(([key, value]) => rightFields.some(([otherKey, otherValue]) => key === otherKey && value === otherValue));
 }
 
 function isDefinedString(value: string | undefined): value is string {

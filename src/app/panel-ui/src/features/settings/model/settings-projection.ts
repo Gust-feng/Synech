@@ -6,17 +6,18 @@ import type {
 import {
   builtinProviderPresetId,
   modelProviderSortRank,
-  resolveModelProviderIdentity,
 } from "./provider-logos.js";
 
 export type ModelForm = {
   readonly profileId: string;
+  readonly presetId?: string;
   readonly label: string;
   readonly logoDataUrl: string;
   readonly logoCleared: boolean;
   readonly baseUrl: string;
   readonly protocolKind: ModelProtocolKind;
   readonly piProviderId: string;
+  readonly connection?: ModelProviderPreset["connection"];
   readonly model: string;
   readonly apiKey: string;
   readonly apiKeyCleared: boolean;
@@ -24,14 +25,14 @@ export type ModelForm = {
 
 export type ModelProviderProfileItem = NonNullable<ConfigResponse["profiles"]>[number];
 export type ModelProviderModelItem = ModelProviderModelCatalog["models"][number];
-export type ModelProtocolKind =
-  | "anthropic_messages"
-  | "openai_responses"
-  | "openai_compatible_chat_completions";
+export type ModelProtocolKind = NonNullable<ModelProviderProfileItem["protocolKind"]>;
 
 export type ModelProviderListItem = {
   readonly key: string;
   readonly title: string;
+  readonly brandId?: string;
+  readonly brandLabel?: string;
+  readonly serviceLabel?: string;
   readonly vendor?: string;
   readonly logoDataUrl?: string;
   readonly model: string;
@@ -42,6 +43,7 @@ export type ModelProviderListItem = {
   readonly profile?: ModelProviderProfileItem;
   readonly presetId?: string;
   readonly preset?: ModelProviderPreset;
+  readonly connection?: ModelProviderPreset["connection"];
   readonly configured: boolean;
   readonly protectedBuiltin: boolean;
   readonly active?: boolean;
@@ -66,60 +68,21 @@ export function modelProviderItems(
   const presets = (config?.modelProviderMarket?.presets ?? []).filter(isSettingsModelProviderPreset);
   const activeProfileId = config?.config?.profileId;
   const order = config?.modelProviderOrder ?? [];
-  const profileBindings = profiles.map((profile: ModelProviderProfileItem) => ({
-    profile,
-    // Only the profile id is a stable relationship to a built-in slot. A custom
-    // provider may intentionally use the same endpoint as a preset, but must
-    // retain its own label and logo object.
-    presetId: builtinProviderPresetId({ profileId: profile.profileId }),
-  }));
-  const boundProfileIds = new Set<string>();
-  const presetItems = presets.map((preset: ModelProviderPreset) => {
-    const bindings = profileBindings.filter((item) => {
-      if (item.profile.profileId === preset.presetId) return true;
-      return item.presetId === preset.presetId;
-    });
-    for (const item of bindings) {
-      if (item.profile.profileId !== undefined) {
-        boundProfileIds.add(item.profile.profileId);
-      }
-    }
-    const binding =
-      bindings.find((item) => item.profile.profileId === activeProfileId) ??
-      bindings.find((item) => item.profile.profileId === preset.presetId) ??
-      bindings[0];
-    if (binding?.profile.profileId !== undefined) {
-      boundProfileIds.add(binding.profile.profileId);
-    }
-    const profile = binding?.profile;
-    const configuredModel = profile?.model ?? "";
-    return {
-      key: profile?.profileId === undefined ? `preset:${preset.presetId}` : `profile:${profile.profileId}`,
-      title: profile === undefined
-        ? preset.label
-        : friendlyProfileTitle(profile),
-      vendor: preset.vendor,
-      logoDataUrl: profile?.logoDataUrl,
-      model: configuredModel,
-      baseUrl: profile === undefined ? preset.baseUrl : visibleProfileBaseUrl(profile),
-      protocolKind: profile?.protocolKind ?? preset.protocolKind,
-      piProviderId: profile?.piProviderId ?? preset.piProviderId,
-      profileId: profile?.profileId,
-      profile,
-      presetId: preset.presetId,
-      preset,
-      configured: profile !== undefined,
-      protectedBuiltin: profile === undefined,
-      active: profile?.profileId !== undefined && profile.profileId === activeProfileId,
-    } satisfies ModelProviderListItem;
-  });
-  const customItems = profileBindings
-    .filter((item) => item.profile.profileId === undefined || !boundProfileIds.has(item.profile.profileId))
-    .map(({ profile }: { readonly profile: ModelProviderProfileItem }) => {
+  const profileItems = profiles.map((profile: ModelProviderProfileItem) => {
+      const slotId = builtinProviderPresetId({ profileId: profile.profileId });
+      // Template metadata can describe an explicitly declared provider, but
+      // connection identity always remains the independent profileId.
+      const preset = presets.find((candidate) =>
+        profile.piProviderId !== undefined && candidate.piProviderId === profile.piProviderId
+      ) ?? presets.find((candidate) => candidate.presetId === slotId);
       const configuredModel = profile.model ?? "";
       return {
         key: `profile:${profile.profileId ?? profile.label ?? profile.baseUrl ?? profile.model ?? "custom"}`,
         title: friendlyProfileTitle(profile),
+        brandId: preset?.brandId ?? preset?.presetId,
+        brandLabel: preset?.brandLabel ?? preset?.label,
+        serviceLabel: preset?.serviceLabel ?? preset?.label,
+        vendor: preset?.vendor,
         logoDataUrl: profile.logoDataUrl,
         model: configuredModel,
         baseUrl: visibleProfileBaseUrl(profile),
@@ -127,29 +90,51 @@ export function modelProviderItems(
         piProviderId: profile.piProviderId,
         profileId: profile.profileId,
         profile,
+        presetId: preset?.presetId,
+        preset,
+        connection: profile.connection,
         configured: true,
-        protectedBuiltin: false,
+        protectedBuiltin: PROTECTED_BUILTIN_PROFILE_IDS.has(profile.profileId ?? ""),
         active: profile.profileId !== undefined && profile.profileId === activeProfileId,
       } satisfies ModelProviderListItem;
     });
-  return [...presetItems, ...customItems]
+  return profileItems
     .map((item: ModelProviderListItem, index: number) => ({ item, index }))
     .sort((left, right) => {
-      const rankDelta = modelProviderSortRank(left.item) - modelProviderSortRank(right.item);
-      if (rankDelta !== 0 && (modelProviderSortRank(left.item) < NEUTRAL_PROVIDER_RANK || modelProviderSortRank(right.item) < NEUTRAL_PROVIDER_RANK)) {
-        return rankDelta;
-      }
       const leftOrder = orderIndex(order, left.item.key);
       const rightOrder = orderIndex(order, right.item.key);
       if (leftOrder !== rightOrder) {
         return leftOrder - rightOrder;
       }
+      const rankDelta = modelProviderSortRank(left.item) - modelProviderSortRank(right.item);
       return rankDelta === 0 ? left.index - right.index : rankDelta;
     })
     .map(({ item }: { readonly item: ModelProviderListItem }) => item);
 }
 
-const NEUTRAL_PROVIDER_RANK = 99;
+const PROTECTED_BUILTIN_PROFILE_IDS: ReadonlySet<string> = new Set(["default", "deepseek", "moonshot", "glm", "minimax"]);
+
+export function modelProviderPresetItems(config: ConfigResponse | undefined): readonly ModelProviderListItem[] {
+  return (config?.modelProviderMarket?.presets ?? [])
+    .filter(isSettingsModelProviderPreset)
+    .map((preset) => ({
+      key: `preset:${preset.presetId}`,
+      title: preset.label,
+      brandId: preset.brandId ?? preset.presetId,
+      brandLabel: preset.brandLabel ?? preset.label,
+      serviceLabel: preset.serviceLabel ?? preset.label,
+      vendor: preset.vendor,
+      model: "",
+      baseUrl: preset.baseUrl,
+      protocolKind: preset.protocolKind,
+      piProviderId: preset.piProviderId,
+      presetId: preset.presetId,
+      preset,
+      connection: preset.connection,
+      configured: false,
+      protectedBuiltin: false,
+    }));
+}
 
 export function modelCatalogItemsWithConfiguredModel(
   models: readonly ModelProviderModelItem[],
@@ -177,12 +162,14 @@ export function modelProviderFormId(item: ModelProviderListItem): string {
 export function modelFormFromProviderItem(item: ModelProviderListItem): ModelForm {
   return {
     profileId: modelProviderFormId(item),
+    presetId: item.presetId,
     label: item.title,
     logoDataUrl: item.logoDataUrl ?? "",
     logoCleared: false,
     baseUrl: item.baseUrl,
     protocolKind: item.protocolKind,
     piProviderId: item.piProviderId ?? "",
+    connection: item.connection,
     model: item.model,
     apiKey: "",
     apiKeyCleared: false,
@@ -198,7 +185,7 @@ export function modelProtocolOptions(): readonly { readonly value: ModelProtocol
 }
 
 export function modelProtocolKind(value: string): ModelProtocolKind {
-  if (value === "anthropic_messages" || value === "openai_responses") return value;
+  if (value === "anthropic_messages" || value === "openai_responses" || value === "native") return value;
   return "openai_compatible_chat_completions";
 }
 
@@ -223,14 +210,14 @@ function isSettingsModelProviderProfile(profile: ModelProviderProfileItem): bool
 /**
  * Protocols the model settings surface can list and edit.
  *
- * The product serves three transports. Filtering this list would hide valid
- * Pi-native connections (Anthropic Messages, MiniMax) from the user entirely,
- * so every served protocol must stay selectable here.
+ * Native services are listed alongside generic connections, but only the
+ * three generic protocols appear in the user-editable protocol selector.
  */
 const SETTINGS_MODEL_PROTOCOLS: ReadonlySet<ModelProtocolKind> = new Set<ModelProtocolKind>([
   "anthropic_messages",
   "openai_responses",
   "openai_compatible_chat_completions",
+  "native",
 ]);
 
 function isSettingsModelProtocol(

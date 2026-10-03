@@ -30,12 +30,6 @@
   color: var(--model-picker-fg);
 }
 
-.model-option-picker[data-variant="composer"] {
-  width: fit-content;
-  max-width: min(240px, 100%);
-  flex: 0 1 auto;
-}
-
 .model-option-picker[data-variant="settings"] {
   width: 100%;
 }
@@ -73,13 +67,6 @@
   background: var(--model-picker-field-bg);
   padding: 0 12px;
   font-size: 13px;
-}
-
-.model-option-picker[data-variant="composer"] .model-picker-trigger {
-  height: 26px;
-  justify-content: flex-start;
-  padding: 0 8px;
-  font-size: 11px;
 }
 
 .model-option-picker[data-variant="settings"] .model-picker-trigger {
@@ -144,14 +131,14 @@
   color: inherit;
   font-size: inherit;
   font-weight: var(--model-picker-weight-label);
-  line-height: 1.2;
+  line-height: 1.5;
 }
 
 .model-picker-trigger-provider {
   color: var(--model-picker-placeholder);
   font-size: 11px;
   font-weight: var(--model-picker-weight-body);
-  line-height: 1.2;
+  line-height: 1.5;
 }
 
 .model-option-picker[data-variant="settings"] .model-picker-trigger-provider {
@@ -168,32 +155,8 @@
   transform: rotate(180deg);
 }
 
-.model-option-picker[data-variant="settings"] > .model-picker-trigger > .model-picker-icon {
+.model-option-picker[data-variant="settings"] .model-picker-model-control > .model-picker-trigger > .model-picker-icon {
   display: none;
-}
-
-.model-option-picker[data-variant="composer"] .model-picker-trigger {
-  height: 28px;
-  min-width: 0;
-  gap: 6px;
-}
-
-.model-option-picker[data-variant="composer"] > .model-picker-trigger {
-  width: fit-content;
-  max-width: 100%;
-}
-
-.model-option-picker[data-variant="composer"] > .model-picker-trigger > .model-picker-icon {
-  width: 18px;
-  height: 18px;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-}
-
-.model-option-picker[data-variant="composer"] .model-picker-icon svg {
-  width: 16px;
-  height: 16px;
 }
 
 .model-picker-icon {
@@ -227,9 +190,10 @@
   position: absolute;
   left: 0;
   z-index: 120;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   width: min(300px, calc(100vw - 48px));
-  max-height: 340px;
+  max-height: min(340px, var(--model-picker-available-height, calc(100dvh - 32px)));
   overflow: hidden;
   border: 1px solid var(--model-picker-popover-border);
   border-radius: var(--model-picker-radius-md);
@@ -243,17 +207,20 @@
   width: max(100%, min(340px, calc(100vw - 48px)));
 }
 
-.model-option-picker[data-placement="top"] .model-picker-popover {
+.model-picker-popover[data-placement="top"] {
   bottom: calc(100% + 8px);
 }
 
-.model-option-picker[data-placement="bottom"] .model-picker-popover {
+.model-picker-popover[data-placement="bottom"] {
   top: calc(100% + 8px);
 }
 
-.model-picker-search {
+/* Popover 内容类名与模型挑选面板（provider.css）存在同名类，
+   必须限定在组件根内，避免两个组件互相污染布局。 */
+.model-option-picker .model-picker-search {
   display: flex;
   min-height: 32px;
+  flex: 0 0 auto;
   align-items: center;
   gap: 7px;
   margin-bottom: 5px;
@@ -264,7 +231,7 @@
   color: var(--model-picker-placeholder);
 }
 
-.model-picker-search input {
+.model-option-picker .model-picker-search input {
   min-width: 0;
   flex: 1 1 auto;
   border: 0;
@@ -277,37 +244,39 @@
   outline: none;
 }
 
-.model-picker-search input:focus,
-.model-picker-search input:focus-visible,
-.ui-workbench-root .settings-content .model-picker-search input:focus,
-.ui-workbench-root .settings-content .model-picker-search input:focus-visible {
+.model-option-picker .model-picker-search input:focus,
+.model-option-picker .model-picker-search input:focus-visible,
+.ui-workbench-root .settings-content .model-option-picker .model-picker-search input:focus,
+.ui-workbench-root .settings-content .model-option-picker .model-picker-search input:focus-visible {
   border-color: transparent;
   box-shadow: none;
   outline: none;
   outline-offset: 0;
 }
 
-.model-picker-search input::placeholder {
+.model-option-picker .model-picker-search input::placeholder {
   color: var(--model-picker-placeholder);
 }
 
-.model-picker-list {
-  display: grid;
-  max-height: 250px;
+.model-option-picker .model-picker-list {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--model-picker-border) transparent;
 }
 
-.model-option-picker[data-variant="settings"] .model-picker-list {
-  max-height: 280px;
-}
-
-.model-picker-group {
+.model-option-picker .model-picker-group {
   display: grid;
+  flex: 0 0 auto;
   gap: 4px;
   padding: 4px 0;
 }
 
-.model-picker-group h3 {
+.model-option-picker .model-picker-group h3 {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -321,11 +290,11 @@
   text-transform: uppercase;
 }
 
-.model-picker-group h3 small {
+.model-option-picker .model-picker-group h3 small {
   display: none;
 }
 
-.model-picker-row {
+.model-option-picker .model-picker-row {
   position: relative;
   display: flex;
   width: 100%;
@@ -345,14 +314,14 @@
     color 140ms ease;
 }
 
-.model-picker-row:hover {
+.model-option-picker .model-picker-row:hover {
   border-color: var(--model-picker-row-hover-border);
   background: var(--model-picker-row-hover-bg);
   box-shadow: var(--model-picker-row-hover-shadow);
 }
 
-.model-picker-row.selected,
-.model-picker-row[aria-selected="true"] {
+.model-option-picker .model-picker-row.selected,
+.model-option-picker .model-picker-row[aria-selected="true"] {
   border-color: var(--model-picker-row-active-border);
   background: var(--model-picker-row-active-bg);
   box-shadow:
@@ -360,8 +329,8 @@
     0 0 0 1px color-mix(in oklch, var(--model-picker-accent) 10%, transparent);
 }
 
-.model-picker-row.selected::after,
-.model-picker-row[aria-selected="true"]::after {
+.model-option-picker .model-picker-row.selected::after,
+.model-option-picker .model-picker-row[aria-selected="true"]::after {
   position: absolute;
   top: 16px;
   right: 10px;
@@ -373,43 +342,39 @@
   transform: rotate(45deg);
 }
 
-.model-picker-row-copy {
+.model-option-picker .model-picker-row-copy {
   display: grid;
   min-width: 0;
   gap: 1px;
 }
 
-.model-picker-row-copy strong,
-.model-picker-row-copy small {
+.model-option-picker .model-picker-row-copy strong,
+.model-option-picker .model-picker-row-copy small {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.model-picker-row-copy strong {
+.model-option-picker .model-picker-row-copy strong {
   color: var(--model-picker-fg);
   font-size: 12px;
   font-weight: var(--model-picker-weight-label);
-  line-height: 1.25;
+  line-height: 1.5;
 }
 
-.model-picker-row-copy small {
+.model-option-picker .model-picker-row-copy small {
   color: var(--model-picker-muted);
   font-size: 11px;
-  line-height: 1.2;
+  line-height: 1.5;
 }
 
-.model-picker-empty {
+.model-option-picker .model-picker-empty {
   padding: 12px 8px;
   color: var(--model-picker-muted);
   font-size: 12px;
 }
 
 @media (max-width: 760px) {
-  .model-option-picker[data-variant="composer"] {
-    max-width: min(210px, 100%);
-  }
-
   .model-picker-popover,
   .model-option-picker[data-variant="settings"] .model-picker-popover {
     width: min(300px, calc(100vw - 32px));
@@ -425,4 +390,277 @@
     opacity: 1;
     transform: translateY(0);
   }
+}
+
+.model-picker-model-control {
+  position: relative;
+  min-width: 0;
+}
+
+.model-option-picker[data-variant="composer"] {
+  --model-picker-row-height: 40px;
+  --model-picker-fg: var(--ui-text-1);
+  --model-picker-muted: var(--ui-text-2);
+  --model-picker-placeholder: var(--ui-text-3);
+  --model-picker-border: var(--ui-border);
+  --model-picker-accent: var(--ui-accent);
+  display: inline-flex;
+  width: fit-content;
+  max-width: min(300px, 100%);
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 5px;
+}
+
+.model-option-picker[data-variant="composer"] .model-picker-model-control {
+  flex: 1 1 auto;
+}
+
+.model-option-picker[data-variant="composer"] .model-picker-trigger {
+  display: inline-flex;
+  width: 100%;
+  height: 30px;
+  min-width: 0;
+  gap: 7px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ui-text-2);
+  font-size: 12px;
+  box-shadow: none;
+}
+
+.model-option-picker[data-variant="composer"] .model-picker-trigger:hover {
+  background: var(--ui-surface-hover);
+  color: var(--ui-text-1);
+}
+
+.model-option-picker[data-variant="composer"] .model-picker-trigger[aria-expanded="true"] {
+  background: var(--ui-accent-bg);
+  color: var(--ui-accent);
+  box-shadow: none;
+}
+
+.model-option-picker[data-variant="composer"] .model-picker-trigger:active {
+  transform: none;
+}
+
+.model-option-picker[data-variant="composer"] .model-picker-trigger:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ui-accent) 55%, transparent);
+  outline-offset: 2px;
+  box-shadow: none;
+}
+
+.model-option-picker[data-variant="composer"] .model-picker-trigger-name {
+  color: var(--ui-text-1);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: -0.015em;
+}
+
+.model-option-picker[data-variant="composer"] .model-picker-trigger > .model-picker-icon {
+  width: 18px;
+  height: 18px;
+  border: 0;
+  background: transparent;
+  color: var(--ui-text-2);
+}
+
+.model-option-picker[data-variant="composer"] .model-picker-trigger:is(:hover, [aria-expanded="true"]) > .model-picker-icon {
+  color: var(--ui-accent);
+}
+
+.model-option-picker[data-variant="composer"] .model-picker-trigger .model-picker-icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+.model-option-picker[data-variant="composer"] .model-picker-popover {
+  right: 0;
+  left: auto;
+  width: min(302px, calc(100vw - 32px));
+  /* Six model rows, the first group heading, and popover padding/border. */
+  max-height: min(calc(6 * var(--model-picker-row-height) + 27px + 14px), var(--model-picker-available-height, calc(100dvh - 32px)));
+  padding: 6px;
+  border: 1px solid var(--ui-border);
+  border-radius: 12px;
+  background: var(--ui-surface-overlay);
+  box-shadow: var(--ui-shadow-float);
+}
+
+.model-option-picker[data-variant="composer"] .model-picker-group {
+  gap: 0;
+  padding: 0;
+}
+
+.model-option-picker[data-variant="composer"] .model-picker-group h3 {
+  padding: 13px 12px 7px;
+  margin: 0;
+  font-size: 10px;
+  line-height: 14px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.model-option-picker[data-variant="composer"] .model-picker-group:first-child h3 {
+  padding-top: 6px;
+}
+
+.model-option-picker[data-variant="composer"] .model-picker-row {
+  height: var(--model-picker-row-height);
+  min-height: var(--model-picker-row-height);
+  gap: 10px;
+  padding: 0 28px 0 11px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--ui-text-2);
+  box-shadow: none;
+}
+
+.model-option-picker[data-variant="composer"] .model-picker-row:hover {
+  background: var(--ui-surface-hover);
+  color: var(--ui-text-1);
+  box-shadow: none;
+}
+
+.model-option-picker[data-variant="composer"] .model-picker-row.selected {
+  background: var(--ui-accent-bg);
+  color: var(--ui-text-1);
+  box-shadow: none;
+}
+
+.model-option-picker[data-variant="composer"] .model-picker-row.selected::after {
+  top: 14px;
+  border-color: var(--ui-accent);
+}
+
+.model-option-picker[data-variant="composer"] .model-picker-row:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ui-accent) 55%, transparent);
+  outline-offset: -2px;
+}
+
+.model-option-picker[data-variant="composer"] .model-picker-row .model-picker-icon {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ui-text-2);
+}
+
+.model-option-picker[data-variant="composer"] .model-picker-row.selected .model-picker-icon {
+  background: color-mix(in srgb, var(--ui-surface-overlay) 74%, transparent);
+  color: var(--ui-accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ui-accent) 7%, transparent);
+}
+
+.model-option-picker[data-variant="composer"] .model-picker-row-copy strong {
+  color: inherit;
+  font-weight: 400;
+}
+
+.model-option-picker[data-variant="composer"] .model-picker-row.selected .model-picker-row-copy strong {
+  font-weight: 500;
+}
+
+
+.model-picker-reasoning-control {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.model-picker-reasoning-trigger {
+  display: flex;
+  width: 30px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ui-text-3);
+  cursor: pointer;
+  transition: background-color var(--motion-duration-quick), color var(--motion-duration-quick);
+}
+
+.model-picker-reasoning-trigger:hover {
+  background: var(--ui-surface-hover);
+  color: var(--ui-accent);
+}
+
+.model-picker-reasoning-trigger[aria-expanded="true"] {
+  background: var(--ui-accent-bg);
+  color: var(--ui-accent);
+}
+
+.model-picker-reasoning-trigger:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ui-accent) 55%, transparent);
+  outline-offset: 2px;
+}
+
+.model-picker-reasoning-trigger:disabled {
+  cursor: default;
+  opacity: 0.64;
+}
+
+.model-picker-effort-meter {
+  display: inline-flex;
+  width: 15px;
+  height: 13px;
+  flex: 0 0 auto;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.model-picker-effort-meter i {
+  width: 2px;
+  border-radius: 1px;
+  background: var(--ui-border-strong);
+}
+
+.model-picker-effort-meter i:nth-child(1) { height: 4px; }
+.model-picker-effort-meter i:nth-child(2) { height: 7px; }
+.model-picker-effort-meter i:nth-child(3) { height: 10px; }
+.model-picker-effort-meter i:nth-child(4) { height: 13px; }
+.model-picker-effort-meter i[data-active="true"] { background: currentColor; }
+
+.model-picker-reasoning-popover {
+  position: absolute;
+  z-index: 120;
+  right: 0;
+  bottom: calc(100% + 8px);
+  width: min(264px, calc(100vw - 32px));
+  border: 1px solid var(--ui-border);
+  border-radius: 12px;
+  background: var(--ui-surface-overlay);
+  box-shadow: var(--ui-shadow-float);
+  animation: model-picker-popover-enter 150ms var(--motion-ease-premium) both;
+  transform-origin: bottom right;
+}
+
+.model-option-picker[data-placement="bottom"] .model-picker-reasoning-popover {
+  top: calc(100% + 8px);
+  bottom: auto;
+}
+
+@media (max-width: 760px) {
+  .model-option-picker[data-variant="composer"] {
+    gap: 4px;
+  }
+
+  .model-option-picker[data-variant="composer"] .model-picker-trigger {
+    height: 28px;
+    gap: 6px;
+    padding: 0 6px;
+  }
+
+  .model-option-picker[data-variant="composer"] .model-picker-trigger-name { font-size: 11px; }
+  .model-option-picker[data-variant="composer"] .model-picker-trigger > .model-picker-icon { width: 18px; height: 18px; }
+  .model-picker-reasoning-trigger { width: 28px; height: 28px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .model-option-picker *, .model-picker-empty-trigger { animation: none !important; transition: none !important; }
 }

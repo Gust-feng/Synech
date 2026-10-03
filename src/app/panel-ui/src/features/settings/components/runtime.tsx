@@ -2,7 +2,6 @@ import React from "react";
 import type { CommandShellConfig, ConfiguredCommandShellKind } from "@panel-api/config";
 import { CommandShellSelection } from "./command-shell-selection";
 import { RuntimeEnvironmentSettings } from "./runtime-environment";
-import { DesktopCloseBehaviorSettings } from "./desktop-close-behavior";
 
 export function RuntimeSettings(props: {
   readonly commandShell?: CommandShellConfig;
@@ -11,7 +10,6 @@ export function RuntimeSettings(props: {
 }): React.ReactElement {
   return (
     <div className="workspace-settings-stack">
-      <DesktopCloseBehaviorSettings />
       <CommandShellSelection
         commandShell={props.commandShell}
         savingCommandShell={props.savingCommandShell}

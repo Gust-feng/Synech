@@ -1,4 +1,5 @@
-import React, { useEffect, useRef, useState } from "react";
+import { getToolMetricsRecordingEnabled, saveToolMetricsRecordingEnabled } from "../../../shell/developer-mode";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   Bot,
   Brain,
@@ -18,6 +19,7 @@ import {
 } from "lucide-react";
 import type {
   ConfigResponse,
+  ModelConfiguration,
   ModelProviderModelCatalog,
   SkillTriggerMode,
 } from "@panel-api/config";
@@ -27,6 +29,7 @@ import type { SubAgentDefinition } from "../../../contracts/sub-agents";
 import type { McpEnvironmentCheckResponse, McpReferenceResponse, ToolsResponse } from "@panel-api/tools";
 import { AppearanceSettings } from "./appearance";
 import { ModelProviderManager } from "../model/provider-manager";
+import type { ModelProviderAuthActions } from "../model/provider-auth-state";
 import type { McpServerForm, ModelForm, SettingsGroup, ToolForm } from "./types";
 import { BasicCapabilitiesSettings, OrdinaryAgentPromptSettings } from "./basic-capabilities";
 import { McpServiceSettings } from "./mcp-service";
@@ -36,6 +39,7 @@ import { SubAgentSettings } from "./sub-agents";
 import { DeveloperToolStatistics, UsageStatisticsSettings, preloadUsageStatistics } from "./usage-statistics";
 import { ResponsivenessDiagnostics } from "../../../components/responsiveness-diagnostics";
 import { RuntimeSettings } from "./runtime";
+import { DesktopCloseBehaviorSettings } from "./desktop-close-behavior";
 import { MemoryCenterPanel } from "../../memory/MemoryCenterPanel";
 import type { MemorySettingsScope } from "../../memory/MemorySettingsPanel";
 import { MemoryDiagnosticsPanel } from "../../memory/MemoryDiagnosticsPanel";
@@ -54,8 +58,6 @@ export function SettingsDialog(props: {
   readonly setModelForm: (form: ModelForm) => void;
   readonly ordinaryAgentSystemPrompt: string;
   readonly setOrdinaryAgentSystemPrompt: (value: string) => void;
-  readonly modelUsageDisplayEnabled: boolean;
-  readonly onModelUsageDisplayChange: (enabled: boolean) => void;
   readonly conversationFollowUpMode?: ConversationFollowUpMode;
   readonly onConversationFollowUpModeChange?: (mode: ConversationFollowUpMode) => void;
   readonly developerModeEnabled: boolean;
@@ -70,7 +72,9 @@ export function SettingsDialog(props: {
   readonly onDeleteModelProvider: (profileId: string, fallbackProfileId?: string) => Promise<void>;
   readonly onFetchModels: (profileId?: string) => Promise<ModelProviderModelCatalog | undefined>;
   readonly onSaveModelCatalog: (profileId: string, catalog: ModelProviderModelCatalog) => Promise<void>;
+  readonly onSaveModelConfiguration: (profileId: string, modelId: string, settings: ModelConfiguration | null) => Promise<void>;
   readonly onRevealModelApiKey: (profileId: string) => Promise<string | undefined>;
+  readonly modelProviderAuth: ModelProviderAuthActions;
   readonly modelCatalogs?: Readonly<Record<string, ModelProviderModelCatalog>>;
   readonly skills: readonly SkillDefinition[];
   readonly subAgents: readonly SubAgentDefinition[];
@@ -83,8 +87,10 @@ export function SettingsDialog(props: {
   readonly mcpServerForm: McpServerForm;
   readonly setMcpServerForm: (form: McpServerForm) => void;
   readonly savingTools?: boolean;
+  readonly savingWebSearch?: boolean;
+  readonly savingSkillTrigger?: boolean;
   readonly onSaveTools: (form: ToolForm) => void;
-  readonly onSaveSkillTriggerMode: (mode: SkillTriggerMode) => void;
+  readonly onSaveSkillTriggerMode: (mode: SkillTriggerMode) => Promise<void>;
   readonly onSaveMcpServer: (form?: McpServerForm) => Promise<void>;
   readonly onLoadMcpReferences: (serverId: string) => Promise<McpReferenceResponse>;
   readonly onImportMcpConfig: (config: string) => void;
@@ -97,7 +103,9 @@ export function SettingsDialog(props: {
   readonly onRefreshSubAgents: () => void;
   readonly onUpdateSkill: (skill: Pick<SkillDefinition, "id" | "stateKey">, enabled: boolean) => void;
 }): React.ReactElement | null {
-  const [activeGroup, setActiveGroup] = useState<SettingsGroup>("models");
+  const [activeGroup, setActiveGroup] = useState<SettingsGroup>(props.initialGroup ?? "models");
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (props.open) {
       setActiveGroup(props.initialGroup ?? "models");
@@ -105,14 +113,17 @@ export function SettingsDialog(props: {
     }
   }, [props.open, props.initialGroup]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!props.open) return;
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") props.onClose();
+    const dialog = dialogRef.current!;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
+    dialog.showModal();
+    closeButtonRef.current!.focus({ preventScroll: true });
+    return () => {
+      dialog.close();
+      if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true });
     };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [props.open, props.onClose]);
+  }, [props.open]);
 
   useEffect(() => {
     if (!props.open) return;
@@ -142,13 +153,19 @@ export function SettingsDialog(props: {
   const currentGroupLabel = currentGroup?.label ?? "设置";
 
   return (
-    <div className="settings-overlay" role="dialog" aria-modal="true" aria-label="设置">
-      <button type="button" className="settings-backdrop" aria-label="关闭设置" onClick={props.onClose} />
+    <dialog
+      ref={dialogRef}
+      className="settings-overlay"
+      aria-label="设置"
+      onCancel={(event) => { event.preventDefault(); props.onClose(); }}
+    >
+      <button type="button" className="settings-backdrop" tabIndex={-1} aria-label="关闭设置" onClick={props.onClose} />
       <section className={`settings-dialog ${visibleActiveGroup === "models" ? "model-settings-dialog" : ""}`}>
         <aside className="settings-sidebar">
           <div className="settings-sidebar-heading" data-desktop-drag-region>
             <button
               type="button"
+              ref={closeButtonRef}
               className="settings-close-button"
               onClick={props.onClose}
               aria-label="返回工作台"
@@ -164,6 +181,7 @@ export function SettingsDialog(props: {
                 type="button"
                 key={group.id}
                 className={group.id === visibleActiveGroup ? "active" : ""}
+                aria-current={group.id === visibleActiveGroup ? "page" : undefined}
                 onClick={() => setActiveGroup(group.id)}
                 onFocus={() => {
                   if (group.id === "statistics" || group.id === "developer") preloadUsageStatistics();
@@ -203,30 +221,31 @@ export function SettingsDialog(props: {
                 onDeleteModelProvider={props.onDeleteModelProvider}
                 onFetchModels={props.onFetchModels}
                 onSaveModelCatalog={props.onSaveModelCatalog}
+                onSaveModelConfiguration={props.onSaveModelConfiguration}
                 onRevealModelApiKey={props.onRevealModelApiKey}
+                authActions={props.modelProviderAuth}
                 modelCatalogs={props.modelCatalogs}
               />
             </div>
             {visibleActiveGroup === "basicCapabilities" && (
               <div className="basic-capabilities-settings">
-                <WebSearchSettings
-                  tools={props.tools}
-                  toolForm={props.toolForm}
-                  setToolForm={props.setToolForm}
-                  saving={props.savingTools}
-                  onSaveTools={props.onSaveTools}
-                />
                 <BasicCapabilitiesSettings
                   config={props.config}
-                  modelUsageDisplayEnabled={props.modelUsageDisplayEnabled}
-                  onModelUsageDisplayChange={props.onModelUsageDisplayChange}
                   conversationFollowUpMode={props.conversationFollowUpMode ?? "queue"}
                   onConversationFollowUpModeChange={props.onConversationFollowUpModeChange ?? (() => undefined)}
-                  savingSkillTrigger={props.savingTools}
+                  savingSkillTrigger={props.savingSkillTrigger}
                   onSaveSkillTriggerMode={props.onSaveSkillTriggerMode}
                   savingOrdinaryAgentPrompt={props.savingOrdinaryAgentPrompt}
                   onSaveOrdinaryAgentSystemPromptVariant={props.onSaveOrdinaryAgentSystemPromptVariant}
                 />
+                <WebSearchSettings
+                  tools={props.tools}
+                  toolForm={props.toolForm}
+                  setToolForm={props.setToolForm}
+                  saving={props.savingWebSearch}
+                  onSaveTools={props.onSaveTools}
+                />
+                <DesktopCloseBehaviorSettings />
               </div>
             )}
             {visibleActiveGroup === "mcp" && (
@@ -302,7 +321,7 @@ export function SettingsDialog(props: {
           </div>
         </div>
       </section>
-    </div>
+    </dialog>
   );
 }
 
@@ -312,7 +331,7 @@ const SETTINGS_GROUPS: readonly { readonly id: SettingsGroup; readonly label: st
   { id: "mcp", label: "MCP 服务", icon: <Server size={15} /> },
   { id: "skills", label: "技能", icon: <FileText size={15} /> },
   { id: "memory", label: "记忆", icon: <Brain size={15} /> },
-  { id: "subAgents", label: "Sub Agent", icon: <Bot size={15} /> },
+  { id: "subAgents", label: "子智能体", icon: <Bot size={15} /> },
   { id: "workspace", label: "运行环境", icon: <Database size={15} /> },
   { id: "appearance", label: "外观", icon: <Palette size={15} /> },
   { id: "statistics", label: "使用统计", icon: <ChartColumn size={15} /> },
@@ -321,14 +340,10 @@ const SETTINGS_GROUPS: readonly { readonly id: SettingsGroup; readonly label: st
 ];
 
 const DEVELOPER_SETTINGS_GROUPS: ReadonlySet<SettingsGroup> = new Set(["developer"]);
-// The current Synech surface has no persisted appearance contract yet.
-// Do not expose a setting that cannot affect the production surface.
-const TEMPORARILY_HIDDEN_SETTINGS_GROUPS: ReadonlySet<SettingsGroup> = new Set(["appearance"]);
 
 export function settingsGroupsForDeveloperMode(enabled: boolean): typeof SETTINGS_GROUPS {
   return SETTINGS_GROUPS.filter((group) =>
-    !TEMPORARILY_HIDDEN_SETTINGS_GROUPS.has(group.id)
-    && (enabled || !DEVELOPER_SETTINGS_GROUPS.has(group.id)));
+    enabled || !DEVELOPER_SETTINGS_GROUPS.has(group.id));
 }
 
 const DEVELOPER_MODE_GESTURE_CLICKS = 7;
@@ -345,6 +360,7 @@ export function AboutSettings(props: {
   const defaultEntry = product?.defaultEntry ?? "Workbench";
   const configDirectory = product?.configDirectory ?? "未提供";
   const productHome = product?.productHome ?? "未提供";
+  const [recordToolMetrics, setRecordToolMetrics] = useState(getToolMetricsRecordingEnabled);
   const developerModeGesture = useRef({ count: 0, startedAt: 0 });
 
   const handleDeveloperModeGesture = (): void => {
@@ -389,6 +405,15 @@ export function AboutSettings(props: {
           <AboutFact icon={<CheckCircle2 size={16} />} label="版本" value={version} />
         </section>
       )}
+
+      {props.developerModeEnabled && <section className="settings-card">
+        <label className="flex items-center justify-between gap-4 p-4">
+          <span><strong className="block text-sm">记录详细工具统计</strong><span className="text-xs" style={{ color: "var(--ui-text-3)" }}>仅记录开启后新运行的诊断数据</span></span>
+          <input type="checkbox" checked={recordToolMetrics} onChange={(event) => {
+            setRecordToolMetrics(event.target.checked); saveToolMetricsRecordingEnabled(event.target.checked);
+          }} />
+        </label>
+      </section>}
 
       {props.developerModeEnabled && <section className="settings-card about-path-card">
         <div className="settings-card-title-row">

@@ -18,6 +18,15 @@ export function normalizeBaseUrl(value: string | undefined): string | undefined 
   if (normalized === undefined) {
     return undefined;
   }
+  let parsed: URL;
+  try {
+    parsed = new URL(normalized);
+  } catch {
+    throw new ConfigSchemaValidationError("Model service address must be a valid HTTP(S) URL.");
+  }
+  if ((parsed.protocol !== "https:" && parsed.protocol !== "http:") || parsed.username.length > 0 || parsed.password.length > 0) {
+    throw new ConfigSchemaValidationError("Model service address must use HTTP(S) without embedded credentials.");
+  }
   return normalized.replace(/\/+$/, "");
 }
 
@@ -25,7 +34,8 @@ export function normalizeAiMode(value: ConfiguredModelRuntimeMode | undefined): 
   return value === "none" ||
     value === "anthropic-messages" ||
     value === "openai-compatible" ||
-    value === "openai-responses"
+    value === "openai-responses" ||
+    value === "native"
     ? value
     : undefined;
 }
@@ -40,7 +50,8 @@ export function normalizeModelProtocolKind(
   if (
     value === "anthropic_messages" ||
     value === "openai_responses" ||
-    value === "openai_compatible_chat_completions"
+    value === "openai_compatible_chat_completions" ||
+    value === "native"
   ) {
     return value;
   }

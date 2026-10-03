@@ -1,0 +1,88 @@
+.model-capability-editor > form {
+  width: 100%;
+  min-width: 0;
+  margin-top: 24px;
+}
+
+.model-capability-editor .model-picker-header-text p {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.model-capability-editor .model-picker-header-text h2 {
+  overflow-wrap: anywhere;
+}
+
+.model-capability-fields {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.model-capability-source {
+  margin-top: 16px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.model-capability-editor .model-capability-checkbox input {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--accent);
+}
+
+.model-capability-levels {
+  min-width: 0;
+  margin: 24px 0;
+  border: 0;
+  padding: 0;
+}
+
+.model-capability-levels legend {
+  margin-bottom: 12px;
+  padding: 0;
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: var(--weight-label);
+}
+
+.model-capability-checkbox {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 8px;
+  color: var(--fg);
+  font-size: 13px;
+}
+
+.model-capability-checkbox:has(input:disabled) {
+  color: var(--muted);
+}
+
+.model-capability-level-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 20px;
+  margin-top: 6px;
+}
+
+.model-capability-error {
+  color: var(--status-danger);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.model-capability-editor .model-picker-footer {
+  flex-wrap: wrap;
+}
+
+.model-capability-editor .model-picker-footer button {
+  gap: 6px;
+}
+
+@media (max-width: 640px) {
+  .model-capability-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

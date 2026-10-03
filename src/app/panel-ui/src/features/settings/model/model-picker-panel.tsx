@@ -106,6 +106,7 @@ export function ModelPickerPanel(props: {
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="搜索可用模型 (ID 或名称)"
+            aria-label="搜索可用模型"
             spellCheck={false}
             autoComplete="off"
             autoCorrect="off"

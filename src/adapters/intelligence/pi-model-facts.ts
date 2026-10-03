@@ -1,4 +1,8 @@
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
+import {
+  DEFAULT_RADIUS_GATEWAY,
+  normalizeRadiusGatewayUrl,
+} from "@earendil-works/pi-ai/providers/radius-config";
 import type { Api, Model, MutableModels } from "@earendil-works/pi-ai";
 import type {
   ConfirmedModelFacts,
@@ -6,6 +10,10 @@ import type {
   ModelThinkingLevelName,
   ModelTransportKind,
 } from "../../domain/config/index.js";
+import {
+  findNativeModelRegistry,
+  type NativeModelFactsScope,
+} from "./native-provider-model-scope.js";
 
 /**
  * 远程发现模型的二态解析（adapter 内部结构）。
@@ -17,7 +25,7 @@ import type {
  * - `UnknownDiscoveredModel`：Pi 在该 provider 下没有这个模型 ID。不持有任何
  *   能力事实；请求仍用连接级默认 transport 把模型 ID 原样发给上游。
  *
- * 约束：pi 类型只存在于本文件与 binding；这里向外只投影 domain 层的无 pi 类型
+ * 约束：pi 类型只存在于 intelligence adapter；这里向外只投影 domain 层的无 pi 类型
  * 二态结构（`ModelFacts`）。已知/未知不得合并为同一伪造事实。
  */
 
@@ -37,45 +45,63 @@ export type UnknownDiscoveredModel = {
 export type DiscoveredModelResolution = KnownPiModel | UnknownDiscoveredModel;
 
 /**
- * pi-ai 真实 provider catalog 的同步精确查找。
+ * pi-ai 真实 provider catalog 的同步精确查找，优先匹配连接级动态 registry。
  *
- * 语义：`getModel(piProviderId, modelId)` 只在显式命名的 provider 作用域内做
+ * 动态目录要求 profile、连接参数和凭证版本同时匹配；静态目录按 provider 查找。
+ * `getModel(piProviderId, modelId)` 只在显式命名的 provider 作用域内做
  * `model.id === modelId` 精确比较——不做模糊匹配、不按 model id 猜厂商、不在
  * 多个 Pi Provider 中取第一条同名模型。因此同一个模型 ID 在不同 Pi Provider 下
  * 的事实不会互相串用。
  */
-export function resolveDiscoveredModel(input: {
+export type DiscoveredModelLookup = NativeModelFactsScope & {
   readonly piProviderId: string | undefined;
   readonly modelId: string | undefined;
-}): DiscoveredModelResolution {
+};
+
+export function resolveDiscoveredModel(input: DiscoveredModelLookup): DiscoveredModelResolution {
   const piProviderId = trimmedOrUndefined(input.piProviderId);
   const modelId = trimmedOrUndefined(input.modelId);
   if (piProviderId === undefined || modelId === undefined) {
     return { status: "unknown", modelId: modelId ?? "" };
   }
-  const model = piModelCatalog().getModel(piProviderId, modelId);
+  const registry = findNativeModelRegistry(input);
+  // A matching dynamic catalog is authoritative, including a model's absence.
+  const model = registry === undefined
+    ? mayUseBuiltinCatalog(input, piProviderId)
+      ? piModelCatalog().getModel(piProviderId, modelId)
+      : undefined
+    : registry.modelRegistry.getModel(registry.providerId, modelId);
   return model === undefined
     ? { status: "unknown", modelId }
     : { status: "known", piProviderId, modelId, model };
 }
 
 /** 产品层（无 pi 类型）的二态事实投影：由调用方注入 `piProviderId` + modelId。 */
-export function resolveDiscoveredModelFacts(input: {
-  readonly piProviderId: string | undefined;
-  readonly modelId: string | undefined;
-}): ModelFacts {
+export function resolveDiscoveredModelFacts(input: DiscoveredModelLookup): ModelFacts {
   const resolution = resolveDiscoveredModel(input);
   return resolution.status === "known"
-    ? confirmedFactsFromPiModel(resolution)
+    ? modelFactsFromPiModel(resolution)
     : { status: "unconfirmed", modelId: resolution.modelId };
 }
 
-function confirmedFactsFromPiModel(resolution: KnownPiModel): ConfirmedModelFacts {
-  const { model, piProviderId, modelId } = resolution;
+function mayUseBuiltinCatalog(input: DiscoveredModelLookup, piProviderId: string): boolean {
+  if (piProviderId !== "radius" || input.baseUrl === undefined || input.baseUrl.trim().length === 0) {
+    return true;
+  }
+  // Pi omits the default gateway's baseline when constructing a custom Radius gateway.
+  return normalizeRadiusGatewayUrl(input.baseUrl.trim()) === normalizeRadiusGatewayUrl(DEFAULT_RADIUS_GATEWAY);
+}
+
+/** Projects live native catalogs without copying them into the static built-in catalog. */
+export function modelFactsFromPiModel(input: {
+  readonly piProviderId: string;
+  readonly model: Model<Api>;
+}): ConfirmedModelFacts {
+  const { model, piProviderId } = input;
   return {
     status: "confirmed",
     piProviderId,
-    modelId,
+    modelId: model.id,
     transport: piModelTransport(model.api),
     contextWindowTokens: model.contextWindow,
     maxOutputTokens: model.maxTokens,
@@ -84,7 +110,9 @@ function confirmedFactsFromPiModel(resolution: KnownPiModel): ConfirmedModelFact
     thinkingLevels: supportedThinkingLevels(model),
     supportsStrictToolSchemas: supportsStrictToolSchemasFor(model),
     // 并行工具调用是 OpenAI 协议字段；按真实 Pi Model.api 派生，不按 provider id 猜。
-    supportsParallelToolCalls: model.api !== "anthropic-messages",
+    supportsParallelToolCalls:
+      model.api === "openai-completions" ||
+      model.api === "openai-responses",
   };
 }
 
@@ -97,6 +125,14 @@ export function piModelTransport(api: Api): ModelTransportKind | undefined {
       return "openai_responses";
     case "anthropic-messages":
       return "anthropic_messages";
+    case "google-generative-ai":
+    case "google-vertex":
+    case "azure-openai-responses":
+    case "bedrock-converse-stream":
+    case "mistral-conversations":
+    case "openai-codex-responses":
+    case "pi-messages":
+      return "native";
     default:
       return undefined;
   }

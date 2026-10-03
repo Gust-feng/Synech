@@ -10,9 +10,9 @@ import type {
   ModelProviderProfileSettings,
 } from "../../domain/config/index.js";
 import {
-  DEFAULT_MODEL_PROVIDER_BASE_URL,
   normalizeBaseUrl,
 } from "./model-provider-settings.js";
+import { modelProviderCredentialSecretRef } from "./model-provider-credentials.js";
 import { normalizeInformationAccessSettings, requireActiveModelProfile, webSearchProviderSettings } from "./settings-schema.js";
 import { toSanitizedOrdinaryAgentPromptConfig as projectSanitizedOrdinaryAgentPromptConfig } from "./ordinary-agent-prompt-settings.js";
 
@@ -30,17 +30,19 @@ export async function toSanitizedModelProfile(input: {
   readonly profile: ModelProviderProfileSettings;
   readonly secretStore: LocalDevSecretStore;
 }): Promise<SanitizedModelProviderConfig> {
-  const secret = await input.secretStore.getMetadata(input.profile.secretRef);
+  const secret = await input.secretStore.getMetadata(modelProviderCredentialSecretRef(input.profile));
   return {
     profileId: input.profile.profileId,
     label: input.profile.label,
     logoDataUrl: input.profile.logoDataUrl,
     providerKind: input.profile.providerKind,
     protocolKind: input.profile.protocolKind,
-    baseUrl: normalizeBaseUrl(input.profile.baseUrl) ?? DEFAULT_MODEL_PROVIDER_BASE_URL,
+    baseUrl: normalizeBaseUrl(input.profile.baseUrl) ?? "",
     model: input.profile.model,
     openAI: input.profile.openAI,
+    ...(input.profile.modelSettings === undefined ? {} : { modelSettings: input.profile.modelSettings }),
     ...(input.profile.piProviderId === undefined ? {} : { piProviderId: input.profile.piProviderId }),
+    ...(input.profile.connection === undefined ? {} : { connection: input.profile.connection }),
     defaultAiMode: input.profile.defaultAiMode,
     secretRef: input.profile.secretRef,
     enabled: input.profile.enabled,

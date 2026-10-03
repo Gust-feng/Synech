@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { GripVertical, Plus, Search, Trash2, X } from "lucide-react";
+import { ArrowLeft, ChevronRight, GripVertical, Plus, RotateCcw, Search, Trash2, X } from "lucide-react";
 import type { ModelProviderListItem } from "./settings-projection";
 import { ProviderLogo } from "./settings-icons";
 import { sameStringList } from "./settings-list-equality";
@@ -8,7 +8,7 @@ const SETTLE_DURATION_MS = 320;
 
 export function ModelProviderList(props: {
   readonly items: readonly ModelProviderListItem[];
-  readonly selectedItem: ModelProviderListItem;
+  readonly selectedItem?: ModelProviderListItem;
   readonly query: string;
   readonly saving?: boolean;
   readonly reorderEnabled: boolean;
@@ -17,6 +17,8 @@ export function ModelProviderList(props: {
   readonly onReorder: (order: readonly string[]) => Promise<void>;
   readonly onDeleteProvider: (item: ModelProviderListItem) => Promise<void>;
   readonly showProviderSearch: boolean;
+  readonly failure?: { readonly message: string; readonly retry?: () => void };
+  readonly onDismissFailure: () => void;
   readonly onOpenCatalog: () => void;
 }): React.ReactElement {
   const [draggingKey, setDraggingKey] = useState<string | undefined>(undefined);
@@ -269,17 +271,25 @@ export function ModelProviderList(props: {
               value={props.query}
               onChange={(event) => props.onQueryChange(event.target.value)}
               placeholder="搜索服务"
+              aria-label="搜索模型服务"
               spellCheck={false}
               autoComplete="off"
               autoCorrect="off"
               autoCapitalize="off"
             />
+            {props.query.length > 0 && <button
+              type="button"
+              className="provider-search-clear"
+              aria-label="清空服务搜索"
+              title="清空服务搜索"
+              onClick={() => props.onQueryChange("")}
+            ><X size={14} /></button>}
           </label>
         </div>
       )}
       <div className={`provider-list ${draggingKey === undefined ? "" : "reordering"} ${dropHandoffActive ? "drop-handoff" : ""}`}>
         {props.items.map((item, index) => {
-          const selected = item.key === props.selectedItem.key;
+          const selected = item.key === props.selectedItem?.key;
           const dragging = item.key === draggingKey;
           const settling = item.key === settlingDrag?.key;
           const deletePreview = deleteZoneActive && deleteAvailable;
@@ -307,6 +317,7 @@ export function ModelProviderList(props: {
               <button
                 type="button"
                 className="provider-row-main"
+                aria-current={selected ? "true" : undefined}
                 onClick={() => props.onSelect(item)}
               >
                 <ProviderLogo item={item} />
@@ -347,6 +358,24 @@ export function ModelProviderList(props: {
         })}
         {props.items.length === 0 && <p className="provider-directory-empty">没有匹配的服务</p>}
       </div>
+      {props.failure !== undefined && <div className="provider-mutation-error" role="alert">
+        <span>{props.failure.message}</span>
+        <div>
+          {props.failure.retry !== undefined && <button
+            type="button"
+            aria-label="重试保存模型服务"
+            title="重试保存"
+            disabled={props.saving}
+            onClick={props.failure.retry}
+          ><RotateCcw size={14} /></button>}
+          <button
+            type="button"
+            aria-label="关闭模型服务错误提示"
+            title="关闭提示"
+            onClick={props.onDismissFailure}
+          ><X size={14} /></button>
+        </div>
+      </div>}
       <button
         ref={deleteZoneRef}
         type="button"
@@ -367,6 +396,7 @@ export function ModelProviderList(props: {
 
 export function ProviderDirectory(props: {
   readonly items: readonly ModelProviderListItem[];
+  readonly warnings?: readonly { readonly presetId: string; readonly message: string }[];
   readonly saving?: boolean;
   readonly onClose: () => void;
   readonly onAddProvider: (item: ModelProviderListItem) => Promise<void>;
@@ -374,48 +404,95 @@ export function ProviderDirectory(props: {
 }): React.ReactElement {
   const [query, setQuery] = useState("");
   const [addingKey, setAddingKey] = useState<string | undefined>(undefined);
+  const [selectedBrandId, setSelectedBrandId] = useState<string | undefined>(undefined);
+  const [error, setError] = useState<string | undefined>(undefined);
   const normalizedQuery = query.trim().toLowerCase();
-  const items = props.items.filter((item) => {
+  const brands = new Map<string, { readonly label: string; readonly items: ModelProviderListItem[] }>();
+  for (const item of props.items) {
+    const brandId = item.brandId ?? item.presetId ?? item.key;
+    const brand = brands.get(brandId);
+    if (brand === undefined) brands.set(brandId, { label: item.brandLabel ?? item.title, items: [item] });
+    else brand.items.push(item);
+  }
+  const selectedBrand = selectedBrandId === undefined ? undefined : brands.get(selectedBrandId);
+  function matches(item: ModelProviderListItem): boolean {
     if (normalizedQuery.length === 0) return true;
-    const presetKey = item.presetId?.toLowerCase() ?? "";
-    const aliases = PROVIDER_SEARCH_ALIASES[presetKey] ?? [];
-    return [item.title, item.vendor, item.presetId, ...aliases].some((value) =>
+    const aliases = PROVIDER_SEARCH_ALIASES[item.brandId ?? item.presetId ?? ""] ?? [];
+    return [item.title, item.vendor, item.brandLabel, item.serviceLabel, ...aliases].some((value) =>
       value?.toLowerCase().includes(normalizedQuery),
     );
-  });
+  }
+  const visibleBrands = [...brands.entries()].filter(([, brand]) => brand.items.some(matches));
+  const services = selectedBrand?.items.filter(matches) ?? [];
+  async function add(key: string, action: () => Promise<void>): Promise<void> {
+    setAddingKey(key);
+    setError(undefined);
+    try {
+      await action();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "模型服务添加失败。");
+    } finally {
+      setAddingKey(undefined);
+    }
+  }
   return (
     <section className="provider-directory-pane" aria-label="添加服务">
       <header className="provider-directory-header">
-        <div>
-          <h2>添加服务</h2>
+        <div className="provider-directory-heading">
+          {selectedBrand !== undefined && (
+            <button
+              type="button"
+              className="provider-directory-close"
+              onClick={() => { setSelectedBrandId(undefined); setQuery(""); setError(undefined); }}
+              aria-label="返回厂商目录"
+              title="返回厂商目录"
+              disabled={addingKey !== undefined}
+            ><ArrowLeft size={18} /></button>
+          )}
+          <h2>{selectedBrand?.label ?? "添加服务"}</h2>
         </div>
-        <button type="button" className="provider-directory-close" onClick={props.onClose} aria-label="返回我的服务" title="返回我的服务">
+        <button type="button" className="provider-directory-close" onClick={props.onClose} disabled={addingKey !== undefined} aria-label="返回我的服务" title="返回我的服务">
           <X size={18} />
         </button>
       </header>
       <div className="provider-directory-toolbar">
-        <label className="provider-directory-search">
-          <Search size={17} />
-          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索厂商或平台" spellCheck={false} autoComplete="off" />
-        </label>
-        <button type="button" className="provider-directory-custom" onClick={() => void props.onAddCustomProvider()} disabled={props.saving}>
+        <button
+          type="button"
+          className="provider-directory-custom"
+          onClick={() => void add("custom", props.onAddCustomProvider)}
+          disabled={addingKey !== undefined || props.saving}
+        >
           <Plus size={16} /> 自定义服务
         </button>
+        <label className="provider-directory-search">
+          <Search size={17} />
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={selectedBrand === undefined ? "搜索厂商或平台" : "搜索服务方案"} aria-label={selectedBrand === undefined ? "搜索厂商或平台" : "搜索服务方案"} spellCheck={false} autoComplete="off" />
+        </label>
       </div>
-      {items.length === 0 ? <p className="provider-directory-empty">没有匹配的服务</p> : <div className="provider-directory-groups">
+      {props.warnings?.map((warning) => <p key={warning.presetId} className="provider-directory-empty" role="status">{warning.message}</p>)}
+      {error !== undefined && <p className="provider-directory-empty" role="alert">{error}</p>}
+      {(selectedBrand === undefined ? visibleBrands.length : services.length) === 0 ? <p className="provider-directory-empty">没有匹配的服务</p> : <div className="provider-directory-groups">
         <div className="provider-directory-grid">
-          {items.map((item) => (
+          {selectedBrand === undefined ? visibleBrands.map(([brandId, brand]) => (
+            <button
+              type="button"
+              key={brandId}
+              disabled={addingKey !== undefined || props.saving}
+              onClick={() => { setSelectedBrandId(brandId); setQuery(""); setError(undefined); }}
+            >
+              <ProviderLogo item={brand.items[0]!} large />
+              <span><strong>{brand.label}</strong><small>{brand.items.length} 个服务方案</small></span>
+              <ChevronRight size={16} aria-hidden="true" />
+            </button>
+          )) : services.map((item) => (
             <button
               type="button"
               key={item.key}
               disabled={addingKey !== undefined || props.saving}
-              onClick={() => {
-                setAddingKey(item.key);
-                void props.onAddProvider(item).finally(() => setAddingKey(undefined));
-              }}
+              onClick={() => void add(item.key, () => props.onAddProvider(item))}
             >
               <ProviderLogo item={item} large />
-              <span><strong>{item.title}</strong><small>{item.vendor ?? "服务连接"}</small></span>
+              <span><strong>{item.serviceLabel ?? item.title}</strong><small>{item.preset?.regionLabel ?? item.vendor ?? "服务连接"}</small></span>
             </button>
           ))}
         </div>
@@ -484,6 +561,7 @@ function clampIndex(value: number, itemCount: number): number {
 const PROVIDER_SEARCH_ALIASES: Readonly<Record<string, readonly string[]>> = {
   moonshot: ["kimi", "月之暗面", "moonshot"],
   glm: ["智谱", "zhipu", "glm", "bigmodel", "zai", "z.ai"],
+  zai: ["智谱", "zhipu", "glm", "bigmodel", "zai", "z.ai"],
   openai: ["chatgpt", "gpt", "openai"],
   anthropic: ["claude", "anthropic"],
   qwen: ["通义", "千问", "阿里", "dashscope", "qwen"],

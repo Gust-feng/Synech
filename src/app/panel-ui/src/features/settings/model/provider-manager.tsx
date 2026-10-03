@@ -1,10 +1,13 @@
 import React, { useState } from "react";
 import { Trash2 } from "lucide-react";
 import { resolveModelIconSvgForModel } from "./icons";
-import { EmptyBlock } from "../../../components/workspace-common";
 import { ModelCatalogPanel } from "./catalog-panel";
+import { ModelCapabilityEditor } from "./model-capability-editor";
+import { modelCapabilitiesForProfileModel } from "./options";
+import type { ModelProviderModelItem } from "./settings-projection";
 import { ModelPickerPanel } from "./model-picker-panel";
 import { ModelProviderForm } from "./provider-form";
+import { ModelProviderAuthPanel } from "./provider-auth-panel";
 import { ProviderLogo } from "./settings-icons";
 import { ModelProviderList, ProviderDirectory } from "./provider-list";
 import { modelProviderFormId } from "./settings-projection";
@@ -20,15 +23,24 @@ type ModelProviderManagerProps = ModelProviderManagerOptions & {
 export function ModelProviderManager(props: ModelProviderManagerProps): React.ReactElement {
   const controller = useModelProviderManagerState(props);
   const [directoryOpen, setDirectoryOpen] = useState(false);
+  const [editingModel, setEditingModel] = useState<{
+    readonly profileId: string;
+    readonly model: ModelProviderModelItem;
+  }>();
+  const editingProfile = props.config?.profiles?.find((profile) => profile.profileId === editingModel?.profileId);
+  const editingConfiguration = editingModel !== undefined && editingProfile?.modelSettings !== undefined &&
+    Object.hasOwn(editingProfile.modelSettings, editingModel.model.id)
+      ? editingProfile.modelSettings[editingModel.model.id] : undefined;
   const {
     filteredItems,
     showProviderSearch,
     catalogItems,
     query,
     setQuery,
+    mutationFailure,
+    clearMutationFailure,
     selectedItem,
     selectedForm,
-    selectedBuiltinLocked,
     selectedSecretConfigured,
     selectedProviderIdentity,
     hasApiKeyAction,
@@ -38,6 +50,9 @@ export function ModelProviderManager(props: ModelProviderManagerProps): React.Re
     fetchFeedback,
     clearFetchFeedback,
     catalogState,
+    authState,
+    canFetchModels,
+    fetchDisabledReason,
     selectItem,
     addProvider,
     addCustomProvider,
@@ -56,14 +71,6 @@ export function ModelProviderManager(props: ModelProviderManagerProps): React.Re
     addCatalogModel,
   } = controller;
 
-  if (selectedItem === undefined) {
-    return (
-      <div className="settings-provider-manager empty">
-        <EmptyBlock>暂无模型服务。请添加一个模型服务。</EmptyBlock>
-      </div>
-    );
-  }
-
   return (
     <div className="settings-provider-manager">
       <ModelProviderList
@@ -71,18 +78,21 @@ export function ModelProviderManager(props: ModelProviderManagerProps): React.Re
         selectedItem={selectedItem}
         query={query}
         saving={props.saving}
-        reorderEnabled={query.trim().length === 0}
+        reorderEnabled={query.trim().length === 0 && !props.saving}
+        failure={mutationFailure}
+        onDismissFailure={clearMutationFailure}
         onQueryChange={setQuery}
-        onSelect={selectItem}
+        onSelect={(item) => { setEditingModel(undefined); selectItem(item); setDirectoryOpen(false); }}
         onReorder={reorderProviders}
         onDeleteProvider={deleteProvider}
         showProviderSearch={showProviderSearch}
-        onOpenCatalog={() => setDirectoryOpen(true)}
+        onOpenCatalog={() => { setEditingModel(undefined); setDirectoryOpen(true); }}
       />
 
-      {directoryOpen ? (
+      {directoryOpen || selectedItem === undefined ? (
         <ProviderDirectory
           items={catalogItems}
+          warnings={props.config?.modelProviderMarket?.warnings}
           saving={props.saving}
           onClose={() => setDirectoryOpen(false)}
           onAddProvider={async (item) => {
@@ -93,6 +103,16 @@ export function ModelProviderManager(props: ModelProviderManagerProps): React.Re
             await addCustomProvider();
             setDirectoryOpen(false);
           }}
+        />
+      ) : editingModel !== undefined && editingModel.profileId === selectedItem.profileId ? (
+        <ModelCapabilityEditor
+          key={JSON.stringify([editingModel.profileId, editingModel.model.id])}
+          profileLabel={selectedItem.title}
+          model={editingModel.model}
+          configuration={editingConfiguration}
+          capabilities={modelCapabilitiesForProfileModel(props.config, editingModel.profileId, editingModel.model.id)}
+          onClose={() => setEditingModel(undefined)}
+          onSave={(settings) => props.onSaveModelConfiguration(editingModel.profileId, editingModel.model.id, settings)}
         />
       ) : catalogState.pickerOpenFor === modelProviderFormId(selectedItem) ? (
         <ModelPickerPanel
@@ -109,15 +129,10 @@ export function ModelProviderManager(props: ModelProviderManagerProps): React.Re
           onConfirm={applySelectedModels}
         />
       ) : (
-        <section className="provider-detail-pane" aria-label="模型服务详情">
+        <section key={modelProviderFormId(selectedItem)} className="provider-detail-pane" aria-label="模型服务详情">
         <header className="provider-detail-header">
-          {selectedItem.presetId !== undefined ? (
-            <>
-              <ProviderLogo item={selectedItem} large />
-              <div className="provider-detail-title">
-                <strong>{selectedItem.title}</strong>
-              </div>
-            </>
+          {selectedItem.protectedBuiltin ? (
+            <ProviderLogo item={selectedItem} large />
           ) : (
             <>
               <label className="provider-detail-logo-edit" aria-label="替换服务 logo">
@@ -132,26 +147,30 @@ export function ModelProviderManager(props: ModelProviderManagerProps): React.Re
                   }}
                 />
               </label>
-              <div className="provider-detail-title-field">
-                <input
-                  value={selectedForm.label}
-                  onChange={(event) => updateModelForm({ label: event.target.value })}
-                  aria-label="服务名称"
-                  placeholder="自定义服务"
-                  spellCheck={false}
-                  autoComplete="off"
-                  autoCorrect="off"
-                  autoCapitalize="off"
-                />
-              </div>
             </>
           )}
-          {(selectedItem.presetId === undefined || selectedItem.configured) && (
+          <div className="provider-detail-title-field">
+            {selectedItem.protectedBuiltin ? <strong className="provider-detail-fixed-title">{selectedItem.title}</strong> : <input
+              value={selectedForm.label}
+              disabled={props.saving}
+              onChange={(event) => updateModelForm({ label: event.target.value })}
+              aria-label="服务名称"
+              placeholder={selectedItem.preset?.label ?? "自定义服务"}
+              spellCheck={false}
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+            />}
+            {selectedItem.serviceLabel !== undefined && (
+              <small className="provider-field-hint">{selectedItem.brandLabel} · {selectedItem.serviceLabel}</small>
+            )}
+          </div>
+          {selectedItem.profileId !== undefined && !selectedItem.protectedBuiltin && (
             <button
               type="button"
               className="provider-detail-delete"
-              title={selectedItem.presetId !== undefined ? "重置此服务配置" : "删除此模型服务"}
-              aria-label={selectedItem.presetId !== undefined ? `重置 ${selectedItem.title} 配置` : `删除 ${selectedItem.title}`}
+              title="删除此模型服务"
+              aria-label={`删除 ${selectedItem.title}`}
               disabled={props.saving}
               onClick={() => void deleteProvider(selectedItem)}
             >
@@ -165,10 +184,6 @@ export function ModelProviderManager(props: ModelProviderManagerProps): React.Re
         <ModelProviderForm
           item={selectedItem}
           modelForm={selectedForm}
-          piProviderIds={(props.config?.modelProviderMarket?.presets ?? []).flatMap((preset) => [
-            ...(preset.piProviderIds ?? []),
-            ...(preset.piProviderId === undefined ? [] : [preset.piProviderId]),
-          ])}
           revealed={revealed}
           revealBusy={revealBusy}
           saving={props.saving}
@@ -178,9 +193,19 @@ export function ModelProviderManager(props: ModelProviderManagerProps): React.Re
           onSetModelForm={setSelectedModelForm}
           onRevealApiKey={revealSelectedApiKey}
           onScheduleModelSave={scheduleSelectedModelSave}
+          authPanel={<ModelProviderAuthPanel
+            auth={authState.auth}
+            busy={authState.busy || props.saving === true}
+            error={authState.error}
+            onStart={authState.start}
+            onAnswer={authState.answer}
+            onCancel={authState.cancel}
+            onLogout={authState.logout}
+          />}
         />
 
         <ModelCatalogPanel
+          key={modelProviderFormId(selectedItem)}
           catalogModels={catalogState.catalogModels}
           visibleCatalogModels={catalogState.visibleCatalogModels}
           fetchedCandidates={catalogState.fetchedCandidates}
@@ -192,7 +217,8 @@ export function ModelProviderManager(props: ModelProviderManagerProps): React.Re
           modelQuery={catalogState.modelQuery}
           selectedModelRowId={catalogState.selectedModelRowId ?? selectedForm.model ?? selectedItem.model}
           modelNameDrafts={catalogState.modelNameDrafts}
-          hasApiKey={hasApiKeyAction}
+          canFetchModels={canFetchModels}
+          fetchDisabledReason={fetchDisabledReason}
           modelIconSvg={(model) => resolveModelIconSvgForModel({
             providerIdentity: selectedProviderIdentity,
             modelId: model.id,
@@ -209,6 +235,9 @@ export function ModelProviderManager(props: ModelProviderManagerProps): React.Re
           onCommitModelDisplayName={commitModelDisplayName}
           onRemoveCatalogModel={removeCatalogModel}
           onAddCatalogModel={addCatalogModel}
+          onEditModelSettings={selectedItem.profileId === undefined ? undefined : (model) => {
+            setEditingModel({ profileId: selectedItem.profileId!, model });
+          }}
         />
       </section>
       )}

@@ -11,6 +11,9 @@ import { resolveModelRuntimeConfig } from "../dist/app/model-runtime/model-runti
 import { listBuiltinModelProviderPresets } from "../dist/domain/config/index.js";
 import { modelProviderMarketPayload } from "../dist/app/panel-server/settings/config-route-payloads.js";
 import { parseConfigUpdate } from "../dist/app/panel-server/request-parsers.js";
+import { listPiProviderCatalog } from "../dist/adapters/intelligence/pi-model-catalog.js";
+import { createNativeModelProviderCollection } from "../dist/adapters/intelligence/native-model-provider.js";
+import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 
 test("saving a remote model catalog keeps a user-configured model id outside the catalog", async () => {
   await withDirectory(async (directory) => {
@@ -178,7 +181,7 @@ test("parseConfigUpdate carries piProviderId through config-center upsert and pe
   });
 });
 
-test("the frozen provider binding keeps the connection's declared piProviderId", () => {
+test("the frozen provider binding keeps the connection's declared piProviderId", async () => {
   const resolved = resolveModelRuntimeConfig({
     mode: "openai-compatible",
     env: { SYNECH_MODEL_API_KEY: "test-key" },
@@ -191,7 +194,7 @@ test("the frozen provider binding keeps the connection's declared piProviderId",
   });
   assert.equal(resolved.piProviderId, "deepseek");
 
-  const binding = createFrozenProviderBinding({
+  const binding = await createFrozenProviderBinding({
     resolved,
     profileId: "deepseek",
     resolveApiKey: async () => "test-key",
@@ -211,15 +214,120 @@ test("the panel provider market projects Pi provider identities without preloadi
   assert.ok(anthropic, "Pi's Anthropic provider must be available in the product market");
   assert.equal(anthropic.piProviderId, "anthropic");
   assert.equal("knownModelIds" in anthropic, false);
-  assert.equal(anthropic.protocolKind, "anthropic_messages");
+  assert.equal(anthropic.protocolKind, "native");
 
   const openrouter = byId.get("openrouter");
   assert.ok(openrouter, "Pi's OpenRouter provider must be available in the product market");
   assert.equal("knownModelIds" in openrouter, false);
-  assert.equal(openrouter.protocolKind, "openai_compatible_chat_completions");
+  assert.equal(openrouter.protocolKind, "native");
 
   const openai = byId.get("openai");
   assert.equal("defaultModel" in openai, false);
+
+  const providers = listPiProviderCatalog();
+  assert.deepEqual(
+    market.presets.map((preset) => preset.piProviderId).sort(),
+    providers.map((provider) => provider.providerId).sort(),
+    "each installed Pi provider must have its own service, including native, regional and plan variants",
+  );
+  const native = builtinModels();
+  for (const preset of market.presets) {
+    assert.deepEqual(preset.piProviderIds, [preset.piProviderId]);
+    assert.ok(preset.brandId && preset.brandLabel && preset.serviceLabel);
+    assert.equal(preset.protocolKind, "native");
+    assert.equal(preset.baseUrl, native.getProvider(preset.piProviderId).baseUrl ?? "");
+    assert.ok(preset.supportedAuthModes.includes(preset.connection.authMode));
+    const collection = createNativeModelProviderCollection({
+      ...preset,
+      profileId: `coverage-${preset.presetId}`,
+      credentialStore: {
+        read: async () => undefined,
+        modify: async (update) => update(undefined),
+        delete: async () => {},
+      },
+    });
+    const runtimeModels = collection.modelRegistry.getModels(collection.providerId);
+    for (const model of runtimeModels) {
+      const original = native.getModel(preset.piProviderId, model.id);
+      assert.ok(original, `native model ${model.id} must have Pi provenance`);
+      assert.equal(model.api, original.api);
+      assert.equal(model.baseUrl, original.baseUrl, "default service URLs must not replace model-specific routes");
+    }
+  }
+  assert.ok(byId.has("kimi-coding"));
+  assert.ok(byId.has("moonshotai"));
+  assert.equal(byId.get("minimax").piProviderId, "minimax-cn");
+  assert.equal(byId.get("pi-minimax").piProviderId, "minimax");
+  assert.equal(byId.get("openai").brandId, byId.get("openai-codex").brandId);
+  assert.notEqual(byId.get("openai").serviceLabel, byId.get("openai-codex").serviceLabel);
+  assert.equal(byId.get("google").brandId, byId.get("google-vertex").brandId);
+  const drifted = modelProviderMarketPayload(providers.filter((provider) => provider.providerId !== "openai"));
+  assert.ok(drifted.presets.some((preset) => preset.piProviderId === "google"));
+  assert.equal(drifted.presets.some((preset) => preset.piProviderId === "openai"), false);
+  assert.deepEqual(drifted.warnings.map((warning) => [warning.code, warning.presetId]), [
+    ["model_service_unavailable", "openai"],
+  ]);
+});
+
+test("native connection configuration reloads independently without exposing credentials", async () => {
+  await withDirectory(async (directory) => {
+    const { configCenter } = createLocalConfigCenter({ configDirectory: directory });
+    for (const [profileId, key, project] of [
+      ["vertex-personal", "private-key-one", "personal-project"],
+      ["vertex-work", "private-key-two", "work-project"],
+    ]) {
+      await configCenter.createModelProviderProfile(parseConfigUpdate({
+        profileId,
+        label: profileId,
+        protocolKind: "native",
+        piProviderId: "google-vertex",
+        baseUrl: "",
+        model: "gemini-2.5-pro",
+        connection: { authMode: "api_key", cloudProject: project, cloudLocation: "global" },
+        apiKey: key,
+      }));
+    }
+    const reopened = createLocalConfigCenter({ configDirectory: directory }).configCenter;
+    const profiles = await reopened.listModelProviderProfiles();
+    for (const [id, key, project] of [
+      ["vertex-personal", "private-key-one", "personal-project"],
+      ["vertex-work", "private-key-two", "work-project"],
+    ]) {
+      const profile = profiles.find((item) => item.profileId === id);
+      assert.equal(profile.protocolKind, "native");
+      assert.equal(profile.defaultAiMode, "native");
+      assert.equal(profile.connection.cloudProject, project);
+      assert.equal(await reopened.getModelProviderApiKey(id), key);
+      assert.equal(JSON.stringify(profiles).includes(key), false);
+    }
+    const resolved = resolveModelRuntimeConfig({
+      mode: "native",
+      env: {},
+      modelProvider: { profileId: "cloud", piProviderId: "google-vertex", baseUrl: "", model: "gemini-2.5-pro", connection: { authMode: "ambient" } },
+    });
+    assert.equal(resolved.protocol, "native");
+    assert.equal(resolved.baseUrl, "", "native connections must not inherit an OpenAI URL");
+    await reopened.updateModelProviderConfig({
+      profileId: "vertex-personal",
+      connection: { authMode: "api_key", cloudProject: "renamed-project", cloudLocation: "global" },
+    });
+    assert.equal(await reopened.getModelProviderApiKey("vertex-personal"), "private-key-one",
+      "editing public cloud parameters must not erase a saved API key");
+    const custom = await reopened.createModelProviderProfile({
+      profileId: "custom-empty-address", label: "Custom", model: "manual-model", apiKey: "custom-test-key",
+    });
+    assert.equal(custom.baseUrl, "");
+    const env = await reopened.createModelRuntimeEnvironment({ modelProvider: custom });
+    assert.throws(() => resolveModelRuntimeConfig({
+      mode: "openai-compatible", env, modelProvider: custom,
+    }), (error) => error.issue?.code === "missing_base_url");
+    for (const baseUrl of ["not-a-url", "file:///private", "https://secret-user:secret-pass@example.invalid"]) {
+      await assert.rejects(reopened.updateModelProviderConfig({
+        profileId: custom.profileId, baseUrl,
+      }), /HTTP\(S\)/);
+    }
+    assert.equal((await reopened.listModelProviderProfiles()).find((profile) => profile.profileId === custom.profileId).baseUrl, "");
+  });
 });
 
 test("an Anthropic Messages profile reloads without resetting the settings file", async () => {

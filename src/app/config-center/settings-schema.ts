@@ -254,9 +254,8 @@ export function normalizeLocalSettings(settings: LocalSettings): LocalSettings {
   if (settings.modelProfiles.length === 0) {
     throw new ConfigSchemaValidationError("settings.modelProfiles must contain at least one profile.");
   }
-  const profileFallback = createDefaultModelProviderProfile(now);
   const parsedProfiles = dedupeProfiles(settings.modelProfiles
-    .map((profile) => normalizeModelProfile(profile, profileFallback)));
+    .map((profile) => normalizeModelProfile(profile, profile)));
   if (parsedProfiles.length !== settings.modelProfiles.length) {
     throw new ConfigSchemaValidationError("settings.modelProfiles contains duplicate profileId values.");
   }

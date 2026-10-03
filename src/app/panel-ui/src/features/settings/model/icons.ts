@@ -1,4 +1,4 @@
-import { decorativeSvg } from "../../../icon-svg";
+import { modelIconVariants } from "./icon-variants";
 import {
   UNKNOWN_MODEL_IDENTITY,
   resolveModelFamilyIdentity,
@@ -9,8 +9,8 @@ import type { ModelFamilyIdentity, ModelProviderIdentity } from "./model-family"
  * Model family marks are discovered from `assets/model-icons/<family>.svg`.
  *
  * The file name is the family slug, so shipping a new family is a data change:
- * drop the SVG in and it resolves. `<family>.mono.svg` files are the theme-safe
- * fallbacks and are addressed separately.
+ * drop the SVG in and it resolves. Canonical assets preserve native colours;
+ * `.mono.svg` variants follow the appearance preference.
  */
 const modelIconModules = import.meta.glob("../../../assets/model-icons/*.svg", {
   query: "?raw",
@@ -51,20 +51,16 @@ export function resolveModelIconSvgForModel(input: {
 }
 
 function buildModelIcons(): Readonly<Record<string, string>> {
-  const icons: Record<string, string> = {};
-  const legacyKeys = new Set<string>();
+  const originals: Record<string, string> = {};
+  const monochrome: Record<string, string> = {};
   for (const [path, svg] of Object.entries(modelIconModules)) {
-    if (isMonoAsset(path)) continue;
     const key = familyKeyFromPath(path);
     if (key.length === 0) continue;
-    const legacy = isLegacyAssetName(path);
-    // Canonical `<family>.svg` wins over a legacy `<family>_model_icon.svg`
-    // regardless of glob order, so replacing an asset is a file drop.
-    if (legacy && icons[key] !== undefined) continue;
-    if (legacy) legacyKeys.add(key);
-    icons[key] = decorativeSvg(svg);
+    if (isMonoAsset(path)) { monochrome[key] = svg; continue; }
+    if (isLegacyAssetName(path) && originals[key] !== undefined) continue;
+    originals[key] = svg;
   }
-  return icons;
+  return Object.fromEntries(Object.entries(originals).map(([key, svg]) => [key, modelIconVariants(svg, monochrome[key], "model-" + key)]));
 }
 
 function familyKeyFromPath(path: string): string {

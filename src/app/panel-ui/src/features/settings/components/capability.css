@@ -1,7 +1,7 @@
 .basic-capabilities-settings {
   display: flex;
   flex-direction: column;
-  gap: 22px;
+  gap: 28px;
   width: 100%;
 }
 
@@ -9,59 +9,39 @@
   margin-bottom: 20px;
 }
 
-/* 现代圆润卡片规范 */
 .cap-card {
   display: flex;
   flex-direction: column;
-  gap: 18px;
-  border: var(--border-width-thin) solid color-mix(in oklch, var(--border) 72%, transparent);
-  border-radius: 16px;
-  background: var(--panel-card-bg);
-  box-shadow:
-    0 1px 3px rgba(0, 0, 0, 0.02),
-    0 8px 24px -4px color-mix(in oklch, var(--shadow-ink, #000) 4%, transparent);
-  padding: 24px 28px;
-  transition:
-    border-color var(--motion-fast-duration) var(--motion-ease-standard),
-    box-shadow var(--motion-fast-duration) var(--motion-ease-standard);
-}
-
-.cap-card:hover {
-  border-color: color-mix(in oklch, var(--border) 90%, transparent);
-  box-shadow:
-    0 2px 6px rgba(0, 0, 0, 0.03),
-    0 12px 30px -4px color-mix(in oklch, var(--shadow-ink, #000) 6%, transparent);
+  min-width: 0;
+  gap: 0;
+  padding: 0;
 }
 
 .cap-card-head {
   display: flex;
-  min-height: 36px;
+  min-height: 32px;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
   border-bottom: 1px solid color-mix(in oklch, var(--border) 55%, transparent);
-  padding-bottom: 16px;
+  padding-bottom: 12px;
 }
 
 .cap-card-title-group {
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 12px;
+  gap: 9px;
 }
 
 .cap-card-icon-badge {
   display: inline-flex;
-  width: 36px;
-  height: 36px;
+  width: 24px;
+  height: 24px;
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  border: 1px solid color-mix(in oklch, var(--accent) 26%, var(--border));
-  border-radius: 11px;
-  background: color-mix(in oklch, var(--accent) 9%, var(--surface));
-  color: var(--accent-strong, var(--accent));
-  box-shadow: 0 2px 6px color-mix(in oklch, var(--accent) 10%, transparent);
+  color: var(--muted);
 }
 
 .cap-card-heading {
@@ -73,9 +53,9 @@
 .cap-card-heading h3 {
   margin: 0;
   color: var(--fg);
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 600;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 
 .cap-card-actions {
@@ -91,6 +71,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+  min-width: 0;
 }
 
 .cap-card-body .service-config-grid,
@@ -100,65 +81,46 @@
   padding-top: 0;
 }
 
-/* 网络搜索表单网格 */
-.basic-capabilities-settings .web-search-config-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-items: end;
-  gap: 16px 20px;
-}
-
-.basic-capabilities-settings .web-search-max-results {
-  max-width: 180px;
-}
-
-.basic-capabilities-settings .service-config-grid label {
-  display: grid;
-  gap: 7px;
-  min-width: 0;
-  color: var(--fg);
-  font-size: 12.5px;
-  font-weight: 500;
-  line-height: 1.35;
-}
-
-.basic-capabilities-settings .service-config-grid input:not([type="checkbox"]) {
+.capability-field-control {
   box-sizing: border-box;
-  width: 100%;
-  height: 40px;
+  width: 280px;
+  max-width: 100%;
+  height: 36px;
+  flex: 0 0 auto;
   border: 1px solid var(--field-border);
-  border-radius: 10px;
+  border-radius: 6px;
   background: var(--field-bg);
-  padding: 0 14px;
+  padding: 0 10px;
   color: var(--fg);
   font: inherit;
-  font-size: 13.5px;
+  font-size: 13px;
   transition:
     border-color var(--motion-fast-duration) var(--motion-ease-standard),
     background-color var(--motion-fast-duration) var(--motion-ease-standard),
     box-shadow var(--motion-fast-duration) var(--motion-ease-standard);
 }
 
-.basic-capabilities-settings .service-config-grid input::placeholder {
+.capability-field-control::placeholder {
   color: color-mix(in oklch, var(--muted) 68%, transparent);
 }
 
-.basic-capabilities-settings .service-config-grid input:not([type="checkbox"]):hover {
+.capability-field-control:hover {
   border-color: var(--field-hover-border);
   background-color: var(--field-hover-bg);
 }
 
-.basic-capabilities-settings .service-config-grid input:not([type="checkbox"]):focus {
+.capability-field-control:focus {
   border-color: var(--field-focus-border);
   box-shadow: var(--field-focus-ring);
   outline: none;
 }
 
-/* 运行偏好列表 */
+.capability-number-control { width: 88px; }
+
 .capability-preference-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 0;
 }
 
 .capability-preference-row {
@@ -167,14 +129,12 @@
   align-items: center;
   justify-content: space-between;
   gap: 24px;
-  border-radius: 11px;
-  padding: 12px 14px;
-  transition:
-    background-color var(--motion-fast-duration) var(--motion-ease-standard);
+  min-height: 62px;
+  padding: 12px 2px;
 }
 
-.capability-preference-row:hover {
-  background: color-mix(in oklch, var(--row-hover-bg) 70%, transparent);
+.capability-preference-row + .capability-preference-row {
+  border-top: 1px solid color-mix(in oklch, var(--border) 50%, transparent);
 }
 
 .capability-preference-copy {
@@ -186,24 +146,53 @@
 
 .capability-preference-copy strong {
   color: var(--fg);
-  font-size: 13.5px;
+  font-size: 13px;
   font-weight: 550;
   line-height: 1.35;
 }
 
 .capability-preference-copy span {
-  overflow: hidden;
   color: var(--muted);
   font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .capability-preference-row .settings-select-control {
-  width: 200px;
-  min-width: 170px;
+  width: 280px;
+  min-width: 0;
   flex: 0 0 auto;
 }
+
+.capability-choice-group {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  flex: 0 0 auto;
+  width: 280px;
+  max-width: 100%;
+  gap: 3px;
+  border: 1px solid var(--field-border);
+  border-radius: 7px;
+  background: var(--content-surface-muted);
+  padding: 3px;
+}
+
+.capability-choice-group label { position: relative; min-width: 0; cursor: pointer; }
+.capability-choice-group input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.capability-choice-group span {
+  display: flex;
+  min-height: 32px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 4px;
+  padding: 4px 7px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.capability-choice-group svg { flex: 0 0 auto; }
+.capability-choice-group input:checked + span { background: var(--surface); color: var(--fg); box-shadow: var(--shadow-soft); }
+.capability-choice-group input:focus-visible + span { outline: 2px solid var(--field-focus-border); outline-offset: 1px; }
 
 /* 圆润胶囊开关 */
 .capability-toggle {
@@ -290,8 +279,7 @@
 
 @media (max-width: 760px) {
   .cap-card {
-    padding: 16px 18px;
-    border-radius: 14px;
+    padding: 0;
   }
 
   .cap-card-head {
@@ -303,21 +291,17 @@
     justify-content: flex-start;
   }
 
-  .basic-capabilities-settings .web-search-config-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .basic-capabilities-settings .web-search-max-results {
-    max-width: none;
-  }
-
   .capability-preference-row {
     align-items: stretch;
     flex-direction: column;
-    padding: 10px 12px;
+    gap: 10px;
+    padding: 14px 0;
   }
 
-  .capability-preference-row .settings-select-control {
+  .capability-preference-row .settings-select-control,
+  .capability-field-control,
+  .capability-choice-group {
     width: 100%;
   }
+  .capability-number-control { width: 88px; }
 }

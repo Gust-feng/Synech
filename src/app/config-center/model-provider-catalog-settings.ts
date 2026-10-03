@@ -7,7 +7,6 @@ import type {
 import { normalizeModelCatalogDisplayName } from "../../domain/config/index.js";
 import { asRecord, optionalString, safeConfigId } from "./settings-utils.js";
 import {
-  DEFAULT_MODEL_PROVIDER_BASE_URL,
   normalizeBaseUrl,
   normalizeOptionalString,
   normalizeProfileId,
@@ -61,7 +60,7 @@ export function normalizeModelCatalogs(
       baseUrl:
         normalizeBaseUrl(catalog.baseUrl) ??
         normalizeBaseUrl(profile.baseUrl) ??
-        DEFAULT_MODEL_PROVIDER_BASE_URL,
+        "",
       modelsPath: normalizeModelCatalogPath(catalog.modelsPath),
       fetchedAt: normalizeCatalogFetchedAt(catalog.fetchedAt) ?? now,
       models: normalizeModelCatalogItems(catalog.models),

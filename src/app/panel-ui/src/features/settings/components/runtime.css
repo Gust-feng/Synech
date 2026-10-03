@@ -191,19 +191,19 @@ html[data-style="default"][data-color="dark"] .ui-workbench-root .settings-overl
 .ui-workbench-root .settings-content .provider-search input:focus-visible,
 .ui-workbench-root .settings-content .model-search-field input:focus-visible,
 .ui-workbench-root .settings-content .api-key-field input:focus-visible,
-.ui-workbench-root .settings-content .provider-base-url-field input:focus-visible {
+.ui-workbench-root .settings-content .provider-base-url-field input:focus-visible,
+.ui-workbench-root .settings-content .model-picker-pane .model-picker-search input:focus-visible {
   border: 0;
   box-shadow: none;
   outline: none;
   outline-offset: 0;
 }
 
-/* Search is a passive filter; keep its field boundary stable without a focus halo. */
 .ui-workbench-root .settings-content .provider-search:focus-within,
 .ui-workbench-root .settings-content .model-search-field:focus-within {
-  border-color: var(--field-border);
+  border-color: var(--field-focus-border);
   background: var(--field-bg);
-  box-shadow: none;
+  box-shadow: var(--field-focus-ring);
 }
 
 @media (max-width: 620px) {

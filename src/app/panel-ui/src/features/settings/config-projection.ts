@@ -1,9 +1,27 @@
 import type { ConfigResponse, ModelProviderModelCatalog, ToolConfirmationPolicy } from "@panel-api/config";
 import type { ModelRunReasoningEffort } from "@panel-api/config";
+import type { ToolsResponse } from "@panel-api/tools";
+import type { ToolForm } from "./components/types";
 
 export type ComposerReasoningEffort = "" | ModelRunReasoningEffort;
 export type ComposerToolConfirmationPolicy = ToolConfirmationPolicy;
-export type VisibleAiMode = "none" | "anthropic-messages" | "openai-compatible" | "openai-responses";
+export type VisibleAiMode = "none" | "anthropic-messages" | "openai-compatible" | "openai-responses" | "native";
+
+export function webSearchFormFromConfig(config: NonNullable<NonNullable<ToolsResponse["tools"]>["webSearch"]>): ToolForm {
+  return {
+    provider: config.provider === "none" ? "model_builtin" : (config.provider ?? "tavily"),
+    apiKey: "",
+    maxResults: String(config.maxResults ?? 5),
+    engineId: config.engineId ?? "",
+  };
+}
+
+export function reconcileWebSearchForm(current: ToolForm, expected: ToolForm | undefined, incoming: ToolForm): ToolForm {
+  // A settings response may acknowledge an older save while the user is already editing again.
+  if (expected !== undefined && (Object.keys(expected) as (keyof ToolForm)[])
+    .some((key) => current[key] !== expected[key])) return current;
+  return incoming;
+}
 
 export function mergeConfigResponse(previous: ConfigResponse | undefined, incoming: ConfigResponse): ConfigResponse {
   return {
@@ -28,7 +46,8 @@ export function normalizeVisibleAiMode(mode: VisibleAiMode | undefined): Visible
   return mode === "none" ||
     mode === "anthropic-messages" ||
     mode === "openai-compatible" ||
-    mode === "openai-responses"
+    mode === "openai-responses" ||
+    mode === "native"
     ? mode
     : "openai-compatible";
 }

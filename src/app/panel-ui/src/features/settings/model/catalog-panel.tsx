@@ -1,5 +1,5 @@
-import React from "react";
-import { AlertCircle, RefreshCw, Search, Trash2, X } from "lucide-react";
+import React, { useState } from "react";
+import { AlertCircle, Plus, RefreshCw, Search, Settings2, Trash2, X } from "lucide-react";
 import type { ModelProviderModelItem } from "./settings-projection";
 import { formatModelCount } from "./settings-projection";
 import { ModelIcon } from "./settings-icons";
@@ -18,7 +18,8 @@ export function ModelCatalogPanel(props: {
   readonly modelNameDrafts: Readonly<Record<string, string>>;
   readonly modelIconSvg: (model: ModelProviderModelItem) => string | undefined;
   readonly saving?: boolean;
-  readonly hasApiKey: boolean;
+  readonly canFetchModels: boolean;
+  readonly fetchDisabledReason?: string;
   readonly modelsFetchBusy?: boolean;
   readonly fetchFeedback?: { readonly type: "error" | "success"; readonly message: string };
   readonly onClearFetchFeedback?: () => void;
@@ -29,9 +30,37 @@ export function ModelCatalogPanel(props: {
   readonly onCommitModelDisplayName: (modelId: string, value: string) => Promise<void>;
   readonly onRemoveCatalogModel: (modelId: string) => Promise<void>;
   readonly onAddCatalogModel?: (model: ModelProviderModelItem) => Promise<void>;
+  readonly onEditModelSettings?: (model: ModelProviderModelItem) => void;
 }): React.ReactElement {
+  const listViewport = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    if (listViewport.current !== null) listViewport.current.scrollTop = 0;
+  }, [props.modelQuery]);
+
   const modelCount = props.catalogModels.length;
   const visibleCount = props.visibleCatalogModels.length;
+  const [manualEntryOpen, setManualEntryOpen] = useState(false);
+  const [modelId, setModelId] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [addingModel, setAddingModel] = useState(false);
+  const [addError, setAddError] = useState<string | undefined>(undefined);
+
+  async function addManualModel(): Promise<void> {
+    const id = modelId.trim();
+    if (id.length === 0 || props.onAddCatalogModel === undefined || addingModel) return;
+    setAddingModel(true);
+    setAddError(undefined);
+    try {
+      await props.onAddCatalogModel({ id, displayName: displayName.trim() || id });
+      setModelId("");
+      setDisplayName("");
+      setManualEntryOpen(false);
+    } catch (error) {
+      setAddError(error instanceof Error ? error.message : "模型添加失败。");
+    } finally {
+      setAddingModel(false);
+    }
+  }
 
   return (
     <section className="model-list-panel">
@@ -52,6 +81,7 @@ export function ModelCatalogPanel(props: {
               value={props.modelQuery}
               onChange={(event) => props.onModelQueryChange(event.target.value)}
               placeholder="搜索模型"
+              aria-label="搜索已保存模型"
               spellCheck={false}
               autoComplete="off"
               autoCorrect="off"
@@ -61,12 +91,21 @@ export function ModelCatalogPanel(props: {
         )}
 
         <div className="model-panel-actions">
+          {props.onAddCatalogModel !== undefined && <button
+            type="button"
+            className="model-manage-button"
+            disabled={props.saving || addingModel}
+            onClick={() => { setManualEntryOpen((open) => !open); setAddError(undefined); }}
+            aria-expanded={manualEntryOpen}
+          >
+            <Plus size={14} /> 添加模型
+          </button>}
           <button
             type="button"
             className={`model-fetch-button ${props.modelsFetchBusy ? "loading" : ""}`}
             onClick={() => void props.onFetchModels()}
-            disabled={props.saving || props.modelsFetchBusy || !props.hasApiKey}
-            title={props.hasApiKey ? "获取该服务商提供的可用模型列表" : "请先填写并保存 API Key"}
+            disabled={props.saving || props.modelsFetchBusy || addingModel || !props.canFetchModels}
+            title={props.canFetchModels ? "获取可用模型列表" : props.fetchDisabledReason}
             aria-busy={props.modelsFetchBusy ? "true" : "false"}
           >
             <RefreshCw className="model-fetch-icon" size={14} />
@@ -76,6 +115,24 @@ export function ModelCatalogPanel(props: {
           </button>
         </div>
       </div>
+
+      {manualEntryOpen && <form
+        className="model-manual-entry"
+        onSubmit={(event) => { event.preventDefault(); void addManualModel(); }}
+      >
+        <label>
+          <span>模型 ID</span>
+          <input value={modelId} onChange={(event) => setModelId(event.target.value)} disabled={props.saving || addingModel} required autoFocus autoComplete="off" spellCheck={false} />
+        </label>
+        <label>
+          <span>显示名称</span>
+          <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} disabled={props.saving || addingModel} placeholder={modelId.trim() || "可选"} autoComplete="off" />
+        </label>
+        <button type="submit" disabled={props.saving || addingModel || modelId.trim().length === 0}>
+          <Plus size={14} /> {addingModel ? "添加中" : "添加"}
+        </button>
+        {addError !== undefined && <p role="alert">{addError}</p>}
+      </form>}
 
       {props.fetchFeedback && props.fetchFeedback.type === "error" && (
         <div className="model-fetch-feedback error" role="status">
@@ -98,18 +155,13 @@ export function ModelCatalogPanel(props: {
 
       {modelCount === 0 ? (
         <div className="model-empty model-empty-start">
-          <span className="model-empty-start-mark" aria-hidden="true">+</span>
+          <Plus className="model-empty-start-mark" aria-hidden="true" size={20} />
           <span className="model-empty-start-title">暂无可用的模型</span>
-          <span className="model-empty-start-detail">
-            {props.hasApiKey
-              ? "可点击右上角「获取模型」同步该服务商的最新可用模型"
-              : "填写 API Key 后，点击右上角「获取模型」即可载入可用模型列表"}
-          </span>
         </div>
       ) : visibleCount === 0 ? (
         <div className="model-empty compact">未找到与关键词匹配的模型</div>
       ) : (
-        <div className="model-list-scroll">
+        <div className="model-list-scroll" ref={listViewport} role="region" aria-label="已保存模型列表" tabIndex={0}>
           <div className="model-list">
             {props.visibleCatalogModels.map((model) => (
               <EditableModelRow
@@ -123,6 +175,7 @@ export function ModelCatalogPanel(props: {
                 onModelNameDraftChange={props.onModelNameDraftChange}
                 onCommitModelDisplayName={props.onCommitModelDisplayName}
                 onRemoveCatalogModel={props.onRemoveCatalogModel}
+                onEditModelSettings={props.onEditModelSettings}
               />
             ))}
           </div>
@@ -142,6 +195,7 @@ function EditableModelRow(props: {
   readonly onModelNameDraftChange: (modelId: string, value: string) => void;
   readonly onCommitModelDisplayName: (modelId: string, value: string) => Promise<void>;
   readonly onRemoveCatalogModel: (modelId: string) => Promise<void>;
+  readonly onEditModelSettings?: (model: ModelProviderModelItem) => void;
 }): React.ReactElement {
   return (
     <div
@@ -186,22 +240,38 @@ function EditableModelRow(props: {
         </div>
         <small title={`原始模型标识: ${props.model.id}`}>{props.model.id}</small>
       </div>
-      <button
-        type="button"
-        className="model-row-action"
-        aria-label={`移除 ${props.model.displayName}`}
-        title={`从列表中移除 ${props.model.displayName}`}
-        onMouseDown={(event) => {
-          event.preventDefault();
-        }}
-        onClick={(event) => {
-          event.stopPropagation();
-          void props.onRemoveCatalogModel(props.model.id);
-        }}
-        disabled={props.saving}
-      >
-        <Trash2 size={14} />
-      </button>
+      <div className="model-row-actions">
+        {props.onEditModelSettings !== undefined && <button
+          type="button"
+          className="model-row-action"
+          aria-label={`设置模型能力 ${props.model.displayName || props.model.id}`}
+          title="模型能力设置"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={(event) => {
+            event.stopPropagation();
+            props.onEditModelSettings?.(props.model);
+          }}
+          disabled={props.saving}
+        >
+          <Settings2 size={14} />
+        </button>}
+        <button
+          type="button"
+          className="model-row-action"
+          aria-label={`移除 ${props.model.displayName}`}
+          title={`从列表中移除 ${props.model.displayName}`}
+          onMouseDown={(event) => {
+            event.preventDefault();
+          }}
+          onClick={(event) => {
+            event.stopPropagation();
+            void props.onRemoveCatalogModel(props.model.id);
+          }}
+          disabled={props.saving}
+        >
+          <Trash2 size={14} />
+        </button>
+      </div>
     </div>
   );
 }

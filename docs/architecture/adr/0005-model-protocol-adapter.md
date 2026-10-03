@@ -1,5 +1,8 @@
 # ADR 0005：模型协议 Adapter（piProviderId 匹配与连接级 transport）
 
+> 原生服务、订阅鉴权与 transport 范围扩展由 ADR 0008 接续；本文的三协议限制只适用于兼容连接，不再代表全部可接服务。
+> ADR 0010 替代自定义兼容连接的 transport 与匹配规则：每模型关联不改上游 ID，自定义连接始终使用配置协议，仅复用同 transport 的 compat。原生服务规则仍由 Pi 与 ADR 0008 管理。
+
 > 状态：Accepted（2026-09-28）
 > 日期：2026-09-28
 > 关联：ADR 0004（模型事实二态：KnownPiModel / UnknownDiscoveredModel）；ADR 0002（其 §9「thinkingLevelMap 镜像链路」表述由本 ADR 与 0004 修正）
@@ -25,6 +28,8 @@ ADR 0004 冻结了模型事实二态，但仍需一条明确规则回答：模�
 - `minimax` 家族映射到 pi 的 `minimax` / `minimax-cn`：pi 目录的 api 是 `anthropic-messages`，由 Anthropic Messages transport 接入，不为它另开 OpenAI 兼容特判；
 - 留空（含通用 OpenAI 兼容端点）= 该连接的全部模型按未知发现模型处理；
 - HTTP 层以条件键输出 `piProviderId` / `clearPiProviderId`（`parseConfigUpdate`），未提交的字段不被静默清空。
+
+产品设置展示补记（2026-09-30）：`piProviderId` 的显式声明属于内部连接配置，不代表用户必须填写运行时标识。用户选择服务预设时由产品携带对应声明；通用自定义服务不按名称、Base URL 或模型 ID 猜 Provider，已有声明在普通编辑时保留。设置页不展示 Pi Provider 输入框。默认 `default` 配置绑定到 `openai` 服务预设，只投影一个服务入口，不修改存储身份或密钥。
 
 ### 2.2 同一模型 ID 按明确的 `piProviderId` 匹配
 

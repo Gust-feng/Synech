@@ -1,9 +1,9 @@
-import React, { useId } from "react";
+import React from "react";
 import { Eye, EyeOff } from "lucide-react";
 import { SettingsSelectControl } from "../components/select-control";
 import type { ModelForm, ModelProviderListItem } from "./settings-projection";
 import { modelProtocolKind, modelProtocolOptions } from "./settings-projection";
-import { builtinProviderPresetId } from "./provider-logos";
+import { hasNativeServiceAddress, nativeConnectionFields } from "./native-connection-fields";
 
 /**
  * 模型服务表单组件属性定义。
@@ -13,7 +13,6 @@ export type ModelProviderFormProps = {
   readonly item: ModelProviderListItem;
   /** 当前编辑中的表单草稿状态 */
   readonly modelForm: ModelForm;
-  readonly piProviderIds: readonly string[];
   /** 当前 API Key 是否明文显式显示 */
   readonly revealed: boolean;
   /** 是否正在请求解密并显示 API Key */
@@ -32,6 +31,7 @@ export type ModelProviderFormProps = {
   readonly onRevealApiKey: () => Promise<void>;
   /** 调度并触发表单防抖自动持久化保存 */
   readonly onScheduleModelSave: (form: ModelForm) => void;
+  readonly authPanel?: React.ReactNode;
 };
 
 /**
@@ -41,21 +41,35 @@ export type ModelProviderFormProps = {
  * 以及底层通信协议（Protocol / Transport，如 OpenAI 兼容、Anthropic Messages 等）。
  */
 export function ModelProviderForm(props: ModelProviderFormProps): React.ReactElement {
-  const piProviderListId = useId();
-  const piProviderLocked = props.item.protectedBuiltin ||
-    builtinProviderPresetId({ profileId: props.item.profileId }) !== undefined;
-  const piProviderIds = [...new Set([
-    ...props.piProviderIds,
-    ...(props.item.preset?.piProviderIds ?? []),
-    ...(props.item.piProviderId === undefined ? [] : [props.item.piProviderId]),
-  ])].sort();
-
+  const native = props.modelForm.protocolKind === "native";
+  const authMode = props.modelForm.connection?.authMode ?? props.item.preset?.connection?.authMode ?? "api_key";
+  const authModes = props.item.preset?.supportedAuthModes ?? [authMode];
+  const connectionFields = native ? nativeConnectionFields(props.modelForm.piProviderId, authMode) : [];
   return (
     <div className="provider-form">
-      <label className="provider-form-full">
+      {native && authModes.length > 1 && <div className="provider-protocol-field provider-form-full">
+        <span>认证方式</span>
+        <SettingsSelectControl
+          id="provider-auth-mode"
+          ariaLabel="认证方式"
+          value={authMode}
+          disabled={props.saving}
+          options={authModes.map((mode) => ({
+            value: mode,
+            label: mode === "api_key" ? "API Key" : mode === "oauth" ? "账号登录" : "本机凭据",
+          }))}
+          onChange={(value) => {
+            const mode = authModes.find((candidate) => candidate === value);
+            if (mode !== undefined) props.onUpdateModelForm({ connection: { ...props.modelForm.connection, authMode: mode } });
+          }}
+        />
+      </div>}
+      {native && authMode === "oauth" && props.authPanel}
+      {(!native || authMode === "api_key") && <label className="provider-form-full">
         <span>API Key</span>
         <div className="api-key-field">
           <input
+            disabled={props.saving}
             type={props.revealed ? "text" : "password"}
             className={props.revealed ? undefined : "api-key-input-masked"}
             value={props.modelForm.apiKey}
@@ -88,9 +102,9 @@ export function ModelProviderForm(props: ModelProviderFormProps): React.ReactEle
             </button>
           </span>
         </div>
-      </label>
-      <label className="provider-form-base-url">
-        <span>Base URL</span>
+      </label>}
+      {(!native || hasNativeServiceAddress(props.modelForm.piProviderId)) && <label className={native ? "provider-form-base-url provider-form-full" : "provider-form-base-url"}>
+        <span>{native ? "服务地址" : "Base URL"}</span>
         <div className="provider-base-url-field">
           <input
             value={props.modelForm.baseUrl}
@@ -99,18 +113,18 @@ export function ModelProviderForm(props: ModelProviderFormProps): React.ReactEle
             autoComplete="off"
             autoCorrect="off"
             autoCapitalize="off"
-            title={props.modelForm.baseUrl || props.item.preset?.baseUrl || props.item.baseUrl || "https://api.example.com/v1"}
+            title={props.modelForm.baseUrl || props.item.preset?.baseUrl || props.item.baseUrl}
             onChange={(event) => {
               props.onUpdateModelForm({ baseUrl: event.target.value });
             }}
             onBlur={(event) => {
               event.currentTarget.scrollLeft = 0;
             }}
-            placeholder={props.item.preset?.baseUrl || props.item.baseUrl || "https://api.example.com/v1"}
+            placeholder={props.item.preset?.baseUrl || props.item.baseUrl || (native ? "默认服务地址" : "https://api.example.com/v1")}
           />
         </div>
-      </label>
-      <div className="provider-protocol-field">
+      </label>}
+      {!native && <div className="provider-protocol-field">
         <span>协议</span>
         <SettingsSelectControl
           id="provider-protocol-kind"
@@ -120,28 +134,19 @@ export function ModelProviderForm(props: ModelProviderFormProps): React.ReactEle
           options={modelProtocolOptions()}
           onChange={(value) => props.onUpdateModelForm({ protocolKind: modelProtocolKind(value) })}
         />
-      </div>
-      <label className="provider-form-full">
-        <span>Pi Provider</span>
-        <div className="provider-base-url-field">
-          <input
-            aria-label="Pi Provider"
-            value={props.modelForm.piProviderId}
-            list={piProviderListId}
-            disabled={props.saving || piProviderLocked}
-            title={piProviderLocked ? "内置槽位由预设管理" : undefined}
-            spellCheck={false}
-            autoComplete="off"
-            autoCorrect="off"
-            autoCapitalize="off"
-            placeholder="未声明"
-            onChange={(event) => props.onUpdateModelForm({ piProviderId: event.target.value })}
-          />
-          <datalist id={piProviderListId}>
-            {piProviderIds.map((providerId) => <option key={providerId} value={providerId} />)}
-          </datalist>
-        </div>
-      </label>
+      </div>}
+      {connectionFields.map((field) => <label className="provider-form-full" key={field.key}>
+        <span>{field.label}</span>
+        <input
+          value={props.modelForm.connection?.[field.key] ?? ""}
+          disabled={props.saving}
+          autoComplete="off"
+          spellCheck={false}
+          onChange={(event) => props.onUpdateModelForm({
+            connection: { ...props.modelForm.connection, authMode, [field.key]: event.target.value },
+          })}
+        />
+      </label>)}
     </div>
   );
 }

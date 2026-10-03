@@ -19,8 +19,6 @@ type WorkbenchSettingsDialogFormState = {
 };
 
 type WorkbenchSettingsDialogPreferences = {
-  readonly modelUsageDisplayEnabled: boolean;
-  readonly onModelUsageDisplayChange: (enabled: boolean) => void;
   readonly developerModeEnabled: boolean;
   readonly onDeveloperModeChange: (enabled: boolean) => void;
   readonly conversationFollowUpMode: ConversationFollowUpMode;
@@ -32,6 +30,8 @@ type WorkbenchSettingsDialogSavingState = {
   readonly workspace?: boolean;
   readonly ordinaryAgent?: boolean;
   readonly tools?: boolean;
+  readonly webSearch?: boolean;
+  readonly skillTrigger?: boolean;
 };
 
 export type WorkbenchSettingsDialogProps = {
@@ -61,8 +61,6 @@ export function WorkbenchSettingsDialog(props: WorkbenchSettingsDialogProps): Re
       setModelForm={props.forms.setModelForm}
       ordinaryAgentSystemPrompt={props.forms.ordinaryAgentSystemPrompt}
       setOrdinaryAgentSystemPrompt={props.forms.setOrdinaryAgentSystemPrompt}
-      modelUsageDisplayEnabled={props.preferences.modelUsageDisplayEnabled}
-      onModelUsageDisplayChange={props.preferences.onModelUsageDisplayChange}
       developerModeEnabled={props.preferences.developerModeEnabled}
       onDeveloperModeChange={props.preferences.onDeveloperModeChange}
       conversationFollowUpMode={props.preferences.conversationFollowUpMode}
@@ -77,7 +75,9 @@ export function WorkbenchSettingsDialog(props: WorkbenchSettingsDialogProps): Re
       onDeleteModelProvider={props.actions.deleteModelProvider}
       onFetchModels={props.actions.fetchModelsForProfile}
       onSaveModelCatalog={props.actions.saveModelCatalog}
+      onSaveModelConfiguration={props.actions.saveModelConfiguration}
       onRevealModelApiKey={props.actions.revealModelApiKey}
+      modelProviderAuth={props.actions.modelProviderAuth}
       modelCatalogs={props.modelCatalogs}
       skills={props.app.skills}
       subAgents={props.app.subAgents}
@@ -90,8 +90,10 @@ export function WorkbenchSettingsDialog(props: WorkbenchSettingsDialogProps): Re
       mcpServerForm={props.forms.mcpServerForm}
       setMcpServerForm={props.forms.setMcpServerForm}
       savingTools={props.saving.tools}
+      savingWebSearch={props.saving.webSearch}
+      savingSkillTrigger={props.saving.skillTrigger}
       onSaveTools={(nextToolForm) => void props.actions.saveTools(nextToolForm)}
-      onSaveSkillTriggerMode={(mode) => void props.actions.saveSkillTriggerMode(mode)}
+      onSaveSkillTriggerMode={props.actions.saveSkillTriggerMode}
       onSaveMcpServer={props.actions.saveMcpServer}
       onLoadMcpReferences={props.actions.loadMcpReferences}
       onImportMcpConfig={(config) => void props.actions.importMcpConfig(config)}

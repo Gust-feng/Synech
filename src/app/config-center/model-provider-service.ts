@@ -11,8 +11,8 @@ import type {
 import { listBuiltinModelProviderPresets } from "../../domain/config/index.js";
 import { ConfigCenterValidationError } from "./config-center-error.js";
 import { builtinPresetForProfileId } from "./model-provider-profile-settings.js";
+import { modelProviderOAuthSecretRef, readModelProviderKey, writeModelProviderKey } from "./model-provider-credentials.js";
 import {
-  DEFAULT_MODEL_PROVIDER_BASE_URL,
   normalizeLocalSettings,
   normalizeModelProfile,
   normalizeModelProviderKind,
@@ -46,7 +46,7 @@ export async function getModelProviderApiKey(
   const profile = profileId === undefined
     ? requireActiveModelProfile(settings)
     : settings.modelProfiles.find((candidate) => candidate.profileId === normalizeProfileId(profileId));
-  return profile === undefined ? undefined : secretStore.readSecret(profile.secretRef);
+  return profile === undefined ? undefined : readModelProviderKey(secretStore, profile);
 }
 
 export async function listModelProviderProfiles(
@@ -135,7 +135,7 @@ export async function createModelProviderProfile(
   });
   const apiKey = normalizeOptionalString(input.apiKey);
   if (apiKey !== undefined) {
-    await secretStore.writeSecret(profile.secretRef, apiKey);
+    await writeModelProviderKey(secretStore, profile, apiKey);
   }
   const saved = settings.modelProfiles.find((candidate) => candidate.profileId === profileId) ?? profile;
   return {
@@ -191,7 +191,10 @@ export async function deleteModelProviderProfile(
     modelCatalogs: (current.modelCatalogs ?? []).filter((catalog) => catalog.profileId !== normalized),
     updatedAt: now,
   });
-  await secretStore.deleteSecret(deletedProfile.secretRef);
+  await Promise.all([
+    secretStore.deleteSecret(deletedProfile.secretRef),
+    secretStore.deleteSecret(modelProviderOAuthSecretRef(deletedProfile.profileId)),
+  ]);
   return {
     settings,
     result: await listModelProviderProfiles(settings, secretStore),
@@ -243,7 +246,7 @@ export async function updateModelProviderConfig(
     await Promise.all([...new Set([existing.secretRef, updatedProfile.secretRef])]
       .map((secretRef) => secretStore.deleteSecret(secretRef)));
   } else if (apiKey !== undefined) {
-    await secretStore.writeSecret(updatedProfile.secretRef, apiKey);
+    await writeModelProviderKey(secretStore, updatedProfile, apiKey);
   }
   const saved = settings.modelProfiles.find((profile) => profile.profileId === updatedProfile.profileId) ?? updatedProfile;
   return {
@@ -263,7 +266,7 @@ function createModelProviderProfileFallback(
     label,
     providerKind: "openai_compatible",
     protocolKind: "openai_compatible_chat_completions",
-    baseUrl: DEFAULT_MODEL_PROVIDER_BASE_URL,
+    baseUrl: undefined,
     defaultAiMode: current.defaultAiMode === "none" ? "none" : "openai-compatible",
     secretRef: `secret://local-dev/model-provider/${profileId}/api-key`,
     enabled: true,

@@ -4,6 +4,12 @@ import type {
 } from "../../domain/config/index.js";
 
 const PROTOCOL_TOOL_CALL_CAPABILITIES: Record<ConfiguredModelProtocolKind, ProtocolToolCallCapabilities> = {
+  native: {
+    protocolKind: "native",
+    canSendToolDefinitions: true,
+    canReceiveToolCalls: true,
+    canRoundTripToolResults: true,
+  },
   openai_compatible_chat_completions: {
     protocolKind: "openai_compatible_chat_completions",
     canSendToolDefinitions: true,
