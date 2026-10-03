@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.panel.json",
+  "compilerOptions": {
+    "types": ["vite/client", "node"]
+  },
+  "include": [
+    "src/app/panel-ui/src/**/*.ts",
+    "src/app/panel-ui/src/**/*.tsx",
+    "src/app/panel-api/**/*.ts",
+    "src/app/panel-demo/**/*.ts",
+    "vite.panel-demo.config.ts"
+  ]
+}
