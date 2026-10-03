@@ -35,6 +35,7 @@ export type PanelDesktopWindowOptions = {
     readonly nodeIntegration: false;
     readonly sandbox: true;
     readonly webviewTag: false;
+    readonly spellcheck: false;
     readonly partition: typeof PRODUCT_CHROMIUM_PARTITION;
   };
 };
@@ -237,6 +238,7 @@ export function createPanelDesktopWindowOptions(
       nodeIntegration: false,
       sandbox: true,
       webviewTag: false,
+      spellcheck: false,
       partition: PRODUCT_CHROMIUM_PARTITION,
     },
   };
