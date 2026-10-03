@@ -1,17 +1,47 @@
 import type { ModelThinkingLevelName, ResolvedModelCapabilities } from "./model-facts.js";
+import type { ModelConfiguration } from "./model-configuration.js";
 
 export type ConfiguredModelRuntimeMode =
   | "none"
   | "anthropic-messages"
   | "openai-compatible"
-  | "openai-responses";
+  | "openai-responses"
+  | "native";
 
 export type ConfiguredModelProviderKind = "openai_compatible";
 
 export type ConfiguredModelProtocolKind =
   | "anthropic_messages"
   | "openai_responses"
-  | "openai_compatible_chat_completions";
+  | "openai_compatible_chat_completions"
+  | "native";
+
+export type ModelProviderAuthMode = "api_key" | "oauth" | "ambient";
+
+/** Connection parameters are public configuration, never credentials. */
+export type ModelProviderConnectionSettings = {
+  readonly authMode: ModelProviderAuthMode;
+  readonly cloudProject?: string;
+  readonly cloudLocation?: string;
+  readonly credentialsPath?: string;
+  readonly awsRegion?: string;
+  readonly awsProfile?: string;
+  readonly azureResource?: string;
+  readonly azureApiVersion?: string;
+  readonly azureDeployment?: string;
+  readonly cloudflareAccountId?: string;
+  readonly cloudflareGatewayId?: string;
+};
+
+/** Credential shapes are interpreted only by the runtime adapter. */
+export type ModelProviderCredentialStorePort = {
+  read(options?: { readonly signal?: AbortSignal }): Promise<unknown | undefined>;
+  modify(
+    update: (current: unknown | undefined) => Promise<unknown | undefined>,
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<unknown | undefined>;
+  delete(options?: { readonly signal?: AbortSignal }): Promise<void>;
+};
 
 export type ProviderProtocolProfileId =
   | "openai"
@@ -61,19 +91,18 @@ export type OpenAIReasoningEffort =
 /**
  * 运行级推理档位。
  *
- * 直接派生自 Pi 的档位名，排除 "off"（那是"不请求档位"，用 absence 表达）。
- * 产品**不维护自己的档位集合**：模型实际支持哪几档完全由该模型真实的
- * `thinkingLevelMap` 决定，档位多于此集合的上游 api 由 Pi 自己扩展。
+ * 产品提供五档，沿用 Pi 编码；off 用 absence 表达，minimal 不进入产品选项。
+ * 默认来自真实 `thinkingLevelMap`，每模型用户设置可以调整支持集合。
+ * Adapter 仍使用 Pi 既有的档位名与编码。
  */
-export type ModelRunReasoningEffort = Exclude<ModelThinkingLevelName, "off">;
+export type ModelRunReasoningEffort = Exclude<ModelThinkingLevelName, "off" | "minimal">;
 
 /** 档位到展示名的映射；新档位必须在这里补一个名字，否则无法在 UI 呈现。 */
 export const MODEL_RUN_REASONING_EFFORT_LABELS: Readonly<Record<ModelRunReasoningEffort, string>> = {
-  minimal: "极简",
-  low: "轻量",
-  medium: "标准",
-  high: "深入",
-  xhigh: "极深",
+  low: "低",
+  medium: "中",
+  high: "高",
+  xhigh: "极高",
   max: "最高",
 };
 
@@ -98,6 +127,11 @@ export type OpenAIModelRequestSettings = {
   readonly store?: boolean;
 };
 export type ModelProviderPreset = {
+  readonly brandId?: string;
+  readonly brandLabel?: string;
+  readonly serviceLabel?: string;
+  readonly connection?: ModelProviderConnectionSettings;
+  readonly supportedAuthModes?: readonly ModelProviderAuthMode[];
   readonly presetId: string;
   readonly label: string;
   readonly vendor: string;
@@ -112,8 +146,7 @@ export type ModelProviderPreset = {
   readonly docsUrl?: string;
   /**
    * 该预置端点对应的 pi-ai 真实 provider id（如 `openai` / `moonshotai-cn`）。
-   * 已知模型的运行事实按此显式声明在 pi 真实目录中精确匹配；未声明（如通用
-   * OpenAI 兼容端点）时，该连接的全部模型都按「远程发现、Pi 未识别」处理。
+   * 原生/显式目录作用域；自定义连接未声明时按模型独立自动关联。
    */
   readonly piProviderId?: string;
   /** Other Pi provider IDs accepted by this preset's Pi-native connection. */
@@ -153,11 +186,12 @@ export type ModelProviderProfileSettings = {
   readonly baseUrl?: string;
   readonly model?: string;
   readonly openAI?: OpenAIModelRequestSettings;
+  readonly modelSettings?: Readonly<Record<string, ModelConfiguration>>;
   /**
-   * 连接显式声明的 pi-ai provider id。非空时，已知模型按此 provider 在 pi 真实
-   * 目录中精确匹配 modelId；为空时该连接的全部模型按未知发现模型处理。
+   * 连接服务身份/显式目录作用域，不是混合网关内所有模型的厂商身份。
    */
   readonly piProviderId?: string;
+  readonly connection?: ModelProviderConnectionSettings;
   readonly defaultAiMode: ConfiguredModelRuntimeMode;
   readonly secretRef: string;
   readonly enabled: boolean;
@@ -173,7 +207,9 @@ export type SanitizedModelProviderConfig = {
   readonly baseUrl: string;
   readonly model?: string;
   readonly openAI?: OpenAIModelRequestSettings;
+  readonly modelSettings?: Readonly<Record<string, ModelConfiguration>>;
   readonly piProviderId?: string;
+  readonly connection?: ModelProviderConnectionSettings;
   readonly defaultAiMode: ConfiguredModelRuntimeMode;
   readonly secretRef: string;
   readonly enabled?: boolean;
@@ -193,6 +229,7 @@ export type UpdateModelProviderConfigInput = {
   readonly model?: string;
   readonly openAI?: OpenAIModelRequestSettings;
   readonly piProviderId?: string;
+  readonly connection?: ModelProviderConnectionSettings;
   readonly clearPiProviderId?: boolean;
   readonly clearModel?: boolean;
   readonly defaultAiMode?: ConfiguredModelRuntimeMode;

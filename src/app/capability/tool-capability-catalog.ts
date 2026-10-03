@@ -31,7 +31,10 @@ export function capabilityWarnings(input: {
   readonly toolCount: number;
 }): readonly string[] {
   const warnings: string[] = [];
-  if (!input.activeModel.secretConfigured) warnings.push("当前模型 profile 未配置 API Key。");
+  if (!input.activeModel.secretConfigured &&
+      (input.activeModel.protocolKind !== "native" || input.activeModel.connection?.authMode === "api_key")) {
+    warnings.push("当前模型服务未配置 API Key。");
+  }
   if (input.activeModel.model === undefined) warnings.push("当前模型 profile 未填写模型名。");
   if (input.toolCount === 0) warnings.push("当前没有可用工具。");
   return warnings;

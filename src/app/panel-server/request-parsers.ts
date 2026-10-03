@@ -12,6 +12,7 @@ import type {
   UpdateCommandShellConfigInput,
   UpdateOrdinaryAgentPromptConfigInput,
   UpdateModelProviderConfigInput,
+  UpdateModelConfigurationInput,
   UpdateSkillTriggerConfigInput,
   UpdateToolConfirmationConfigInput,
   UpdateWebSearchConfigInput,
@@ -31,12 +32,16 @@ import type { OrdinaryRunContextInput } from "../../domain/ordinary/index.js";
 import { ORDINARY_AGENT_SYSTEM_PROMPT_MAX_CHARS, isKnownOrdinaryAgentPromptVariant } from "../config-center/ordinary-agent-prompt-settings.js";
 import { z } from "zod";
 import { PanelHttpError } from "./http-utils.js";
+import { parseModelProviderConnectionSettings } from "../config-center/model-provider-connection-settings.js";
+import { modelConfigurationSchema, updateModelConfigurationSchema } from "../../domain/config/model-configuration-schema.js";
 
 export type PanelRunInput = {
+  readonly recordToolMetrics?: boolean;
+  readonly replacesRunId?: string;
   readonly goal: string;
   readonly submissionId?: string;
   /** Canonical owner for a new Conversation. */
-  readonly owner?: { readonly kind: "space" | "workspace"; readonly id: string };
+  readonly owner?: { readonly kind: "space"; readonly id: string };
   readonly aiMode?: ModelRuntimeMode;
   readonly reasoningEffort?: ModelRunReasoningEffort;
   readonly toolConfirmationPolicy?: ToolConfirmationPolicy;
@@ -68,10 +73,8 @@ export type ModelProviderOrderUpdateInput = {
   readonly order: readonly string[];
 };
 
-type ConversationRollbackInput = {
-  readonly targetTurnId?: string;
-  readonly targetRunId?: string;
-  readonly stepsBack?: number;
+type ConversationBranchSelectionInput = {
+  readonly targetRunId: string;
 };
 
 type ContextAttachmentPreviewRequestInput = CreateContextAttachmentPreviewInput;
@@ -101,6 +104,7 @@ const modelProtocolKindSchema = z.enum([
   "anthropic_messages",
   "openai_responses",
   "openai_compatible_chat_completions",
+  "native",
 ]);
 const mcpTransportSchema = z.enum(["stdio", "http"]);
 const mcpConfirmationModeSchema = z.enum(["always", "unsafe_only", "never"]);
@@ -108,11 +112,11 @@ const mcpToolExposureModeSchema = z.enum(["none", "all", "selected"]);
 const webSearchProviderSchema = z.enum(["tavily", "exa", "zai", "metaso", "google", "bing", "model_builtin", "none"]);
 const toolConfirmationPolicySchema = z.enum(["prompt", "full_access"]);
 const skillTriggerModeSchema = z.enum(["keyword", "model"]);
-const aiModeSchema = z.enum(["none", "anthropic-messages", "openai-compatible", "openai-responses"]);
-const configuredAiModeSchema = z.enum(["none", "anthropic-messages", "openai-compatible", "openai-responses"]);
+const aiModeSchema = z.enum(["none", "anthropic-messages", "openai-compatible", "openai-responses", "native"]);
+const configuredAiModeSchema = z.enum(["none", "anthropic-messages", "openai-compatible", "openai-responses", "native"]);
 
 const conversationOwnerSchema = z.object({
-  kind: z.enum(["space", "workspace"]),
+  kind: z.literal("space"),
   id: optionalTrimmedStringSchema,
 }).strict().superRefine((owner, context) => {
   if (owner.id === undefined) {
@@ -122,6 +126,8 @@ const conversationOwnerSchema = z.object({
 
 const ordinaryRunRequestSchema = z.preprocess(normalizeRequestObject, z.object({
   goal: optionalTrimmedStringSchema,
+  replacesRunId: optionalTrimmedStringSchema,
+  recordToolMetrics: z.boolean().optional(),
   submissionId: optionalTrimmedStringSchema,
   owner: conversationOwnerSchema.optional(),
   aiMode: z.unknown().optional(),
@@ -131,11 +137,9 @@ const ordinaryRunRequestSchema = z.preprocess(normalizeRequestObject, z.object({
   contextInput: z.unknown().optional(),
 }));
 
-const conversationRollbackRequestSchema = z.preprocess(normalizeRequestObject, z.object({
-  targetTurnId: optionalTrimmedStringSchema,
-  targetRunId: optionalTrimmedStringSchema,
-  stepsBack: optionalFiniteNumberSchema,
-}));
+const conversationBranchSelectionRequestSchema = z.preprocess(normalizeRequestObject, z.object({
+  targetRunId: z.string().trim().min(1),
+}).strict());
 
 const contextAttachmentPreviewRequestSchema = z.preprocess(normalizeRequestObject, z.object({
   kind: z.unknown().optional(),
@@ -173,7 +177,7 @@ export function parseConfigUpdate(raw: unknown): UpdateModelProviderConfigInput 
     clearLogoDataUrl: booleanOrUndefined(record.clearLogoDataUrl),
     providerKind: parseOptionalModelProviderKind(record.providerKind),
     protocolKind: parseOptionalModelProtocolKind(record.protocolKind),
-    baseUrl: optionalString(record.baseUrl),
+    baseUrl: typeof record.baseUrl === "string" ? record.baseUrl.trim() : undefined,
     model: optionalString(record.model),
     clearModel: booleanOrUndefined(record.clearModel),
     defaultAiMode: parseOptionalConfiguredAiMode(record.defaultAiMode, "默认 AI 模式无效。"),
@@ -184,6 +188,7 @@ export function parseConfigUpdate(raw: unknown): UpdateModelProviderConfigInput 
   };
   return {
     ...update,
+    ...("connection" in record ? { connection: parseRequestModelConnection(record.connection) } : {}),
     // piProviderId 只在请求真实带该字段时传递：config-center 会把空串归一为
     // undefined（显式清空），但请求没提的字段不能变成 undefined 清掉既有声明。
     ...("piProviderId" in record ? { piProviderId: optionalString(record.piProviderId) } : {}),
@@ -191,6 +196,14 @@ export function parseConfigUpdate(raw: unknown): UpdateModelProviderConfigInput 
       ? { openAI: parseOpenAIModelRequestSettings(record.openAI) }
       : {}),
   };
+}
+
+function parseRequestModelConnection(value: unknown): UpdateModelProviderConfigInput["connection"] {
+  try {
+    return parseModelProviderConnectionSettings(value);
+  } catch {
+    throw new PanelHttpError(400, "invalid_model_connection", "模型服务连接参数无效。");
+  }
 }
 
 export function parseCreateModelProfile(raw: unknown): CreateModelProviderProfileInput {
@@ -203,6 +216,21 @@ export function parseCreateModelProfile(raw: unknown): CreateModelProviderProfil
     ...parsed,
     profileId,
   };
+}
+
+const modelConfigurationRequestSchema = updateModelConfigurationSchema.omit({ profileId: true }).extend({
+  settings: modelConfigurationSchema.nullable().optional(),
+});
+
+export function parseModelConfigurationUpdate(raw: unknown): Omit<UpdateModelConfigurationInput, "profileId"> {
+  const parsed = modelConfigurationRequestSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new PanelHttpError(400, "invalid_model_configuration", "Invalid model configuration.");
+  }
+  // HTTP null and absence both reset; an object replaces only this model's settings.
+  return parsed.data.settings == null
+    ? { modelId: parsed.data.modelId }
+    : { modelId: parsed.data.modelId, settings: parsed.data.settings };
 }
 
 export function parseModelProviderOrderUpdate(raw: unknown): ModelProviderOrderUpdateInput {
@@ -432,6 +460,8 @@ export function parseRunInput(raw: unknown): PanelRunInput {
   return {
     goal,
     submissionId: request.submissionId,
+    replacesRunId: request.replacesRunId,
+    recordToolMetrics: request.recordToolMetrics,
     owner,
     aiMode: parseOptionalAiMode(request.aiMode, "AI 模式无效。"),
     reasoningEffort: parseOptionalRunReasoningEffort(request.reasoningEffort),
@@ -485,8 +515,8 @@ export function parseSkillStateRequest(raw: unknown): { readonly enabled: boolea
   return { enabled: enabled.data, stateKey: request.stateKey };
 }
 
-export function parseConversationRollbackInput(raw: unknown): ConversationRollbackInput {
-  return conversationRollbackRequestSchema.parse(raw);
+export function parseConversationBranchSelectionInput(raw: unknown): ConversationBranchSelectionInput {
+  return conversationBranchSelectionRequestSchema.parse(raw);
 }
 
 export function parseContextAttachmentPreviewRequest(raw: unknown): ContextAttachmentPreviewRequestInput {
@@ -730,7 +760,6 @@ function parseOptionalOpenAIReasoningEffort(value: unknown): OpenAIModelRequestS
 function parseOptionalRunReasoningEffort(value: unknown): ModelRunReasoningEffort | undefined {
   if (value === undefined || value === null || value === "") return undefined;
   if (
-    value === "minimal" ||
     value === "low" ||
     value === "medium" ||
     value === "high" ||

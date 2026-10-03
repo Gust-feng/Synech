@@ -1,22 +1,14 @@
-/**
- * 模型事实二态投影——产品层唯一允许使用的「模型能力事实」契约。
- *
- * - `confirmed`：连接显式声明的 `piProviderId` 在 pi-ai 真实 provider catalog 中
- *   精确命中 modelId。每个字段都是真实 Pi Model 的运行事实投影，Synech 不在这里
- *   自维护任何能力值，也不做模糊匹配。
- * - `unconfirmed`：远程 `/models` 发现、但 Pi 在该 provider 下不识别的模型。
- *   不投影任何能力事实；它仍然使用当前连接的默认 transport 把模型 ID 原样发给
- *   上游，请求是否成功由真实上游决定。
- *
- * 约束：本文件不得出现 pi 类型（pi 事实由 `src/adapters/intelligence` 解析后投影
- * 到这里）；已知/未知二态不得合并为同一伪造事实类型。
- */
+import type { ModelCapabilityValues, ModelConfiguration } from "./model-configuration.js";
+import { DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS } from "./model-configuration.js";
+
+/** Pi catalog facts and explicit user configuration remain separate sources. */
 
 /** 产品可服务的 transport；已知模型的 transport 由真实 Pi Model.api 决定。 */
 export type ModelTransportKind =
   | "openai_compatible_chat_completions"
   | "openai_responses"
-  | "anthropic_messages";
+  | "anthropic_messages"
+  | "native";
 
 /** Pi 思考档位名；可用档位动态来自真实 Pi Model.thinkingLevelMap。 */
 export type ModelThinkingLevelName = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -55,24 +47,26 @@ export type ModelFacts = ConfirmedModelFacts | UnconfirmedModelFacts;
 
 export type ResolvedModelCapabilities = {
   readonly facts: ModelFacts;
+  readonly configuration?: ModelConfiguration;
+  /** Effective connection transport, independent of the catalog reference. */
+  readonly transport?: ModelTransportKind;
 };
 
 export function isConfirmedModelFacts(facts: ModelFacts): facts is ConfirmedModelFacts {
   return facts.status === "confirmed";
 }
 
-/** @deprecated 覆写层过渡保留；最终口径只读 Pi 已确认事实或未确认。 */
-export function resolvedContextWindowTokens(resolved: ResolvedModelCapabilities): number | undefined {
-  return confirmedOrUndefined(resolved, (facts) => facts.contextWindowTokens);
+export function resolvedContextWindowTokens(resolved: ResolvedModelCapabilities): number {
+  return capabilityValue(resolved, "contextWindowTokens") ?? DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS;
 }
 
 export function resolvedMaxOutputTokens(resolved: ResolvedModelCapabilities): number | undefined {
-  return confirmedOrUndefined(resolved, (facts) => facts.maxOutputTokens);
+  return capabilityValue(resolved, "maxOutputTokens");
 }
 
 /** undefined = 视觉输入未确认；调用方按保守策略处理（不发送图片）。 */
 export function resolvedSupportsVisionInput(resolved: ResolvedModelCapabilities): boolean | undefined {
-  return confirmedOrUndefined(resolved, (facts) => facts.supportsVisionInput);
+  return capabilityValue(resolved, "supportsVisionInput");
 }
 
 /**
@@ -80,30 +74,46 @@ export function resolvedSupportsVisionInput(resolved: ResolvedModelCapabilities)
  * 「Synech 不知道」当成「模型不支持」，形成运行阻断。
  */
 export function confirmedModelSupportsReasoningEffort(facts: ConfirmedModelFacts): boolean {
-  return facts.thinkingLevels.some((level) => level !== "off");
+  return facts.thinkingLevels.some((level) => level !== "off" && level !== "minimal");
 }
 
 export function resolvedSupportsReasoningEffort(resolved: ResolvedModelCapabilities): boolean {
-  return resolved.facts.status === "confirmed" && confirmedModelSupportsReasoningEffort(resolved.facts);
+  return (resolvedThinkingLevels(resolved)?.filter((level) => level !== "off" && level !== "minimal").length ?? 0) > 0;
 }
 
 export function resolvedThinkingLevels(
   resolved: ResolvedModelCapabilities
 ): readonly ModelThinkingLevelName[] | undefined {
+  const overrides = resolved.configuration?.overrides;
+  if (overrides?.supportsReasoningOutput === false) return [];
+  if (overrides?.thinkingLevels !== undefined) return overrides.thinkingLevels;
+  if (capabilityValue(resolved, "supportsReasoningOutput") === false) return [];
   return resolved.facts.status === "confirmed" ? resolved.facts.thinkingLevels : undefined;
 }
 
 export function resolvedSupportsStrictToolSchemas(resolved: ResolvedModelCapabilities): boolean {
-  return resolved.facts.status === "confirmed" && resolved.facts.supportsStrictToolSchemas;
+  return resolved.facts.status === "confirmed" &&
+    (resolved.transport === undefined || resolved.transport === resolved.facts.transport) &&
+    resolved.facts.supportsStrictToolSchemas;
 }
 
 export function resolvedSupportsParallelToolCalls(resolved: ResolvedModelCapabilities): boolean {
-  return resolved.facts.status === "confirmed" && resolved.facts.supportsParallelToolCalls;
+  const transport = resolved.transport ?? (resolved.facts.status === "confirmed" ? resolved.facts.transport : undefined);
+  return transport === "openai_responses" || transport === "openai_compatible_chat_completions";
 }
 
-function confirmedOrUndefined<T>(
+function capabilityValue(
   resolved: ResolvedModelCapabilities,
-  read: (facts: ConfirmedModelFacts) => T,
-): T | undefined {
-  return resolved.facts.status === "confirmed" ? read(resolved.facts) : undefined;
+  key: "contextWindowTokens" | "maxOutputTokens",
+): number | undefined;
+function capabilityValue(
+  resolved: ResolvedModelCapabilities,
+  key: "supportsVisionInput" | "supportsReasoningOutput",
+): boolean | undefined;
+function capabilityValue(
+  resolved: ResolvedModelCapabilities,
+  key: Exclude<keyof ModelCapabilityValues, "thinkingLevels">,
+): number | boolean | undefined {
+  return resolved.configuration?.overrides?.[key] ??
+    (resolved.facts.status === "confirmed" ? resolved.facts[key] : undefined);
 }

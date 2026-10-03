@@ -17,6 +17,12 @@ import type {
 import type { ToolConfirmationPolicy as DomainToolConfirmationPolicy } from "../../domain/tools/index.js";
 
 export type { ModelRunReasoningEffort };
+export type {
+  ModelCapabilityValues,
+  ModelConfiguration,
+  UpdateModelConfigurationInput,
+} from "../../domain/config/model-configuration.js";
+export { DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS } from "../../domain/config/model-configuration.js";
 export { MODEL_RUN_REASONING_EFFORT_LABELS } from "../../domain/config/index.js";
 
 export type ConfigResponse = {
@@ -41,6 +47,12 @@ export type ConfigResponse = {
 };
 
 export type ModelProviderProfile = Partial<SanitizedModelProviderConfig>;
+export type {
+  ModelProviderAuthEvent,
+  ModelProviderAuthPrompt,
+  ModelProviderAuthSession,
+  ModelProviderAuthResponse,
+} from "../model-service-auth/contracts.js";
 /** 产品层二态能力投影（Pi 已知事实 / 未确认）；字段可选化由面板读侧负责。 */
 export type ModelCapabilities = Partial<ResolvedModelCapabilities>;
 export type ModelProviderModelCatalog = DomainModelProviderModelCatalog;
@@ -57,6 +69,13 @@ export type ModelCapabilityProfile = {
 
 export type ModelProviderMarket = {
   readonly presets: readonly DomainModelProviderPreset[];
+  readonly warnings?: readonly ModelProviderMarketWarning[];
+};
+
+export type ModelProviderMarketWarning = {
+  readonly code: "model_service_unavailable";
+  readonly presetId: string;
+  readonly message: string;
 };
 
 export type ConfigCapabilities = Partial<Pick<

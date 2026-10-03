@@ -4,6 +4,7 @@ import { App } from "./App";
 import { ErrorBoundary } from "./components/error-boundary";
 import { LaunchIntro } from "./shell/entry-scene/launch-intro";
 import { applyMotionPreference } from "./shell/motion";
+import { applyModelIconStyle } from "./shell/model-icon-preference";
 import { applyTheme, getInitialTheme } from "./shell/theme";
 import { startPanelResponsivenessDiagnostics } from "./shell/responsiveness-diagnostics";
 import { panelQueryClient } from "./panel-query-client";
@@ -11,6 +12,7 @@ import { scheduleOfficePreviewWarmup } from "./personal-workbench/workbench/app/
 import "./personal-workbench/workbench/styles/index.css";
 
 applyMotionPreference();
+applyModelIconStyle();
 const initialTheme = getInitialTheme();
 // The inline bootstrap script paints the first frame; applying the same
 // preference here also installs the live OS listener for "跟随系统".

@@ -9,7 +9,7 @@ import type { OrdinaryRunContext } from "../../domain/ordinary/index.js";
 import type { ToolDefinition, ToolExecutionBroker } from "../../domain/tools/index.js";
 import type { CapabilityAgentProfile } from "./capability-policy.js";
 import type { AgentLoopToolVisibilityPlan } from "../model-runtime/agent-loop.js";
-import type { ModelVisibleToolDefinitionTokenCounter } from "../model-runtime/tool-definition-visibility-cost.js";
+import type { ModelVisibleToolDefinitionSerialization, ModelVisibleToolDefinitionTokenCounter } from "../model-runtime/tool-definition-visibility-cost.js";
 import { frozenToolDefinitionsForRun } from "./capability-tool-definitions.js";
 import { resolveRunCapabilities } from "./capability-policy.js";
 import { createRunCapabilityPlan } from "../model-runtime/model-capability-registry.js";
@@ -33,6 +33,7 @@ export type ResolveRunToolBoundaryInput = {
   readonly skillContexts?: readonly SkillToolContext[];
   /** Model-specific counter used only to decide whether progressive definitions save context. */
   readonly toolDefinitionTokenCounter?: ModelVisibleToolDefinitionTokenCounter;
+  readonly toolDefinitionSerialization?: ModelVisibleToolDefinitionSerialization;
 };
 
 export type ResolvedRunToolBoundary = {
@@ -106,6 +107,7 @@ export function resolveRunToolBoundary(input: ResolveRunToolBoundaryInput): Reso
     allowedAgentToolNames,
     frozenDefinitions: toolDefinitions,
     toolDefinitionTokenCounter: input.toolDefinitionTokenCounter,
+    toolDefinitionSerialization: input.toolDefinitionSerialization,
   });
   return {
     allowedTools,

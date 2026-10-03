@@ -1,12 +1,10 @@
-import { createHash } from "node:crypto";
+import { runModelConfiguration } from "../ordinary-agent/run-model-configuration.js";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import type { ConversationOwner } from "../../domain/execution-scope/index.js";
 import { toolRunAccessPolicyFromPreset } from "../../domain/tools/index.js";
-import { memoryOwnersForConversation } from "../../domain/memory/index.js";
-import { createOpenAITokenCounter } from "../context-maintenance/index.js";
 import {
   agentDefinitionRefMatchesDefinition,
   runAgentDefinitionRef,
@@ -14,26 +12,14 @@ import {
 } from "../agent-definitions/agent-definition-ref.js";
 import { ordinaryAgentDefinitionFromPromptConfig } from "../agent-prompts/ordinary-agent-configured-definition.js";
 import type { AgentDefinition } from "../agent-prompts/contracts.js";
-import type { AgentNotesFeature } from "../agent-notes/index.js";
-import type { CollaborationRulesFeature } from "../collaboration-rules/index.js";
+import type { CollaborationRulesApplication } from "../application/collaboration-rules-application.js";
 import type { CapabilityCenter } from "../capability/capability-center.js";
 import type { ConfigCenter } from "../config-center/index.js";
 import type { OrdinaryAgentFeature, OrdinaryRunBirth } from "../ordinary-agent/index.js";
-import {
-  PATH_DEPENDENCY_DIRECTORY_MAX_ENTRIES,
-  renderPathDependencyDirectory,
-  type PathDependencyDirectoryEntry,
-  type PathDependencyFeature,
-} from "../path-dependencies/index.js";
 import type { SpaceFeature } from "../spaces/index.js";
-import type { WorkspaceFeature } from "../workspaces/index.js";
 import type { ProductPaths } from "../../platform/storage/index.js";
-import type {
-  SpaceConversationDeletionCoordinator,
-  WorkspaceDeletionCoordinator,
-} from "../workbench-coordination/index.js";
+import type { SpaceConversationDeletionCoordinator } from "../workbench-coordination/index.js";
 import { ordinaryCapabilitySnapshotForRunStart } from "./ordinary/ordinary-run-model-settings.js";
-import { resolveModelCapabilitiesForProfile } from "./settings/model-facts.js";
 import { PanelHttpError } from "./http-utils.js";
 import type { PanelRunInput } from "./request-parsers.js";
 
@@ -42,14 +28,10 @@ export type OrdinaryRunBirthHost = {
   readonly capabilityCenter: CapabilityCenter;
   readonly ordinaryAgentDefinition: AgentDefinition;
   readonly agentDefinitionOverrides: Map<string, AgentDefinition>;
-  readonly agentNotesFeature: AgentNotesFeature;
-  readonly collaborationRulesFeature: CollaborationRulesFeature;
-  readonly pathDependencyFeature: PathDependencyFeature;
+  readonly collaborationRulesApplication: CollaborationRulesApplication;
   readonly ordinaryAgentFeature: OrdinaryAgentFeature;
   readonly spaceFeature: SpaceFeature;
-  readonly workspaceFeature: WorkspaceFeature;
   readonly spaceConversationDeletion: SpaceConversationDeletionCoordinator;
-  readonly workspaceDeletion: WorkspaceDeletionCoordinator;
   /** 每次 run birth 的活动钩子：用于重启缺口的异步补整理，不得阻塞或抛出。 */
   readonly onRunBirthActivity?: (input: { readonly conversationId?: string; readonly owner: ConversationOwner }) => void;
   readonly productPaths: ProductPaths;
@@ -79,20 +61,15 @@ export async function prepareOrdinaryRunBirth(
     capabilitySnapshotForRun(runtime, input.modelOverride, scope.cwd, scope.owner, informationAccess),
     runtime.configCenter.getOrdinaryAgentPromptConfig(),
   ]);
-  const capabilitySnapshot = ordinaryCapabilitySnapshotForRunStart(baseCapabilitySnapshot, input.reasoningEffort);
+  const assembled = ordinaryCapabilitySnapshotForRunStart(baseCapabilitySnapshot, input.reasoningEffort);
+  const capabilitySnapshot = { ...assembled, activeModel: runModelConfiguration(assembled.activeModel) };
   const configuredDefinition = ordinaryAgentDefinitionFromPromptConfig(
     runtime.ordinaryAgentDefinition,
     ordinaryAgentPromptConfig,
   );
-  const [ownerBlock, noteSnapshot, pathDependencyDirectory, collaborationRules] = await Promise.all([
+  const [ownerBlock, collaborationRules] = await Promise.all([
     formatOwnerContext(runtime, scope),
-    runtime.agentNotesFeature.queries.startupSnapshot(scope.owner),
-    runtime.pathDependencyFeature.queries.directory({
-      owners: memoryOwnersForConversation(scope.owner),
-      limit: PATH_DEPENDENCY_DIRECTORY_MAX_ENTRIES,
-      excerptChars: 240,
-    }),
-    runtime.collaborationRulesFeature.queries.startupSnapshot(scope.owner),
+    runtime.collaborationRulesApplication.startupSnapshot(scope.owner),
   ]);
   // 活动钩子：重启遗留的整理缺口在本会话再次活动时异步补做，绝不阻塞 run birth。
   if (conversationId !== undefined) {
@@ -102,22 +79,17 @@ export async function prepareOrdinaryRunBirth(
       // 钩子异常不得影响 run 准备。
     }
   }
-  const definition = definitionWithMemoryContext(
-    configuredDefinition,
-    noteSnapshot.injection,
-    pathDependencyDirectory,
-    createOpenAITokenCounter(capabilitySnapshot.activeModel.model ?? "gpt-4o").countText,
-  );
+  const definition = configuredDefinition;
   const agentDefinitionRef = runAgentDefinitionRef(definition);
   runtime.agentDefinitionOverrides.set(runAgentDefinitionRefCacheKey(agentDefinitionRef), definition);
   return {
     instructions: definition.prompt.systemPrompt,
+    ...(input.recordToolMetrics === true ? { recordToolMetrics: true } : {}),
     aiMode: input.aiMode ?? capabilitySnapshot.activeModel.defaultAiMode,
     config: capabilitySnapshot.activeModel,
     reasoningEffort: input.reasoningEffort,
     agentDefinitionRef,
     capabilitySnapshot,
-    agentNoteVersions: noteSnapshot.versions,
     memoryOwner: scope.owner,
     ownerContext: [ownerBlock, formatEnvironmentContext(capabilitySnapshot.commandShell)].join("\n\n"),
     // Keep user-authored rules out of the owner/environment segment. The model
@@ -136,16 +108,6 @@ async function formatOwnerContext(
   runtime: OrdinaryRunBirthHost,
   scope: { readonly owner: ConversationOwner; readonly cwd: string; readonly managedRoot?: string },
 ): Promise<string> {
-  if (scope.owner.kind === "workspace") {
-    const workspace = await runtime.workspaceFeature.queries.get(scope.owner.id);
-    return [
-      "[Current conversation owner]",
-      "kind=workspace",
-      `name=${workspace?.title ?? scope.owner.id}`,
-      `path=${scope.cwd}`,
-      "The path above is the user's own project folder and your root working directory. Create and edit files there as the task requires.",
-    ].join("\n");
-  }
   const space = await runtime.spaceFeature.queries.getTree(scope.owner.id);
   const managedRoot = scope.managedRoot ?? scope.cwd;
   return [
@@ -195,20 +157,6 @@ async function resolveConversationExecutionScope(
   const owner = canonicalOwner ?? requestedOwner;
   if (owner === undefined) throw new Error("Conversation owner is required before run birth.");
 
-  if (owner.kind === "workspace") {
-    runtime.workspaceDeletion.assertAvailable(owner.id);
-    const workspace = await runtime.workspaceFeature.queries.get(owner.id);
-    if (workspace?.status !== "available") {
-      if (workspace === undefined) {
-        throw new PanelHttpError(404, "workspace_not_found", `工作区 ${owner.id} 不存在。`);
-      }
-      throw new PanelHttpError(409, "workspace_not_available", `工作区 ${owner.id} 当前不可用。`);
-    }
-    const mount = workspace.currentMount;
-    if (mount === undefined) throw new Error(`Workspace ${owner.id} has no active mount and cannot host a run.`);
-    return { owner, cwd: mount.rootPath };
-  }
-
   runtime.spaceConversationDeletion.assertAvailable(owner.id);
   if (await runtime.spaceFeature.queries.getTree(owner.id) === undefined) {
     throw new PanelHttpError(404, "space_not_found", `Space ${owner.id} was not found.`);
@@ -216,39 +164,6 @@ async function resolveConversationExecutionScope(
   const managedRoot = path.join(runtime.productPaths.data.spaces.files, owner.id, "files");
   await ensureSpaceManagedRoot(managedRoot);
   return { owner, cwd: managedRoot, managedRoot };
-}
-
-function definitionWithMemoryContext(
-  definition: AgentDefinition,
-  noteInjection: string | undefined,
-  pathDependencyDirectory: readonly PathDependencyDirectoryEntry[],
-  countMemoryTokens: (text: string) => number,
-): AgentDefinition {
-  const directoryInjection = renderPathDependencyDirectory(pathDependencyDirectory, countMemoryTokens);
-  if (noteInjection === undefined && directoryInjection === undefined) {
-    return definition;
-  }
-  const segmentTags: string[] = [];
-  if (noteInjection !== undefined) segmentTags.push("agent-notes");
-  if (directoryInjection !== undefined) segmentTags.push("path-dependencies");
-  const systemPrompt = [
-    definition.prompt.systemPrompt,
-    ...(noteInjection === undefined ? [] : ["<agent_notes>", noteInjection, "</agent_notes>"]),
-    ...(directoryInjection === undefined
-      ? []
-      : ["<path_dependency_directory>", directoryInjection, "</path_dependency_directory>"]),
-  ].join("\n\n");
-  const fingerprint = createHash("sha256").update(systemPrompt, "utf8").digest("hex").slice(0, 12);
-  const suffix = segmentTags.join("+");
-  return {
-    ...definition,
-    prompt: {
-      ...definition.prompt,
-      promptRef: `${definition.prompt.promptRef}:${suffix}`,
-      version: `${definition.prompt.version}:${suffix}-${fingerprint}`,
-      systemPrompt,
-    },
-  };
 }
 
 async function modelProviderConfigForRun(
@@ -270,12 +185,6 @@ async function capabilitySnapshotForRun(
   memoryOwner: ConversationOwner,
   informationAccess: import("../../domain/config/index.js").SanitizedInformationAccessConfig,
 ) {
-  const snapshot = await runtime.capabilityCenter.snapshot({ executionRoot, memoryOwner, informationAccess });
-  if (override === undefined) return snapshot;
-  const activeModel = await modelProviderConfigForRun(runtime, override);
-  return {
-    ...snapshot,
-    activeModel,
-    modelCapabilities: resolveModelCapabilitiesForProfile({ profile: activeModel }),
-  };
+  const modelProvider = await modelProviderConfigForRun(runtime, override);
+  return runtime.capabilityCenter.snapshot({ executionRoot, memoryOwner, informationAccess, modelProvider });
 }

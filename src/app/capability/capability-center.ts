@@ -76,6 +76,8 @@ export type CapabilityCenterOptions = {
 };
 
 export type CapabilityCenterSnapshotInput = {
+  /** Effective model selected for this run, before assembling its tool catalog. */
+  readonly modelProvider?: SanitizedModelProviderConfig;
   readonly executionRoot?: string;
   /** Owner-scoped feature tools must never derive identity from executionRoot. */
   readonly memoryOwner?: ConversationOwner;
@@ -141,7 +143,7 @@ export class CapabilityCenter {
   }
 
   private async snapshotResult(input: CapabilityCenterSnapshotInput): Promise<CapabilityCenterSnapshotResult> {
-    if (input.executionRoot !== undefined || input.memoryOwner !== undefined) return this.buildSnapshot(input);
+    if (input.executionRoot !== undefined || input.memoryOwner !== undefined || input.modelProvider !== undefined) return this.buildSnapshot(input);
     if (this.snapshotPromise === undefined) {
       const current = this.buildSnapshot();
       const cached = current.catch((error) => {
@@ -155,7 +157,7 @@ export class CapabilityCenter {
 
   private async buildSnapshot(input: CapabilityCenterSnapshotInput = {}): Promise<CapabilityCenterSnapshotResult> {
     const [activeModel, toolStates, toolConfirmation, skillTrigger, mcpServers, commandShell, env, webSearch] = await Promise.all([
-      this.options.configCenter.getModelProviderConfig(),
+      input.modelProvider ?? this.options.configCenter.getModelProviderConfig(),
       this.options.configCenter.listToolStates(),
       this.options.configCenter.getToolConfirmationConfig(),
       this.options.configCenter.getSkillTriggerConfig(),

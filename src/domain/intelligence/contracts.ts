@@ -11,6 +11,7 @@ export const MODEL_PROTOCOL_KINDS = [
   "anthropic_messages",
   "openai_compatible_chat_completions",
   "openai_responses",
+  "native",
 ] as const;
 
 export type ModelProtocolKind = (typeof MODEL_PROTOCOL_KINDS)[number];

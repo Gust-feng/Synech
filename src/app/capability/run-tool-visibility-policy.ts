@@ -1,5 +1,5 @@
 import type { AgentCapabilitySnapshot } from "../../domain/config/index.js";
-import { resolvedContextWindowTokens, resolvedSupportsStrictToolSchemas } from "../../domain/config/index.js";
+import { resolvedContextWindowTokens } from "../../domain/config/index.js";
 import {
   modelVisibleToolDescription,
   type ToolDefinition,
@@ -12,6 +12,7 @@ import {
   progressiveToolVisibilityCostGate,
   toolDefinitionSerializationApiForProtocol,
   type ModelVisibleToolDefinitionTokenCounter,
+  type ModelVisibleToolDefinitionSerialization,
 } from "../model-runtime/tool-definition-visibility-cost.js";
 import {
   LOAD_MCP_TOOLS_CONTROL_NAME,
@@ -37,6 +38,7 @@ export function resolveMcpFirstToolVisibilityPlan(input: {
   readonly allowedAgentToolNames: readonly string[];
   readonly frozenDefinitions: readonly ToolDefinition[];
   readonly toolDefinitionTokenCounter?: ModelVisibleToolDefinitionTokenCounter;
+  readonly toolDefinitionSerialization?: ModelVisibleToolDefinitionSerialization;
 }): AgentLoopToolVisibilityPlan | undefined {
   const executionAllowed = new Set(input.executionAllowedToolNames);
   const agentTools = new Set(input.allowedAgentToolNames);
@@ -100,12 +102,19 @@ export function resolveMcpFirstToolVisibilityPlan(input: {
 
   const searchControl = searchMcpToolsDefinition();
   const loadControl = loadMcpToolsDefinition();
+  const modelTransport = input.snapshot.modelCapabilities.transport ?? (input.snapshot.modelCapabilities.facts.status === "confirmed"
+    ? input.snapshot.modelCapabilities.facts.transport
+    : input.snapshot.activeModel.protocolKind);
+  const serializationApi = modelTransport === undefined ? undefined : toolDefinitionSerializationApiForProtocol(modelTransport);
+  // Without a transport-specific cost representation keep all authorized tools visible.
+  const serialization = input.toolDefinitionSerialization ?? (serializationApi === undefined ? undefined : {
+    api: serializationApi,
+    includeStrict: serializationApi === "openai-responses",
+  });
+  if (serialization === undefined) return undefined;
   const costGate = progressiveToolVisibilityCostGate(
     resolvedContextWindowTokens(input.snapshot.modelCapabilities),
-    {
-      api: toolDefinitionSerializationApiForProtocol(input.snapshot.activeModel.protocolKind),
-      includeStrict: resolvedSupportsStrictToolSchemas(input.snapshot.modelCapabilities),
-    },
+    serialization,
   );
   if (input.toolDefinitionTokenCounter === undefined || costGate === undefined || !isProgressiveToolVisibilityCostEffective({
     directDefinitions: frozenDefinitions,

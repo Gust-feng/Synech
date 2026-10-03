@@ -2,6 +2,9 @@ export type {
   ConfiguredModelRuntimeMode,
   ConfiguredModelProviderKind,
   ConfiguredModelProtocolKind,
+  ModelProviderAuthMode,
+  ModelProviderConnectionSettings,
+  ModelProviderCredentialStorePort,
   ProviderProtocolProfileId,
   ModelPreferredApiStyle,
   ModelStability,
@@ -24,6 +27,7 @@ export type {
   CreateModelProviderProfileInput,
 } from "./model-settings.js";
 export { MODEL_RUN_REASONING_EFFORT_LABELS } from "./model-settings.js";
+export { modelProviderConnectionSettingsSchema } from "./model-connection-settings-schema.js";
 export type {
   ModelTransportKind,
   ModelThinkingLevelName,
@@ -136,3 +140,9 @@ export {
 } from "./model-provider-market.js";
 export type { McpServerPreset } from "./mcp-server-presets.js";
 export { listBuiltinMcpServerPresets } from "./mcp-server-presets.js";
+export type {
+  ModelCapabilityValues,
+  ModelConfiguration,
+  UpdateModelConfigurationInput,
+} from "./model-configuration.js";
+export { modelConfigurationForId } from "./model-configuration.js";
