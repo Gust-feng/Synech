@@ -1,20 +1,14 @@
 /**
- * 记忆系统文档产物（0.6.0 正式设计）公开契约。
- *
- * 设计基线：`docs/architecture/架构决策记录.md`"文档收敛与记忆系统基线"条；
- * 技术规格为记忆系统正式设计 v0.6.0（2026-09-05，原文档已按该条删除）。
- * 本文件只冻结稳定概念与 Port 合同，不包含检索算法、SQL schema 或模型提示；
- * 实验参数不进契约。
- *
- * 根本边界：
- * - Memory 是可选背景供给方，不是 Core 前提；缺席时 Core 完整运行。
- * - Memory 只拥有派生文档产物，不拥有原始 Conversation 或 owner 身份。
- * - 背景恒为 advisory data：不能覆盖当前请求、显式规则、权限或可验证事实。
- * - 无新证据，模型不得触碰记忆；用户直接编辑是唯一无需新证据的编辑路径。
- * - Stored / Retrieved / Injected 可观测；Used 不可观测，工具调用率不是优化目标。
+ * Current Memory facade contracts; ADR 0019 Accepted target entry contracts are
+ * exported from entry-contracts.ts. Whole-document signatures below remain the
+ * current implementation surface until workers integrate the target in one slice.
+ * Memory owns published recognition and derived supply, never original Ordinary
+ * conversations or owner identity. Background remains advisory data.
  */
 
 import type { MemoryOwner } from "../../domain/memory/index.js";
+import type { MemoryEntryAdminPort, MemoryEntryQueryPort, MemorySourceLifecyclePort, MemoryOverviewSourceState } from "./entry-contracts.js";
+import type { ConversationOwner } from "../../domain/execution-scope/contracts.js";
 
 // ---------------------------------------------------------------------------
 // 政策与控制状态（沿用 Memory v2 分账）
@@ -38,7 +32,7 @@ export type EffectiveMemoryAdmission = {
   readonly policyRevision: PolicyRevision;
   readonly rolloutRevision: string;
   readonly generation: number;
-  /** 结构原因码（global_consent / space_participation / rollout_off / generation_fence）。 */
+  /** 结构原因码（memory_disabled / rollout_off / generation_fence）。 */
   readonly reasons: readonly string[];
 };
 
@@ -47,7 +41,7 @@ export type EffectiveMemoryAdmission = {
 // ---------------------------------------------------------------------------
 
 export type MemoryCaptureSignal = {
-  readonly owner: MemoryOwner;
+  readonly owner: ConversationOwner;
   readonly conversationId: string;
   readonly stableThrough: {
     readonly turnId: string;
@@ -95,11 +89,12 @@ export type MemoryCaptureAcceptance =
 
 /**
  * Capture 运行时（可缺席）。accepted 表示 eligibleAt 之前不整理；本层同时维护
- * transcript 索引投影的增量覆盖（索引不依赖 consent，跟随信号推进）。
+ * 已授权 transcript 索引投影的增量覆盖；关闭/清除排除区间不会回填，
+ * 索引与任务发布均在仓储事务内复核准入和世代。
  */
 export interface MemoryCaptureRuntime {
   acceptStableSignal(signal: MemoryCaptureSignal): Promise<MemoryCaptureAcceptance>;
-  /** 进程关闭：停止接单并释放后台资源。 */
+  /** 宿主在关闭前停止稳定信号订阅；释放当前 Capture 所拥有的资源。 */
   release(): Promise<void>;
 }
 
@@ -107,13 +102,15 @@ export interface MemoryCaptureRuntime {
 // 背景供给（新会话绑定 + 每次冻结复核）
 // ---------------------------------------------------------------------------
 
-export type SpaceMemoryBackground = {
+export type OwnerMemoryBackground = {
   readonly revisionId: string;
   readonly revision: number;
   readonly origin: "model" | "user_edit";
   readonly markdown: string;
   readonly generation: number;
   readonly updatedAt: number;
+  /** Current source observations; not frozen in overview markdown or conversation binding. */
+  readonly sourceStates?: readonly MemoryOverviewSourceState[];
 };
 
 /**
@@ -122,12 +119,12 @@ export type SpaceMemoryBackground = {
  * generation 与绑定 revision 的 validity；任一不满足返回 undefined（无贡献），不自动换绑。
  */
 export interface MemoryBackgroundPort {
-  getActiveSpaceMemoryHead(owner: MemoryOwner): Promise<SpaceMemoryBackground | undefined>;
+  getActiveOwnerMemoryHead(owner: ConversationOwner): Promise<OwnerMemoryBackground | undefined>;
   resolveSupplyableBackground(input: {
-    readonly owner: MemoryOwner;
+    readonly owner: ConversationOwner;
     readonly revisionId: string;
     readonly generation: number;
-  }): Promise<SpaceMemoryBackground | undefined>;
+  }): Promise<OwnerMemoryBackground | undefined>;
 }
 
 // ---------------------------------------------------------------------------
@@ -159,7 +156,7 @@ export type HistorySearchResult = {
 };
 
 export type HistorySearchInput = {
-  readonly owner: MemoryOwner;
+  readonly owner: ConversationOwner;
   readonly query: string;
   readonly conversationId?: string;
   readonly sources: HistorySearchSource;
@@ -167,12 +164,14 @@ export type HistorySearchInput = {
 };
 
 export type HistoryReadInput = {
-  readonly owner: MemoryOwner;
+  readonly owner: ConversationOwner;
   readonly conversationId: string;
   readonly source: "summary" | "transcript";
   readonly fromOrdinal?: number;
   /** 片段续读偏移（N01）：fromOrdinal 所指轮次 turn 流内的字符起点。 */
   readonly fragmentStart?: number;
+  /** Opaque continuation for a fixed summary revision. */
+  readonly cursor?: string;
   readonly limitTokens: number;
 };
 
@@ -190,6 +189,7 @@ export type HistoryReadResult =
        */
       readonly nextFromOrdinal?: number;
       readonly nextFragmentStart?: number;
+      readonly nextCursor?: string;
     }
   | { readonly outcome: "unavailable"; readonly reason: string };
 
@@ -197,7 +197,7 @@ export type HistoryReadResult =
  * 历史查询口：scope 由宿主从真实调用会话注入（调用方传 owner，不是模型选择）；
  * 检索保持中立，不携带原始分数/SQL/rowid。
  */
-export interface HistoryQueryPort {
+export interface HistoryQueryPort extends MemoryEntryQueryPort {
   search(input: HistorySearchInput): Promise<HistorySearchResult>;
   read(input: HistoryReadInput): Promise<HistoryReadResult>;
 }
@@ -217,7 +217,7 @@ export type MaintenanceModelOutcome =
 
 export interface MemoryMaintenanceModelPort {
   /** 一次有界、无工具的 JSON 生成请求；失败返回 unavailable，绝不伪造输出。 */
-  generate(input: { readonly messages: readonly MaintenancePromptMessage[] }): Promise<MaintenanceModelOutcome>;
+  generate(input: { readonly messages: readonly MaintenancePromptMessage[]; readonly maxLatencyMs?: number }): Promise<MaintenanceModelOutcome>;
 }
 
 // ---------------------------------------------------------------------------
@@ -233,7 +233,7 @@ export type RemovalTicket = {
   readonly preparedAt: string;
 };
 
-export interface MemoryLifecycle {
+export interface MemoryLifecycle extends MemorySourceLifecyclePort {
   prepareOwnerRemoval(owner: MemoryOwner): Promise<RemovalTicket>;
   finalizeOwnerRemoval(ticket: RemovalTicket): Promise<void>;
   /** 清除 owner 派生内容后恢复可参与状态；排除边界由 Admin 在 fence 前写入。 */
@@ -247,62 +247,34 @@ export interface MemoryLifecycle {
 // ---------------------------------------------------------------------------
 
 export type MemoryCapabilityStatus = {
-  readonly globalConsent: boolean;
+  /** Whether the queried scope contains published, nonempty memory content. */
+  readonly hasContent: boolean;
+  /** 用户唯一可见的全局开关（默认关闭）；所有 Space 共享同一全局开关，不提供逐 owner opt-in。 */
+  readonly enabled: boolean;
   readonly rollout: MemoryRolloutMode;
   readonly health: MemoryRuntimeHealth;
   readonly effective: "off" | "shadow" | "active";
-  /** Current Space participation, omitted outside a Space capability view. */
-  readonly spaceParticipation?: boolean;
 };
 
 export type MemoryCapabilityQuery = {
   readonly owner?: MemoryOwner;
 };
 
-export type ClearImplicitMemoryResult = { readonly generation: number };
+export type ClearMemoryResult = { readonly generation: number };
 
-export type WriteSpaceMemoryResult = {
-  readonly revisionId: string;
-  readonly revision: number;
-};
+export type UpdateMemoryResult = import("./entry-contracts.js").UpdateMemoryEntryResult;
 
 /**
  * 普通设置命令；Application 落 src/app/application（跨 Feature 编排层），
  * Route 只解析 HTTP 并调用其中一个命令。
  */
-export interface MemoryAdminApplication {
-  getCapabilityStatus(input?: MemoryCapabilityQuery): Promise<MemoryCapabilityStatus>;
+export interface MemoryAdminApplication extends MemoryEntryAdminPort {
+  getStatus(input?: MemoryCapabilityQuery): Promise<MemoryCapabilityStatus>;
   /** Developer-only rollout control; `off` is the immediate Memory kill switch. */
   setRollout(input: { rollout: MemoryRolloutMode }): Promise<{ policyRevision: PolicyRevision }>;
-  setConsent(input: { globalConsent: boolean }): Promise<{ policyRevision: PolicyRevision }>;
-  setSpaceParticipation(input: { spaceId: string; enabled: boolean }):
-    Promise<{ policyRevision: PolicyRevision }>;
-  clearImplicitMemory(input: { scope: MemoryOwner }): Promise<ClearImplicitMemoryResult>;
-  /**
-   * 用户直接编辑 Space 长期记忆（唯一无需新证据的编辑路径）：CAS 发布新版本并
-   * 撤销被明确替换的旧版供给；不调用模型，空正文合法（不等于 clear）。
-   */
-  writeSpaceMemory(input: {
-    readonly spaceId: string;
-    readonly expectedRevisionId: string | null;
-    readonly markdown: string;
-    readonly requestId: string;
-  }): Promise<WriteSpaceMemoryResult>;
-  /** Memory Center 只读视图：当前文档、真实来源会话与最近整理时间。 */
-  getSpaceMemoryView(input: { readonly spaceId: string }): Promise<{
-    readonly document: SpaceMemoryBackground | undefined;
-    /** 当前文档的来源会话范围（文档级保守依赖粒度，按会话聚合；含可识别信息）。 */
-    readonly sources: readonly {
-      readonly conversationId: string;
-      readonly fromOrdinal: number;
-      readonly toOrdinal: number;
-      readonly title?: string;
-      /** 来源会话最近更新时间（Ordinary 会话事实），不是事实发生时间。 */
-      readonly sourceTime?: string;
-    }[];
-    readonly summaryCount: number;
-    readonly lastMaintenanceAt: number | null;
-  }>;
+  /** 用户唯一可见的全局开关；同值重复设置是幂等 no-op，不重新排除、不 bump revision。 */
+  setEnabled(input: { enabled: boolean }): Promise<{ policyRevision: PolicyRevision }>;
+  clearMemory(input: { scope: MemoryOwner }): Promise<ClearMemoryResult>;
 }
 
 // ---------------------------------------------------------------------------
@@ -344,7 +316,8 @@ export type MemoryDiagnosticSnapshot = {
 };
 
 export type MemoryDiagnosticQuery = {
-  readonly spaceId?: string;
+  /** 结构化 owner；缺省表示全局（只读总量视图，无 per-owner 上下文）。 */
+  readonly owner?: ConversationOwner;
   readonly conversationId?: string;
 };
 
@@ -371,12 +344,12 @@ export type MemoryDiagnosticBinding =
   | { readonly kind: "revision"; readonly boundAt: string; readonly revisionId: string; readonly revision: number; readonly generation: number };
 
 export type MemoryDiagnosticContext = {
-  readonly spaceId: string;
-  readonly spaceTitle: string;
+  readonly owner: ConversationOwner;
+  readonly ownerTitle: string;
   readonly conversation: { readonly id: string; readonly title: string; readonly active: boolean } | null;
   readonly capability: MemoryCapabilityStatus;
   readonly blockingReasons: readonly string[];
-  readonly memory: SpaceMemoryBackground | null;
+  readonly memory: OwnerMemoryBackground | null;
   readonly summary: {
     readonly revision: number;
     readonly markdown: string;
@@ -392,7 +365,7 @@ export type MemoryDiagnosticContext = {
 };
 
 export type MemoryDiagnosticSearchInput = {
-  readonly spaceId: string;
+  readonly owner: ConversationOwner;
   readonly conversationId?: string;
   readonly query: string;
   readonly source: "summary" | "transcript" | "all";
@@ -411,6 +384,10 @@ export const MEMORY_ERROR_CODES = [
   "memory_store_failure",
   "memory_model_unavailable",
   "memory_invalid_owner",
+  "memory_entry_not_found",
+  "memory_source_unavailable",
+  "memory_invalid_edit",
+  "memory_request_conflict",
 ] as const;
 
 export type MemoryErrorCode = (typeof MEMORY_ERROR_CODES)[number];

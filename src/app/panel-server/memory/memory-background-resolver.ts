@@ -1,4 +1,4 @@
-import type { MemoryOwner } from "../../../domain/memory/index.js";
+import type { ConversationOwner } from "../../../domain/execution-scope/contracts.js";
 import type { OrdinaryAgentFeature } from "../../ordinary-agent/index.js";
 import {
   renderMemoryBackgroundBlock,
@@ -8,7 +8,7 @@ import {
 /**
  * 会话背景绑定与供给解析（正式设计 §9.1/§9.3）：
  *
- * Run Birth 调用一次：读取会话绑定；未初始化时读取当前 Space 记忆 head 并持久化
+ * Run Birth 调用一次：读取会话绑定；未初始化时读取当前 owner 记忆 head 并持久化
  * `none | {memoryRevision, generation}`（幂等，绝不暗中补绑）；然后返回：
  * - initialBlock：当前请求的背景块（绑定版本仍可供给时）；
  * - resolvePerFreeze：每次 provider 请求冻结前复核 policy/generation/revision
@@ -22,7 +22,7 @@ export type MemoryBackgroundResolution = {
 };
 
 export type MemoryBackgroundResolver = (input: {
-  readonly owner: MemoryOwner;
+  readonly owner: ConversationOwner;
   readonly conversationId: string;
 }) => Promise<MemoryBackgroundResolution | undefined>;
 
@@ -35,7 +35,7 @@ export function createMemoryBackgroundResolver(input: {
     const ordinary = input.ordinary();
     let binding = await ordinary.queries.getMemoryBackground(conversationId);
     if (binding === undefined) {
-      const head = await input.backgroundPort.getActiveSpaceMemoryHead(owner);
+      const head = await input.backgroundPort.getActiveOwnerMemoryHead(owner);
       binding = await ordinary.commands.bindMemoryBackground({
         conversationId,
         background: head === undefined

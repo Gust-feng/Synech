@@ -3,297 +3,213 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-
 import { SqliteRuntimeDatabase } from "../dist/adapters/runtime-storage/index.js";
-import {
-  MemoryError,
-  POLICY_KEY,
-  createSqliteMemoryDocumentRepository,
-  createSqliteMemoryControlRepository,
-  spaceParticipationKey,
-} from "../dist/app/memory/index.js";
+import { MemoryError } from "../dist/app/memory/index.js";
+import { POLICY_KEY, createSqliteMemoryDocumentRepository, createSqliteMemoryControlRepository } from "../dist/app/memory/composition.js";
 
+const owner = { kind: "space", id: "s1" };
+const content = { markdown: "SQLite 是本地存储。", applicability: null, occurredAt: null,
+  reportedAt: "2026-10-03T00:00:00.000Z", reason: null, topicIds: [], related: [] };
+const userInput = (entryId, overrides = {}) => ({ owner, requestId: `create-${entryId}`, now: 250, expectedGeneration: 0,
+  edit: { ...content, reason: null, operation: "create", entryId, expectedRevisionId: null, kind: "initial", retractsRevisionIds: [] }, ...overrides });
 async function withStore(run) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "synech-memory-doc-"));
   const database = new SqliteRuntimeDatabase(path.join(dir, "synech.sqlite3"));
-  const documents = createSqliteMemoryDocumentRepository(database, {
-    idFactory: (() => { let n = 0; const make = (prefix) => `${prefix}-${++n}`; make.for = make; return make; })(),
-  });
-  const control = createSqliteMemoryControlRepository(database, {
-    idFactory: (() => { let n = 0; return () => `memjob-${++n}`; })(),
-  });
-  // 提交边界会锁内重算有效准入；测试默认给一组开启的 policy（revision 与
-  // commitInput.expectedPolicyRevision 保持一致）。
-  void control.setPolicy({ key: POLICY_KEY.consent, kind: "global_consent", scopeOwnerKey: null, enabled: true });
-  void control.setPolicy({ key: spaceParticipationKey("s1"), kind: "space_participation", scopeOwnerKey: "space:s1", enabled: true });
-  void control.setPolicy({ key: POLICY_KEY.rollout, kind: "rollout", scopeOwnerKey: "active", enabled: true });
-  try {
-    await run({ documents, control, database });
-  } finally {
-    database.close();
-    await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
-  }
+  const documents = createSqliteMemoryDocumentRepository(database);
+  const control = createSqliteMemoryControlRepository(database);
+  await control.setPolicy({ key: POLICY_KEY.consent, kind: "global_consent", scopeOwnerKey: null, enabled: true });
+  await control.setPolicy({ key: POLICY_KEY.rollout, kind: "rollout", scopeOwnerKey: "active", enabled: true });
+  try { await run({ documents, control, database }); }
+  finally { database.close(); await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 }
-
-/** 构造一个已领取（running + claimToken）的 job，供提交边界使用。 */
 async function claimJob(control, overrides = {}) {
-  await control.acceptConversationSignal({
-    conversationId: "c1",
-    ownerKey: "space:s1",
-    stableThroughOrdinal: 3,
-    sourceFingerprint: "fp",
-    eligibleAt: 100,
-    now: 0,
-    generation: 0,
-    policyRevision: "g1:r1:s1:gen0",
-    ...overrides,
-  });
-  const [queued] = await control.listJobsByStatus("queued");
-  const claimToken = `claim-${queued.jobId}`;
-  const claimed = await control.claimJob({ jobId: queued.jobId, claimToken, now: 200 });
+  const job = await control.acceptConversationSignal({ conversationId: "c1", ownerKey: "space:s1", stableThroughOrdinal: 3,
+    sourceFingerprint: "fp", eligibleAt: 100, now: 0, generation: 0, conversationGeneration: 0, policyRevision: "g1:r1:gen0", ...overrides });
+  const claimToken = `claim-${job.jobId}`;
+  const claimed = await control.claimJob({ jobId: job.jobId, claimToken, now: 200 });
   return { job: claimed, claimToken };
 }
-
 const commitInput = (overrides = {}) => ({
-  conversationId: "c1",
-  ownerKey: "space:s1",
-  expectedPolicyRevision: "g1:r1:s1:gen0",
-  expectedGeneration: 0,
-  expectedSummaryRevisionId: null,
-  expectedMemoryHeadRevisionId: null,
-  summary: { markdown: "## 本次讨论\n确认使用 SQLite。", coveredThroughOrdinal: 3 },
-  longTermUpdate: { markdown: "# Space Memory\n\n## 稳定事实\n- 本地持久化采用 SQLite。[2026-09-05]" },
-  batchRange: { fromOrdinal: 1, toOrdinal: 3, sourceRevision: 3 },
-  advanceProgressTo: { ordinal: 3, sourceFingerprint: "rev:3" },
-  ...overrides,
+  conversationId: "c1", ownerKey: "space:s1", expectedPolicyRevision: "g1:r1:gen0", expectedGeneration: 0,
+  expectedConversationGeneration: 0, expectedSummaryRevisionId: null, expectedMemoryHeadRevisionId: null,
+  summary: { markdown: "确认 SQLite", coveredThroughOrdinal: 3 },
+  batchRange: { fromOrdinal: 1, toOrdinal: 3, sourceRevision: 3 }, advanceProgressTo: { ordinal: 3, sourceFingerprint: "rev:3" },
+  readSet: [], entryReadSet: [], topics: [],
+  sources: [{ sourceId: "source-c1", owner, locator: { kind: "conversation_range", conversationId: "c1", fromOrdinal: 1,
+    toOrdinal: 3, sourceRevision: 3, conversationGeneration: 0 }, lifecycle: "present", branch: "selected", createdAt: 200 }],
+  mutations: [{ ...content, operation: "create", entryId: "entry-1", revisionId: "entry-1-r1", expectedRevisionId: null,
+    kind: "initial", retractsRevisionIds: [], sourceIds: ["source-c1"] }],
+  overview: { markdown: "SQLite 是本地存储。", entries: [{ entryId: "entry-1", revisionId: "entry-1-r1" }] }, ...overrides,
 });
+async function publish(documents, control, overrides = {}) {
+  const { job, claimToken } = await claimJob(control);
+  await documents.indexTranscriptRange({ conversationId: "c1", ownerKey: "space:s1", now: 100,
+    publication: { policyRevision: "g1:r1:gen0", generation: 0, conversationGeneration: 0 },
+    entries: [{ ordinal: 3, text: "SQLite", sourceRevision: 3 }] });
+  const result = await documents.commitMaintenanceBatch(commitInput({ jobId: job.jobId, claimToken, ...overrides }));
+  assert.equal(result.status, "committed"); return result;
+}
+const getRevision = (documents, ref) => documents.getEntryRevision({ ownerKey: "space:s1", ...ref });
+const supply = (documents, revisionId) => documents.getSupplyableMemoryRevision({ ownerKey: "space:s1", revisionId, generation: 0 });
 
-test("dual-output commit publishes summary + memory + progress + job in one transaction", async () => {
+test("entry + sources + overview + summary + progress + job publish atomically and stay owner isolated", async () => {
   await withStore(async ({ documents, control }) => {
-    const { job, claimToken } = await claimJob(control);
-    const result = await documents.commitMaintenanceBatch(commitInput({
-      jobId: job.jobId, claimToken,
-    }));
-    assert.equal(result.status, "committed");
-    assert.ok(result.summaryRevisionId.length > 0);
-    assert.ok(result.memoryRevisionId !== null);
+    const result = await publish(documents, control);
+    assert.deepEqual(result.entries, [{ entryId: "entry-1", revisionId: "entry-1-r1" }]);
+    assert.equal((await documents.getLatestValidSummary("c1")).revisionId, result.summaryRevisionId);
+    assert.equal((await documents.getProgress("c1")).processedThroughOrdinal, 3);
     assert.equal(result.jobStatus, "done");
-
-    const summary = await documents.getLatestValidSummary("c1");
-    assert.equal(summary.revisionId, result.summaryRevisionId);
-    assert.equal(summary.coveredThroughOrdinal, 3);
-    const head = await documents.getActiveSpaceMemoryHead("space:s1");
-    assert.equal(head.revisionId, result.memoryRevisionId);
-    const progress = await documents.getProgress("c1");
-    assert.equal(progress.processedThroughOrdinal, 3);
-
-    // 摘要可被 FTS 检索命中且 scope 过滤生效。
-    const hits = await documents.searchSummaries({
-      ownerKey: "space:s1",
-      match: '"SQLite"',
-      limit: 8,
-    });
-    assert.equal(hits.length, 1);
-    const otherSpace = await documents.searchSummaries({
-      ownerKey: "space:other",
-      match: '"SQLite"',
-      limit: 8,
-    });
-    assert.equal(otherSpace.length, 0);
+    assert.equal((await supply(documents, result.memoryRevisionId)).sourceStates[0].readback, "available");
+    assert.equal((await documents.searchSummaries({ ownerKey: "space:s1", match: '"SQLite"', limit: 8 })).length, 1);
+    assert.equal((await documents.searchEntryCandidates({ ownerKey: "space:s1", match: '"SQLite"', includeHistory: false, limit: 8 })).candidates.length, 1);
+    assert.equal((await documents.searchEntryCandidates({ ownerKey: "space:other", match: '"SQLite"', includeHistory: true, limit: 8 })).candidates.length, 0);
+    assert.equal(await documents.getEntry({ ownerKey: "space:other", entryId: "entry-1" }), undefined);
   });
 });
 
-test("a user edit supersedes in-flight model output via the memory head CAS", async () => {
+test("user edit makes an in-flight overview CAS stale without publishing auxiliary outputs", async () => {
   await withStore(async ({ documents, control }) => {
     const { job, claimToken } = await claimJob(control);
-    // 用户直接编辑发布新 head（expected null → v1）。
-    const edited = await documents.recordUserSpaceMemoryEdit({
-      ownerKey: "space:s1",
-      markdown: "# Space Memory\n\n用户手写的长期背景。",
-      requestId: "req-edit-1",
-      expectedRevisionId: null,
-      now: 250,
-    });
-    assert.ok(edited.revisionId.length > 0);
-
-    const result = await documents.commitMaintenanceBatch(commitInput({
-      jobId: job.jobId, claimToken,
-    }));
-    assert.equal(result.status, "discarded");
-    assert.equal(result.reason, "memory_head_superseded");
-    // 被废弃的批次不产生任何总结。
+    await documents.recordUserMemoryEdit(userInput("user-entry"));
+    await documents.indexTranscriptRange({ conversationId: "c1", ownerKey: "space:s1", now: 100,
+      publication: { policyRevision: "g1:r1:gen0", generation: 0, conversationGeneration: 0 },
+      entries: [{ ordinal: 3, text: "SQLite", sourceRevision: 3 }] });
+    const result = await documents.commitMaintenanceBatch(commitInput({ jobId: job.jobId, claimToken }));
+    assert.deepEqual(result, { status: "discarded", reason: "memory_head_superseded" });
     assert.equal(await documents.getLatestValidSummary("c1"), undefined);
-    // 用户编辑后的 head 仍然是编辑内容。
-    assert.equal((await documents.getActiveSpaceMemoryHead("space:s1")).markdown, "# Space Memory\n\n用户手写的长期背景。");
+    assert.equal(await documents.getEntry({ ownerKey: "space:s1", entryId: "entry-1" }), undefined);
   });
 });
 
-test("user edit revokes only the replaced head; concurrent in-flight commit then fails CAS", async () => {
-  await withStore(async ({ documents, control }) => {
-    // v1（模型发布）：先提交一个批次产生 head。
-    const first = await claimJob(control, { stableThroughOrdinal: 3 });
-    const committed = await documents.commitMaintenanceBatch(commitInput({
-      jobId: first.job.jobId, claimToken: first.claimToken,
-      summary: { markdown: "v1 总结", coveredThroughOrdinal: 3 },
-    }));
-    assert.equal(committed.status, "committed");
-    const v1 = await documents.getActiveSpaceMemoryHead("space:s1");
-
-    // v2（用户编辑）：撤销 v1 供给。
-    const v2 = await documents.recordUserSpaceMemoryEdit({
-      ownerKey: "space:s1",
-      markdown: "v2 用户修订",
-      requestId: "req-edit-2",
-      expectedRevisionId: v1.revisionId,
-      now: 300,
-    });
-    const replaced = await documents.getSpaceMemoryRevision(v1.revisionId);
-    assert.equal(replaced.validity, "invalidated");
-
-    // 基于旧 head 的编辑重试必须失败（stale CAS）。
-    await assert.rejects(() => documents.recordUserSpaceMemoryEdit({
-      ownerKey: "space:s1",
-      markdown: "过时编辑",
-      requestId: "req-edit-3",
-      expectedRevisionId: v1.revisionId,
-      now: 310,
-    }), (error) => error instanceof MemoryError && error.code === "memory_revision_stale");
-
-    // 已绑定旧 revision 的会话在供给复核处被拒绝（由 background port 完成，此处验证 validity）。
-    const v2reread = await documents.getSpaceMemoryRevision(v2.revisionId);
-    assert.equal(v2reread.validity, "valid");
+test("single-entry CAS and request payload idempotency preserve other entries", async () => {
+  await withStore(async ({ documents }) => {
+    const input = userInput("a");
+    const first = await documents.recordUserMemoryEdit(input);
+    const other = await documents.recordUserMemoryEdit(userInput("b"));
+    assert.deepEqual(await documents.recordUserMemoryEdit({ ...input, now: 300 }), first);
+    await assert.rejects(() => documents.recordUserMemoryEdit({ ...input, edit: { ...input.edit, markdown: "different" } }),
+      error => error instanceof MemoryError && error.code === "memory_request_conflict");
+    const edited = await documents.recordUserMemoryEdit({ ...input, requestId: "change-a", edit: { ...input.edit,
+      operation: "revise", kind: "change", expectedRevisionId: first.revisionId, markdown: "新状态" } });
+    assert.equal((await getRevision(documents, first)).supplyState, "eligible");
+    assert.equal((await getRevision(documents, first)).role, "historical");
+    assert.equal((await documents.getEntry({ ownerKey: "space:s1", entryId: "b" })).headRevisionId, other.revisionId);
+    await assert.rejects(() => documents.recordUserMemoryEdit({ ...input, requestId: "stale", edit: { ...input.edit,
+      operation: "revise", kind: "supplement", expectedRevisionId: first.revisionId } }), error => error.code === "memory_revision_stale");
+    assert.equal((await documents.getEntry({ ownerKey: "space:s1", entryId: "a" })).headRevisionId, edited.revisionId);
   });
 });
 
-test("conservative source inheritance: deleting a conversation invalidates dependent doc revisions", async () => {
+test("explicit correction revokes only named old revisions and their bound overviews; withdrawal never falls back", async () => {
+  await withStore(async ({ documents }) => {
+    const input = userInput("a");
+    const first = await documents.recordUserMemoryEdit(input);
+    const second = await documents.recordUserMemoryEdit({ ...input, requestId: "supplement", edit: { ...input.edit,
+      operation: "revise", kind: "supplement", expectedRevisionId: first.revisionId, markdown: "更多条件" } });
+    const corrected = await documents.recordUserMemoryEdit({ ...input, requestId: "correction", edit: { ...input.edit,
+      operation: "revise", kind: "correction", expectedRevisionId: second.revisionId, retractsRevisionIds: [second.revisionId], markdown: "纠正" } });
+    assert.equal((await getRevision(documents, first)).supplyState, "eligible");
+    assert.ok(await supply(documents, first.overviewRevisionId));
+    assert.equal((await getRevision(documents, second)).supplyState, "revoked");
+    assert.equal(await supply(documents, second.overviewRevisionId), undefined);
+    const withdrawn = await documents.recordUserMemoryEdit({ ...input, requestId: "withdraw", edit: { ...input.edit,
+      operation: "revise", kind: "withdrawal", expectedRevisionId: corrected.revisionId, retractsRevisionIds: [corrected.revisionId], markdown: "" } });
+    const current = await getRevision(documents, withdrawn);
+    assert.equal(current.role, "withdrawn"); assert.equal(current.currentRevisionId, null);
+    assert.equal((await getRevision(documents, first)).currentRevisionId, null);
+    assert.equal((await documents.getEntry({ ownerKey: "space:s1", entryId: "a" })).headRevisionId, withdrawn.revisionId);
+  });
+});
+
+test("ordinary source deletion keeps published entries and overview supply while purging auxiliaries", async () => {
   await withStore(async ({ documents, control }) => {
-    const first = await claimJob(control);
-    // 批次引用会话 c1（来源范围 1..3），同时跨会话来源由另一个 range 注入。
-    const committed = await documents.commitMaintenanceBatch(commitInput({
-      jobId: first.job.jobId, claimToken: first.claimToken,
-    }));
-    assert.equal(committed.status, "committed");
-    const v1 = await documents.getActiveSpaceMemoryHead("space:s1");
-    const sources = await documents.listSpaceDocSources(v1.revisionId);
-    assert.ok(sources.some((source) => source.depKind === "conversation_range" && source.conversationId === "c1"));
-
-    // 删除 c1：prepare 失效（含被绑定的 v1，不只 head），finalize 物理清理。
-    await documents.invalidateDependentRevisions("c1");
-    const invalidated = await documents.getSpaceMemoryRevision(v1.revisionId);
-    assert.equal(invalidated.validity, "invalidated");
+    const result = await publish(documents, control);
+    await control.fenceForRemoval("conversation:c1");
+    await documents.markConversationSourcesDeleted("c1");
+    await documents.purgeConversationAuxiliaries("c1");
+    assert.equal((await getRevision(documents, result.entries[0])).role, "current");
+    assert.equal((await supply(documents, result.memoryRevisionId)).sourceStates[0].readback, "deleted");
     assert.equal(await documents.getLatestValidSummary("c1"), undefined);
-
-    await documents.purgeConversation("c1");
-    assert.equal(await documents.getSpaceMemoryRevision(v1.revisionId), undefined);
+    assert.equal((await documents.listSummarySources(result.summaryRevisionId)).length, 0);
     assert.equal(await documents.getProgress("c1"), undefined);
   });
 });
 
-test("excluded high-water is monotonic and rejects batches overlapping the excluded range", async () => {
+test("branch retirement and deletion stay independent and the head never falls back", async () => {
   await withStore(async ({ documents, control }) => {
-    await documents.setExcludedThrough({
-      conversationId: "c1", ownerKey: "space:s1", excludedThroughOrdinal: 2, now: 10,
-    });
-    // 重复/回退写入是幂等的（高水位只进不退）。
-    const progress = await documents.setExcludedThrough({
-      conversationId: "c1", ownerKey: "space:s1", excludedThroughOrdinal: 1, now: 20,
-    });
-    assert.equal(progress.excludedThroughOrdinal, 2);
-
-    const { job, claimToken } = await claimJob(control);
-    const result = await documents.commitMaintenanceBatch(commitInput({
-      jobId: job.jobId, claimToken,
-      batchRange: { fromOrdinal: 1, toOrdinal: 3, sourceRevision: 3 },
-    }));
-    assert.equal(result.status, "discarded");
-    assert.equal(result.reason, "range_excluded");
-    assert.equal(await documents.getLatestValidSummary("c1"), undefined);
+    const result = await publish(documents, control);
+    await documents.supersedeConversationSources({ conversationId: "c1", owner, retainedThroughOrdinal: 1 });
+    await documents.markConversationSourcesDeleted("c1");
+    const historical = await getRevision(documents, result.entries[0]);
+    assert.equal(historical.role, "historical"); assert.equal(historical.currentRevisionId, null);
+    assert.equal(historical.sources[0].lifecycle, "deleted"); assert.equal(historical.sources[0].branch, "superseded");
+    assert.equal(await supply(documents, result.memoryRevisionId), undefined);
+    assert.equal((await documents.getOwnerMemoryRevision(result.memoryRevisionId)).validity, "valid");
+    assert.equal((await documents.getEntry({ ownerKey: "space:s1", entryId: "entry-1" })).headRevisionId, "entry-1-r1");
   });
 });
 
-test("purgeOwner preserves exclusion boundaries when requested; purgeAll likewise", async () => {
+test("extra raw source generation is revalidated in the publication transaction", async () => {
   await withStore(async ({ documents, control }) => {
-    await documents.setExcludedThrough({
-      conversationId: "c1", ownerKey: "space:s1", excludedThroughOrdinal: 9, now: 10,
-    });
+    const first = await publish(documents, control);
+    const extra = (await getRevision(documents, first.entries[0])).sources[0];
+    await documents.indexTranscriptRange({ ownerKey: "space:s1", conversationId: "c1", now: 210,
+      publication: { policyRevision: "g1:r1:gen0", generation: 0, conversationGeneration: 0 }, entries: [{ ordinal: 3, text: "SQLite", sourceRevision: 3 }] });
+    const { job, claimToken } = await claimJob(control, { conversationId: "c2" });
+    await control.fenceForRemoval("conversation:c1");
+    const result = await documents.commitMaintenanceBatch(commitInput({ jobId: job.jobId, claimToken, conversationId: "c2",
+      expectedMemoryHeadRevisionId: first.memoryRevisionId, readSet: [{ sourceId: extra.sourceId, conversationGeneration: 0 }],
+      sources: [], mutations: [], overview: null }));
+    assert.deepEqual(result, { status: "discarded", reason: "source_changed" });
+    assert.equal(await documents.getLatestValidSummary("c2"), undefined);
+  });
+});
+
+test("excluded high water rejects overlap, remains monotonic, and owner/global purge removes all facts", async () => {
+  await withStore(async ({ documents, control, database }) => {
+    await publish(documents, control);
+    await documents.setExcludedThrough({ conversationId: "c1", ownerKey: "space:s1", excludedThroughOrdinal: 2, now: 10 });
+    assert.equal((await documents.setExcludedThrough({ conversationId: "c1", ownerKey: "space:s1", excludedThroughOrdinal: 1, now: 20 })).excludedThroughOrdinal, 2);
+    const { job, claimToken } = await claimJob(control, { stableThroughOrdinal: 6 });
+    const conflict = await documents.commitMaintenanceBatch(commitInput({ jobId: job.jobId, claimToken, sources: [], mutations: [], overview: null }));
+    assert.equal(conflict.reason, "range_excluded");
     await documents.purgeOwner("space:s1", { preserveExclusions: true });
-    const progress = await documents.getProgress("c1");
-    assert.equal(progress.excludedThroughOrdinal, 9);
-
-    await documents.purgeOwner("space:s1");
-    assert.equal(await documents.getProgress("c1"), undefined);
+    assert.equal((await documents.getProgress("c1")).excludedThroughOrdinal, 2);
+    assert.equal((await documents.getProgress("c1")).processedThroughOrdinal, 0);
+    for (const table of ["memory_entry", "memory_entry_revision", "memory_source", "memory_entry_fts", "memory_overview_dependency", "memory_doc_source", "memory_conversation_summary"]) {
+      assert.equal(database.connection.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n, 0);
+    }
+    await documents.recordUserMemoryEdit(userInput("new"));
+    await documents.purgeAll({ preserveExclusions: true });
+    assert.equal((await documents.getProgress("c1")).excludedThroughOrdinal, 2);
+    assert.equal(await documents.hasContent(), false);
   });
 });
 
-test("progress regression is discarded", async () => {
+test("progress regression and invalid overview references discard the entire batch", async () => {
   await withStore(async ({ documents, control }) => {
-    const first = await claimJob(control, { stableThroughOrdinal: 6 });
-    const committed = await documents.commitMaintenanceBatch(commitInput({
-      jobId: first.job.jobId, claimToken: first.claimToken,
-      advanceProgressTo: { ordinal: 4, sourceFingerprint: "rev:4" },
-      summary: { markdown: "s", coveredThroughOrdinal: 4 },
-      batchRange: { fromOrdinal: 1, toOrdinal: 4, sourceRevision: 4 },
-    }));
-    assert.equal(committed.status, "committed");
-
-    const second = await claimJob(control, { stableThroughOrdinal: 6 });
-    const regressed = await documents.commitMaintenanceBatch(commitInput({
-      jobId: second.job.jobId, claimToken: second.claimToken,
-      expectedSummaryRevisionId: committed.summaryRevisionId,
-      advanceProgressTo: { ordinal: 2, sourceFingerprint: "rev:2" },
-      summary: { markdown: "s2", coveredThroughOrdinal: 2 },
-      batchRange: { fromOrdinal: 1, toOrdinal: 2, sourceRevision: 2 },
-    }));
-    assert.equal(regressed.status, "discarded");
+    const first = await publish(documents, control, { advanceProgressTo: { ordinal: 2, sourceFingerprint: "rev:2" } });
+    const { job, claimToken } = await claimJob(control, { stableThroughOrdinal: 6 });
+    const regressed = await documents.commitMaintenanceBatch(commitInput({ jobId: job.jobId, claimToken,
+      expectedSummaryRevisionId: first.summaryRevisionId, expectedMemoryHeadRevisionId: first.memoryRevisionId,
+      advanceProgressTo: { ordinal: 1, sourceFingerprint: "old" }, sources: [], mutations: [], overview: null }));
     assert.equal(regressed.reason, "progress_regressed");
+    const invalid = await documents.commitMaintenanceBatch(commitInput({ jobId: job.jobId, claimToken,
+      expectedSummaryRevisionId: first.summaryRevisionId, expectedMemoryHeadRevisionId: first.memoryRevisionId,
+      sources: [], mutations: [], overview: { markdown: "bad", entries: [{ entryId: "other", revisionId: "unknown" }] } }));
+    assert.equal(invalid.status, "discarded");
+    assert.equal((await documents.getLatestValidSummary("c1")).revisionId, first.summaryRevisionId);
   });
 });
 
-test("R04: a user edit revokes supply of every older valid revision, not only the head", async () => {
-  await withStore(async ({ documents, control }) => {
-    const first = await claimJob(control);
-    const v1 = await documents.commitMaintenanceBatch(commitInput({
-      jobId: first.job.jobId, claimToken: first.claimToken,
-      summary: { markdown: "v1 总结", coveredThroughOrdinal: 3 },
-    }));
-    assert.equal(v1.status, "committed");
-    const head1 = await documents.getActiveSpaceMemoryHead("space:s1");
-
-    const second = await claimJob(control, { stableThroughOrdinal: 3 });
-    const v2 = await documents.commitMaintenanceBatch(commitInput({
-      jobId: second.job.jobId, claimToken: second.claimToken,
-      expectedSummaryRevisionId: v1.summaryRevisionId,
-      expectedMemoryHeadRevisionId: head1.revisionId,
-      summary: { markdown: "v2 总结", coveredThroughOrdinal: 3 },
-      advanceProgressTo: { ordinal: 3, sourceFingerprint: "rev:3b" },
-      batchRange: { fromOrdinal: 1, toOrdinal: 3, sourceRevision: 3 },
-    }));
-    assert.equal(v2.status, "committed");
-    const head2 = await documents.getActiveSpaceMemoryHead("space:s1");
-
-    // v3（用户纠正）：v1 与 v2 全部停止供给（旧错误事实不能继续注入）。
-    const v3 = await documents.recordUserSpaceMemoryEdit({
-      ownerKey: "space:s1",
-      markdown: "v3 用户纠正后的认识。",
-      requestId: "req-v3",
-      expectedRevisionId: head2.revisionId,
-      now: 400,
-    });
-    assert.equal((await documents.getSpaceMemoryRevision(head1.revisionId)).validity, "invalidated");
-    assert.equal((await documents.getSpaceMemoryRevision(head2.revisionId)).validity, "invalidated");
-    assert.equal((await documents.getSpaceMemoryRevision(v3.revisionId)).validity, "valid");
-  });
-});
-
-test("R10: purgeOwner removes summary source rows together with the summaries", async () => {
-  await withStore(async ({ documents, control }) => {
-    const first = await claimJob(control);
-    const v1 = await documents.commitMaintenanceBatch(commitInput({
-      jobId: first.job.jobId, claimToken: first.claimToken,
-    }));
-    const sourcesBefore = await documents.listSummarySources(v1.summaryRevisionId);
-    assert.ok(sourcesBefore.length > 0);
-    await documents.purgeOwner("space:s1");
-    assert.equal((await documents.listSummarySources(v1.summaryRevisionId)).length, 0);
+test("cross-owner retraction is rejected without replacing entry or invalidating unrelated overview", async () => {
+  await withStore(async ({ documents }) => {
+    const first = await documents.recordUserMemoryEdit(userInput("a"));
+    const other = await documents.recordUserMemoryEdit({ ...userInput("other"), owner: { kind: "space", id: "s2" } });
+    const input = userInput("a");
+    await assert.rejects(() => documents.recordUserMemoryEdit({ ...input, requestId: "wrong-retract", edit: { ...input.edit,
+      operation: "revise", kind: "correction", expectedRevisionId: first.revisionId, retractsRevisionIds: [other.revisionId] } }), error => error.code === "memory_invalid_edit");
+    assert.equal((await documents.getEntry({ ownerKey: "space:s1", entryId: "a" })).headRevisionId, first.revisionId);
+    assert.ok(await supply(documents, first.overviewRevisionId));
   });
 });

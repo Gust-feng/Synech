@@ -1,5 +1,4 @@
 import type { ConversationOwner } from "../../../domain/execution-scope/index.js";
-import { memoryOwnersForConversation, type MemoryOwner } from "../../../domain/memory/index.js";
 import type { ToolExecutor } from "../../../domain/tools/index.js";
 import type { AgentToolRegistryContribution } from "../../tool-center/factory.js";
 import type { HistoryQueryPort } from "../contracts.js";
@@ -10,9 +9,9 @@ import {
 } from "./history-query-port.js";
 
 /**
- * search_history / read_history 工具（正式设计 §10）：Active 历史的唯一读取口。
+ * search_history / read_history 工具（正式设计 §10，ADR 0018）：Active 历史的唯一读取口。
  *
- * - scope 从宿主注入的会话 owner 派生（space owner），模型不能选择 Space；
+ * - scope 是宿主注入的结构化 Space owner，模型不能选择 owner；
  * - 工具描述只描述能力，不编写"出现某类词必须调用"的触发策略；
  * - 返回 coverage 与结构化失败；主模型不调用时工程不补偿。
  */
@@ -22,12 +21,6 @@ export type MemoryHistoryToolOptions = {
   /** Undefined only while CapabilityCenter builds a catalog without a run. */
   readonly owner?: ConversationOwner;
 };
-
-/** 会话的 Space memory owner；workspace 会话没有长期记忆（返回 undefined）。 */
-export function spaceMemoryOwnerOf(owner: ConversationOwner | undefined): MemoryOwner | undefined {
-  if (owner === undefined) return undefined;
-  return memoryOwnersForConversation(owner).find((candidate) => candidate.kind === "space");
-}
 
 export function createMemoryHistoryToolRegistryContribution(
   options: MemoryHistoryToolOptions,
@@ -48,25 +41,29 @@ function searchHistoryTool(options: MemoryHistoryToolOptions): ToolExecutor {
     definition: {
       name: "search_history",
       description:
-        "Search prior conversations of this Space (curated conversation summaries and raw user/assistant excerpts). " +
-        "Use it when past discussions, decisions or details may matter to the current task. " +
-        "Returns bounded excerpts with conversation id and time; coverage states whether each source was fully searched.",
+        "Search published memory entries of this Space, or conversation summaries and raw excerpts. " +
+        "Memory revisions include current/historical roles, event/report/publication times and dynamically checked sources. " +
+        "contentPage and sourcePage identify partial content/source fields; continue with the cursor to retrieve every field and source. " +
+        "Use source=memory (default) for recognition, source=summary/transcript/all for prior conversations; use returned cursors to continue.",
       metadata: { category: "workspace", riskLevel: "low", operationType: "read-only", requiresConfirmation: false },
       inputSchema: {
         type: "object",
         properties: {
           query: { type: "string", description: "Natural-language query." },
           conversationId: { type: "string", description: "Optional conversation to restrict the search to." },
-          source: { type: "string", enum: ["summary", "transcript", "all"], description: "Which sources to search (default all)." },
+          source: { type: "string", enum: ["memory", "summary", "transcript", "all"], description: "Published memory entries (default memory), conversation summaries, raw transcripts or both history sources." },
+          topicId: { type: "string", description: "Optional memory topic id." },
+          includeHistory: { type: "boolean", description: "Include historical or withdrawn memory revisions, with explicit roles (default false)." },
+          cursor: { type: "string", description: "Opaque continuation returned by a memory entry search." },
           limit: { type: "number", minimum: 1, maximum: HISTORY_SEARCH_MAX_ITEMS, description: "Maximum excerpts (default 8)." },
         },
         required: ["query"],
       },
     },
     async execute(input) {
-      const owner = spaceMemoryOwnerOf(options.owner);
+      const owner = options.owner;
       if (owner === undefined) {
-        return { status: "ok", outcome: "no_hit", coverage: { summary: "disabled", transcript: "disabled" }, items: [] };
+        return { status: "ok", outcome: "unavailable", reason: "memory_scope_unavailable", items: [], nextCursor: null, truncated: false };
       }
       const record = asRecordLike(input);
       const query = stringOrUndefinedLike(record.query);
@@ -76,6 +73,17 @@ function searchHistoryTool(options: MemoryHistoryToolOptions): ToolExecutor {
       const source = parseSource(record.source);
       const limit = optionalLimit(record.limit, HISTORY_SEARCH_MAX_ITEMS);
       const conversationId = stringOrUndefinedLike(record.conversationId);
+      if (source === "memory") {
+        const topicId = stringOrUndefinedLike(record.topicId);
+        const cursor = stringOrUndefinedLike(record.cursor);
+        const result = await options.historyQueryPort.searchEntries({ owner, query, limit,
+          ...(conversationId === undefined ? {} : { conversationId }),
+          ...(topicId === undefined ? {} : { topicId }),
+          ...(cursor === undefined ? {} : { cursor }),
+          includeHistory: record.includeHistory === true,
+        });
+        return { status: "ok", ...result };
+      }
       const result = await options.historyQueryPort.search({
         owner,
         query,
@@ -93,27 +101,47 @@ function readHistoryTool(options: MemoryHistoryToolOptions): ToolExecutor {
     definition: {
       name: "read_history",
       description:
-        "Read the curated summary or the raw transcript of one prior conversation in this Space. " +
-        "Use it after search_history when you need more complete context around a match.",
+        "Read a published memory entry by entryId (optional immutable revision, history and one-hop related entries), " +
+        "or a prior conversation summary/transcript in this owner. Deleted sources do not revoke recognition but cannot be read back. " +
+        "contentPage and sourcePage mark slices of content and sources; empty body on a source continuation does not withdraw the entry. " +
+        "Use returned continuation positions for complete bounded reads.",
       metadata: { category: "workspace", riskLevel: "low", operationType: "read-only", requiresConfirmation: false },
       inputSchema: {
         type: "object",
         properties: {
           conversationId: { type: "string", description: "Conversation id returned by search_history." },
-          source: { type: "string", enum: ["summary", "transcript"], description: "summary = curated digest, transcript = raw user/assistant messages." },
+          source: { type: "string", enum: ["memory", "summary", "transcript"], description: "memory = published entry, summary = curated digest, transcript = raw messages." },
+          entryId: { type: "string", description: "Published memory entry id; selects the memory branch." },
+          revisionId: { type: "string", description: "Optional immutable memory revision id; historical reads require includeHistory." },
+          includeHistory: { type: "boolean", description: "Read older revisions with their historical/withdrawn roles." },
+          includeRelated: { type: "boolean", description: "Include at most one hop of related current entries within the same budget." },
+          cursor: { type: "string", description: "Opaque continuation returned by read_history for this entry." },
           fromOrdinal: { type: "number", minimum: 1, description: "Transcript continuation position returned by a previous read." },
           fragmentStart: { type: "number", minimum: 0, description: "Character offset inside fromOrdinal's turn stream returned by a previous read (fragment continuation)." },
           limitTokens: { type: "number", minimum: 1, maximum: HISTORY_READ_MAX_TOKENS, description: "Maximum tokens to return (default 4000)." },
         },
-        required: ["conversationId", "source"],
+        anyOf: [{ required: ["entryId"] }, { required: ["conversationId", "source"] }],
       },
     },
     async execute(input) {
-      const owner = spaceMemoryOwnerOf(options.owner);
+      const owner = options.owner;
       if (owner === undefined) {
         return { status: "ok", outcome: "unavailable", reason: "memory_scope_unavailable" };
       }
       const record = asRecordLike(input);
+      const entryId = stringOrUndefinedLike(record.entryId);
+      const limitTokens = Math.min(HISTORY_READ_MAX_TOKENS, optionalLimit(record.limitTokens, HISTORY_READ_DEFAULT_TOKENS));
+      if (entryId !== undefined || record.source === "memory") {
+        if (entryId === undefined) return { status: "invalid_input", message: "entryId is required for memory reads." };
+        const revisionId = stringOrUndefinedLike(record.revisionId);
+        const cursor = stringOrUndefinedLike(record.cursor);
+        const result = await options.historyQueryPort.readEntry({ owner, entryId, limitTokens,
+          ...(revisionId === undefined ? {} : { revisionId }),
+          ...(cursor === undefined ? {} : { cursor }),
+          includeHistory: record.includeHistory === true, includeRelated: record.includeRelated === true,
+        });
+        return { status: "ok", ...result };
+      }
       const conversationId = stringOrUndefinedLike(record.conversationId);
       if (conversationId === undefined) {
         return { status: "invalid_input", message: "conversationId must be a non-empty string." };
@@ -124,13 +152,13 @@ function readHistoryTool(options: MemoryHistoryToolOptions): ToolExecutor {
       }
       const fromOrdinal = optionalPositiveNumber(record.fromOrdinal);
       const fragmentStart = optionalNonNegativeNumber(record.fragmentStart);
-      const limitTokens = optionalLimit(record.limitTokens, HISTORY_READ_DEFAULT_TOKENS);
       const result = await options.historyQueryPort.read({
         owner,
         conversationId,
         source,
         ...(fromOrdinal === undefined ? {} : { fromOrdinal }),
         ...(fragmentStart === undefined ? {} : { fragmentStart }),
+        ...(typeof record.cursor === "string" ? { cursor: record.cursor } : {}),
         limitTokens,
       });
       return { status: "ok", ...result };
@@ -138,9 +166,9 @@ function readHistoryTool(options: MemoryHistoryToolOptions): ToolExecutor {
   };
 }
 
-function parseSource(value: unknown): "summary" | "transcript" | "all" {
+function parseSource(value: unknown): "memory" | "summary" | "transcript" | "all" {
   if (value === "summary" || value === "transcript" || value === "all") return value;
-  return "all";
+  return "memory";
 }
 
 function optionalLimit(value: unknown, fallback: number): number {

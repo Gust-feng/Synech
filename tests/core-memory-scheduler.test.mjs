@@ -5,12 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { SqliteRuntimeDatabase } from "../dist/adapters/runtime-storage/index.js";
-import {
-  POLICY_KEY,
-  createSqliteMemoryControlRepository,
-  createSqliteMemoryDocumentRepository,
-  spaceParticipationKey,
-} from "../dist/app/memory/index.js";
+import { POLICY_KEY, createSqliteMemoryControlRepository, createSqliteMemoryDocumentRepository } from "../dist/app/memory/composition.js";
 import { createMemoryMaintenanceScheduler } from "../dist/app/panel-server/memory/capture-scheduler.js";
 
 /**
@@ -25,17 +20,20 @@ async function withHarness(run, options = {}) {
   const database = new SqliteRuntimeDatabase(path.join(dir, "synech.sqlite3"));
   const control = createSqliteMemoryControlRepository(database);
   const documents = createSqliteMemoryDocumentRepository(database);
-  void control.setPolicy({ key: POLICY_KEY.consent, kind: "global_consent", scopeOwnerKey: null, enabled: true });
-  void control.setPolicy({ key: spaceParticipationKey("s1"), kind: "space_participation", scopeOwnerKey: "space:s1", enabled: true });
-  void control.setPolicy({ key: POLICY_KEY.rollout, kind: "rollout", scopeOwnerKey: "active", enabled: true });
+  await control.setPolicy({ key: POLICY_KEY.consent, kind: "global_consent", scopeOwnerKey: null, enabled: true });
+  await control.setPolicy({ key: POLICY_KEY.rollout, kind: "rollout", scopeOwnerKey: "active", enabled: true });
 
   const modelCalls = [];
   const model = {
     async generate({ messages }) {
-      modelCalls.push(JSON.parse(messages[1].content));
+      const payload = JSON.parse(messages[1].content);
+      modelCalls.push(payload);
       return { status: "completed", text: JSON.stringify({
-        conversationSummary: { markdown: `s-${modelCalls.length}`, sourceRefs: [] },
-        longTermUpdate: null,
+        status: "ready",
+        conversationSummary: { markdown: `s-${modelCalls.length}`, sourceRefs: payload.evidence.map(item => item.id) },
+        mutations: [],
+        topics: [],
+        overview: null,
       }) };
     },
   };
@@ -56,6 +54,22 @@ async function withHarness(run, options = {}) {
       } };
     },
   };
+  // Production capture publishes authorized transcript identities before registering a job.
+  const enqueueJob = async input => {
+    const evidence = await evidenceReader.readTurnWindow({ conversationId: input.conversationId, fromOrdinal: 1,
+      through: { ordinal: input.stableThroughOrdinal, sourceRevision: input.stableThroughOrdinal } });
+    const entries = new Map();
+    for (const turn of evidence.turns) {
+      const previous = entries.get(turn.ordinal);
+      entries.set(turn.ordinal, { ordinal: turn.ordinal, sourceRevision: turn.sourceRevision,
+        text: previous === undefined ? turn.text : `${previous.text}\n${turn.text}` });
+    }
+    const coverage = await documents.indexTranscriptRange({ conversationId: input.conversationId, ownerKey: input.ownerKey,
+      entries: [...entries.values()], now: input.now,
+      publication: { policyRevision: input.policyRevision, generation: input.generation, conversationGeneration: 0 } });
+    assert.equal(coverage?.indexedThroughOrdinal, input.stableThroughOrdinal, "scheduler fixture must publish authorized evidence identities");
+    return control.acceptConversationSignal(input);
+  };
   const scheduler = createMemoryMaintenanceScheduler({
     controlRepository: control,
     documentRepository: documents,
@@ -66,7 +80,7 @@ async function withHarness(run, options = {}) {
     now: options.now ?? Date.now,
   });
   try {
-    await run({ control, documents, scheduler, modelCalls, database });
+    await run({ control, documents, scheduler, modelCalls, database, enqueueJob });
   } finally {
     await scheduler.release();
     database.close();
@@ -75,12 +89,12 @@ async function withHarness(run, options = {}) {
 }
 
 test("R03: more than 16 due jobs are all processed across continued wakes", async () => {
-  await withHarness(async ({ control, documents, scheduler }) => {
+  await withHarness(async ({ control, documents, scheduler, enqueueJob }) => {
     for (let index = 1; index <= 17; index += 1) {
-      await control.acceptConversationSignal({
+      await enqueueJob({
         conversationId: `c${index}`, ownerKey: "space:s1", stableThroughOrdinal: 2,
         sourceFingerprint: "fp", eligibleAt: 100, now: 0,
-        generation: 0, policyRevision: "g1:r1:s1:gen0",
+        generation: 0, policyRevision: "g1:r1:gen0",
       });
     }
     await scheduler.recoverQueuedJobs();
@@ -97,33 +111,34 @@ test("R03: more than 16 due jobs are all processed across continued wakes", asyn
 });
 
 test("R03: a long conversation's remaining batches continue without new activity", async () => {
-  await withHarness(async ({ control, documents, scheduler }) => {
-    await control.acceptConversationSignal({
+  await withHarness(async ({ control, documents, scheduler, modelCalls, enqueueJob }) => {
+    await enqueueJob({
       conversationId: "c-long", ownerKey: "space:s1", stableThroughOrdinal: 6,
       sourceFingerprint: "fp", eligibleAt: 100, now: 0,
-      generation: 0, policyRevision: "g1:r1:s1:gen0",
+      generation: 0, policyRevision: "g1:r1:gen0",
     });
     await scheduler.recoverQueuedJobs();
     await sleep(1_500);
     // 每批装不下全部轮次，剩余批次靠持续唤醒处理到边界。
     const progress = await documents.getProgress("c-long");
     assert.equal(progress.processedThroughOrdinal, 6);
+    assert.ok(modelCalls.length > 1, "the fixture must require continued batches without another activity signal");
     const queued = await control.listJobsByStatus("queued");
     assert.equal(queued.length, 0);
   }, {
     idleDelayMs: 270_000,
-    // 通过极小批预算强迫多批：scheduler 不直接暴露 batchTokenBudget，这里用
-    // 大 ordinal 文本成本替代——每轮文本加长到超过默认批预算即可。
+    // Both user and assistant evidence consume the bounded request capacity.
+    padText: "detail ".repeat(1500),
   });
 });
 
 test("R06: unrelated activity does not postpone an already scheduled earlier wake", async () => {
-  await withHarness(async ({ control, scheduler }) => {
+  await withHarness(async ({ control, scheduler, enqueueJob }) => {
     // A：立即到期。
-    await control.acceptConversationSignal({
+    await enqueueJob({
       conversationId: "c-a", ownerKey: "space:s1", stableThroughOrdinal: 2,
       sourceFingerprint: "fp", eligibleAt: Date.now() + 100, now: Date.now(),
-      generation: 0, policyRevision: "g1:r1:s1:gen0",
+      generation: 0, policyRevision: "g1:r1:gen0",
     });
     await scheduler.recoverQueuedJobs();
     // 50ms 后 B 的活动信号：不得把 A 的唤醒推迟到更晚。
@@ -138,13 +153,13 @@ test("R06: unrelated activity does not postpone an already scheduled earlier wak
 
 test("N02: active jobs are deferred and cannot starve later eligible jobs", async () => {
   const activeConversations = new Set();
-  await withHarness(async ({ control, documents, scheduler }) => {
+  await withHarness(async ({ control, documents, scheduler, enqueueJob }) => {
     // 17 个到期任务：前 16 个属于「恢复活动」的会话，第 17 个空闲。
     for (let index = 1; index <= 17; index += 1) {
-      await control.acceptConversationSignal({
+      await enqueueJob({
         conversationId: `c${index}`, ownerKey: "space:s1", stableThroughOrdinal: 2,
         sourceFingerprint: "fp", eligibleAt: 100, now: 0,
-        generation: 0, policyRevision: "g1:r1:s1:gen0",
+        generation: 0, policyRevision: "g1:r1:gen0",
       });
       if (index <= 16) activeConversations.add(`c${index}`);
     }

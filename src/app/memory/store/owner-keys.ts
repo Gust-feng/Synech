@@ -10,6 +10,6 @@ export function memoryOwnerFromKey(ownerKey: string): MemoryOwner {
   const separatorIndex = ownerKey.indexOf(":");
   const kind = separatorIndex === -1 ? "" : ownerKey.slice(0, separatorIndex);
   const id = separatorIndex === -1 ? "" : ownerKey.slice(separatorIndex + 1);
-  if ((kind === "space" || kind === "workspace") && id.length > 0) return { kind, id };
+  if (kind === "space" && id.length > 0) return { kind: "space", id };
   throw new MemoryError("memory_invalid_owner", `Cannot parse memory owner key ${ownerKey}.`);
 }

@@ -1,4 +1,153 @@
 import { z } from "zod";
+import type {
+  MemoryEntry, MemoryEntryRevision, MemorySource, MemoryTopic, MemoryOverviewDependencies,
+} from "../entry-contracts.js";
+import { memoryOwnerFromKey } from "./owner-keys.js";
+
+/** ADR 0019 domain validators; A maps SQLite rows before parsing. No new SQL owner. */
+const entryIdentity = z.string().min(1);
+const entryOwnerSchema = z.object({
+  kind: z.literal("space"), id: entryIdentity,
+}).strict();
+const revisionRefSchema = z.object({ entryId: entryIdentity, revisionId: entryIdentity }).strict();
+export const memoryEntrySchema = z.object({
+  entryId: entryIdentity,
+  owner: entryOwnerSchema,
+  generation: z.number().int().nonnegative(),
+  headRevisionId: entryIdentity,
+  createdAt: z.number().finite().int().nonnegative(),
+}).strict();
+export const memoryTopicSchema = z.object({
+  topicId: entryIdentity,
+  owner: entryOwnerSchema,
+  name: entryIdentity,
+  aliases: z.array(entryIdentity).max(4),
+}).strict();
+export const memorySourceSchema = z.object({
+  sourceId: entryIdentity,
+  owner: entryOwnerSchema,
+  locator: z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("conversation_range"),
+      conversationId: entryIdentity,
+      fromOrdinal: z.number().int().nonnegative(),
+      toOrdinal: z.number().int().nonnegative(),
+      sourceRevision: z.number().int().nonnegative(),
+      conversationGeneration: z.number().int().nonnegative(),
+    }).strict(),
+    z.object({ kind: z.literal("user_edit"), requestId: entryIdentity }).strict(),
+  ]),
+  lifecycle: z.enum(["present", "deleted"]),
+  branch: z.enum(["selected", "superseded"]),
+  createdAt: z.number().finite().int().nonnegative(),
+}).strict().superRefine((source, context) => {
+  if (source.locator.kind === "conversation_range" && source.locator.fromOrdinal > source.locator.toOrdinal) {
+    context.addIssue({ code: "custom", message: "Source range is reversed." });
+  }
+  if (source.locator.kind === "user_edit" && (source.lifecycle !== "present" || source.branch !== "selected")) {
+    context.addIssue({ code: "custom", message: "User edit provenance has no conversation lifecycle." });
+  }
+});
+export const memoryEntryRevisionSchema = z.object({
+  revisionId: entryIdentity,
+  entryId: entryIdentity,
+  revision: z.number().int().positive(),
+  previousRevisionId: entryIdentity.nullable(),
+  kind: z.enum(["initial", "supplement", "change", "correction", "withdrawal"]),
+  origin: z.enum(["model", "user_edit"]),
+  markdown: z.string(),
+  applicability: entryIdentity.nullable(),
+  occurredAt: entryIdentity.nullable(),
+  reportedAt: z.string().datetime({ offset: true }),
+  reason: z.object({ text: entryIdentity, sourceIds: z.array(entryIdentity).min(1) }).strict().nullable(),
+  topicIds: z.array(entryIdentity).max(4),
+  related: z.array(z.object({ entryId: entryIdentity, sourceIds: z.array(entryIdentity).min(1) }).strict()).max(3),
+  sourceIds: z.array(entryIdentity).min(1),
+  retractsRevisionIds: z.array(entryIdentity),
+  publishedAt: z.number().finite().int().nonnegative(),
+}).strict().superRefine((item, context) => {
+  const issue = (message: string) => context.addIssue({ code: "custom", message });
+  if ((item.kind === "initial") !== (item.previousRevisionId === null) ||
+      (item.kind === "initial" && item.revision !== 1)) issue("Initial revision must start a chain.");
+  if (item.kind !== "withdrawal" && item.markdown.trim().length === 0) issue("Only withdrawal can have empty content.");
+  const retracting = item.kind === "correction" || item.kind === "withdrawal";
+  if (retracting !== (item.retractsRevisionIds.length > 0)) issue("Retractions require correction or withdrawal and explicit revisions.");
+  if (item.related.some((link) => link.entryId === item.entryId)) issue("Related entries cannot reference themselves.");
+  if (item.reason?.sourceIds.some((id) => !item.sourceIds.includes(id)) ||
+      item.related.some((link) => link.sourceIds.some((id) => !item.sourceIds.includes(id)))) {
+    issue("Reason and relation evidence must belong to revision sources.");
+  }
+  if (item.retractsRevisionIds.includes(item.revisionId)) issue("A revision cannot retract itself.");
+});
+export const memoryOverviewDependenciesSchema = z.object({
+  revisionId: entryIdentity,
+  entries: z.array(revisionRefSchema),
+}).strict();
+export function parseMemoryEntry(value: unknown): MemoryEntry { return memoryEntrySchema.parse(value); }
+export function parseMemoryEntryRevision(value: unknown): MemoryEntryRevision { return memoryEntryRevisionSchema.parse(value); }
+export function parseMemorySource(value: unknown): MemorySource { return memorySourceSchema.parse(value); }
+export function parseMemoryTopic(value: unknown): MemoryTopic { return memoryTopicSchema.parse(value); }
+export function parseMemoryOverviewDependencies(value: unknown): MemoryOverviewDependencies {
+  return memoryOverviewDependenciesSchema.parse(value);
+}
+
+const entrySqlRowSchema = z.object({
+  entry_id: entryIdentity, owner_key: entryIdentity, generation: z.number().int().nonnegative(),
+  head_revision_id: entryIdentity, created_at: z.number().finite().int().nonnegative(),
+}).strict();
+const revisionSqlRowSchema = z.object({
+  revision_id: entryIdentity, entry_id: entryIdentity, owner_key: entryIdentity,
+  revision: z.number().int().positive(), previous_revision_id: entryIdentity.nullable(),
+  kind: z.enum(["initial", "supplement", "change", "correction", "withdrawal"]),
+  origin: z.enum(["model", "user_edit"]), content_json: z.string(), source_ids_json: z.string(),
+  retracts_revision_ids_json: z.string(), published_at: z.number().finite().int().nonnegative(),
+  supply_state: z.enum(["eligible", "revoked"]),
+}).strict();
+const sourceSqlRowSchema = z.object({
+  source_id: entryIdentity, owner_key: entryIdentity, locator_json: z.string(),
+  lifecycle: z.enum(["present", "deleted"]), branch: z.enum(["selected", "superseded"]),
+  created_at: z.number().finite().int().nonnegative(),
+}).strict();
+const topicSqlRowSchema = z.object({
+  topic_id: entryIdentity, owner_key: entryIdentity, name: entryIdentity, aliases_json: z.string(),
+}).strict();
+export function parseMemoryEntryRow(value: unknown): MemoryEntry {
+  const row = entrySqlRowSchema.parse(value);
+  return parseMemoryEntry({ entryId: row.entry_id, owner: memoryOwnerFromKey(row.owner_key),
+    generation: row.generation, headRevisionId: row.head_revision_id, createdAt: row.created_at });
+}
+/** SQL envelope retains owner and mutable supply state outside the immutable revision. */
+export type MemoryEntryRevisionRow = MemoryEntryRevision & {
+  readonly owner: MemoryEntry["owner"];
+  readonly supplyState: "eligible" | "revoked";
+};
+export function parseMemoryEntryRevisionRow(value: unknown): MemoryEntryRevisionRow {
+  const row = revisionSqlRowSchema.parse(value);
+  const content = z.object({
+    markdown: z.string(), applicability: entryIdentity.nullable(), occurredAt: entryIdentity.nullable(),
+    reportedAt: z.string().datetime({ offset: true }),
+    reason: z.object({ text: entryIdentity, sourceIds: z.array(entryIdentity).min(1) }).strict().nullable(),
+    topicIds: z.array(entryIdentity),
+    related: z.array(z.object({ entryId: entryIdentity, sourceIds: z.array(entryIdentity).min(1) }).strict()),
+  }).strict().parse(JSON.parse(row.content_json));
+  const parsed = parseMemoryEntryRevision({ ...content,
+    revisionId: row.revision_id, entryId: row.entry_id, revision: row.revision,
+    previousRevisionId: row.previous_revision_id, kind: row.kind, origin: row.origin,
+    sourceIds: JSON.parse(row.source_ids_json), retractsRevisionIds: JSON.parse(row.retracts_revision_ids_json),
+    publishedAt: row.published_at,
+  });
+  return { ...parsed, owner: entryOwnerSchema.parse(memoryOwnerFromKey(row.owner_key)), supplyState: row.supply_state };
+}
+export function parseMemorySourceRow(value: unknown): MemorySource {
+  const row = sourceSqlRowSchema.parse(value);
+  return parseMemorySource({ sourceId: row.source_id, owner: memoryOwnerFromKey(row.owner_key),
+    locator: JSON.parse(row.locator_json), lifecycle: row.lifecycle, branch: row.branch, createdAt: row.created_at });
+}
+export function parseMemoryTopicRow(value: unknown): MemoryTopic {
+  const row = topicSqlRowSchema.parse(value);
+  return parseMemoryTopic({ topicId: row.topic_id, owner: memoryOwnerFromKey(row.owner_key),
+    name: row.name, aliases: JSON.parse(row.aliases_json) });
+}
 
 /**
  * Memory 文档产物（0.6.0 正式设计）的行 schema。
@@ -7,12 +156,12 @@ import { z } from "zod";
  *
  * 目标 schema 见《架构决策记录》"记忆系统文档产物重构"条：
  * - memory_policy / memory_lifecycle：策略分账和生命周期控制；
- * - memory_space_doc / memory_conversation_summary：不可变 revision 的文档产物；
+ * - memory_owner_doc / memory_conversation_summary：不可变 revision 的文档产物；
  * - memory_doc_source：文档级保守依赖（revision 间复制继承）；
  * - memory_capture_progress：processed / excluded 两种进度分离；
  * - memory_job：每会话至多一个活跃待办（eligible_at / claim_token 调度边界）；
  * - memory_summary_fts / memory_transcript_fts：FTS5 派生投影。
- * v1 的初始 schema 已冻结；后续结构变化通过追加 migration 演进。
+ * 未发布 v1：这里维护目标 schema，不为旧开发数据保留兼容层。
  */
 
 const epochMs = z.number().finite().int().nonnegative();
@@ -23,7 +172,6 @@ const ordinal = z.number().int().nonnegative();
 export const policyKindSchema = z.enum([
   "global_consent",
   "rollout",
-  "space_participation",
 ]);
 export type PersistedPolicyKind = z.infer<typeof policyKindSchema>;
 
@@ -163,7 +311,7 @@ export type PersistedDocValidity = z.infer<typeof docValiditySchema>;
 export const docSourceKindSchema = z.enum(["conversation_range", "user_edit"]);
 export type PersistedDocSourceKind = z.infer<typeof docSourceKindSchema>;
 
-const spaceDocRowSchema = z.object({
+const ownerDocRowSchema = z.object({
   revision_id: z.string().min(1),
   owner_key: z.string().min(1),
   revision,
@@ -221,7 +369,7 @@ const transcriptCoverageRowSchema = z.object({
   updated_at: epochMs,
 }).strict();
 
-export type MemorySpaceDocRow = {
+export type MemoryOwnerDocRow = {
   readonly revisionId: string;
   readonly ownerKey: string;
   readonly revision: number;
@@ -278,8 +426,8 @@ export type MemoryTranscriptCoverageRow = {
   readonly updatedAt: number;
 };
 
-export function parseSpaceDocRow(value: unknown): MemorySpaceDocRow {
-  const row = spaceDocRowSchema.parse(value);
+export function parseOwnerDocRow(value: unknown): MemoryOwnerDocRow {
+  const row = ownerDocRowSchema.parse(value);
   return {
     revisionId: row.revision_id,
     ownerKey: row.owner_key,

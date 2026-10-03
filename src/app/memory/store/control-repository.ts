@@ -1,9 +1,14 @@
 import type { SQLInputValue } from "node:sqlite";
+import { z } from "zod";
 
 import type { SqliteRuntimeDatabase } from "../../../adapters/runtime-storage/index.js";
 import { createId, type IdFactory } from "../../../kernel/id.js";
+import { capturePublicationMatches } from "../policy/capture-publication.js";
+import { resolveAdmissionFromPolicy } from "../policy/policy-snapshot.js";
+import { memoryOwnerFromKey } from "./owner-keys.js";
 import { MemoryError } from "../contracts.js";
 import {
+  parseCaptureProgressRow,
   parseJobRow,
   parseLifecycleRow,
   parsePolicyRow,
@@ -29,13 +34,14 @@ import {
  * - 进程重启后 running 必须 recoverInterruptedJobs 回到 queued（durable 边界不丢）。
  */
 
-// Frozen v1 initializes the target schema; future changes append migrations.
+// Unreleased v1: this is the target schema. Old development data is not
+// migrated; a checksum mismatch fails startup instead of silently reshaping data.
 export const MEMORY_MIGRATIONS = [{
   version: 1,
   sql: `
     CREATE TABLE memory_policy (
       policy_key TEXT PRIMARY KEY,
-      policy_kind TEXT NOT NULL CHECK(policy_kind IN ('global_consent', 'rollout', 'space_participation')),
+      policy_kind TEXT NOT NULL CHECK(policy_kind IN ('global_consent', 'rollout')),
       scope_owner_key TEXT,
       enabled INTEGER NOT NULL CHECK(enabled IN (0, 1)),
       revision INTEGER NOT NULL CHECK(revision > 0),
@@ -49,7 +55,7 @@ export const MEMORY_MIGRATIONS = [{
       updated_at INTEGER NOT NULL
     ) STRICT;
 
-    CREATE TABLE memory_space_doc (
+    CREATE TABLE memory_owner_doc (
       revision_id TEXT PRIMARY KEY,
       owner_key TEXT NOT NULL,
       revision INTEGER NOT NULL CHECK(revision >= 1),
@@ -61,7 +67,7 @@ export const MEMORY_MIGRATIONS = [{
       updated_at INTEGER NOT NULL,
       UNIQUE(owner_key, revision)
     ) STRICT;
-    CREATE INDEX memory_space_doc_owner_idx ON memory_space_doc(owner_key, validity, revision);
+    CREATE INDEX memory_owner_doc_owner_idx ON memory_owner_doc(owner_key, validity, revision);
 
     CREATE TABLE memory_conversation_summary (
       revision_id TEXT PRIMARY KEY,
@@ -94,6 +100,125 @@ export const MEMORY_MIGRATIONS = [{
     ) STRICT;
     CREATE INDEX memory_doc_source_revision_idx ON memory_doc_source(revision_id);
     CREATE INDEX memory_doc_source_conversation_idx ON memory_doc_source(conversation_id);
+
+    CREATE TABLE memory_source (
+      source_id TEXT PRIMARY KEY,
+      owner_key TEXT NOT NULL,
+      locator_json TEXT NOT NULL CHECK(json_valid(locator_json)),
+      lifecycle TEXT NOT NULL CHECK(lifecycle IN ('present', 'deleted')),
+      branch TEXT NOT NULL CHECK(branch IN ('selected', 'superseded')),
+      created_at INTEGER NOT NULL,
+      UNIQUE(source_id, owner_key)
+    ) STRICT;
+    CREATE INDEX memory_source_conversation_idx ON memory_source(json_extract(locator_json, '$.conversationId'));
+    CREATE TABLE memory_entry (
+      entry_id TEXT PRIMARY KEY,
+      owner_key TEXT NOT NULL,
+      generation INTEGER NOT NULL CHECK(generation >= 0),
+      head_revision_id TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      UNIQUE(entry_id, owner_key),
+      FOREIGN KEY(head_revision_id, entry_id, owner_key)
+        REFERENCES memory_entry_revision(revision_id, entry_id, owner_key) DEFERRABLE INITIALLY DEFERRED
+    ) STRICT;
+    CREATE TABLE memory_entry_revision (
+      revision_id TEXT PRIMARY KEY,
+      entry_id TEXT NOT NULL,
+      owner_key TEXT NOT NULL,
+      revision INTEGER NOT NULL CHECK(revision > 0),
+      previous_revision_id TEXT,
+      kind TEXT NOT NULL CHECK(kind IN ('initial', 'supplement', 'change', 'correction', 'withdrawal')),
+      origin TEXT NOT NULL CHECK(origin IN ('model', 'user_edit')),
+      content_json TEXT NOT NULL CHECK(json_valid(content_json)),
+      source_ids_json TEXT NOT NULL CHECK(json_valid(source_ids_json)),
+      retracts_revision_ids_json TEXT NOT NULL CHECK(json_valid(retracts_revision_ids_json)),
+      published_at INTEGER NOT NULL,
+      supply_state TEXT NOT NULL CHECK(supply_state IN ('eligible', 'revoked')),
+      UNIQUE(entry_id, revision),
+      UNIQUE(revision_id, entry_id, owner_key),
+      UNIQUE(revision_id, owner_key),
+      FOREIGN KEY(entry_id, owner_key) REFERENCES memory_entry(entry_id, owner_key) ON DELETE CASCADE,
+      FOREIGN KEY(previous_revision_id, entry_id, owner_key)
+        REFERENCES memory_entry_revision(revision_id, entry_id, owner_key) DEFERRABLE INITIALLY DEFERRED,
+      CHECK((revision = 1 AND previous_revision_id IS NULL AND kind = 'initial') OR
+        (revision > 1 AND previous_revision_id IS NOT NULL AND kind <> 'initial')),
+      CHECK(kind = 'withdrawal' OR length(trim(json_extract(content_json, '$.markdown'))) > 0)
+    ) STRICT;
+    CREATE TRIGGER memory_entry_revision_chain BEFORE INSERT ON memory_entry_revision
+    WHEN NEW.previous_revision_id IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM memory_entry_revision previous WHERE previous.revision_id = NEW.previous_revision_id
+        AND previous.entry_id = NEW.entry_id AND previous.owner_key = NEW.owner_key AND previous.revision + 1 = NEW.revision
+    ) BEGIN SELECT RAISE(ABORT, 'memory revision chain mismatch'); END;
+    CREATE TRIGGER memory_entry_revision_immutable BEFORE UPDATE OF
+      revision_id, entry_id, owner_key, revision, previous_revision_id, kind, origin,
+      content_json, source_ids_json, retracts_revision_ids_json, published_at ON memory_entry_revision
+    BEGIN SELECT RAISE(ABORT, 'memory revision is immutable'); END;
+    CREATE TRIGGER memory_entry_head_forward BEFORE UPDATE OF head_revision_id ON memory_entry
+    WHEN NOT EXISTS (SELECT 1 FROM memory_entry_revision next WHERE next.revision_id = NEW.head_revision_id
+      AND next.entry_id = OLD.entry_id AND next.owner_key = OLD.owner_key AND next.previous_revision_id = OLD.head_revision_id)
+    BEGIN SELECT RAISE(ABORT, 'memory head cannot move backwards'); END;
+    CREATE TRIGGER memory_source_identity_immutable BEFORE UPDATE OF source_id, owner_key, locator_json, created_at ON memory_source
+    BEGIN SELECT RAISE(ABORT, 'memory source identity is immutable'); END;
+    CREATE TRIGGER memory_source_retirement_monotonic BEFORE UPDATE OF branch, lifecycle ON memory_source
+    WHEN (OLD.branch = 'superseded' AND NEW.branch <> 'superseded') OR (OLD.lifecycle = 'deleted' AND NEW.lifecycle <> 'deleted')
+    BEGIN SELECT RAISE(ABORT, 'memory source retirement is irreversible'); END;
+    CREATE INDEX memory_entry_owner_idx ON memory_entry(owner_key, entry_id);
+    CREATE TABLE memory_topic (
+      topic_id TEXT PRIMARY KEY,
+      owner_key TEXT NOT NULL,
+      name TEXT NOT NULL CHECK(length(trim(name)) > 0),
+      aliases_json TEXT NOT NULL CHECK(json_valid(aliases_json)),
+      UNIQUE(topic_id, owner_key)
+    ) STRICT;
+    CREATE TABLE memory_entry_revision_source (
+      revision_id TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      owner_key TEXT NOT NULL,
+      PRIMARY KEY(revision_id, source_id),
+      FOREIGN KEY(revision_id, owner_key) REFERENCES memory_entry_revision(revision_id, owner_key) ON DELETE CASCADE,
+      FOREIGN KEY(source_id, owner_key) REFERENCES memory_source(source_id, owner_key)
+    ) STRICT;
+    CREATE INDEX memory_entry_revision_source_source_idx ON memory_entry_revision_source(source_id);
+    CREATE TABLE memory_entry_revision_topic (
+      revision_id TEXT NOT NULL,
+      topic_id TEXT NOT NULL,
+      owner_key TEXT NOT NULL,
+      PRIMARY KEY(revision_id, topic_id),
+      FOREIGN KEY(revision_id, owner_key) REFERENCES memory_entry_revision(revision_id, owner_key) ON DELETE CASCADE,
+      FOREIGN KEY(topic_id, owner_key) REFERENCES memory_topic(topic_id, owner_key)
+    ) STRICT;
+    CREATE TABLE memory_entry_revision_related (
+      revision_id TEXT NOT NULL,
+      entry_id TEXT NOT NULL,
+      related_entry_id TEXT NOT NULL,
+      owner_key TEXT NOT NULL,
+      PRIMARY KEY(revision_id, related_entry_id),
+      CHECK(entry_id <> related_entry_id),
+      FOREIGN KEY(revision_id, entry_id, owner_key) REFERENCES memory_entry_revision(revision_id, entry_id, owner_key) ON DELETE CASCADE,
+      FOREIGN KEY(related_entry_id, owner_key) REFERENCES memory_entry(entry_id, owner_key) ON DELETE CASCADE
+    ) STRICT;
+    CREATE TABLE memory_overview_dependency (
+      overview_revision_id TEXT NOT NULL REFERENCES memory_owner_doc(revision_id) ON DELETE CASCADE,
+      entry_id TEXT NOT NULL,
+      revision_id TEXT NOT NULL,
+      owner_key TEXT NOT NULL,
+      PRIMARY KEY(overview_revision_id, entry_id),
+      FOREIGN KEY(revision_id, entry_id, owner_key) REFERENCES memory_entry_revision(revision_id, entry_id, owner_key) ON DELETE CASCADE
+    ) STRICT;
+    CREATE TRIGGER memory_overview_dependency_owner BEFORE INSERT ON memory_overview_dependency
+    WHEN NOT EXISTS (SELECT 1 FROM memory_owner_doc WHERE revision_id = NEW.overview_revision_id AND owner_key = NEW.owner_key)
+    BEGIN SELECT RAISE(ABORT, 'memory overview owner mismatch'); END;
+    CREATE TABLE memory_edit_request (
+      owner_key TEXT NOT NULL,
+      request_id TEXT NOT NULL,
+      payload_hash TEXT NOT NULL,
+      result_json TEXT NOT NULL CHECK(json_valid(result_json)),
+      PRIMARY KEY(owner_key, request_id)
+    ) STRICT;
+    CREATE VIRTUAL TABLE memory_entry_fts USING fts5(
+      terms, revision_id UNINDEXED, entry_id UNINDEXED, owner_key UNINDEXED,
+      tokenize = 'unicode61'
+    );
 
     CREATE TABLE memory_capture_progress (
       conversation_id TEXT PRIMARY KEY,
@@ -146,6 +271,14 @@ export const MEMORY_MIGRATIONS = [{
       tokenize = 'unicode61'
     );
 
+    CREATE TABLE memory_transcript_identity (
+      conversation_id TEXT NOT NULL,
+      ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+      owner_key TEXT NOT NULL,
+      source_revision INTEGER NOT NULL CHECK(source_revision >= 0),
+      PRIMARY KEY(conversation_id, ordinal)
+    ) STRICT;
+
     CREATE TABLE memory_transcript_coverage (
       conversation_id TEXT PRIMARY KEY,
       owner_key TEXT NOT NULL,
@@ -176,6 +309,7 @@ export type AcceptConversationSignalInput = {
   readonly now: number;
   readonly generation: number;
   readonly policyRevision: string;
+  readonly conversationGeneration?: number;
 };
 
 export type ClaimJobInput = {
@@ -397,23 +531,44 @@ export function createSqliteMemoryControlRepository(
 
     async acceptConversationSignal(input) {
       return database.transaction(() => {
-        const active = database.connection.prepare(`
+        const globalLifecycle = readLifecycle("global");
+        if (globalLifecycle !== undefined && globalLifecycle.fenceState !== "none") return undefined;
+        const conversationLifecycle = readLifecycle(`conversation:${input.conversationId}`);
+        const policyRows = (database.connection.prepare(
+          "SELECT " + POLICY_COLUMNS + " FROM memory_policy ORDER BY policy_key",
+        ).all() as Record<string, SQLInputValue>[]).map(parsePolicyRow);
+        const admission = resolveAdmissionFromPolicy({
+          owner: memoryOwnerFromKey(input.ownerKey), conversationId: input.conversationId,
+          policyRows, ownerLifecycle: readLifecycle(input.ownerKey), conversationLifecycle,
+        });
+        if (!capturePublicationMatches(admission, conversationLifecycle?.generation ?? 0, {
+          policyRevision: input.policyRevision, generation: input.generation,
+          conversationGeneration: input.conversationGeneration ?? 0,
+        })) return undefined;
+        const progress = database.connection.prepare(
+          "SELECT * FROM memory_capture_progress WHERE conversation_id = ?",
+        ).get(input.conversationId);
+        const parsedProgress = progress === undefined ? undefined : parseCaptureProgressRow(progress);
+        if (parsedProgress !== undefined && parsedProgress.ownerKey !== input.ownerKey) throw new MemoryError("memory_invalid_owner", "Capture progress owner changed.");
+        if ((parsedProgress?.excludedThroughOrdinal ?? 0) >= input.stableThroughOrdinal) return undefined;
+        const rawActive = database.connection.prepare(`
           SELECT ${JOB_COLUMNS} FROM memory_job
           WHERE conversation_id = ? AND status IN ('queued', 'running')
           ORDER BY created_at LIMIT 1
         `).get(input.conversationId) as Record<string, SQLInputValue> | undefined;
+        const active = rawActive === undefined ? undefined : parseJobRow(rawActive);
         const now = input.now;
         if (active !== undefined) {
-          if (String(active.owner_key) !== input.ownerKey) {
+          if (String(active.ownerKey) !== input.ownerKey) {
             throw new MemoryError(
               "memory_invalid_owner",
-              `Active memory job for ${input.conversationId} belongs to ${String(active.owner_key)}, not ${input.ownerKey}.`,
+              `Active memory job for ${input.conversationId} belongs to ${String(active.ownerKey)}, not ${input.ownerKey}.`,
             );
           }
-          const requested = Number(active.requested_through_ordinal);
+          const requested = Number(active.requestedThroughOrdinal);
           if (input.stableThroughOrdinal <= requested) {
             // 迟到的旧信号不得缩小边界或重置空闲计时。
-            const saved = readJob(String(active.job_id));
+            const saved = readJob(String(active.jobId));
             return saved;
           }
           database.connection.prepare(`
@@ -432,9 +587,9 @@ export function createSqliteMemoryControlRepository(
             input.generation,
             input.policyRevision,
             now,
-            String(active.job_id),
+            String(active.jobId),
           );
-          const saved = readJob(String(active.job_id));
+          const saved = readJob(String(active.jobId));
           if (saved === undefined) throw new MemoryError("memory_store_failure", "Active memory job vanished after extension.");
           return saved;
         }
@@ -551,7 +706,7 @@ export function createSqliteMemoryControlRepository(
         const row = database.connection.prepare(
           `SELECT COUNT(*) AS count FROM memory_job WHERE ${filter} AND status = ?`,
         ).get(...params, status);
-        counts[status] = Number(row?.count ?? 0);
+        counts[status] = z.object({ count: z.number().int().nonnegative() }).strict().parse(row).count;
       }
       const limit = Math.min(Math.max(input.limit, 1), 30);
       const rows = database.connection.prepare(`
@@ -574,7 +729,7 @@ export function createSqliteMemoryControlRepository(
       return database.transaction(() => {
         const interrupted = database.connection
           .prepare(`SELECT job_id FROM memory_job WHERE status = 'running'`)
-          .all() as { readonly job_id: string }[];
+          .all().map(row => z.object({ job_id: z.string().min(1) }).strict().parse(row));
         for (const row of interrupted) {
           database.connection.prepare(`
             UPDATE memory_job SET

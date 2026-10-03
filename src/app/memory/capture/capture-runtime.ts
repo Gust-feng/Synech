@@ -15,7 +15,7 @@ import type { MemoryControlRepository } from "../store/control-repository.js";
  *   每会话待办登记（eligibleAt = stableAt + 空闲时长）。
  *
  * 边界：
- * - effective=off（未同意/未参与/被 fence/rollout off）一律 skipped；不逐信号推进
+ * - effective=off（用户关闭/被 fence/rollout off）一律 skipped；不逐信号推进
  *   游标——启用/重新启用时由 Admin 按 Ordinary 高水位写 excludedThrough 覆盖关闭区间，
  *   保证重新开启不回填（正式设计 §11.2）；
  * - shadow 与 active 在接单阶段行为一致，差别只在注入侧；
@@ -45,6 +45,9 @@ function skipped(reason: string): MemoryCaptureAcceptance {
 export function createMemoryCaptureRuntime(deps: MemorySignalAcceptorDeps): MemoryCaptureRuntime {
   const idleDelayMs = deps.idleDelayMs ?? MAINTENANCE_IDLE_DELAY_MS;
   const now = deps.now ?? Date.now;
+  let released = false;
+  let releasePromise: Promise<void> | undefined;
+  const inFlight = new Set<Promise<MemoryCaptureAcceptance>>();
 
   async function acceptStableSignal(signal: MemoryCaptureSignal): Promise<MemoryCaptureAcceptance> {
     const ownerKey = memoryOwnerKey(signal.owner);
@@ -80,7 +83,7 @@ export function createMemoryCaptureRuntime(deps: MemorySignalAcceptorDeps): Memo
 
     // 3. transcript 索引增量覆盖（独立于整理进度；连续块止于第一个缺口）。
     const coverage = await deps.documentRepository.getTranscriptCoverage(signal.conversationId);
-    const indexFromOrdinal = (coverage?.indexedThroughOrdinal ?? 0) + 1;
+    const indexFromOrdinal = Math.max(coverage?.indexedThroughOrdinal ?? 0, progress?.excludedThroughOrdinal ?? 0) + 1;
     if (indexFromOrdinal <= signal.stableThrough.ordinal) {
       const window = await deps.evidenceReader.readTurnWindow({
         conversationId: signal.conversationId,
@@ -89,12 +92,17 @@ export function createMemoryCaptureRuntime(deps: MemorySignalAcceptorDeps): Memo
       });
       if (window.turns.length > 0) {
         const entries = collectOrdinalTexts(window.turns);
-        await deps.documentRepository.indexTranscriptRange({
+        const indexed = await deps.documentRepository.indexTranscriptRange({
           conversationId: signal.conversationId,
           ownerKey,
           entries,
+          publication: {
+            policyRevision: admission.policyRevision, generation: admission.generation,
+            conversationGeneration: conversationLifecycle?.generation ?? 0,
+          },
           now: at,
         });
+        if (indexed === undefined) return skipped("capture_revoked");
       }
     }
 
@@ -108,6 +116,7 @@ export function createMemoryCaptureRuntime(deps: MemorySignalAcceptorDeps): Memo
       now: at,
       generation: admission.generation,
       policyRevision: admission.policyRevision,
+      conversationGeneration: conversationLifecycle?.generation ?? 0,
     });
     if (job === undefined) {
       return skipped("no_new_stable_evidence");
@@ -116,9 +125,20 @@ export function createMemoryCaptureRuntime(deps: MemorySignalAcceptorDeps): Memo
   }
 
   return {
-    acceptStableSignal,
-    async release(): Promise<void> {
-      // 无后台定时器/资源（唤醒器归维护调度器所有）。
+    acceptStableSignal(signal) {
+      if (released) return Promise.resolve(skipped("capture_runtime_released"));
+      const job = acceptStableSignal(signal);
+      inFlight.add(job);
+      void job.then(() => inFlight.delete(job), () => inFlight.delete(job));
+      return job;
+    },
+    release() {
+      released = true;
+      return releasePromise ??= (async () => {
+        const results = await Promise.allSettled([...inFlight]);
+        const errors = results.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
+        if (errors.length > 0) throw new AggregateError(errors, "Memory capture did not drain cleanly.");
+      })();
     },
   };
 }

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createMemoryRuntime } from "../dist/app/memory/memory-runtime.js";
+import { createProvenAbsentMemoryLifecycle } from "../dist/app/memory/noop.js";
 
 import {
   createConversationLifecycleCoordinator,
@@ -78,4 +80,17 @@ test("conversation-scoped mutations are rejected once deletion admission starts"
   releaseDelete();
   await deletion;
   assert.deepEqual(lifecycleEvents, ["memory.prepare", "ordinary.delete", "memory.finalize"]);
+});
+
+test("absent memory query contribution never implies successful lifecycle cleanup", async () => {
+  const runtime = createMemoryRuntime({ controlRepository: {} });
+  const owner = { kind: "space", id: "s1" };
+  assert.equal(await runtime.backgroundPort.getActiveOwnerMemoryHead(owner), undefined);
+  const search = await runtime.historyQueryPort.searchEntries({ owner, query: "预算", limit: 8 });
+  assert.equal(search.outcome, "unavailable");
+  assert.equal((await runtime.historyQueryPort.readEntry({ owner, entryId: "entry", limitTokens: 4_000 })).outcome, "unavailable");
+  assert.equal((await runtime.captureRuntime.acceptStableSignal({ owner, conversationId: "c1", stableThrough: { turnId: "u1", ordinal: 1, sourceRevision: 1 } })).status, "skipped");
+  await assert.rejects(() => runtime.lifecycle.clearOwnerMemory(owner), /lifecycle is unavailable/);
+  await assert.rejects(() => runtime.lifecycle.supersedeConversationSources({ owner, conversationId: "c1", retainedThroughOrdinal: 0 }), /lifecycle is unavailable/);
+  await assert.rejects(() => createProvenAbsentMemoryLifecycle().clearOwnerMemory(owner), /proven absent/);
 });

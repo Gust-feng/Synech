@@ -1,4 +1,4 @@
-import { memoryOwnerKey, type MemoryOwner } from "../../../domain/memory/index.js";
+import type { MemoryOwner } from "../../../domain/memory/index.js";
 import type {
   EffectiveMemoryAdmission,
   MemoryRolloutMode,
@@ -9,14 +9,17 @@ import type {
   MemoryPolicyRow,
 } from "../store/persistence-schema.js";
 
+/**
+ * 持久化 policy 行 → 有效准入（ADR 0018）。
+ *
+ * 只有两条 policy：`consent:global`（用户唯一开关）与 `rollout:global`
+ * （开发者 rollout）。没有 per-owner participation：所有 Space 同源，
+ * 一律由同一个 enabled 总开关控制。
+ */
 export const POLICY_KEY = {
   consent: "consent:global",
   rollout: "rollout:global",
 } as const;
-
-export function spaceParticipationKey(spaceId: string): string {
-  return `participation:${memoryOwnerKey({ kind: "space", id: spaceId })}`;
-}
 
 const FENCED_STATES = new Set(["fenced", "tombstone"]);
 
@@ -37,18 +40,13 @@ function rolloutFromRow(row: MemoryPolicyRow | undefined): MemoryRolloutMode {
 export function resolveAdmissionFromPolicy(
   input: ResolveAdmissionFromPolicyInput,
 ): EffectiveMemoryAdmission {
-  const ownerKey = memoryOwnerKey(input.owner);
   const byKey = new Map(input.policyRows.map((row) => [row.key, row]));
 
   const consentRow = byKey.get(POLICY_KEY.consent);
   const rolloutRow = byKey.get(POLICY_KEY.rollout);
-  const spaceParticipationRow = input.owner.kind === "space"
-    ? byKey.get(spaceParticipationKey(input.owner.id))
-    : undefined;
 
-  const globalConsent = consentRow?.enabled ?? false;
+  const enabled = consentRow?.enabled ?? false;
   const rollout = rolloutFromRow(rolloutRow);
-  const spaceParticipation = spaceParticipationRow?.enabled ?? false;
 
   const ownerFenced =
     input.ownerLifecycle !== undefined && FENCED_STATES.has(input.ownerLifecycle.fenceState);
@@ -62,14 +60,12 @@ export function resolveAdmissionFromPolicy(
   const policyRevision =
     `g${consentRow?.revision ?? 0}:` +
     `r${rolloutRow?.revision ?? 0}:` +
-    `s${spaceParticipationRow?.revision ?? 0}:` +
     `gen${generation}`;
   const rolloutRevision = `r${rolloutRow?.revision ?? 0}`;
 
   return resolveEffectiveMemoryAdmission({
     scopeKind: input.owner.kind,
-    globalConsent,
-    spaceParticipation,
+    enabled,
     rollout,
     fenced,
     generation,

@@ -5,6 +5,5 @@ export {
   memoryOwnerLabel,
 } from "./owner.js";
 export type {
-  MemoryContentKind,
   MemoryOwner,
 } from "./owner.js";

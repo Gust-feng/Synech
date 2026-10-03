@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 import { fetchMemoryDiagnostics, type MemoryDiagnosticQuery, type MemoryDiagnosticSnapshot } from "@panel-api/memory-admin";
 
 export function useMemoryDiagnostics(query: MemoryDiagnosticQuery, autoRefresh: boolean, refreshKey: number) {
-  const { spaceId, conversationId } = query;
+  const ownerKind = query.owner?.kind;
+  const ownerId = query.owner?.id;
+  const { conversationId } = query;
   const [snapshot, setSnapshot] = useState<MemoryDiagnosticSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -15,7 +17,10 @@ export function useMemoryDiagnostics(query: MemoryDiagnosticQuery, autoRefresh: 
       if (controller.signal.aborted) return;
       setLoading(true);
       try {
-        const response = await fetchMemoryDiagnostics({ spaceId, conversationId }, controller.signal);
+        const response = await fetchMemoryDiagnostics({
+          ...(ownerKind === undefined || ownerId === undefined ? {} : { owner: { kind: ownerKind, id: ownerId } }),
+          ...(conversationId === undefined ? {} : { conversationId }),
+        }, controller.signal);
         if (!controller.signal.aborted) { setSnapshot(response.diagnostics); setError(null); }
       } catch (cause) {
         if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : "诊断读取失败");
@@ -32,6 +37,6 @@ export function useMemoryDiagnostics(query: MemoryDiagnosticQuery, autoRefresh: 
     }
     void refresh();
     return () => { controller.abort(); if (timer !== undefined) clearTimeout(timer); };
-  }, [spaceId, conversationId, autoRefresh, refreshKey]);
+  }, [ownerId, ownerKind, conversationId, autoRefresh, refreshKey]);
   return { snapshot, error, loading };
 }

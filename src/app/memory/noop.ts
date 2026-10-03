@@ -1,4 +1,4 @@
-import { type MemoryOwner } from "../../domain/memory/index.js";
+import type { ConversationOwner } from "../../domain/execution-scope/contracts.js";
 import type {
   HistoryQueryPort,
   HistoryReadInput,
@@ -10,7 +10,7 @@ import type {
   MemoryCaptureRuntime,
   MemoryCaptureSignal,
   MemoryLifecycle,
-  SpaceMemoryBackground,
+  OwnerMemoryBackground,
 } from "./contracts.js";
 
 /**
@@ -37,14 +37,14 @@ export function createNoopMemoryCaptureRuntime(): MemoryCaptureRuntime {
 
 export function createNoopMemoryBackgroundPort(): MemoryBackgroundPort {
   return {
-    async getActiveSpaceMemoryHead(_owner: MemoryOwner): Promise<SpaceMemoryBackground | undefined> {
+    async getActiveOwnerMemoryHead(_owner: ConversationOwner): Promise<OwnerMemoryBackground | undefined> {
       return undefined;
     },
     async resolveSupplyableBackground(_input: {
-      readonly owner: MemoryOwner;
+      readonly owner: ConversationOwner;
       readonly revisionId: string;
       readonly generation: number;
-    }): Promise<SpaceMemoryBackground | undefined> {
+    }): Promise<OwnerMemoryBackground | undefined> {
       return undefined;
     },
   };
@@ -52,6 +52,12 @@ export function createNoopMemoryBackgroundPort(): MemoryBackgroundPort {
 
 export function createNoopMemoryHistoryQueryPort(): HistoryQueryPort {
   return {
+    async searchEntries() {
+      return { outcome: "unavailable", items: [], nextCursor: null, truncated: false };
+    },
+    async readEntry() {
+      return { outcome: "unavailable", reason: "memory_unavailable" };
+    },
     async search(_input: HistorySearchInput): Promise<HistorySearchResult> {
       return {
         outcome: "degraded",
@@ -77,6 +83,9 @@ export function createUnavailableMemoryLifecycle(): MemoryLifecycle {
       return unavailable();
     },
     async clearOwnerMemory() {
+      return unavailable();
+    },
+    async supersedeConversationSources() {
       return unavailable();
     },
     async prepareConversationRemoval() {
@@ -106,6 +115,9 @@ export function createProvenAbsentMemoryLifecycle(): MemoryLifecycle {
       return provenAbsent();
     },
     async clearOwnerMemory() {
+      return provenAbsent();
+    },
+    async supersedeConversationSources() {
       return provenAbsent();
     },
     async prepareConversationRemoval() {

@@ -36,9 +36,7 @@ test("Space deletion fences implicit memory before Conversation removal and purg
       queries: { async listConversationsByOwner() { return [{ conversationId: "conversation-1" }]; } },
     },
     personalKnowledge: { commands: { async cleanupSpace() { events.push("knowledge.cleanup"); } } },
-    agentNotes: { async deleteByOwner() { events.push("agent-notes.delete"); } },
     collaborationRules: { async deleteByOwner() { events.push("rules.delete"); } },
-    memory: { async deleteByOwner() { events.push("path-dependencies.delete"); } },
     memoryLifecycle: {
       async prepareOwnerRemoval() {
         events.push("memory.prepare");
@@ -63,7 +61,7 @@ test("Space deletion fences implicit memory before Conversation removal and purg
   assert.ok(indexOf(events, "memory.finalize") > indexOf(events, "space.delete"));
 });
 
-test("Workspace deletion fences implicit memory before Conversation removal and purges after Workspace removal", async () => {
+test("Workspace deletion removes only the resource registration and references", async () => {
   const events = [];
   const workspace = { id: "workspace-1", status: "available" };
   const coordinator = createWorkspaceDeletionCoordinator({
@@ -89,9 +87,7 @@ test("Workspace deletion fences implicit memory before Conversation removal and 
       commands: { async deleteConversation() { events.push("ordinary.delete"); } },
       queries: { async listConversationsByOwner() { return [{ conversationId: "conversation-1" }]; } },
     },
-    agentNotes: { async deleteByOwner() { events.push("agent-notes.delete"); } },
     collaborationRules: { async deleteByOwner() { events.push("rules.delete"); } },
-    memory: { async deleteByOwner() { events.push("path-dependencies.delete"); } },
     memoryLifecycle: {
       async prepareOwnerRemoval() {
         events.push("memory.prepare");
@@ -110,7 +106,10 @@ test("Workspace deletion fences implicit memory before Conversation removal and 
 
   await coordinator.deleteWorkspace("workspace-1");
 
-  assert.ok(indexOf(events, "workspace.delete") < indexOf(events, "memory.prepare"));
-  assert.ok(indexOf(events, "memory.prepare") < indexOf(events, "ordinary.delete"));
-  assert.ok(indexOf(events, "memory.finalize") > indexOf(events, "workspace.purge"));
+  assert.ok(events.includes("workspace.delete"));
+  assert.ok(events.includes("rules.delete"));
+  assert.ok(events.includes("workspace.purge"));
+  assert.equal(events.includes("memory.prepare"), false);
+  assert.equal(events.includes("memory.finalize"), false);
+  assert.equal(events.includes("ordinary.delete"), false);
 });

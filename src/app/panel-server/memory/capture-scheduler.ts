@@ -64,7 +64,16 @@ export function createMemoryMaintenanceScheduler(input: {
   let released = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let drainPromise: Promise<void> | undefined;
+  let recoveryPromise: Promise<void> | undefined;
+  let releasePromise: Promise<void> | undefined;
+  const drainErrors: unknown[] = [];
   let drainRequestedAgain = false;
+
+  function reportFailure(topic: string, error: unknown): void {
+    // Diagnostics do not turn a shared-storage failure into successful shutdown.
+    drainErrors.push(error);
+    onDiagnostic(topic, error);
+  }
 
   const maintenanceDeps: MaintenanceDeps = {
     controlRepository: input.controlRepository,
@@ -95,6 +104,7 @@ export function createMemoryMaintenanceScheduler(input: {
    * 而不是只看未来的 eligibleAt；有未来任务时按最早资格唤醒；都没有则停止轮询，
    * 由下一次活动信号重新安排。 */
   async function scheduleNextWakeFromJobs(): Promise<void> {
+    if (released) return;
     try {
       const queued = await input.controlRepository.listJobsByStatus("queued");
       const nowMs = now();
@@ -109,7 +119,7 @@ export function createMemoryMaintenanceScheduler(input: {
         return;
       }
     } catch (error) {
-      onDiagnostic("Memory scheduler could not schedule next wake", error);
+      reportFailure("Memory scheduler could not schedule next wake", error);
     }
     // 没有任何待办时不再轮询：下一次活动信号会重新安排唤醒。
   }
@@ -119,12 +129,14 @@ export function createMemoryMaintenanceScheduler(input: {
     try {
       jobs = await input.controlRepository.listDueJobs({ now: now(), limit: 16 });
     } catch (error) {
-      onDiagnostic("Memory maintenance drain could not list due jobs", error);
+      reportFailure("Memory maintenance drain could not list due jobs", error);
       return;
     }
     for (const job of jobs) {
       if (released) return;
-      if (await isConversationActive(job.conversationId)) {
+      const active = await isConversationActive(job.conversationId);
+      if (released) return;
+      if (active) {
         // N02：恢复活动的会话其待办持久延期（默认 60s，实验参数）——不占据
         // 队首、不触发忙循环；其下一次稳定终结会按最新 eligibleAt 重算。
         try {
@@ -134,7 +146,7 @@ export function createMemoryMaintenanceScheduler(input: {
             now: now(),
           });
         } catch (error) {
-          onDiagnostic(`Memory maintenance could not defer active job ${job.jobId}`, error);
+          reportFailure(`Memory maintenance could not defer active job ${job.jobId}`, error);
         }
         continue;
       }
@@ -144,12 +156,13 @@ export function createMemoryMaintenanceScheduler(input: {
         input.onOutcome?.(outcome, { jobId: job.jobId, conversationId: job.conversationId,
           ownerKey: job.ownerKey, durationMs: Math.max(0, now() - startedAt) });
       } catch (error) {
-        onDiagnostic(`Memory maintenance job ${job.jobId} failed`, error);
+        reportFailure(`Memory maintenance job ${job.jobId} failed`, error);
       }
     }
   }
 
   function runDrain(): Promise<void> {
+    if (released) return Promise.resolve();
     if (drainPromise !== undefined) {
       drainRequestedAgain = true;
       return drainPromise;
@@ -161,6 +174,8 @@ export function createMemoryMaintenanceScheduler(input: {
           await drainDueJobsOnce();
           await scheduleNextWakeFromJobs();
         } while (drainRequestedAgain && !released);
+      } catch (error) {
+        reportFailure("Memory maintenance drain failed", error);
       } finally {
         drainPromise = undefined;
       }
@@ -180,23 +195,43 @@ export function createMemoryMaintenanceScheduler(input: {
       }
     },
 
-    async recoverQueuedJobs() {
-      try {
-        await input.controlRepository.recoverInterruptedJobs();
-      } catch (error) {
-        onDiagnostic("Memory maintenance recovery failed", error);
-        return;
-      }
-      await runDrain();
+    recoverQueuedJobs() {
+      if (released) return Promise.resolve();
+      if (recoveryPromise !== undefined) return recoveryPromise;
+      recoveryPromise = (async () => {
+        try {
+          try {
+            await input.controlRepository.recoverInterruptedJobs();
+          } catch (error) {
+            reportFailure("Memory maintenance recovery failed", error);
+            return;
+          }
+          if (!released) await runDrain();
+        } finally {
+          recoveryPromise = undefined;
+        }
+      })();
+      return recoveryPromise;
     },
 
-    async release() {
+    release() {
       released = true;
       if (timer !== undefined) {
         clearTimeout(timer);
         timer = undefined;
       }
-      await (drainPromise ?? Promise.resolve());
+      scheduledWakeAt = undefined;
+      return releasePromise ??= (async () => {
+        const results = await Promise.allSettled([
+          recoveryPromise ?? Promise.resolve(),
+          drainPromise ?? Promise.resolve(),
+        ]);
+        const errors = [
+          ...drainErrors,
+          ...results.flatMap((result) => result.status === "rejected" ? [result.reason] : []),
+        ];
+        if (errors.length > 0) throw new AggregateError(errors, "Memory maintenance did not drain cleanly.");
+      })();
     },
   };
 }

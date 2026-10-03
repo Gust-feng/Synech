@@ -35,7 +35,10 @@ test("Ordinary resource acquisition carries standing rules and implicit memory i
   const definition = frozenDefinition();
   let resolverInput;
   let freezeCount = 0;
+  let currentBackground = `[Memory — historical background]
+- The project uses local durable storage.`;
   let released = 0;
+  const loopConfigurations = [];
   const acquirer = createOrdinaryAgentRunResourceAcquirer({
     host: {
       configCenter: {
@@ -44,9 +47,9 @@ test("Ordinary resource acquisition carries standing rules and implicit memory i
       processRegistry: { async cleanupByRun() { return { attempted: [], skipped: [] }; } },
     },
     sessionRepository: {
-      async acquire() {
+      async acquire(ref) {
         return {
-          session: {},
+          session: { metadata: { id: ref.sessionId } },
           async revokeTo() {},
           async release() { released += 1; },
         };
@@ -55,12 +58,12 @@ test("Ordinary resource acquisition carries standing rules and implicit memory i
     async resolveAgentDefinition() { return definition; },
     async resolveMemoryBackground(input) {
       resolverInput = input;
-      const block = "[Space memory — historical background]\n- The project stores durable state in SQLite.";
+      const block = currentBackground;
       return {
         initialBlock: block,
         resolvePerFreeze: async () => {
           freezeCount += 1;
-          return block;
+          return currentBackground;
         },
       };
     },
@@ -84,7 +87,8 @@ test("Ordinary resource acquisition carries standing rules and implicit memory i
     createProviderBinding() {
       return { modelRegistry: {}, selectedModel: {}, thinkingLevel: "off" };
     },
-    createSessionLoop() {
+    createSessionLoop(input) {
+      loopConfigurations.push(input);
       return {
         async execute() { throw new Error("The model loop must not run during message assembly coverage."); },
         async release() { released += 1; },
@@ -105,7 +109,7 @@ test("Ordinary resource acquisition carries standing rules and implicit memory i
     },
   });
 
-  const run = await acquirer.acquire({
+  const acquisition = {
     runId: "run-memory-input",
     conversationId: "conversation-memory-input",
     sessionRef: {
@@ -141,8 +145,16 @@ test("Ordinary resource acquisition carries standing rules and implicit memory i
     abortSignal: new AbortController().signal,
     async acceptToolInvocations() { return []; },
     async acceptNestedToolInvocations() { return []; },
-  });
+  };
+  const run = await acquirer.acquire(acquisition);
 
+  assert.equal(run.toolMetrics, undefined);
+  assert.equal(loopConfigurations[0].onProviderToolDefinitionMetrics, undefined);
+  const diagnosticRun = await acquirer.acquire({ ...acquisition, birth: { ...acquisition.birth, recordToolMetrics: true } });
+  assert.ok(diagnosticRun.toolMetrics);
+  assert.equal(typeof loopConfigurations[1].onProviderToolDefinitionMetrics, "function");
+  await diagnosticRun.release();
+  await diagnosticRun.releaseSession();
   try {
     // 绑定解析只携带 owner + conversationId（query-independent 的编译期证明）。
     assert.deepEqual(resolverInput, {
@@ -160,13 +172,25 @@ test("Ordinary resource acquisition carries standing rules and implicit memory i
     assert.ok(requestIndex > rulesIndex);
     assert.ok(content.endsWith("What is the durable storage decision?"));
     // 背景不再拼进 user 消息正文：由 session loop 的 per-freeze 贡献承载。
-    assert.ok(!content.includes("[Space memory — historical background]"));
+    assert.ok(!content.includes("[Memory — historical background]"));
     assert.ok(run.resolveMemoryBackgroundBlock, "loop options must carry the per-freeze background resolver");
     const block = await run.resolveMemoryBackgroundBlock();
-    assert.ok(block.includes("[Space memory — historical background]"));
+    assert.ok(block.includes("[Memory — historical background]"));
     assert.ok(freezeCount === 1);
+    // The Ordinary adapter follows each per-freeze boundary result without rebuilding
+    // the run; actual deletion/revocation semantics are covered by the repository tests.
+    currentBackground = block + `
+[Memory sources]
+source-1: deleted (original text cannot be reopened)`;
+    const deletedSourceBlock = await run.resolveMemoryBackgroundBlock();
+    assert.ok(deletedSourceBlock.includes("source-1: deleted"));
+    assert.ok(deletedSourceBlock.startsWith(block));
+    currentBackground = undefined;
+    assert.equal(await run.resolveMemoryBackgroundBlock(), undefined);
+    assert.equal(freezeCount, 3);
+    assert.ok(!run.resolvedMessages.find(message => message.role === "user").content.includes("[Memory — historical background]"));
   } finally {
     await run.release();
   }
-  assert.equal(released, 2);
+  assert.equal(released, 5);
 });

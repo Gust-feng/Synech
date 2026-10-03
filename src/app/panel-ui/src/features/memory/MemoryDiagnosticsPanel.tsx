@@ -10,7 +10,7 @@ import "./memory-diagnostics.css";
 const JOB_LABEL = { queued: "排队", running: "整理中", done: "已完成", failed: "失败" };
 const WAIT_LABEL = { active_conversation: "会话仍在运行", policy_blocked: "策略未允许或来源不可用",
   retry_backoff: "等待退避重试", idle_delay: "等待空闲资格", ready: "已到期，等待工作线程" };
-const BLOCK_LABEL: Record<string, string> = { global_consent: "全局自动记忆未开启", space_participation: "此 Space 未参与",
+const BLOCK_LABEL: Record<string, string> = { memory_disabled: "自动记忆总开关未开启", memory_owner_unavailable: "当前 owner 暂不可用",
   rollout_off: "开发者总开关已关闭", generation_fence: "删除或清除正在阻断该范围" };
 const OUTCOME_LABEL = { committed: "已发布", failed: "失败", retry_queued: "等待重试", no_evidence: "没有新增合格内容", discarded: "结果已丢弃" };
 const BINDING_LABEL = { unbound: "尚未绑定", none: "已固定为空背景", available: "绑定版本当前可供给", unavailable: "绑定版本当前不可供给" };
@@ -20,20 +20,20 @@ export function MemoryDiagnosticsPanel(props: {
   readonly onOpenConversation?: (id: string) => void;
   readonly onOpenMemorySettings?: () => void;
 }): React.ReactElement {
-  const currentSpace = props.scope?.owner?.kind === "space" ? props.scope.owner.id : undefined;
-  const currentConversation = currentSpace === undefined ? undefined : props.scope?.conversationId;
-  const [scopeChoice, setScopeChoice] = useState<"all" | "space" | "conversation">("all");
+  const currentOwner = props.scope?.owner;
+  const currentConversation = currentOwner === undefined ? undefined : props.scope?.conversationId;
+  const [scopeChoice, setScopeChoice] = useState<"all" | "owner" | "conversation">("all");
   const [selectedConversation, setSelectedConversation] = useState<string>();
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   useEffect(() => {
-    setScopeChoice(currentConversation ? "conversation" : currentSpace ? "space" : "all");
+    setScopeChoice(currentConversation ? "conversation" : currentOwner ? "owner" : "all");
     setSelectedConversation(undefined);
-  }, [currentSpace, currentConversation]);
+  }, [currentOwner?.kind, currentOwner?.id, currentConversation]);
   const query = {
-    spaceId: scopeChoice === "all" ? undefined : currentSpace,
+    owner: scopeChoice === "all" ? undefined : currentOwner,
     conversationId: selectedConversation ?? (scopeChoice === "conversation" ? currentConversation : undefined),
   };
   const { snapshot, loading, error } = useMemoryDiagnostics(query, autoRefresh, refreshKey);
@@ -65,7 +65,7 @@ export function MemoryDiagnosticsPanel(props: {
       <label>查看范围 <select value={scopeChoice} onChange={event => {
         setScopeChoice(event.target.value as typeof scopeChoice); setSelectedConversation(undefined); setNotice(null);
       }}>
-        <option value="all">全部任务</option><option value="space" disabled={!currentSpace}>当前 Space</option>
+        <option value="all">全部任务</option><option value="owner" disabled={!currentOwner}>当前 Space</option>
         <option value="conversation" disabled={!currentConversation}>当前会话</option>
       </select></label>
       <label className="memory-debug-toggle"><input type="checkbox" checked={autoRefresh} onChange={event => setAutoRefresh(event.target.checked)} />每 5 秒刷新</label>
@@ -86,13 +86,13 @@ export function MemoryDiagnosticsPanel(props: {
           onChange={event => void changeRollout(event.target.value as MemoryRolloutMode)}>
           <option value="off">关闭</option><option value="shadow">观察：整理但不注入</option><option value="active">启用：按用户许可供给</option>
         </select></label>
-        <p className="memory-hint">此开关对所有 Space 生效，仍受全局自动记忆与各 Space 参与开关约束。</p>
-        <p>全局自动记忆：{snapshot.capability?.globalConsent ? "已开启" : "未开启"}
-          {context && <> · 当前 Space：{context.capability.spaceParticipation ? "已参与" : "未参与"}</>}</p>
+        <p className="memory-hint">此开关是内部装配诊断；用户设置仅包含自动记忆总开关。实际供给还会显示对应 owner 的健康状态。</p>
+        <p>自动记忆总开关：{snapshot.capability?.enabled ? "已开启" : "未开启"}
+          {context && <> · 当前范围：{context.capability.health === "ready" ? "可用" : "暂不可用或已降级"}</>}</p>
         {context && <p className="memory-debug-state">{context.blockingReasons.length > 0
           ? context.blockingReasons.map(reason => BLOCK_LABEL[reason] ?? reason).join("；")
-          : context.capability.effective === "shadow" ? "可整理；观察模式下不注入长期背景。" : "当前策略允许整理和背景供给。"}</p>}
-        {props.onOpenMemorySettings && (!snapshot.capability?.globalConsent || (context && !context.capability.spaceParticipation)) &&
+          : context.capability.effective === "shadow" ? "观察 rollout：仅用于内部诊断，不代表用户设置模式。" : context.capability.effective === "active" ? "当前实际状态允许整理和背景供给。" : "当前实际状态不提供长期背景。"}</p>}
+        {props.onOpenMemorySettings && (!snapshot.capability?.enabled || context?.capability.health !== "ready") &&
           <button type="button" onClick={props.onOpenMemorySettings}>打开记忆设置</button>}
       </div>
 
@@ -103,8 +103,8 @@ export function MemoryDiagnosticsPanel(props: {
           <div className="memory-debug-jobs">{snapshot.jobRows.map(job => <JobRow key={job.jobId} job={job}
             onInspect={() => setSelectedConversation(job.conversationId)} />)}</div>}
       </section>
-      {context ? <MemoryHistoryProbe key={`${context.spaceId}:${context.conversation?.id ?? ""}`}
-        spaceId={context.spaceId} conversationId={context.conversation?.id} onOpenConversation={props.onOpenConversation} /> :
+      {context ? <MemoryHistoryProbe key={`${context.owner.kind}:${context.owner.id}:${context.conversation?.id ?? ""}`}
+        owner={context.owner} conversationId={context.conversation?.id} onOpenConversation={props.onOpenConversation} /> :
         <p className="memory-hint">切换到当前 Space，或检查列表中的会话，即可查看文档并测试历史搜索。</p>}
       <section className="memory-debug-section">
         <h4>最近批次 <small>· 当前进程</small></h4>
@@ -134,9 +134,9 @@ function ContextInspector(props: { readonly context: MemoryDiagnosticContext; re
   const { context: c } = props;
   const binding = c.binding;
   return <section className="memory-debug-section">
-    <div className="memory-debug-row-title"><h4>{c.conversation?.title ?? c.spaceTitle}</h4>
+    <div className="memory-debug-row-title"><h4>{c.conversation?.title ?? c.ownerTitle}</h4>
       {c.conversation && props.onOpenConversation && <button type="button" onClick={() => props.onOpenConversation?.(c.conversation!.id)}>打开会话</button>}</div>
-    <p className="memory-debug-meta">{c.spaceTitle}{c.conversation ? ` · ${c.conversation.active ? "会话正在运行或排队" : "会话当前无运行任务"}` : " · Space 记忆"}</p>
+    <p className="memory-debug-meta">{c.ownerTitle}{c.conversation ? ` · ${c.conversation.active ? "会话正在运行或排队" : "会话当前无运行任务"}` : " · owner 记忆"}</p>
     {binding && <div className="memory-debug-binding">
       <strong>{BINDING_LABEL[binding.state]}</strong>
       <p className="memory-hint">{binding.state === "none" ? "会话开始时绑定了空背景；后台产生新记忆不会自动换绑。"
@@ -146,8 +146,8 @@ function ContextInspector(props: { readonly context: MemoryDiagnosticContext; re
       {binding.reference?.kind === "revision" && <p className="memory-debug-meta">绑定版本 {binding.reference.revision} · generation {binding.reference.generation} · {binding.reference.boundAt}</p>}
       {binding.markdown && <DocumentView title="查看绑定背景正文" markdown={binding.markdown} />}
     </div>}
-    {c.memory ? <DocumentView title={`Space 长期文档 · 版本 ${c.memory.revision}`} markdown={c.memory.markdown}
-      detail={`${c.memory.origin === "user_edit" ? "用户编辑" : "后台整理"} · ${time(c.memory.updatedAt)}`} /> : <p className="memory-hint">此 Space 还没有有效长期文档。</p>}
+    {c.memory ? <DocumentView title={`owner 长期文档 · 版本 ${c.memory.revision}`} markdown={c.memory.markdown}
+      detail={`${c.memory.origin === "user_edit" ? "用户编辑" : "后台整理"} · ${time(c.memory.updatedAt)}`} /> : <p className="memory-hint">当前范围还没有有效长期文档。</p>}
     {c.conversation && (c.summary ? <DocumentView title={`会话累计摘要 · 版本 ${c.summary.revision}`} markdown={c.summary.markdown}
       detail={`覆盖至第 ${c.summary.coveredThroughOrdinal} 轮 · ${time(c.summary.updatedAt)}`} /> : <p className="memory-hint">此会话还没有有效摘要。</p>)}
   </section>;

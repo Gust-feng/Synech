@@ -1,6 +1,9 @@
-import { getEncoding, type Tiktoken } from "js-tiktoken";
+import { createHmac, randomBytes } from "node:crypto";
+import { countMemoryTokens } from "../token-counting.js";
+import { createMemoryEntryQueries } from "./entry-query.js";
 
-import { memoryOwnerKey, type MemoryOwner } from "../../../domain/memory/index.js";
+import { memoryOwnerKey } from "../../../domain/memory/index.js";
+import type { ConversationOwner } from "../../../domain/execution-scope/contracts.js";
 import type {
   HistoryQueryPort,
   HistoryReadInput,
@@ -23,7 +26,7 @@ import { lexicalMatchExpression } from "../recall/lexical-projection.js";
  * 纪律：
  * - scope 由宿主从真实调用会话注入（owner），不由模型选择；读取目标会话必须
  *   属于同一 owner scope（结构身份拒绝，E10）；
- * - FTS 投影命中一律回表复核 owner/validity，跨 Space 泄漏恒为 0；会话范围
+ * - FTS 投影命中一律回表复核 owner/validity，跨 owner 泄漏恒为 0；会话范围
  *   条件在 SQL LIMIT 之前过滤（R12）；
  * - 检索保持中立：返回匹配位置附近有语境的原文/摘要片段，不改写、不合成答案；
  * - all 搜索按「每来源保底 + 轮转合并」在统一预算下选取候选（R13），遵守调用方
@@ -42,8 +45,8 @@ export const HISTORY_READ_MAX_TOKENS = 6_000;
 export const HISTORY_READ_MAX_ORDINAL_SPAN = 200;
 
 export type HistoryConversationLookup = {
-  /** 目标会话的 memory owner；undefined 表示会话不存在（结构身份拒绝）。 */
-  readonly resolveConversationOwner: (conversationId: string) => Promise<MemoryOwner | undefined>;
+  /** 目标会话的 memory owner（Space 或 Workspace）；undefined 表示会话不存在（结构身份拒绝）。 */
+  readonly resolveConversationOwner: (conversationId: string) => Promise<ConversationOwner | undefined>;
   /** 会话标题（只用于展示）。 */
   readonly resolveConversationTitle?: (conversationId: string) => Promise<string | undefined>;
 };
@@ -62,56 +65,118 @@ export type CreateMemoryHistoryQueryPortInput = {
   readonly countTokens?: (text: string) => number;
 };
 
-let sharedEncoding: Tiktoken | undefined;
-
-/** 真实 tokenizer（与维护管线同源）；预算边界不允许字符近似冒充硬上限。 */
-export function historyCountTokens(text: string): number {
-  sharedEncoding ??= getEncoding("o200k_base");
-  return sharedEncoding.encode(text).length;
-}
+/** Shared tokenizer; kept as the history counting entry used by budget checks. */
+export const historyCountTokens = countMemoryTokens;
 
 export function createMemoryHistoryQueryPort(
   input: CreateMemoryHistoryQueryPortInput,
 ): HistoryQueryPort {
   const countTokens = input.countTokens ?? historyCountTokens;
   const transcriptCoverage = input.transcriptCoverage ?? (() => "partial" as const);
+  const cursorKey = randomBytes(32);
+  const signCursor = (body: string) => createHmac("sha256", cursorKey).update(body).digest("base64url");
+  const summaryCursor = (scope: string, revisionId: string, offset: number): string => {
+    const body = Buffer.from(JSON.stringify({ scope, revisionId, offset })).toString("base64url");
+    return `${body}.${signCursor(body)}`;
+  };
 
-  const readAdmission = async (owner: MemoryOwner) => {
+  const readAdmission = async (
+    owner: ConversationOwner,
+    conversationIds: readonly string[] = [],
+  ) => {
     const ownerKey = memoryOwnerKey(owner);
-    const [policyRows, ownerLifecycle] = await Promise.all([
+    const uniqueConversationIds = [...new Set(conversationIds)];
+    const [policyRows, ownerLifecycle, conversationLifecycles] = await Promise.all([
       input.controlRepository.readAllPolicy(),
       input.controlRepository.getLifecycle(ownerKey),
+      Promise.all(uniqueConversationIds.map((id) =>
+        input.controlRepository.getLifecycle(`conversation:${id}`),
+      )),
     ]);
+    const conversationLifecycle = conversationLifecycles.length === 1
+      ? conversationLifecycles[0]
+      : undefined;
+    const admission = resolveAdmissionFromPolicy({
+      owner,
+      conversationId: uniqueConversationIds.length === 1 ? uniqueConversationIds[0]! : "__history_query__",
+      policyRows,
+      ownerLifecycle,
+      conversationLifecycle,
+    });
     return {
       ownerKey,
-      admission: resolveAdmissionFromPolicy({
-        owner,
-        conversationId: "__history_query__",
-        policyRows,
-        ownerLifecycle,
-        conversationLifecycle: undefined,
-      }),
+      policyRevision: admission.policyRevision,
+      admission,
+      conversationGenerations: new Map(uniqueConversationIds.map((id, index) => [
+        id,
+        conversationLifecycles[index]?.generation ?? 0,
+      ])),
+      hasFencedConversation: conversationLifecycles.some((lifecycle) =>
+        lifecycle !== undefined && (lifecycle.fenceState === "fenced" || lifecycle.fenceState === "tombstone"),
+      ),
     };
   };
 
+  /**
+   * Async FTS/evidence reads can overlap a policy change or lifecycle fence. Re-read
+   * authoritative facts immediately before returning any content and reject the whole
+   * result if the admission snapshot changed or any target conversation is fenced.
+   */
+  const canReturnHistory = async (
+    owner: ConversationOwner,
+    expected: Awaited<ReturnType<typeof readAdmission>>,
+    conversationIds: readonly string[],
+    compareConversationGenerations = false,
+  ): Promise<"available" | "policy_changed" | "conversation_changed" | "conversation_fenced"> => {
+    const current = await readAdmission(owner, conversationIds);
+    if (current.hasFencedConversation) return "conversation_fenced";
+    if (current.admission.effective !== "active" ||
+        current.admission.generation !== expected.admission.generation ||
+        current.policyRevision !== expected.policyRevision) return "policy_changed";
+    if (compareConversationGenerations && conversationIds.some((id) =>
+      (current.conversationGenerations.get(id) ?? 0) !== (expected.conversationGenerations.get(id) ?? 0),
+    )) return "conversation_changed";
+    return "available";
+  };
+
+  const unavailableSearch = (
+    summaryRequested: boolean,
+    transcriptRequested: boolean,
+  ): HistorySearchResult => ({
+    outcome: summaryRequested || transcriptRequested ? "degraded" : "no_hit",
+    coverage: { summary: "disabled", transcript: "disabled" },
+    items: [],
+  });
+
+  const entries = createMemoryEntryQueries(input.documentRepository, readAdmission, countTokens);
   return {
+    ...entries,
     async search(searchInput: HistorySearchInput): Promise<HistorySearchResult> {
-      const { ownerKey, admission } = await readAdmission(searchInput.owner);
+      const initialAdmission = await readAdmission(
+        searchInput.owner,
+        searchInput.conversationId === undefined ? [] : [searchInput.conversationId],
+      );
+      const { ownerKey, admission } = initialAdmission;
       const match = lexicalMatchExpression(searchInput.query);
       const summaryRequested = searchInput.sources === "summary" || searchInput.sources === "all";
       const transcriptRequested = searchInput.sources === "transcript" || searchInput.sources === "all";
+      // 用户开关（enabled / rollout / fence）关闭时，记忆供给整体停止：摘要与
+      // transcript 两个来源都 disabled，工具不得绕过开关继续读历史。
+      const memoryOff = admission.effective !== "active";
       const summaryCoverage: HistorySourceCoverage = summaryRequested
-        ? (admission.effective === "off" ? "disabled" : "available")
+        ? (memoryOff ? "disabled" : "available")
         : "disabled";
-      const transcriptCov: HistorySourceCoverage = transcriptRequested ? transcriptCoverage() : "disabled";
+      const transcriptCov: HistorySourceCoverage = transcriptRequested
+        ? (memoryOff ? "disabled" : transcriptCoverage())
+        : "disabled";
       // R13：调用方 limit 是统一上限；每个来源各自取满 limit 个候选，再轮转合并。
       const perSourceLimit = Math.max(1, Math.min(Math.floor(searchInput.limit) || 1, HISTORY_SEARCH_MAX_ITEMS));
 
-      type Candidate = { readonly build: () => Promise<HistorySearchItem> };
+      type Candidate = { readonly conversationId: string; readonly build: () => Promise<HistorySearchItem> };
       const summaryCandidates: Candidate[] = [];
       const transcriptCandidates: Candidate[] = [];
 
-      if (summaryRequested && admission.effective !== "off") {
+      if (summaryRequested && admission.effective === "active") {
         const summaryHits = await input.documentRepository.searchSummaries({
           ownerKey,
           match,
@@ -120,6 +185,7 @@ export function createMemoryHistoryQueryPort(
         });
         for (const hit of summaryHits) {
           summaryCandidates.push({
+            conversationId: hit.summary.conversationId,
             build: async () => {
               const excerpt = excerptAroundTerms(
                 hit.summary.markdown,
@@ -151,6 +217,7 @@ export function createMemoryHistoryQueryPort(
         });
         for (const hit of transcriptHits) {
           transcriptCandidates.push({
+            conversationId: hit.conversationId,
             build: async () => {
               const window = await input.evidenceReader.readTurnWindow({
                 conversationId: hit.conversationId,
@@ -182,6 +249,14 @@ export function createMemoryHistoryQueryPort(
         if (index < transcriptCandidates.length) queue.push(transcriptCandidates[index]);
       }
 
+      const discoveredConversationIds = [...new Set([
+        ...summaryCandidates.map(candidate => candidate.conversationId),
+        ...transcriptCandidates.map(candidate => candidate.conversationId),
+      ])];
+      const evidenceAdmission = await readAdmission(searchInput.owner, discoveredConversationIds);
+      if (evidenceAdmission.hasFencedConversation || evidenceAdmission.admission.effective !== "active" ||
+          evidenceAdmission.admission.generation !== initialAdmission.admission.generation ||
+          evidenceAdmission.policyRevision !== initialAdmission.policyRevision) return unavailableSearch(summaryRequested, transcriptRequested);
       const items: HistorySearchItem[] = [];
       let totalTokens = 0;
       for (const candidate of queue) {
@@ -203,16 +278,31 @@ export function createMemoryHistoryQueryPort(
       const coverage = { summary: summaryCoverage, transcript: transcriptCov };
       let fitted = items;
       while (fitted.length > 1 &&
-             countTokens(JSON.stringify({ outcome: "ok", coverage, items: fitted })) > HISTORY_SEARCH_TOTAL_MAX_TOKENS) {
+             countTokens(JSON.stringify({ status: "ok", outcome: "ok", coverage, items: fitted })) > HISTORY_SEARCH_TOTAL_MAX_TOKENS) {
         fitted = fitted.slice(0, -1);
       }
       if (fitted.length === 1 &&
-          countTokens(JSON.stringify({ outcome: "ok", coverage, items: fitted })) > HISTORY_SEARCH_TOTAL_MAX_TOKENS) {
+          countTokens(JSON.stringify({ status: "ok", outcome: "ok", coverage, items: fitted })) > HISTORY_SEARCH_TOTAL_MAX_TOKENS) {
         const shrunk = excerptFromStart(fitted[0].text, HISTORY_SEARCH_TOTAL_MAX_TOKENS - 200, countTokens);
         fitted = [{ ...fitted[0], text: shrunk.text, truncated: true }];
       }
-      const degraded = (summaryRequested && admission.effective === "off") || transcriptCov === "unavailable";
+      const degraded = (memoryOff && (summaryRequested || transcriptRequested)) || transcriptCov === "unavailable";
       const outcome = fitted.length > 0 ? "ok" : degraded ? "degraded" : "no_hit";
+      const targetConversationIds = [
+        ...(searchInput.conversationId === undefined ? [] : [searchInput.conversationId]),
+        ...fitted.map((item) => item.conversationId),
+      ];
+      const candidateSummaryRevisions = fitted
+        .filter((item) => item.type === "conversation_summary")
+        .map((item) => item.sourceRef.slice("summary:".length));
+      const stillValidSummaries = await Promise.all(candidateSummaryRevisions.map(async (revisionId) => {
+        const revision = await input.documentRepository.getSummaryRevision(revisionId);
+        return revision?.validity === "valid" && revision.ownerKey === ownerKey;
+      }));
+      if (stillValidSummaries.some((valid) => !valid) ||
+          await canReturnHistory(searchInput.owner, evidenceAdmission, targetConversationIds, true) !== "available") {
+        return unavailableSearch(summaryRequested, transcriptRequested);
+      }
       return {
         outcome,
         coverage,
@@ -230,34 +320,79 @@ export function createMemoryHistoryQueryPort(
         return { outcome: "unavailable", reason: "conversation_outside_scope" };
       }
 
+      // 每次读取都在当前边界重算准入（owner/generation/rollout 变化立即生效）；
+      // 关闭时摘要与原文都不可读——history 工具不能绕开用户开关。
+      const initialAdmission = await readAdmission(readInput.owner, [readInput.conversationId]);
+      const { admission } = initialAdmission;
+      if (admission.effective !== "active") {
+        return readInput.source === "summary"
+          ? { outcome: "unavailable", reason: "summary_disabled" }
+          : { outcome: "unavailable", reason: "transcript_disabled" };
+      }
+
       if (readInput.source === "summary") {
-        const { admission } = await readAdmission(readInput.owner);
-        if (admission.effective === "off") {
-          return { outcome: "unavailable", reason: "summary_disabled" };
+        const scope = JSON.stringify([initialAdmission.ownerKey, readInput.conversationId,
+          initialAdmission.policyRevision, admission.generation, initialAdmission.conversationGenerations.get(readInput.conversationId)]);
+        let offset = 0;
+        let revisionId: string | undefined;
+        if (readInput.cursor !== undefined) {
+          try {
+            const [body, mac, extra] = readInput.cursor.split(".");
+            if (!body || mac !== signCursor(body) || extra !== undefined || readInput.cursor.length > 8_192) throw new Error("invalid_cursor");
+            const parsed = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as { scope: string; revisionId: string; offset: number };
+            if (parsed.scope !== scope || typeof parsed.revisionId !== "string" || !Number.isInteger(parsed.offset) || parsed.offset < 0) throw new Error("stale_cursor");
+            offset = parsed.offset; revisionId = parsed.revisionId;
+          } catch { return { outcome: "unavailable", reason: "history_cursor_stale" }; }
         }
-        const summary = await input.documentRepository.getLatestValidSummary(readInput.conversationId);
-        if (summary === undefined) {
+        const summary = revisionId === undefined
+          ? await input.documentRepository.getLatestValidSummary(readInput.conversationId)
+          : await input.documentRepository.getSummaryRevision(revisionId);
+        if (summary === undefined || summary.ownerKey !== initialAdmission.ownerKey ||
+            summary.conversationId !== readInput.conversationId || summary.validity !== "valid") {
           return { outcome: "unavailable", reason: "summary_not_found" };
         }
         const budget = Math.min(Math.max(readInput.limitTokens, 1), HISTORY_READ_MAX_TOKENS);
-        const excerpt = excerptFromStart(summary.markdown, budget, countTokens);
         const coverage = await input.documentRepository.getTranscriptCoverage(readInput.conversationId);
-        // N03：摘要头与覆盖字段计入最终预算，超出时收缩正文。
-        const raw: HistoryReadResult = {
-          outcome: "ok",
-          text: `[模型生成摘要 · 覆盖至 ordinal ${summary.coveredThroughOrdinal}]\n${excerpt.text}`,
-          truncated: excerpt.truncated,
+        const stream = `[模型生成摘要 · 覆盖至 ordinal ${summary.coveredThroughOrdinal}]\n${summary.markdown}`;
+        const remaining = stream.slice(offset);
+        const pageWith = (text: string): HistoryReadResult => ({ outcome: "ok",
+          text, truncated: offset + text.length < stream.length,
           coveredThroughOrdinal: summary.coveredThroughOrdinal,
           hasUnsummarizedMessages: coverage !== undefined && coverage.indexedThroughOrdinal > summary.coveredThroughOrdinal,
-        };
-        return fitReadResultToBudget(raw, budget, countTokens);
+          ...(offset + text.length < stream.length ? { nextCursor: summaryCursor(scope, summary.revisionId, offset + text.length) } : {}),
+        });
+        const pageCost = (text: string) => countTokens(JSON.stringify({ status: "ok", ...pageWith(text) }));
+        const prefix = takePrefixByTokens(remaining, budget, pageCost);
+        if (pageCost(prefix.text) > budget) return { outcome: "unavailable", reason: "history_response_budget_too_small" };
+        const fitted = pageWith(prefix.text);
+        const currentSummary = await input.documentRepository.getSummaryRevision(summary.revisionId);
+        if (currentSummary?.validity !== "valid" || currentSummary.ownerKey !== memoryOwnerKey(readInput.owner)) {
+          return { outcome: "unavailable", reason: "summary_not_found" };
+        }
+        const finalCheck = await canReturnHistory(readInput.owner, initialAdmission, [readInput.conversationId], true);
+        if (finalCheck !== "available") {
+          return {
+            outcome: "unavailable",
+            reason: finalCheck === "conversation_fenced" ? "conversation_not_found"
+              : finalCheck === "conversation_changed" ? "conversation_changed"
+              : "summary_disabled",
+          };
+        }
+        return fitted;
       }
 
       // transcript：消息/片段级分页（N01）——页面按完整轮次填充；单轮超预算时
       // 取该轮 turn 流的字符前缀并把续读位置留在同一轮（配合 fragmentStart），
       // 剩余内容经续读可达，绝不永久跳过；扫描跨度用尽时探测下一轮，区分
       // 「token 截断」「跨度到界」与「真正读到末尾」。
-      const fromOrdinal = Math.max(readInput.fromOrdinal ?? 1, 1);
+      const requestedOrdinal = Math.max(readInput.fromOrdinal ?? 1, 1);
+      const authorizedOrdinals = await input.documentRepository.listTranscriptOrdinals({
+        ownerKey: memoryOwnerKey(readInput.owner), conversationId: readInput.conversationId,
+        fromOrdinal: requestedOrdinal, limit: HISTORY_READ_MAX_ORDINAL_SPAN + 1,
+      });
+      if (authorizedOrdinals.length === 0) return { outcome: "unavailable", reason: "transcript_not_available" };
+      const authorized = new Set(authorizedOrdinals);
+      const fromOrdinal = authorizedOrdinals[0];
       const spanEnd = fromOrdinal + HISTORY_READ_MAX_ORDINAL_SPAN - 1;
       const window = await input.evidenceReader.readTurnWindow({
         conversationId: readInput.conversationId,
@@ -272,6 +407,7 @@ export function createMemoryHistoryQueryPort(
       {
         const groups = new Map<number, EvidenceTurn[]>();
         for (const turn of window.turns) {
+          if (!authorized.has(turn.ordinal)) continue;
           const group = groups.get(turn.ordinal) ?? [];
           group.push(turn);
           groups.set(turn.ordinal, group);
@@ -279,91 +415,58 @@ export function createMemoryHistoryQueryPort(
         for (const [ordinal, group] of groups) {
           ordinalStreams.set(
             ordinal,
-            group.map((turn) => `[${turn.role} · ${turn.occurredAt}]\n${turn.text}`).join("\n\n"),
+            group.map((turn) => `[${turn.role} · ${turn.occurredAt}]\n${turn.text}`).join("\n\n") +
+              (authorizedOrdinals.some(candidate => candidate > ordinal) ? "\n\n" : ""),
           );
         }
       }
       const startFragmentOffset = Math.max(readInput.fragmentStart ?? 0, 0);
-      let cursorOrdinal = fromOrdinal;
-      let cursorOffset = fromOrdinal === (readInput.fromOrdinal ?? 1) ? startFragmentOffset : 0;
+      let fitted: HistoryReadResult = { outcome: "unavailable", reason: "transcript_not_available" };
       const lines: string[] = [];
-      let usedTokens = 0;
-      let truncated = false;
-      let lastOrdinal = fromOrdinal - 1;
-      let includedOrdinals = 0;
       for (const [ordinal, stream] of ordinalStreams) {
-        if (ordinal < cursorOrdinal) continue;
-        const offset = ordinal === cursorOrdinal ? Math.min(cursorOffset, stream.length) : 0;
-        if (offset >= stream.length) {
-          // 该轮已在前页读完（防御分支）。
-          lastOrdinal = ordinal;
-          cursorOrdinal = ordinal + 1;
-          cursorOffset = 0;
-          continue;
-        }
+        const offset = ordinal === fromOrdinal && fromOrdinal === requestedOrdinal
+          ? Math.min(startFragmentOffset, stream.length)
+          : 0;
+        if (offset >= stream.length) continue;
         const remaining = stream.slice(offset);
-        const remainingTokens = countTokens(remaining);
-        if (usedTokens + remainingTokens <= budget) {
+        const pageWith = (text: string): HistoryReadResult => {
+          const end = offset + text.length;
+          const nextOrdinal = end < stream.length
+            ? ordinal
+            : authorizedOrdinals.find(candidate => candidate > ordinal);
+          return {
+            outcome: "ok",
+            text: [...lines, text].join(""),
+            truncated: nextOrdinal !== undefined,
+            ...(nextOrdinal === undefined ? {} : { nextFromOrdinal: nextOrdinal }),
+            ...(end < stream.length ? { nextFragmentStart: end } : {}),
+          };
+        };
+        // 正文、JSON 转义和真实续读位置必须一起计入预算，发布后不能再单独裁正文。
+        const pageCost = (text: string): number => countTokens(JSON.stringify({ status: "ok", ...pageWith(text) }));
+        if (pageCost(remaining) <= budget) {
+          fitted = pageWith(remaining);
           lines.push(remaining);
-          usedTokens += remainingTokens;
-          lastOrdinal = ordinal;
-          includedOrdinals += 1;
-          cursorOrdinal = ordinal + 1;
-          cursorOffset = 0;
           continue;
         }
-        const prefix = takePrefixByTokens(remaining, budget - usedTokens, countTokens);
-        lines.push(prefix.text);
-        usedTokens += prefix.tokens;
-        lastOrdinal = ordinal;
-        includedOrdinals += 1;
-        truncated = true;
-        cursorOffset = offset + prefix.consumedChars;
+        if (lines.length > 0) break;
+        const prefix = takePrefixByTokens(remaining, budget, pageCost);
+        if (pageCost(prefix.text) > budget) return { outcome: "unavailable", reason: "history_response_budget_too_small" };
+        fitted = pageWith(prefix.text);
         break;
       }
-
-      // 扫描跨度用尽且未触发 token 截断时，探测下一轮判断是否真的读到末尾。
-      const reachedSpanEnd = ordinalStreams.size >= HISTORY_READ_MAX_ORDINAL_SPAN;
-      if (!truncated && reachedSpanEnd) {
-        const probe = await input.evidenceReader.readTurnWindow({
-          conversationId: readInput.conversationId,
-          fromOrdinal: spanEnd + 1,
-          through: { turnId: "", ordinal: spanEnd + 1, sourceRevision: 0 },
-        });
-        if (probe.turns.length > 0) truncated = true;
+      const finalCheck = await canReturnHistory(readInput.owner, initialAdmission, [readInput.conversationId], true);
+      if (finalCheck !== "available") {
+        return {
+          outcome: "unavailable",
+          reason: finalCheck === "conversation_fenced" ? "conversation_not_found"
+            : finalCheck === "conversation_changed" ? "conversation_changed"
+            : "transcript_disabled",
+        };
       }
-
-      // N03：最终返回按完整包装（JSON 转义、分页/覆盖字段）计入预算，超出时
-      // 收缩正文并保留有效续读位置。
-      const raw: HistoryReadResult = {
-        outcome: "ok",
-        text: lines.join("\n\n"),
-        truncated,
-        ...(truncated
-          ? { nextFromOrdinal: cursorOffset > 0 ? cursorOrdinal : lastOrdinal + 1 }
-          : {}),
-        ...(truncated && cursorOffset > 0 ? { nextFragmentStart: cursorOffset } : {}),
-      };
-      return fitReadResultToBudget(raw, budget, countTokens);
+      return fitted;
     },
   };
-}
-
-/**
- * N03：把完整返回（含 JSON 转义与包装字段）收缩进预算——wrapper 以「正文置空的
- * 完整序列化」精确计量，正文二分收缩；续读位置保持有效（页面仍前进）。
- */
-function fitReadResultToBudget(
-  result: HistoryReadResult,
-  budget: number,
-  countTokens: (text: string) => number,
-): HistoryReadResult {
-  if (result.outcome !== "ok") return result;
-  const wrapperCost = countTokens(JSON.stringify({ ...result, text: "" }));
-  const textBudget = budget - wrapperCost;
-  if (textBudget <= 0 || countTokens(result.text) <= textBudget) return result;
-  const shrunk = excerptFromStart(result.text, textBudget, countTokens);
-  return { ...result, text: shrunk.text, truncated: true };
 }
 
 /** 在 token 预算内取文本前缀（字符二分）；至少消费 1 个字符。 */
@@ -391,6 +494,7 @@ function takePrefixByTokens(
       high = mid - 1;
     }
   }
+  if (best < text.length && /[\uD800-\uDBFF]/u.test(text[best - 1]!)) best -= 1;
   const out = text.slice(0, Math.max(best, 1));
   return { text: out, tokens: countTokens(out), consumedChars: out.length };
 }

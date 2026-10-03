@@ -9,9 +9,10 @@ import {
 import type {
   MaintenanceModelOutcome,
   MemoryMaintenanceModelPort,
-} from "../../memory/capture/consolidation.js";
-import type { MaintenancePromptMessage } from "../../memory/capture/consolidation.js";
-import { MAINTENANCE_PROMPT_REF } from "../../memory/capture/consolidation.js";
+} from "../../memory/contracts.js";
+import type { MaintenancePromptMessage } from "../../memory/contracts.js";
+import { MAINTENANCE_PROMPT_REF } from "../../memory/capture/maintenance-prompt.js";
+import { MAINTENANCE_MAX_OUTPUT_TOKENS, MAINTENANCE_MAX_LATENCY_MS } from "../../memory/policy/maintenance-limits.js";
 import {
   createAuxiliaryModelChannel,
   createConfigCenterApiKeyResolver,
@@ -35,11 +36,6 @@ import {
  * - 返回事实：本次请求实际返回的内容块与 usage 由通道上报。
  */
 
-/** 输出上限：双正文 + JSON 开销（正式设计 §13，实验参数，不照搬旧 1024 限制）。 */
-const MAINTENANCE_MAX_OUTPUT_TOKENS = 12_000;
-/** 后台整理不阻塞主链路，但也不允许无限挂起占用单飞 worker。 */
-const MAINTENANCE_MAX_LATENCY_MS = 120_000;
-
 function unavailable(reason: string): MaintenanceModelOutcome {
   return { status: "unavailable", reason };
 }
@@ -56,13 +52,14 @@ export function createConfigCenterConsolidationModel(input: {
 }): MemoryMaintenanceModelPort {
   const createModelChannel = input.createModelChannel ?? createAuxiliaryModelChannel;
   return {
-    async generate({ messages }) {
+    async generate({ messages, maxLatencyMs }) {
+      const deadline = Date.now() + Math.max(0, Math.min(MAINTENANCE_MAX_LATENCY_MS, maxLatencyMs ?? MAINTENANCE_MAX_LATENCY_MS));
       const provider = await input.configCenter.getModelProviderConfig();
       const configuredMode = provider.defaultAiMode;
       if (
         configuredMode === "none" ||
         provider.enabled === false ||
-        provider.secretConfigured !== true
+        (configuredMode !== "native" && provider.secretConfigured !== true)
       ) {
         return unavailable("model_provider_not_configured");
       }
@@ -75,7 +72,8 @@ export function createConfigCenterConsolidationModel(input: {
         if (error instanceof ModelRuntimeConfigurationError) return unavailable("model_provider_not_configured");
         throw error;
       }
-      const channel = createModelChannel({
+      const channel = await createModelChannel({
+        configCenter: input.configCenter,
         resolved,
         profileId: provider.profileId,
         providerKind: provider.providerKind,
@@ -88,6 +86,7 @@ export function createConfigCenterConsolidationModel(input: {
         ...(provider.piProviderId === undefined ? {} : { piProviderId: provider.piProviderId }),
       });
 
+      if (Date.now() >= deadline) return unavailable("model_request_deadline_exceeded");
       const requestId = createId("model-request");
       let textOutput: string | undefined;
       try {
@@ -110,7 +109,7 @@ export function createConfigCenterConsolidationModel(input: {
           },
           budget: {
             maxOutputTokens: MAINTENANCE_MAX_OUTPUT_TOKENS,
-            maxLatencyMs: MAINTENANCE_MAX_LATENCY_MS,
+            maxLatencyMs: Math.max(1, deadline - Date.now()),
           },
           sensitivity: "internal",
           requestedAt: nowIso(),

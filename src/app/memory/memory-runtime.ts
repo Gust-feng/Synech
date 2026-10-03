@@ -22,7 +22,7 @@ import type {
 } from "./contracts.js";
 
 /**
- * Memory Feature 运行时装配（0.6.0 文档产物）。
+ * Memory Feature 运行时装配：同一仓储拥有条目、修订和派生概览。
  * - BackgroundPort：绑定读取 + 每次 freeze 的供给复核（effective=active + generation
  *   + validity）；缺省（无文档仓储）回退 Noop，保留"可缺席组合"；
  * - HistoryQueryPort：search_history / read_history 的查询逻辑（scope 注入、回表复核、
@@ -59,7 +59,6 @@ export function createMemoryRuntime(input: CreateMemoryRuntimeInput): MemoryRunt
   return {
     backgroundPort: realAvailable
       ? createMemoryBackgroundPort({
-          controlRepository: input.controlRepository,
           documentRepository,
         })
       : createNoopMemoryBackgroundPort(),

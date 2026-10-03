@@ -1,82 +1,49 @@
-import { memoryOwnerKey, type MemoryOwner } from "../../../domain/memory/index.js";
+import { memoryOwnerKey } from "../../../domain/memory/index.js";
+import type { ConversationOwner } from "../../../domain/execution-scope/contracts.js";
 import type {
   MemoryBackgroundPort,
-  SpaceMemoryBackground,
+  OwnerMemoryBackground,
 } from "../contracts.js";
-import { resolveAdmissionFromPolicy } from "../policy/policy-snapshot.js";
 import type { MemoryDocumentRepository } from "../store/content-repository.js";
-import type { MemoryControlRepository } from "../store/control-repository.js";
 
 /**
  * 背景供给端口实现（正式设计 §9）：
- * - getActiveSpaceMemoryHead：新会话绑定时读取当前 head（只读引用，不复制正文所有权）；
- * - resolveSupplyableBackground：每次 provider 请求冻结前复核 effective=active、
- *   generation 与绑定 revision 的 validity；任一不满足返回 undefined（无贡献），
- *   绝不自动换绑到新版本。
+ * - getActiveOwnerMemoryHead：新会话绑定时读取当前 head（只读引用，不复制正文所有权）；
+ * - resolveSupplyableBackground：事务仓储是政策、结构身份、generation、revision
+ *   validity、精确依赖撤销及分支支持的唯一权威供给口；来源删除仅动态报告 readback；此处只映射模型 DTO，
+ *   不满足时返回 undefined（无贡献），绝不自动换绑到新版本。
  */
+function projectBackground(current: NonNullable<Awaited<ReturnType<MemoryDocumentRepository["getSupplyableMemoryRevision"]>>>): OwnerMemoryBackground {
+  return { revisionId: current.revisionId, revision: current.revision, origin: current.origin,
+    markdown: current.markdown, generation: current.generation, updatedAt: current.updatedAt, sourceStates: current.sourceStates };
+}
+
 export function createMemoryBackgroundPort(deps: {
-  readonly controlRepository: MemoryControlRepository;
-  readonly documentRepository: MemoryDocumentRepository;
+  readonly documentRepository: Pick<
+    MemoryDocumentRepository,
+    "getActiveOwnerMemoryHead" | "getSupplyableMemoryRevision"
+  >;
 }): MemoryBackgroundPort {
   return {
-    async getActiveSpaceMemoryHead(owner: MemoryOwner): Promise<SpaceMemoryBackground | undefined> {
-      const head = await deps.documentRepository.getActiveSpaceMemoryHead(memoryOwnerKey(owner));
-      return head === undefined ? undefined : {
-        revisionId: head.revisionId,
-        revision: head.revision,
-        origin: head.origin,
-        markdown: head.markdown,
-        generation: head.generation,
-        updatedAt: head.updatedAt,
-      };
+    async getActiveOwnerMemoryHead(owner: ConversationOwner): Promise<OwnerMemoryBackground | undefined> {
+      const head = await deps.documentRepository.getActiveOwnerMemoryHead(memoryOwnerKey(owner));
+      if (head === undefined) return undefined;
+      const current = await deps.documentRepository.getSupplyableMemoryRevision({ ownerKey: memoryOwnerKey(owner), revisionId: head.revisionId, generation: head.generation });
+      return current === undefined ? undefined : projectBackground(current);
     },
 
     async resolveSupplyableBackground(input: {
-      readonly owner: MemoryOwner;
+      readonly owner: ConversationOwner;
       readonly revisionId: string;
       readonly generation: number;
-    }): Promise<SpaceMemoryBackground | undefined> {
-      const ownerKey = memoryOwnerKey(input.owner);
-      const [policyRows, ownerLifecycle, row] = await Promise.all([
-        deps.controlRepository.readAllPolicy(),
-        deps.controlRepository.getLifecycle(ownerKey),
-        deps.documentRepository.getSpaceMemoryRevision(input.revisionId),
-      ]);
-      if (row === undefined || row.validity !== "valid") return undefined;
-      // 绑定携带的 generation 与当前 owner generation 不一致（clear/删除）→ 停止供给。
-      if (row.generation !== input.generation) return undefined;
-      // R05：来源会话的删除 fence 是供给边界的权威条件之一——即使依赖失效写入
-      // 尚未完成（清理停滞/重试中），引用被 fence 会话的文档也不得继续注入。
-      const sources = await deps.documentRepository.listSpaceDocSources(row.revisionId);
-      const sourceConversations = [...new Set(
-        sources
-          .filter((source) => source.depKind === "conversation_range" && source.conversationId !== null)
-          .map((source) => `conversation:${source.conversationId}`),
-      )];
-      for (const conversationKey of sourceConversations) {
-        const conversationLifecycle = await deps.controlRepository.getLifecycle(conversationKey);
-        if (conversationLifecycle !== undefined &&
-            (conversationLifecycle.fenceState === "fenced" || conversationLifecycle.fenceState === "tombstone")) {
-          return undefined;
-        }
-      }
-      const admission = resolveAdmissionFromPolicy({
-        owner: input.owner,
-        conversationId: "__memory_background__",
-        policyRows,
-        ownerLifecycle,
-        conversationLifecycle: undefined,
+    }): Promise<OwnerMemoryBackground | undefined> {
+      const current = await deps.documentRepository.getSupplyableMemoryRevision({
+        ownerKey: memoryOwnerKey(input.owner),
+        revisionId: input.revisionId,
+        generation: input.generation,
       });
-      // shadow 只整理不注入；供给要求 active。
-      if (admission.effective !== "active") return undefined;
-      return {
-        revisionId: row.revisionId,
-        revision: row.revision,
-        origin: row.origin,
-        markdown: row.markdown,
-        generation: row.generation,
-        updatedAt: row.updatedAt,
-      };
+      if (current === undefined) return undefined;
+      return projectBackground(current);
     },
   };
 }

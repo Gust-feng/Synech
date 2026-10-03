@@ -5,9 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { SqliteRuntimeDatabase } from "../dist/adapters/runtime-storage/index.js";
-import {
-  createSqliteMemoryControlRepository,
-} from "../dist/app/memory/index.js";
+import { createSqliteMemoryControlRepository } from "../dist/app/memory/composition.js";
 
 async function withStore(run) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "synech-memory-store-"));
@@ -16,6 +14,8 @@ async function withStore(run) {
   const repository = createSqliteMemoryControlRepository(database, {
     idFactory: (() => { let n = 0; return () => `memjob-${++n}`; })(),
   });
+  await repository.setPolicy({ key: "consent:global", kind: "global_consent", scopeOwnerKey: null, enabled: true });
+  await repository.setPolicy({ key: "rollout:global", kind: "rollout", scopeOwnerKey: "active", enabled: true });
   try {
     await run({ repository, database, filePath });
   } finally {
@@ -32,7 +32,7 @@ const signal = (overrides = {}) => ({
   eligibleAt: 1_000,
   now: 900,
   generation: 0,
-  policyRevision: "p1",
+  policyRevision: "g1:r1:gen0",
   ...overrides,
 });
 
@@ -42,6 +42,8 @@ test("durable job boundary survives repository/database recreation", async () =>
   try {
     const first = new SqliteRuntimeDatabase(filePath);
     const repo1 = createSqliteMemoryControlRepository(first);
+    await repo1.setPolicy({ key: "consent:global", kind: "global_consent", scopeOwnerKey: null, enabled: true });
+    await repo1.setPolicy({ key: "rollout:global", kind: "rollout", scopeOwnerKey: "active", enabled: true });
     await repo1.acceptConversationSignal(signal());
     first.close();
 
@@ -126,6 +128,19 @@ test("due jobs are ordered by eligibility and only include due tasks", async () 
     }));
     const due = await repository.listDueJobs({ now: 1_500, limit: 8 });
     assert.deepEqual(due.map((job) => job.conversationId), ["c-early"]);
+  });
+});
+
+test("global and conversation fences reject stale intake across removal and branch generations", async () => {
+  await withStore(async ({ repository }) => {
+    const global = await repository.fenceForRemoval("global");
+    assert.equal(await repository.acceptConversationSignal(signal()), undefined);
+    await repository.setLifecycleFence("global", "none", null, global.generation);
+    const branch = await repository.fenceForRemoval("conversation:c1");
+    assert.equal(await repository.acceptConversationSignal(signal()), undefined);
+    await repository.setLifecycleFence("conversation:c1", "none", null, branch.generation);
+    assert.equal(await repository.acceptConversationSignal(signal({ conversationGeneration: 0 })), undefined);
+    assert.ok(await repository.acceptConversationSignal(signal({ conversationGeneration: branch.generation })));
   });
 });
 

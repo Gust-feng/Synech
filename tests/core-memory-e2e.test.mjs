@@ -5,17 +5,8 @@ import path from "node:path";
 import test from "node:test";
 
 import { SqliteRuntimeDatabase } from "../dist/adapters/runtime-storage/index.js";
-import {
-  POLICY_KEY,
-  createMemoryCaptureRuntime,
-  createMemoryBackgroundPort,
-  createMemoryHistoryQueryPort,
-  createSqliteMemoryControlRepository,
-  createSqliteMemoryDocumentRepository,
-  maintainConversationJob,
-  renderMemoryBackgroundBlock,
-  spaceParticipationKey,
-} from "../dist/app/memory/index.js";
+import { renderMemoryBackgroundBlock } from "../dist/app/memory/index.js";
+import { POLICY_KEY, createMemoryCaptureRuntime, createMemoryBackgroundPort, createMemoryHistoryQueryPort, createSqliteMemoryControlRepository, createSqliteMemoryDocumentRepository, maintainConversationJob } from "../dist/app/memory/composition.js";
 
 /**
  * 0.6.0 主链路端到端：稳定信号接单（含 transcript 索引）→ 单请求双输出整理
@@ -28,7 +19,6 @@ async function withChain(run, options = {}) {
   const control = createSqliteMemoryControlRepository(database);
   const documents = createSqliteMemoryDocumentRepository(database);
   await control.setPolicy({ key: POLICY_KEY.consent, kind: "global_consent", scopeOwnerKey: null, enabled: true });
-  await control.setPolicy({ key: spaceParticipationKey("s1"), kind: "space_participation", scopeOwnerKey: "space:s1", enabled: true });
   await control.setPolicy({ key: POLICY_KEY.rollout, kind: "rollout", scopeOwnerKey: "active", enabled: true });
 
   const turns = [];
@@ -51,10 +41,18 @@ async function withChain(run, options = {}) {
       };
     },
   };
-  const model = options.model ?? { async generate() {
-    return { status: "completed", text: JSON.stringify({
-      conversationSummary: { markdown: "## 累计总结\n用户确认出版项目首批预算 18000 元。", sourceRefs: ["source:u1"] },
-      longTermUpdate: { markdown: "# Space Memory\n\n## 稳定事实\n- [用户陈述，2026-09-05] 首批预算上限 18000 元。", sourceRefs: ["source:u1"] },
+  let modelCalls = 0;
+  const model = options.model ?? { async generate({ messages }) {
+    modelCalls += 1;
+    const payload = JSON.parse(messages.find(message => message.role === "user").content);
+    const entryId = payload.availableNewEntryIds[0];
+    const evidence = payload.evidence.find(item => item.role === "user");
+    return { status: "completed", text: JSON.stringify({ status: "ready",
+      conversationSummary: { markdown: "## 累计总结\n用户确认出版项目首批预算 18000 元。", sourceRefs: [evidence.id] },
+      mutations: [{ operation: "create", entryId, expectedRevisionId: null, kind: "initial",
+        markdown: "[用户陈述] 首批预算上限 18000 元。", applicability: "出版项目", occurredAt: null, reportedAt: evidence.reportedAt,
+        reason: null, topicIds: [], related: [], sourceIds: [evidence.sourceId], retractsRevisionIds: [] }], topics: [],
+      overview: { markdown: "出版项目首批预算上限 18000 元。", entryIds: [entryId] },
     }) };
   } };
   const deps = {
@@ -78,7 +76,7 @@ async function withChain(run, options = {}) {
     },
   });
   try {
-    await run({ control, documents, capture, background, history, deps, model });
+    await run({ control, documents, capture, background, history, deps, model, getModelCalls: () => modelCalls });
   } finally {
     database.close();
     await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
@@ -94,7 +92,7 @@ async function acceptAndClaim(control, overrides = {}) {
     eligibleAt: 100,
     now: 0,
     generation: 0,
-    policyRevision: "g1:r1:s1:gen0",
+    policyRevision: "g1:r1:gen0",
     ...overrides,
   });
   const [queued] = await control.listJobsByStatus("queued");
@@ -104,7 +102,7 @@ async function acceptAndClaim(control, overrides = {}) {
 }
 
 test("end-to-end: accept → maintain → bind → inject → search/read", async () => {
-  await withChain(async ({ control, capture, deps, background, history, documents }) => {
+  await withChain(async ({ control, capture, deps, background, history, documents, getModelCalls }) => {
     // 1. 稳定信号接单。
     const acceptance = await capture.acceptStableSignal({
       owner: { kind: "space", id: "s1" },
@@ -116,11 +114,11 @@ test("end-to-end: accept → maintain → bind → inject → search/read", asyn
     // 2. 整理批次（一次请求双输出；领取由管线 CAS 完成）。
     const [queued] = await control.listJobsByStatus("queued");
     const outcome = await maintainConversationJob(deps, queued.jobId);
-    assert.equal(outcome.status, "completed");
+    assert.equal(outcome.status, "completed", JSON.stringify(outcome));
     assert.equal(outcome.longTermUpdated, true);
 
     // 3. 新会话绑定当前 head。
-    const head = await background.getActiveSpaceMemoryHead({ kind: "space", id: "s1" });
+    const head = await background.getActiveOwnerMemoryHead({ kind: "space", id: "s1" });
     assert.ok(head.revisionId.length > 0);
 
     // 4. 背景供给（effective=active + generation 一致）。
@@ -131,7 +129,7 @@ test("end-to-end: accept → maintain → bind → inject → search/read", asyn
     });
     assert.ok(supplied !== undefined);
     const block = renderMemoryBackgroundBlock(supplied);
-    assert.ok(block.includes("[Space memory — historical background]"));
+    assert.ok(block.includes("[Memory — historical background]"));
     assert.ok(block.includes("18000"));
 
     // 5. search_history 命中摘要与原文（含 transcript 索引）。
@@ -167,6 +165,14 @@ test("end-to-end: accept → maintain → bind → inject → search/read", asyn
     assert.equal(transcript.outcome, "ok");
     assert.ok(transcript.text.includes("[user · 2026-09-05T00:00:00.000Z]"));
 
+    const beforeQueryCalls = getModelCalls();
+    const entries = await history.searchEntries({ owner: { kind: "space", id: "s1" }, query: "预算", limit: 8 });
+    assert.equal(entries.outcome, "ok");
+    assert.equal(entries.items[0].role, "current");
+    const entryRead = await history.readEntry({ owner: { kind: "space", id: "s1" }, entryId: entries.items[0].entry.entryId, includeRelated: true, includeHistory: true, limitTokens: 6_000 });
+    assert.equal(entryRead.outcome, "ok");
+    assert.ok(entryRead.item.revision.markdown.includes("18000"));
+    assert.equal(getModelCalls(), beforeQueryCalls, "front queries never call the maintenance model");
     void documents;
   });
 });
@@ -189,5 +195,44 @@ test("cross-space access is rejected by structural identity, not by result filte
     });
     assert.equal(read.outcome, "unavailable");
     assert.equal(read.reason, "conversation_outside_scope");
+  });
+});
+
+test("background supply is owner-isolated across Space and second Space", async () => {
+  await withChain(async ({ documents, background }) => {
+    const publish = async (owner, entryId, markdown) => {
+      const result = await documents.recordUserMemoryEdit({ owner, requestId: `r-${entryId}`, expectedGeneration: 0, now: 10,
+        edit: { operation: "create", entryId, expectedRevisionId: null, kind: "initial", markdown,
+          applicability: null, occurredAt: null, reason: null, topicIds: [], related: [], retractsRevisionIds: [] } });
+      return documents.getOwnerMemoryRevision(result.overviewRevisionId);
+    };
+    const spaceHead = await publish({ kind: "space", id: "s1" }, "entry-space", "# space");
+    const workspaceHead = await publish({ kind: "space", id: "s2" }, "entry-workspace", "# workspace");
+
+    // 每个 owner 只读自己的 head。
+    assert.equal((await background.getActiveOwnerMemoryHead({ kind: "space", id: "s1" })).revisionId, spaceHead.revisionId);
+    assert.equal((await background.getActiveOwnerMemoryHead({ kind: "space", id: "s2" })).revisionId, workspaceHead.revisionId);
+
+    // 用另一个 owner 的 opaque revisionId + 其真实 generation 冒充绑定：结构身份必须拒绝。
+    assert.equal(await background.resolveSupplyableBackground({
+      owner: { kind: "space", id: "s1" },
+      revisionId: workspaceHead.revisionId,
+      generation: workspaceHead.generation,
+    }), undefined);
+
+    // generation 不一致（clear/删除推进后）同样拒绝，即使 revision 行仍在。
+    assert.equal(await background.resolveSupplyableBackground({
+      owner: { kind: "space", id: "s1" },
+      revisionId: spaceHead.revisionId,
+      generation: spaceHead.generation + 1,
+    }), undefined);
+
+    // second Space owner 与 space owner 同源：自己的绑定正常供给。
+    const supplied = await background.resolveSupplyableBackground({
+      owner: { kind: "space", id: "s2" },
+      revisionId: workspaceHead.revisionId,
+      generation: workspaceHead.generation,
+    });
+    assert.equal(supplied.markdown, "# workspace");
   });
 });

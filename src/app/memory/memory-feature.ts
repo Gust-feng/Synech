@@ -1,72 +1,38 @@
 /**
- * Memory Feature facade：跨子目录（admin / capture / recall / lifecycle /
- * store / policy）的统一公开面。本文件只承担"薄转发"，不引入新的不变量。
+ * Memory Feature facade：Memory 命令与查询的唯一稳定入口。
  *
- * 现有 surface：
- * - commands: setConsent / setSpaceParticipation /
- *   clearImplicitMemory → 直转 MemoryAdminApplication；
- * - queries: capability/diagnostics → 直转对应 Application/query port。
- *
- * captureRuntime / contextProvider / lifecycle 仍由 Composition Root 装配；本
- * facade 不把它们伪装成可由 Route 直接组合的 Repository。
- *
- * 不变量：
- * - facade 不缓存任何 policy 状态；每次调用都转交 admin 重算；
- * - facade 不引入 owner admission：admission 与 owner 存在性已经在 admin 层
- *   完成，facade 不再"包一层 serialize"。
+ * Route 只解析输入并调用一个 facade 方法；跨 Feature 的 owner 存在性、会话高水位
+ * 和 owner admission 通过 Composition Root 注入窄查询/控制口，不由 Route 编排。
  */
 
 import type { MemoryOwner } from "../../domain/memory/index.js";
+import type { ConversationOwner } from "../../domain/execution-scope/contracts.js";
 import type {
-  ClearImplicitMemoryResult,
-  MemoryCapabilityQuery,
+  ClearMemoryResult,
+  HistorySearchResult,
   MemoryAdminApplication,
   MemoryCapabilityStatus,
-  MemoryDiagnosticSnapshot,
   MemoryDiagnosticQuery,
   MemoryDiagnosticSearchInput,
-  HistorySearchResult,
+  MemoryDiagnosticSnapshot,
   MemoryRolloutMode,
   PolicyRevision,
-  WriteSpaceMemoryResult,
 } from "./contracts.js";
 
+import type { MemoryEntryAdminPort } from "./entry-contracts.js";
+
 export type MemoryFeatureCommands = {
-  setRollout(input: { rollout: MemoryRolloutMode }): Promise<{ policyRevision: PolicyRevision }>;
-  setConsent(input: { globalConsent: boolean }): Promise<{ policyRevision: PolicyRevision }>;
-  setSpaceParticipation(input: { spaceId: string; enabled: boolean }): Promise<{ policyRevision: PolicyRevision }>;
-  clearImplicitMemory(input: { scope: MemoryOwner }): Promise<ClearImplicitMemoryResult>;
-  writeSpaceMemory(input: {
-    readonly spaceId: string;
-    readonly expectedRevisionId: string | null;
-    readonly markdown: string;
-    readonly requestId: string;
-  }): Promise<WriteSpaceMemoryResult>;
+  setEnabled(input: { readonly enabled: boolean }): Promise<{ readonly policyRevision: PolicyRevision }>;
+  setRollout(input: { readonly rollout: MemoryRolloutMode }): Promise<{ readonly policyRevision: PolicyRevision }>;
+  clearMemory(input: { readonly scope: MemoryOwner }): Promise<ClearMemoryResult>;
+  updateMemory: MemoryEntryAdminPort["updateMemory"];
 };
 
 export type MemoryFeatureQueries = {
-  getCapabilityStatus(input?: MemoryCapabilityQuery): Promise<MemoryCapabilityStatus>;
+  getStatus(input?: { readonly owner?: ConversationOwner }): Promise<MemoryCapabilityStatus>;
+  getMemoryView: MemoryEntryAdminPort["getMemoryView"];
   getDiagnosticSnapshot(input?: MemoryDiagnosticQuery): Promise<MemoryDiagnosticSnapshot>;
   searchDiagnosticHistory(input: MemoryDiagnosticSearchInput): Promise<HistorySearchResult>;
-  getSpaceMemoryView(input: { readonly spaceId: string }): Promise<{
-    readonly document: {
-      readonly revisionId: string;
-      readonly revision: number;
-      readonly origin: "model" | "user_edit";
-      readonly markdown: string;
-      readonly generation: number;
-      readonly updatedAt: number;
-    } | undefined;
-    readonly sources: readonly {
-      readonly conversationId: string;
-      readonly fromOrdinal: number;
-      readonly toOrdinal: number;
-      readonly title?: string;
-      readonly sourceTime?: string;
-    }[];
-    readonly summaryCount: number;
-    readonly lastMaintenanceAt: number | null;
-  }>;
 };
 
 export type MemoryFeature = {
@@ -84,43 +50,50 @@ export function createMemoryFeature(input: {
   const admin = input.adminApplication;
   const diagnostics = input.diagnostics ?? {
     async getSnapshot(): Promise<MemoryDiagnosticSnapshot> {
-      return { enabled: false, generatedAt: Date.now(), capability: null, jobs: { queued: 0, running: 0, done: 0, failed: 0 },
-        recentOutcomes: [], jobRows: [], jobRowsTruncated: false, context: null, limits: null };
+      return {
+        enabled: false,
+        generatedAt: Date.now(),
+        capability: null,
+        jobs: { queued: 0, running: 0, done: 0, failed: 0 },
+        recentOutcomes: [],
+        jobRows: [],
+        jobRowsTruncated: false,
+        context: null,
+        limits: null,
+      };
     },
     async searchHistory(): Promise<HistorySearchResult> {
       return { outcome: "degraded", coverage: { summary: "unavailable", transcript: "unavailable" }, items: [] };
     },
   };
+
   return {
     commands: {
+      async setEnabled(args) {
+        return await admin.setEnabled(args);
+      },
       async setRollout(args) {
         return await admin.setRollout(args);
       },
-      async setConsent(args) {
-        return await admin.setConsent(args);
+      async clearMemory(args) {
+        return await admin.clearMemory(args);
       },
-      async setSpaceParticipation(args) {
-        return await admin.setSpaceParticipation(args);
-      },
-      async clearImplicitMemory(args) {
-        return await admin.clearImplicitMemory(args);
-      },
-      async writeSpaceMemory(args) {
-        return await admin.writeSpaceMemory(args);
+      async updateMemory(args) {
+        return await admin.updateMemory(args);
       },
     },
     queries: {
-      async getCapabilityStatus(input) {
-        return await admin.getCapabilityStatus(input);
+      async getStatus(args) {
+        return await admin.getStatus(args);
+      },
+      async getMemoryView(args) {
+        return await admin.getMemoryView(args);
       },
       async getDiagnosticSnapshot(args) {
         return await diagnostics.getSnapshot(args);
       },
       async searchDiagnosticHistory(args) {
         return await diagnostics.searchHistory(args);
-      },
-      async getSpaceMemoryView(args) {
-        return await admin.getSpaceMemoryView(args);
       },
     },
   };

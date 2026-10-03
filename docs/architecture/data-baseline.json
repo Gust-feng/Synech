@@ -1,7 +1,7 @@
 {
   "productNamespace": "synech",
   "dataFormatId": "synech/v1",
-  "schemaFingerprint": "7aac2c46faab82d0118f8315e7ca866539add3b33e3c8c49fc7ee1fb4b3d3deb",
+  "schemaFingerprint": "67e7d20066433f9c4795649184419f6c98fc589d25cf28f862a9de216bd35e4a",
   "migrationOwners": {
     "conversation-lifecycle": 1,
     "managed-assets": 1,
@@ -15,7 +15,7 @@
   "migrationChecksums": {
     "conversation-lifecycle/1": "ca7ecb9854e63dae1438816b573cb57eceb9625167f690dad50b975202ce7a2a",
     "managed-assets/1": "d81174fdfb81bfda1a49d8c62029a326f297a776818dd74328e13ef65d697495",
-    "memory/1": "3d349f2d045023e2c80711b6701a2168fea7b41f0a09594ee649387d0187c2e6",
+    "memory/1": "f10e653fb34c590ff144e36c3ca7144effed7a72cbebb2a4f74e4cbeb593b11b",
     "personal-knowledge/1": "765a1c04ff9d0be57bf1e5285f6733f7308ae43fdb8b86b96fd0b03c2415c5a1",
     "research/1": "906e8d19a80c954aa44d38657357d7f7f87eb6e4218046a6168ac15aa1aba87e",
     "space-conversation-deletion/1": "fcc367ac68ae21c2e453a683ee1aa1058338f320fab41348dc3b589491fe4b11",

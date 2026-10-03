@@ -1,54 +1,55 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
 import type { MemoryOwner } from "../../domain/memory/index.js";
-import type { MemoryFeature } from "../memory/index.js";
+import type { ConversationOwner } from "../../domain/execution-scope/contracts.js";
+import type { MemoryFeature, UpdateMemoryEntryInput } from "../memory/index.js";
 import { PanelHttpError, readJsonBody, writeJson } from "./http-utils.js";
 
-const memoryOwnerSchema = z.discriminatedUnion("kind", [
+const conversationOwnerSchema = z.object({ kind: z.literal("space"), id: z.string().min(1) }).strict();
+
+const memoryOwnerSchema = z.union([
   z.object({ kind: z.literal("global") }).strict(),
-  z.object({ kind: z.literal("space"), id: z.string().min(1) }).strict(),
-  z.object({ kind: z.literal("workspace"), id: z.string().min(1) }).strict(),
+  conversationOwnerSchema,
 ]);
 
-const setConsentSchema = z.object({ op: z.literal("setConsent"), globalConsent: z.boolean() }).strict();
+const setEnabledSchema = z.object({ op: z.literal("setEnabled"), enabled: z.boolean() }).strict();
 const setRolloutSchema = z.object({ op: z.literal("setRollout"), rollout: z.enum(["off", "shadow", "active"]) }).strict();
-const setSpaceSchema = z.object({ op: z.literal("setSpaceParticipation"), spaceId: z.string().min(1), enabled: z.boolean() }).strict();
-const clearSchema = z.object({ op: z.literal("clearImplicitMemory"), scope: memoryOwnerSchema }).strict();
-const writeMemorySchema = z.object({
-  op: z.literal("writeSpaceMemory"),
-  spaceId: z.string().min(1),
-  // expectedRevisionId 为 null 表示当前没有有效文档（首次由用户创建正文）。
-  expectedRevisionId: z.string().min(1).nullable(),
-  markdown: z.string().max(65_536),
-  requestId: z.string().min(1),
+const clearSchema = z.object({ op: z.literal("clearMemory"), scope: memoryOwnerSchema }).strict();
+const updateMemorySchema = z.object({
+  op: z.literal("updateMemory"),
+  owner: conversationOwnerSchema,
+  requestId: z.string().trim().min(1).max(256),
+  // Semantic edit validation belongs to the single Application command.
+  edit: z.unknown(),
 }).strict();
 const mutationBodySchema = z.discriminatedUnion("op", [
-  setConsentSchema,
+  setEnabledSchema,
   setRolloutSchema,
-  setSpaceSchema,
   clearSchema,
-  writeMemorySchema,
+  updateMemorySchema,
 ]);
 
 const diagnosticQuerySchema = z.object({
-  spaceId: z.string().min(1).max(256).optional(),
+  ownerKind: z.literal("space").optional(),
+  ownerId: z.string().min(1).max(256).optional(),
   conversationId: z.string().min(1).max(256).optional(),
 }).strict();
 const diagnosticSearchSchema = diagnosticQuerySchema.extend({
-  spaceId: z.string().min(1).max(256),
+  ownerKind: z.literal("space"),
+  ownerId: z.string().min(1).max(256),
   query: z.string().trim().min(1).max(2048),
   source: z.enum(["summary", "transcript", "all"]).default("all"),
 });
 
-export async function handleMemoryCapabilityRoute(
+export async function handleMemoryStatusRoute(
   feature: Pick<MemoryFeature, "queries">,
   request: IncomingMessage,
   response: ServerResponse,
   url: URL,
 ): Promise<boolean> {
-  if (request.method !== "GET" || url.pathname !== "/api/memory/capability") return false;
-  const query = capabilityQueryFromUrl(url);
-  const status = await feature.queries.getCapabilityStatus(query);
+  if (request.method !== "GET" || url.pathname !== "/api/memory/status") return false;
+  const owner = optionalOwnerFromUrl(url);
+  const status = await feature.queries.getStatus(owner === undefined ? {} : { owner });
   writeJson(response, 200, { ok: true, status });
   return true;
 }
@@ -63,28 +64,52 @@ export async function handleMemoryDiagnosticsRoute(
   if (url.pathname === "/api/memory/diagnostics/search") {
     const query = diagnosticSearchSchema.safeParse(Object.fromEntries(url.searchParams));
     if (!query.success) throw new PanelHttpError(400, "memory_diagnostic_query_invalid", "检索参数无效。");
-    writeJson(response, 200, { ok: true, result: await feature.queries.searchDiagnosticHistory(query.data) });
+    writeJson(response, 200, {
+      ok: true,
+      result: await feature.queries.searchDiagnosticHistory({
+        owner: { kind: query.data.ownerKind, id: query.data.ownerId },
+        ...(query.data.conversationId === undefined ? {} : { conversationId: query.data.conversationId }),
+        query: query.data.query,
+        source: query.data.source,
+      }),
+    });
     return true;
   }
   if (url.pathname !== "/api/memory/diagnostics") return false;
-  const query = diagnosticQuerySchema.safeParse(Object.fromEntries(url.searchParams));
-  if (!query.success) throw new PanelHttpError(400, "memory_diagnostic_query_invalid", "诊断范围无效。");
-  writeJson(response, 200, { ok: true, diagnostics: await feature.queries.getDiagnosticSnapshot(query.data) });
+  const parsed = diagnosticQuerySchema.safeParse(Object.fromEntries(url.searchParams));
+  if (!parsed.success || (parsed.data.ownerKind === undefined) !== (parsed.data.ownerId === undefined)) {
+    throw new PanelHttpError(400, "memory_diagnostic_query_invalid", "诊断范围无效。");
+  }
+  const query = parsed.data.ownerKind === undefined
+    ? { ...(parsed.data.conversationId === undefined ? {} : { conversationId: parsed.data.conversationId }) }
+    : {
+        owner: { kind: parsed.data.ownerKind, id: parsed.data.ownerId! },
+        ...(parsed.data.conversationId === undefined ? {} : { conversationId: parsed.data.conversationId }),
+      };
+  writeJson(response, 200, { ok: true, diagnostics: await feature.queries.getDiagnosticSnapshot(query) });
   return true;
 }
 
-export async function handleMemorySpaceViewRoute(
+export async function handleMemoryDocumentRoute(
   feature: Pick<MemoryFeature, "queries">,
   request: IncomingMessage,
   response: ServerResponse,
   url: URL,
 ): Promise<boolean> {
-  if (request.method !== "GET" || url.pathname !== "/api/memory/space") return false;
-  const spaceId = url.searchParams.get("spaceId");
-  if (spaceId === null || spaceId.length === 0) {
-    throw new PanelHttpError(400, "memory_space_view_invalid", "缺少 spaceId。");
-  }
-  const view = await feature.queries.getSpaceMemoryView({ spaceId });
+  if (request.method !== "GET" || url.pathname !== "/api/memory/document") return false;
+  const owner = requiredOwnerFromUrl(url, "memory_document_query_invalid", "缺少有效 owner。");
+  const page = z.object({
+    ownerKind: z.literal("space"), ownerId: z.string().min(1),
+    entryId: z.string().min(1).max(256).optional(),
+    limit: z.coerce.number().int().min(1).max(50).optional(),
+    cursor: z.string().min(1).max(4096).optional(),
+  }).strict().safeParse(Object.fromEntries(url.searchParams));
+  if (!page.success) throw new PanelHttpError(400, "memory_document_query_invalid", "记忆分页参数无效。");
+  const { entryId, limit, cursor } = page.data;
+  const view = await feature.queries.getMemoryView({ owner,
+    ...(entryId === undefined ? {} : { entryId }), ...(limit === undefined ? {} : { limit }),
+    ...(cursor === undefined ? {} : { cursor }),
+  });
   writeJson(response, 200, { ok: true, view });
   return true;
 }
@@ -99,51 +124,51 @@ export async function handleMemoryMutationRoute(
   if (!parsed.success) throw new PanelHttpError(400, "memory_mutation_invalid", parsed.error.message);
   const input = parsed.data;
   switch (input.op) {
+    case "setEnabled": {
+      const result = await feature.commands.setEnabled({ enabled: input.enabled });
+      writeJson(response, 200, { ok: true, policyRevision: result.policyRevision });
+      return;
+    }
     case "setRollout": {
       const result = await feature.commands.setRollout({ rollout: input.rollout });
       writeJson(response, 200, { ok: true, policyRevision: result.policyRevision });
       return;
     }
-    case "setConsent": {
-      const result = await feature.commands.setConsent({ globalConsent: input.globalConsent });
-      writeJson(response, 200, { ok: true, policyRevision: result.policyRevision });
-      return;
-    }
-    case "setSpaceParticipation": {
-      const result = await feature.commands.setSpaceParticipation({ spaceId: input.spaceId, enabled: input.enabled });
-      writeJson(response, 200, { ok: true, policyRevision: result.policyRevision });
-      return;
-    }
-    case "clearImplicitMemory": {
-      const result = await feature.commands.clearImplicitMemory({ scope: input.scope as MemoryOwner });
+    case "clearMemory": {
+      const result = await feature.commands.clearMemory({ scope: input.scope as MemoryOwner });
       writeJson(response, 200, { ok: true, generation: result.generation });
       return;
     }
-    case "writeSpaceMemory": {
-      const result = await feature.commands.writeSpaceMemory({
-        spaceId: input.spaceId,
-        expectedRevisionId: input.expectedRevisionId,
-        markdown: input.markdown,
+    case "updateMemory": {
+      const result = await feature.commands.updateMemory({
+        owner: input.owner as ConversationOwner,
         requestId: input.requestId,
+        edit: input.edit as UpdateMemoryEntryInput["edit"],
       });
-      writeJson(response, 200, { ok: true, revisionId: result.revisionId, revision: result.revision });
+      writeJson(response, 200, { ok: true, ...result });
       return;
     }
   }
 }
 
-function capabilityQueryFromUrl(url: URL): {
-  readonly owner?: MemoryOwner;
-} {
+function optionalOwnerFromUrl(url: URL): ConversationOwner | undefined {
   const ownerKind = url.searchParams.get("ownerKind");
   const ownerId = url.searchParams.get("ownerId");
-  if (ownerKind === null && ownerId === null) {
-    return {};
-  }
-  if ((ownerKind !== "space" && ownerKind !== "workspace") || ownerId === null || ownerId.length === 0) {
-    throw new PanelHttpError(400, "memory_capability_query_invalid", "记忆状态查询范围无效。");
-  }
-  return {
-    owner: { kind: ownerKind, id: ownerId },
-  };
+  if (ownerKind === null && ownerId === null) return undefined;
+  return parseOwner(ownerKind, ownerId, "memory_owner_query_invalid", "记忆 owner 查询范围无效。");
+}
+
+function requiredOwnerFromUrl(url: URL, code: string, message: string): ConversationOwner {
+  return parseOwner(url.searchParams.get("ownerKind"), url.searchParams.get("ownerId"), code, message);
+}
+
+function parseOwner(
+  ownerKind: string | null,
+  ownerId: string | null,
+  code: string,
+  message: string,
+): ConversationOwner {
+  const parsed = conversationOwnerSchema.safeParse({ kind: ownerKind, id: ownerId });
+  if (!parsed.success) throw new PanelHttpError(400, code, message);
+  return parsed.data;
 }

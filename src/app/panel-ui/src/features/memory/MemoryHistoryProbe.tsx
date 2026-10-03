@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { searchMemoryDiagnostics, type HistorySearchResult } from "@panel-api/memory-admin";
+import type { MemorySettingsOwner } from "./MemorySettingsPanel";
 
 const COVERAGE_LABEL = { available: "可用", partial: "部分覆盖", disabled: "已关闭", unavailable: "不可用" };
 
 export function MemoryHistoryProbe(props: {
-  readonly spaceId: string;
+  readonly owner: MemorySettingsOwner;
   readonly conversationId?: string;
   readonly onOpenConversation?: (id: string) => void;
 }) {
@@ -15,7 +16,8 @@ export function MemoryHistoryProbe(props: {
   const [busy, setBusy] = useState(false);
   const [elapsed, setElapsed] = useState<number | null>(null);
   const request = useRef<AbortController | null>(null);
-  useEffect(() => () => request.current?.abort(), []);
+  useEffect(() => { request.current?.abort(); setResult(null); setError(null); setBusy(false); setElapsed(null);
+    return () => request.current?.abort(); }, [props.owner.kind, props.owner.id, props.conversationId]);
 
   async function search() {
     request.current?.abort();
@@ -24,7 +26,7 @@ export function MemoryHistoryProbe(props: {
     setBusy(true); setError(null); setResult(null);
     const started = performance.now();
     try {
-      const value = await searchMemoryDiagnostics({ spaceId: props.spaceId, conversationId: props.conversationId,
+      const value = await searchMemoryDiagnostics({ owner: props.owner, conversationId: props.conversationId,
         query: query.trim(), source }, controller.signal);
       if (!controller.signal.aborted) { setResult(value); setElapsed(Math.round(performance.now() - started)); }
     } catch (cause) {
@@ -46,7 +48,7 @@ export function MemoryHistoryProbe(props: {
     {error && <p className="memory-error" role="alert">{error}</p>}
     {result && <>
       <p className="memory-debug-meta">{result.items.length} 个片段 · {elapsed} ms · 摘要：{COVERAGE_LABEL[result.coverage.summary]} · 原文：{COVERAGE_LABEL[result.coverage.transcript]}</p>
-      {result.items.length === 0 && <p className="memory-hint">{result.outcome === "degraded" ? "部分来源不可用，当前没有可返回的命中。" : "当前可检索范围内没有命中，可更换关键词或来源。"}</p>}
+      {result.items.length === 0 && <p className="memory-hint">{result.coverage.summary === "disabled" && result.coverage.transcript === "disabled" ? "记忆查询已关闭；这不表示没有已保存内容。" : result.outcome === "degraded" ? "部分来源不可用，当前没有可返回的命中。" : "当前可检索范围内没有命中，可更换关键词或来源。"}</p>}
       <ol className="memory-debug-results">
         {result.items.map((item, index) => <li key={`${item.sourceRef}-${index}`}>
           <div className="memory-debug-row-title"><span>{item.type === "conversation_summary" ? "模型生成摘要" : "原始对话片段"}{item.truncated ? " · 节选" : ""}</span>
