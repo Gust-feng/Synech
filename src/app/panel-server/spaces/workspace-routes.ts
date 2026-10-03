@@ -1,111 +1,47 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { z } from "zod";
 
-import { inspectSpaceExternalSource } from "../../spaces/index.js";
-import type { WorkspaceFeature, WorkspaceFeatureError } from "../../workspaces/index.js";
-import type { WorkbenchCoordination } from "../../workbench-coordination/index.js";
-import { PanelHttpError, readJsonBody, writeJson } from "../http-utils.js";
-
-const registerSchema = z.object({
-  rootPath: z.string().trim().min(1).max(4_096),
-}).strict();
-
-const visibilitySchema = z.object({
-  visibility: z.enum(["listed", "implicit"]),
-}).strict();
-
-export type WorkspaceRouteDependencies = {
-  readonly workspaceFeature: {
-    readonly commands: Pick<WorkspaceFeature["commands"], "ensureWorkspace" | "setVisibility" | "reconnectWorkspace">;
-    readonly queries: Pick<WorkspaceFeature["queries"], "list" | "get">;
-  };
-  readonly workbenchCoordination: {
-    readonly commands: Pick<WorkbenchCoordination["commands"], "reconnectWorkspace" | "hideWorkspace" | "deleteWorkspace">;
-  };
-};
+import type { WorkspaceFeatureError } from "../../workspaces/index.js";
+import { PanelHttpError } from "../http-utils.js";
 
 /**
- * Workspace 功能的 HTTP adapter。
+ * Workspace 不再作为独立产品入口提供 HTTP API。
  *
- * 注册路径必须来自系统文件夹选择器或等价 Host 接口；后端捕获来源身份并做唯一性
- * 校验，模型不能通过任意路径创建持久化 Workspace。
+ * Workspace 仍然是本地目录的稳定登记身份，由 Space reference 通过
+ * `/api/spaces/:spaceId/workspaces` 关联、通过 `/api/spaces/references/:id`
+ * 管理。这里暂时保留 adapter 作为明确的退役边界，避免旧调用静默落入
+ * 404 或继续绕过 Space membership 写入 Workspace。
+ *
+ * request-handler 仍会调用本模块，直到宿主组合根同步移除这条退役 adapter。
+ */
+export type WorkspaceRouteDependencies = Record<never, never>;
+
+const RETIRED_WORKSPACE_SURFACE_ERROR = new PanelHttpError(
+  410,
+  "workspace_surface_retired",
+  "工作区不再作为独立入口提供，请从空间内管理本地资源。",
+);
+
+/**
+ * 明确拒绝已退役的独立 Workspace surface。
+ *
+ * 这里不读取请求体，也不触碰 WorkspaceFeature，保证旧的独立入口不会
+ * 继续创建、隐藏、删除或重连 Workspace。底层 Workspace 能力由 Space
+ * reference/application 路径继续使用。
  */
 export async function handlePanelWorkspaceRoute(
-  dependencies: WorkspaceRouteDependencies,
-  request: IncomingMessage,
-  response: ServerResponse,
+  _dependencies: WorkspaceRouteDependencies,
+  _request: IncomingMessage,
+  _response: ServerResponse,
   url: URL,
 ): Promise<boolean> {
-  const feature = dependencies.workspaceFeature;
-
-  if (url.pathname === "/api/workspaces") {
-    if (request.method === "GET") {
-      writeJson(response, 200, { ok: true, workspaces: await feature.queries.list() });
-      return true;
-    }
-    if (request.method === "POST") {
-      const input = parse(registerSchema, await readJsonBody(request), "工作区路径无效。");
-      const source = await inspectSpaceExternalSource(input.rootPath);
-      if (source === undefined || source.kind !== "folder") {
-        throw new PanelHttpError(400, "workspace_directory_required", "所选路径必须是存在的文件夹。");
-      }
-      const registered = await feature.commands.ensureWorkspace({
-        rootPath: input.rootPath,
-        sourceIdentity: source.identity,
-        visibility: "listed",
-      });
-      writeJson(response, 201, { ok: true, workspace: registered.workspace, mount: registered.mount });
-      return true;
-    }
-    return false;
+  if (isRetiredWorkspacePath(url.pathname)) {
+    throw RETIRED_WORKSPACE_SURFACE_ERROR;
   }
-
-  const reconnectMatch = /^\/api\/workspaces\/([^/]+)\/reconnect$/u.exec(url.pathname);
-  if (reconnectMatch !== null && request.method === "POST") {
-    const workspaceId = decode(reconnectMatch[1]);
-    const input = parse(registerSchema, await readJsonBody(request), "工作区路径无效。");
-    const reconnected = await dependencies.workbenchCoordination.commands.reconnectWorkspace({ workspaceId, rootPath: input.rootPath });
-    writeJson(response, 200, { ok: true, workspace: reconnected.workspace, mount: reconnected.mount });
-    return true;
-  }
-
-  const visibilityMatch = /^\/api\/workspaces\/([^/]+)$/u.exec(url.pathname);
-  if (visibilityMatch !== null && request.method === "PATCH") {
-    const workspaceId = decode(visibilityMatch[1]);
-    const workspace = await feature.queries.get(workspaceId);
-    if (workspace === undefined) throw new PanelHttpError(404, "workspace_not_found", "工作区不存在。");
-    const input = parse(visibilitySchema, await readJsonBody(request), "工作区可见性无效。");
-    const updated = input.visibility === "implicit"
-      ? await dependencies.workbenchCoordination.commands.hideWorkspace(workspaceId)
-      : await feature.commands.setVisibility(workspaceId, "listed");
-    writeJson(response, 200, { ok: true, workspace: updated });
-    return true;
-  }
-
-  if (visibilityMatch !== null && request.method === "DELETE") {
-    const workspaceId = decode(visibilityMatch[1]);
-    await dependencies.workbenchCoordination.commands.deleteWorkspace(workspaceId);
-    writeJson(response, 200, { ok: true });
-    return true;
-  }
-
   return false;
 }
 
-function parse<T>(schema: z.ZodType<T>, raw: unknown, invalidMessage: string): T {
-  const result = schema.safeParse(raw);
-  if (!result.success) {
-    throw new PanelHttpError(400, "workspace_invalid_input", invalidMessage);
-  }
-  return result.data;
-}
-
-function decode(encoded: string): string {
-  try {
-    return decodeURIComponent(encoded);
-  } catch {
-    throw new PanelHttpError(400, "workspace_invalid_input", "工作区标识无效。");
-  }
+function isRetiredWorkspacePath(pathname: string): boolean {
+  return pathname === "/api/workspaces" || /^\/api\/workspaces\/[^/]+(?:\/reconnect)?$/u.test(pathname);
 }
 
 export function workspaceFeatureHttpError(error: WorkspaceFeatureError): PanelHttpError {
@@ -132,5 +68,3 @@ export function workspaceFeatureHttpError(error: WorkspaceFeatureError): PanelHt
       return new PanelHttpError(500, error.code, error.message);
   }
 }
-
-export type { WorkspaceFeatureError };

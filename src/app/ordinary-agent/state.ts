@@ -132,7 +132,7 @@ export function transitionOrdinaryRun(input: {
     toolCalls: toolCallsAfter(input.state, input.transition),
     toolResultRecordedAt: toolResultRecordedAtAfter(input.state, input.transition, input.recordedAt),
     usage: usageAfter(input.state, input.transition),
-    capabilityResolution: capabilityResolutionAfter(input.state, input.transition),
+    capabilityResolution: undefined,
     toolMetrics: toolMetricsAfter(input.state, input.transition),
     timeline: event === undefined ? input.state.timeline : [...input.state.timeline, event],
     timestamps: {
@@ -1085,19 +1085,11 @@ function usageAfter(state: OrdinaryRunState, transition: OrdinaryRunTransition):
     : state.usage;
 }
 
-function capabilityResolutionAfter(
-  state: OrdinaryRunState,
-  transition: OrdinaryRunTransition,
-): RunCapabilityResolution | undefined {
-  return "capabilityResolution" in transition && transition.capabilityResolution !== undefined
-    ? cloneJson(transition.capabilityResolution)
-    : state.capabilityResolution;
-}
-
 function toolMetricsAfter(
   state: OrdinaryRunState,
   transition: OrdinaryRunTransition,
 ): OrdinaryToolMetricsSnapshot | undefined {
+  if (state.birth.recordToolMetrics !== true) return undefined;
   return "toolMetrics" in transition && transition.toolMetrics !== undefined
     ? cloneJson(transition.toolMetrics)
     : state.toolMetrics;

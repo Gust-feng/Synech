@@ -1,46 +1,35 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { Check, ChevronDown, Layers } from 'lucide-react'
 import type { ConversationOwnerSelection } from '../../../../workbench/navigation-state'
-import type { PersonalWorkspaceProjection } from '../../../workspace'
-
-export type HomeOwnerSelection = ConversationOwnerSelection
 
 
 interface HomeOwnerOption {
-  readonly kind: 'space' | 'workspace'
   readonly id: string
   readonly title: string
 }
 
 interface HomeOwnerPickerProps {
   readonly spaces?: readonly { readonly spaceId: string; readonly title: string }[]
-  readonly workspaces?: readonly PersonalWorkspaceProjection[]
-  readonly value: HomeOwnerSelection | null
-  readonly onChange: (owner: HomeOwnerSelection | null) => void
+  readonly value: ConversationOwnerSelection | null
+  readonly onChange: (owner: ConversationOwnerSelection | null) => void
 }
 
 /**
  * 首页任务入口的对话空间选择器：与 composer 模型选择器保持同一套
  * 自定义下拉视觉语言，替代原生 select，避免弹出面板与工作台割裂。
  */
-export function HomeOwnerPicker({ spaces = [], workspaces = [], value, onChange }: HomeOwnerPickerProps) {
+export function HomeOwnerPicker({ spaces = [], value, onChange }: HomeOwnerPickerProps) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
   const popoverId = useId()
 
   const spaceOptions: HomeOwnerOption[] = spaces.map((space) => ({
-    kind: 'space',
     id: space.spaceId,
     title: space.title,
   }))
-  const workspaceOptions: HomeOwnerOption[] = workspaces.map((workspace) => ({
-    kind: 'workspace',
-    id: workspace.workspaceId,
-    title: workspace.title,
-  }))
-  const allOptions = [...spaceOptions, ...workspaceOptions]
+  const allOptions = spaceOptions
   const empty = allOptions.length === 0
-  const selected = value === null ? undefined : allOptions.find((option) => option.kind === value.kind && option.id === value.id)
+  const selected = value === null ? undefined : allOptions.find((option) => option.id === value.id)
   const triggerLabel = selected?.title ?? (empty ? '请选择空间' : '选择空间')
 
   useEffect(() => {
@@ -64,7 +53,7 @@ export function HomeOwnerPicker({ spaces = [], workspaces = [], value, onChange 
 
   const select = (option: HomeOwnerOption): void => {
     setOpen(false)
-    onChange({ kind: option.kind, id: option.id })
+    onChange({ kind: 'space', id: option.id })
   }
 
   return (
@@ -92,20 +81,7 @@ export function HomeOwnerPicker({ spaces = [], workspaces = [], value, onChange 
                 <HomeOwnerRow
                   key={option.id}
                   option={option}
-                  selected={value?.kind === 'space' && value.id === option.id}
-                  onSelect={select}
-                />
-              ))}
-            </section>
-          )}
-          {workspaceOptions.length > 0 && (
-            <section className="ui-home-owner-picker__group">
-              <h3>工作区</h3>
-              {workspaceOptions.map((option) => (
-                <HomeOwnerRow
-                  key={option.id}
-                  option={option}
-                  selected={value?.kind === 'workspace' && value.id === option.id}
+                  selected={value?.id === option.id}
                   onSelect={select}
                 />
               ))}

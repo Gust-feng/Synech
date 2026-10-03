@@ -1,0 +1,20 @@
+.space-landing {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  place-items: center;
+  overflow: hidden;
+  pointer-events: none;
+  container-type: size;
+}
+
+.space-landing__art {
+  display: block;
+  width: min(560px, 72cqw, calc(80cqh * 64 / 43));
+  height: auto;
+  aspect-ratio: 64 / 43;
+  object-fit: contain;
+  transform: translateY(-7%);
+  user-select: none;
+}

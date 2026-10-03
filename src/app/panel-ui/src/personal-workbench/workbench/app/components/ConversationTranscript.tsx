@@ -1,3 +1,4 @@
+import { SvgMark } from "@ui/components/svg-mark";
 /**
  * Conversation workbench 的对话转录渲染器。
  *
@@ -7,11 +8,9 @@
  * 数据权威不变：projectConversationDisplayList 产出什么，这里就渲染什么。
  * 全量可见性不变：工具活动、确认流、失败归因、Sub-Agent 嵌套全部保留。
  */
-import React, { useEffect, useState } from "react";
-import { AnimatePresence, motion } from "motion/react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   Brain,
-  Check,
   ChevronDown,
   ChevronRight,
   CircleAlert,
@@ -23,9 +22,8 @@ import {
   FolderOpen,
   Bot,
   Wrench,
-  Sparkles,
 } from "lucide-react";
-import type { ConversationTurn, ConversationTurnAttachment } from "@ui/contracts/conversation";
+import type { ConversationTurn } from "@ui/contracts/conversation";
 import type { OrdinaryRun, OrdinaryWorkView, TranscriptNode } from "@ui/contracts/run";
 import type { PanelToolCallResult as ToolCallResult } from "@panel-api/ordinary-agent";
 import type { LiveRunBuffer } from "@panel-api/ui-read-model";
@@ -33,10 +31,10 @@ import type { WorklineProjectedTurn } from "@panel-api/ui-read-model";
 import type { ChatModelOption } from "@ui/contracts/composer";
 import { RichText, StreamingRichText } from "@ui/components/rich-text";
 import { useStreamingText } from "@ui/features/conversations/transcript/use-streaming-text";
+import { ConversationUserMessage } from "./ConversationUserMessage";
 import { CopyActionButton } from "@ui/components/copy-action-button";
 import { ActivityEvidencePanel } from "./ActivityEvidence";
 import { toolResultForActivity } from "@ui/features/conversations/transcript/tool-result-association";
-import { MOTION_EASING, MOTION_TIMING, useMotionEnabled } from "@ui/shell/motion-system";
 import { ConfirmationCard, type ConfirmationProjection } from "./ConfirmationCard";
 import type { ConversationDisplayItem } from "@panel-api/ui-read-model";
 import type { AssistantWorkflowDisplay } from "@panel-api/ui-read-model";
@@ -71,17 +69,18 @@ export type ConversationTranscriptProps = {
   readonly live?: LiveRunBuffer;
   readonly workView?: OrdinaryWorkView;
   readonly pending?: ConfirmationProjection;
-  readonly showModelUsage: boolean;
   readonly developerModeEnabled: boolean;
   readonly standaloneRun?: ConversationStandaloneRun;
   readonly models: readonly ChatModelOption[];
   readonly selectedModelId: string;
+  readonly onSelectBranch?: (runId: string) => Promise<void>;
+  readonly onEditTurn?: (runId: string, content: string) => Promise<boolean>;
   readonly onDecision: (decision: "approve_once" | "deny" | "guidance", guidance?: string) => void;
   readonly confirmationBusy: boolean;
 };
 
 export function ConversationTranscript(props: ConversationTranscriptProps): React.ReactElement | null {
-  const { conversationDisplay, toolResultsByRunId } = useConversationTranscriptProjection(props);
+  const { conversationDisplay, toolResultsByRunId, nodesByRunId } = useConversationTranscriptProjection(props);
   const items = conversationDisplay.items;
   if (items.length === 0) return null;
 
@@ -89,7 +88,9 @@ export function ConversationTranscript(props: ConversationTranscriptProps): Reac
     <div className="ui-conversation-stream">
       {items.map((item) => {
         if (item.kind === "user") {
-          return <ConversationUserMessage key={item.key} content={item.turn.content} attachments={item.turn.attachments} />;
+          return <ConversationUserMessage key={item.key} turn={item.turn} onSelectBranch={props.onSelectBranch}
+            onEdit={item.turn.runId === undefined || props.onEditTurn === undefined ? undefined :
+              (content) => props.onEditTurn!(item.turn.runId!, content)} />;
         }
         if (item.failure !== undefined) {
           return (
@@ -110,6 +111,11 @@ export function ConversationTranscript(props: ConversationTranscriptProps): Reac
           <ConversationAssistantMessage
             key={item.key}
             live={item.live}
+            durationSeconds={conversationRunDurationSeconds(
+              item.source === "turn" ? item.turn.runId : props.standaloneRun?.currentRunId ?? props.currentRunId,
+              props.run,
+              nodesByRunId,
+            )}
             model={modelBadgeForItem(item, props.models, props.selectedModelId)}
             workflow={item.workflow}
             toolResultsByRunId={toolResultsByRunId}
@@ -122,43 +128,6 @@ export function ConversationTranscript(props: ConversationTranscriptProps): Reac
     </div>
   );
 }
-
-/* ─── 用户消息 ─── */
-
-const ConversationUserMessage = React.memo(function ConversationUserMessage(props: {
-  readonly content: string;
-  readonly attachments?: readonly ConversationTurnAttachment[];
-}) {
-  const attachments = props.attachments?.filter((a) => a.attachmentId.trim().length > 0) ?? [];
-  return (
-    <div className="ui-conversation-turn ui-conversation-turn--user flex justify-end">
-      <div className="ui-user-message flex max-w-[520px] flex-col items-end gap-1.5">
-        {attachments.length > 0 && (
-          <div className="flex flex-wrap justify-end gap-1.5">
-            {attachments.map((attachment) => (
-              <span
-                key={attachment.attachmentId}
-                className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px]"
-                style={{ background: "var(--ui-surface-hover, #eeebe6)", color: "var(--ui-text-2)" }}
-              >
-                <FileText size={11} className="shrink-0" />
-                <span className="max-w-[160px] truncate">{attachment.title}</span>
-              </span>
-            ))}
-          </div>
-        )}
-        {props.content.trim().length > 0 && (
-          <div
-            className="ui-user-message__body user-message-content px-3.5 py-2.5"
-            style={{ lineHeight: 1.7, color: "var(--ui-text-1)" }}
-          >
-            <RichText text={props.content} />
-          </div>
-        )}
-      </div>
-    </div>
-  );
-});
 
 /* ─── 助手消息 ─── */
 
@@ -175,6 +144,7 @@ function modelBadgeForItem(
 
 function ConversationAssistantMessage(props: {
   readonly live?: boolean;
+  readonly durationSeconds?: number;
   readonly model?: ConversationModelBadge;
   readonly workflow?: AssistantWorkflowDisplay<TranscriptNode, ConfirmationProjection>;
   readonly toolResultsByRunId: Readonly<Record<string, readonly ToolCallResult[]>>;
@@ -186,38 +156,175 @@ function ConversationAssistantMessage(props: {
   if (workflow === undefined) {
     return <ConversationPendingDots />;
   }
+  const needsConfirmation = workflow.segments.some((segment) =>
+    segment.kind === "activity" &&
+    segment.timeline.confirmation.current !== undefined
+  );
+  const lastToolIndex = workflow.segments.reduce((lastIndex, segment, index) =>
+    segment.kind === "activity" && segment.timeline.items.some((item) => item.tone === "tool") ? index : lastIndex,
+    -1,
+  );
+  const finalAnswerStart = workflow.segments.findIndex((segment, index) =>
+    index > lastToolIndex && segment.kind === "body" && segment.text.trim().length > 0
+  );
+  const hasFinalAnswer = workflow.showCopyActions && !props.live && !needsConfirmation && finalAnswerStart >= 0;
+  const answerCopyText = hasFinalAnswer
+    ? workflow.segments.slice(finalAnswerStart).filter((segment) => segment.kind === "body").map((segment) => segment.copyText).join("\n\n")
+    : workflow.copyText;
   return (
     <div className="ui-conversation-turn ui-conversation-turn--assistant space-y-3">
       <ConversationModelLabel model={props.model} />
-      {workflow.segments.map((segment, index) => {
-        if (segment.kind === "activity") {
+      <ConversationRunProcess
+        segments={workflow.segments}
+        settled={hasFinalAnswer}
+        finalAnswerStart={hasFinalAnswer ? finalAnswerStart : undefined}
+        live={props.live}
+        durationSeconds={props.durationSeconds}
+        attention={needsConfirmation}
+        onDecision={props.onDecision}
+        confirmationBusy={props.confirmationBusy === true}
+        toolResultsByRunId={props.toolResultsByRunId}
+        developerModeEnabled={props.developerModeEnabled}
+      />
+      <div className="ui-message-actions ui-message-actions--assistant">
+        <ConversationAnswerActions
+          text={answerCopyText}
+          visible={workflow.showCopyActions}
+        />
+      </div>
+    </div>
+  );
+}
+
+function formatProcessDuration(seconds: number): string {
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return minutes > 0 ? `${minutes}m ${remainingSeconds}s` : `${remainingSeconds}s`;
+}
+
+function conversationRunDurationSeconds(
+  runId: string | undefined,
+  run: OrdinaryRun | undefined,
+  nodesByRunId: Readonly<Record<string, readonly TranscriptNode[]>>,
+): number | undefined {
+  if (runId === undefined) return undefined;
+  const nodes = nodesByRunId[runId] ?? [];
+  const startedAt = run?.runId === runId
+    ? run.createdAt
+    : nodes.find((node) => node.eventType === "model.requested")?.timestamp;
+  const finishedAt = nodes.find((node) => node.eventType === "run.completed")?.timestamp;
+  const endedAt = finishedAt ?? (run?.runId === runId && run.status === "completed" ? run.updatedAt : undefined);
+  if (startedAt === undefined || endedAt === undefined) return undefined;
+  const elapsed = Date.parse(endedAt) - Date.parse(startedAt);
+  return Number.isFinite(elapsed) && elapsed >= 0 ? Math.round(elapsed / 1000) : undefined;
+}
+
+type ConversationProcessSegment = AssistantWorkflowDisplay<TranscriptNode, ConfirmationProjection>["segments"][number];
+
+function useObservedThinkingDurations(segments: readonly ConversationProcessSegment[]): Readonly<Record<string, number>> {
+  const starts = useRef(new Map<string, number>());
+  const [durations, setDurations] = useState<Readonly<Record<string, number>>>({});
+  useEffect(() => {
+    const completed: Record<string, number> = {};
+    for (const segment of segments) {
+      if (segment.kind !== "activity") continue;
+      for (const item of segment.timeline.items) {
+        if (item.tone !== "thinking") continue;
+        if (item.phase !== "completed") {
+          if (!starts.current.has(item.key)) starts.current.set(item.key, Date.now());
+          continue;
+        }
+        const startedAt = starts.current.get(item.key);
+        if (startedAt !== undefined && durations[item.key] === undefined) {
+          completed[item.key] = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
+        }
+      }
+    }
+    if (Object.keys(completed).length > 0) {
+      setDurations((current) => ({ ...current, ...completed }));
+    }
+  }, [segments, durations]);
+  return durations;
+}
+
+function hasVisibleProcessActivity(segments: readonly ConversationProcessSegment[], developerModeEnabled: boolean): boolean {
+  return segments.some((segment) => segment.kind === "activity" && (
+    segment.timeline.confirmation.current !== undefined ||
+    segment.timeline.items.some((item) =>
+      isVisibleOrdinaryActivityItem(item) && (developerModeEnabled || item.tone !== "thinking")
+    )
+  ));
+}
+
+function ConversationRunProcess(props: {
+  readonly segments: readonly ConversationProcessSegment[];
+  readonly settled: boolean;
+  readonly finalAnswerStart?: number;
+  readonly live?: boolean;
+  readonly durationSeconds?: number;
+  readonly attention: boolean;
+  readonly failed?: boolean;
+  readonly onDecision?: (decision: "approve_once" | "deny" | "guidance", guidance?: string) => void;
+  readonly confirmationBusy: boolean;
+  readonly toolResultsByRunId: Readonly<Record<string, readonly ToolCallResult[]>>;
+  readonly developerModeEnabled: boolean;
+}) {
+  // A completion transition closes earlier work without remounting the answer.
+  const [disclosure, setDisclosure] = useState({ settled: props.settled, open: !props.settled });
+  const open = disclosure.settled === props.settled ? disclosure.open : !props.settled;
+  const thinkingDurations = useObservedThinkingDurations(props.segments);
+  const expanded = props.attention || open;
+  const hasVisibleActivity = hasVisibleProcessActivity(props.segments, props.developerModeEnabled);
+  const toolCount = props.segments.reduce((count, segment) => segment.kind === "activity"
+    ? count + segment.timeline.items.filter((item) => item.tone === "tool").length
+    : count, 0);
+  return (
+    <div className="ui-run-process" data-state={props.attention ? "attention" : props.failed ? "failed" : props.settled ? "settled" : "running"}>
+      {hasVisibleActivity && <button
+        type="button"
+        className="ui-run-process__summary"
+        data-conversation-disclosure
+        onClick={() => setDisclosure({ settled: props.settled, open: !open })}
+        disabled={props.attention}
+        aria-expanded={expanded}
+      >
+        <span>{props.attention ? "需要确认" : props.failed ? "过程" : props.settled
+          ? props.durationSeconds === undefined ? "已完成" : `用时 ${formatProcessDuration(props.durationSeconds)}`
+          : "正在处理"}</span>
+        {toolCount > 0 && !props.settled && <span className="ui-run-process__count">{toolCount} 项操作</span>}
+        {!props.attention && (expanded
+          ? <ChevronDown size={13} aria-hidden="true" />
+          : <ChevronRight size={13} aria-hidden="true" />)}
+      </button>}
+      <div className="ui-run-process__segments">
+        {props.segments.map((segment, index) => {
+          const isIntermediateBody = segment.kind === "body" && props.settled &&
+            props.finalAnswerStart !== undefined && index < props.finalAnswerStart;
+          const isProcess = segment.kind === "activity" || isIntermediateBody;
+          const visibleActivity = segment.kind === "activity" &&
+            hasVisibleProcessActivity([segment], props.developerModeEnabled);
+          const hidden = isProcess && (!expanded || (segment.kind === "activity" && !visibleActivity));
+          const segmentKey = segment.kind === "awaiting" ? `awaiting-${index}` : segment.segmentKey;
           return (
-            <ConversationActivitySegment
-              key={segment.segmentKey}
-              segment={segment}
-              onDecision={props.onDecision}
-              confirmationBusy={props.confirmationBusy === true}
-              toolResultsByRunId={props.toolResultsByRunId}
-              developerModeEnabled={props.developerModeEnabled}
-            />
+            <div key={segmentKey} className={isProcess ? "ui-run-process__step" : "ui-run-process__body"} hidden={hidden}>
+              {segment.kind === "activity" ? (
+                <ConversationActivitySegment
+                  segment={segment}
+                  onDecision={props.onDecision}
+                  confirmationBusy={props.confirmationBusy}
+                  toolResultsByRunId={props.toolResultsByRunId}
+                  developerModeEnabled={props.developerModeEnabled}
+                  thinkingDurations={thinkingDurations}
+                />
+              ) : segment.kind === "awaiting" ? <ConversationPendingDots /> : (
+                <ConversationAnswerBlock text={segment.text} live={props.live === true && segment.live} />
+              )}
+            </div>
           );
-        }
-        if (segment.kind === "awaiting") {
-          return <ConversationPendingDots key={`awaiting-${index}`} />;
-        }
-        const rawText = segment.text;
-        if (rawText.trim().length === 0) {
-          return null;
-        }
-        return (
-          <ConversationAnswerBlock
-            key={segment.segmentKey}
-            text={rawText}
-            live={props.live === true && index === workflow.segments.length - 1}
-          />
-        );
-      })}
-      <ConversationAnswerActions text={workflow.copyText} visible={workflow.showCopyActions} />
+        })}
+        {!hasVisibleActivity && props.live && props.segments.length > 0 &&
+          props.segments.every((segment) => segment.kind === "activity") && <ConversationPendingDots />}
+      </div>
     </div>
   );
 }
@@ -253,25 +360,25 @@ function ConversationFailureMessage(props: {
         <CircleAlert size={14} className="mt-0.5 shrink-0" style={{ color: "var(--ui-status-error, #C84040)" }} />
         <div className="min-w-0 space-y-1">
           <p className="font-medium" style={{ color: "var(--ui-status-error, #C84040)" }}>
-            {assistantTerminalNoticeTitle(props.terminalStatus ?? "failed")}
+            {assistantTerminalNoticeTitle(props.terminalStatus ?? "failed", props.failure.code)}
           </p>
           {props.failure.error !== undefined && (
             <p className="text-xs" style={{ color: "var(--ui-text-2)", lineHeight: 1.6 }}>{props.failure.error}</p>
           )}
         </div>
       </div>
-      {activitySegments.map((segment) => (
-        segment.kind === "activity" ? (
-          <ConversationActivitySegment
-            key={segment.segmentKey}
-            segment={segment}
-            onDecision={props.onDecision}
-            confirmationBusy={props.confirmationBusy}
-            toolResultsByRunId={props.toolResultsByRunId}
-            developerModeEnabled={props.developerModeEnabled}
-          />
-        ) : null
-      ))}
+      {hasVisibleProcessActivity(activitySegments, props.developerModeEnabled) && (
+        <ConversationRunProcess
+          segments={activitySegments}
+          settled={false}
+          attention={false}
+          failed
+          onDecision={props.onDecision}
+          confirmationBusy={props.confirmationBusy}
+          toolResultsByRunId={props.toolResultsByRunId}
+          developerModeEnabled={props.developerModeEnabled}
+        />
+      )}
     </div>
   );
 }
@@ -306,7 +413,7 @@ const ConversationAnswerBlock = React.memo(function ConversationAnswerBlock(prop
       className="ui-answer-block assistant-answer reading-prose"
       style={{ color: "var(--ui-text-1)", lineHeight: 1.85 }}
     >
-      {props.live ? <StreamingRichText text={props.text} live /> : <RichText text={props.text} />}
+      <StreamingRichText text={props.text} live={props.live} />
     </div>
   );
 });
@@ -340,8 +447,7 @@ function ConversationPendingDots() {
 /* ─── 工具活动时间线 ─── */
 
 /**
- * 一个活动段由两部分组成：独立的思考块（模型推理过程）与工具工作流时间线。
- * 思考不属于工具调用过程，展示上与工具条目分开。
+ * 保留一次模型请求的思考与工具执行顺序，供整次运行的过程区使用。
  */
 function ConversationActivitySegment(props: {
   readonly segment: Extract<
@@ -352,83 +458,109 @@ function ConversationActivitySegment(props: {
   readonly confirmationBusy: boolean;
   readonly developerModeEnabled: boolean;
   readonly toolResultsByRunId: Readonly<Record<string, readonly ToolCallResult[]>>;
+  readonly thinkingDurations?: Readonly<Record<string, number>>;
 }) {
-  const { thinkingItems, processTimeline } = splitThinkingTimeline(props.segment.timeline);
+  const segments = activityTimelineSegments({
+    ...props.segment.timeline,
+    items: props.segment.timeline.items.filter((item) => props.developerModeEnabled || item.tone !== "thinking"),
+  });
   return (
     <>
-      {props.developerModeEnabled && thinkingItems.length > 0 && <ConversationThinkingBlock items={thinkingItems} />}
-      <ConversationActivityTimeline
-        timeline={processTimeline}
-        collapsed={props.segment.collapsed}
-        lifecycle={props.segment.lifecycle}
-        onDecision={props.onDecision}
-        confirmationBusy={props.confirmationBusy}
-        toolResultsByRunId={props.toolResultsByRunId}
-        developerModeEnabled={props.developerModeEnabled}
-      />
+      {segments.map((segment) => segment.kind === "thinking" ? (
+        <ConversationThinkingBlock
+          key={segment.item.key}
+          item={segment.item}
+          durationSeconds={props.thinkingDurations?.[segment.item.key]}
+          text={props.segment.timeline.nodes.find((node) => node.nodeId === segment.item.nodeId)?.text ??
+            segment.item.copy.expandedDetail ?? segment.item.copy.detail}
+        />
+      ) : (
+        <ConversationActivityTimeline
+          key={segment.key}
+          timeline={segment.timeline}
+          onDecision={props.onDecision}
+          confirmationBusy={props.confirmationBusy}
+          toolResultsByRunId={props.toolResultsByRunId}
+          developerModeEnabled={props.developerModeEnabled}
+        />
+      ))}
     </>
   );
 }
 
-function splitThinkingTimeline(timeline: AgentWorkTimelineView<TranscriptNode, ConfirmationProjection>): {
-  readonly thinkingItems: readonly ActivityItem[];
-  readonly processTimeline: AgentWorkTimelineView<TranscriptNode, ConfirmationProjection>;
-} {
-  const visibleItems = timeline.items.filter(isVisibleOrdinaryActivityItem);
-  const thinkingItems = visibleItems.filter((item) => item.tone === "thinking");
-  const processItems = visibleItems.filter((item) => item.tone !== "thinking");
-  return {
-    thinkingItems,
-    processTimeline: {
-      ...timeline,
-      items: processItems,
-      hasContent: processItems.length > 0 || timeline.confirmation.current !== undefined,
-    },
+type ActivityTimelineSegment =
+  | { readonly kind: "thinking"; readonly item: ActivityItem }
+  | { readonly kind: "process"; readonly key: string; readonly timeline: AgentWorkTimelineView<TranscriptNode, ConfirmationProjection> };
+
+function activityTimelineSegments(
+  timeline: AgentWorkTimelineView<TranscriptNode, ConfirmationProjection>,
+): readonly ActivityTimelineSegment[] {
+  const segments: ActivityTimelineSegment[] = [];
+  let processItems: ActivityItem[] = [];
+  const flushProcess = (includeConfirmation: boolean): void => {
+    const confirmation = includeConfirmation ? timeline.confirmation : { ...timeline.confirmation, current: undefined };
+    if (processItems.length === 0 && confirmation.current === undefined) return;
+    segments.push({
+      kind: "process",
+      key: processItems[0]?.key ?? "pending-confirmation",
+      timeline: { ...timeline, items: processItems, confirmation, hasContent: true },
+    });
+    processItems = [];
   };
+  // Keep each model block at its chronological position. Only adjacent process
+  // items share a disclosure; a later request's reasoning never joins an earlier one.
+  for (const item of timeline.items.filter(isVisibleOrdinaryActivityItem)) {
+    if (item.tone === "thinking") {
+      flushProcess(false);
+      segments.push({ kind: "thinking", item });
+    } else {
+      processItems.push(item);
+    }
+  }
+  flushProcess(true);
+  return segments;
 }
 
 /* ─── 思考块 ─── */
 
-/**
- * 模型推理过程的专门展示：独立于工具工作流。思考进行中保持展开以实时显示
- * 推理内容；思考一旦完成（终态条目），自动收起为「思考」标题行。
- */
-function ConversationThinkingBlock(props: { readonly items: readonly ActivityItem[] }) {
-  const thinkingInProgress = props.items.some((item) => item.phase !== "completed");
-  const [open, setOpen] = useState(thinkingInProgress);
-  useEffect(() => {
-    // 只在思考阶段切换时自动开合，不覆盖用户手动展开/收起。
-    setOpen(thinkingInProgress);
-  }, [thinkingInProgress]);
-  const text = props.items
-    .map((item) => item.copy.expandedDetail ?? item.copy.detail)
-    .filter((value): value is string => value !== undefined && value.trim().length > 0)
-    .join("\n\n");
-  // reasoning 流平滑逐字显示；终态内容到达时立即结算为权威内容。
-  const displayed = useStreamingText(text, thinkingInProgress);
-  if (displayed.length === 0) return null;
+/** 进行态保持单行流式输出；完成后按需展开完整思考。 */
+function ConversationThinkingBlock(props: { readonly item: ActivityItem; readonly text: string; readonly durationSeconds?: number }) {
+  const thinkingInProgress = props.item.phase !== "completed";
+  const displayed = useStreamingText(props.text, thinkingInProgress, { tone: "thinking", animateOnMount: true });
+  const [open, setOpen] = useState(false);
+  const contentId = React.useId();
+  const streamRef = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    if (thinkingInProgress && streamRef.current !== null) {
+      streamRef.current.scrollLeft = streamRef.current.scrollWidth;
+    }
+  }, [displayed, thinkingInProgress]);
+  if (thinkingInProgress) return (
+    <div className="ui-thinking-block__summary" data-state="streaming">
+      <span className="ui-thinking-block__stream" ref={streamRef}>{displayed}</span>
+    </div>
+  );
   return (
     <div className="ui-thinking-block">
       <button
         type="button"
+        className="ui-thinking-block__summary ui-thinking-block__trigger"
+        data-conversation-disclosure
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
-        aria-label={open ? "收起思考" : "展开思考"}
-        className="flex w-full items-center gap-2 text-left"
-        style={{ color: "var(--ui-text-2)" }}
+        aria-controls={contentId}
       >
-        <Brain size={12} className="shrink-0" style={{ color: "var(--ui-text-3)" }} />
-        <span className="text-[12px] font-medium tracking-wide">过程</span>
-        <span className="ml-auto" style={{ color: "var(--ui-text-3)" }}>
-          {open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-        </span>
+        <Brain size={13} className="shrink-0" aria-hidden="true" />
+        <span className="ui-thinking-block__label">思考</span>
+        <span className="ui-thinking-block__duration">· {props.durationSeconds === undefined ? "已完成" : formatProcessDuration(props.durationSeconds)}</span>
+        {open ? <ChevronDown size={13} aria-hidden="true" /> : <ChevronRight size={13} aria-hidden="true" />}
       </button>
       {open && (
-        <div
-          className="ui-thinking-content mt-1.5 border-l-2 pl-3 text-[12px] leading-[1.75]"
-          style={{ borderColor: "var(--ui-border)", color: "var(--ui-text-2)", whiteSpace: "pre-wrap" }}
-        >
-          {displayed}
+        <div id={contentId} className="ui-thinking-block__content" data-conversation-detail role="region" aria-label="思考内容" tabIndex={0}>
+          <div className="ui-thinking-block__toolbar">
+            <CopyActionButton value={props.text} label="复制思考" className="ui-thinking-block__copy" />
+          </div>
+          <div className="ui-thinking-block__text">{props.text}</div>
         </div>
       )}
     </div>
@@ -437,136 +569,53 @@ function ConversationThinkingBlock(props: { readonly items: readonly ActivityIte
 
 function ConversationActivityTimeline(props: {
   readonly timeline: AgentWorkTimelineView<TranscriptNode, ConfirmationProjection>;
-  readonly collapsed?: boolean;
-  readonly lifecycle?: "open" | "settled" | "attention";
   readonly onDecision?: (decision: "approve_once" | "deny" | "guidance", guidance?: string) => void;
   readonly confirmationBusy: boolean;
   readonly toolResultsByRunId: Readonly<Record<string, readonly ToolCallResult[]>>;
   readonly developerModeEnabled: boolean;
 }) {
-  const { confirmation, items, hasContent } = props.timeline;
-  // Hooks 必须在任何 early return 之前无条件调用：该组件被父级无条件渲染，
-  // 活动段从「无内容」变为「有工具调用」时若 useState 位于 return 之后，Hook 数量
-  // 会从 0 变 1，触发 React "rendered more hooks" 崩溃。
-  const autoOpen = props.lifecycle === "open" || props.lifecycle === "attention" || confirmation.current !== undefined;
-  const [open, setOpen] = useState(autoOpen || props.collapsed !== true);
-  const motionEnabled = useMotionEnabled();
-
-  if (!hasContent) return null;
-  const visibleItems = items.filter(isVisibleOrdinaryActivityItem);
-  if (visibleItems.length === 0 && confirmation.current === undefined) return null;
-
-  const doneCount = visibleItems.filter((i) => i.phase === "completed").length;
-  const failedCount = visibleItems.filter((i) => i.phase === "failed").length;
-  const running = visibleItems.some((i) => i.phase === "executing" || i.phase === "preparing");
-  const summaryState = confirmation.current !== undefined
-    ? "attention"
-    : running
-      ? "running"
-      : failedCount > 0
-        ? "failed"
-        : "settled";
-  const summaryLabel = summaryState === "attention"
-    ? "需要确认"
-    : summaryState === "running"
-      ? "正在处理"
-      : summaryState === "failed"
-        ? "有操作未完成"
-        : "查看执行过程";
-  const summaryColor = summaryState === "running"
-    ? "var(--ui-accent)"
-    : summaryState === "attention"
-      ? "var(--ui-status-wait)"
-      : summaryState === "failed"
-        ? "var(--ui-status-error)"
-        : "var(--ui-text-2)";
-  const summaryContent = (
-    <>
-      <Wrench size={11} style={{ color: "var(--ui-text-3)" }} />
-      <span className="font-medium" style={{ color: summaryColor }}>
-        {summaryLabel}
-      </span>
-      {running && (
-        <span className="h-1.5 w-1.5 rounded-full" style={{ background: "var(--ui-accent)", animation: "pulse 1.2s infinite" }} />
-      )}
-    </>
-  );
+  const visibleItems = props.timeline.items.filter(isVisibleOrdinaryActivityItem);
+  const confirmation = props.timeline.confirmation.current;
+  if (visibleItems.length === 0 && confirmation === undefined) return null;
 
   return (
-    <div className="ui-activity-timeline overflow-hidden" data-state={summaryState}>
-      {/* 摘要行 */}
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        className="ui-activity-summary flex w-full items-center gap-2 text-left"
-        style={{ color: "var(--ui-text-2)" }}
-      >
-        {summaryContent}
-        <span className="ml-auto" style={{ color: "var(--ui-text-3)" }}>
-          {open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-        </span>
-      </button>
-
-      {/* 展开的活动列表 */}
-      {open && visibleItems.length > 0 && (
-        <div className="ui-activity-details space-y-1">
-          <div className="space-y-2">
-            <AnimatePresence initial={false}>
-              {visibleItems.map((item, index) => (
-                <motion.div
-                  key={item.key}
-                  initial={motionEnabled ? { opacity: 0, y: 5 } : false}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={motionEnabled ? { opacity: 0, y: -3 } : undefined}
-                  transition={{
-                    duration: MOTION_TIMING.interaction,
-                    delay: motionEnabled ? Math.min(index * 0.025, 0.12) : 0,
-                    ease: MOTION_EASING.premium,
-                  }}
-                >
-                  <ConversationActivityItem
-                    item={item}
-                    toolResult={toolResultForActivity(item, props.timeline.nodes, props.toolResultsByRunId)}
-                    resolveChildResult={(child) => toolResultForActivity(child, props.timeline.nodes, props.toolResultsByRunId)}
-                    showCanonicalToolResult={props.developerModeEnabled}
-                  />
-                </motion.div>
-              ))}
-            </AnimatePresence>
-          </div>
+    <>
+      {visibleItems.length > 0 && (
+        <div className="ui-process-actions">
+          {visibleItems.map((item) => (
+            <ConversationActivityItem
+              key={item.key}
+              item={item}
+              toolResult={toolResultForActivity(item, props.timeline.nodes, props.toolResultsByRunId)}
+              resolveChildResult={(child) => toolResultForActivity(child, props.timeline.nodes, props.toolResultsByRunId)}
+              showCanonicalToolResult={props.developerModeEnabled}
+            />
+          ))}
         </div>
       )}
-
-      {/* 确认卡片 */}
-      {confirmation.current !== undefined && (
-        <motion.div
-          className="ui-activity-confirmation"
-          initial={motionEnabled ? { opacity: 0, y: 6, scale: 0.99 } : false}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          transition={{ duration: MOTION_TIMING.panel, ease: MOTION_EASING.premium }}
-        >
+      {confirmation !== undefined && (
+        <div className="ui-activity-confirmation">
           <ConfirmationCard
-            confirmation={confirmation.current}
+            confirmation={confirmation}
             busy={props.confirmationBusy}
             onDecision={props.onDecision}
           />
-        </motion.div>
+        </div>
       )}
-    </div>
+    </>
   );
 }
 
 /* ─── 单条活动记录 ─── */
 
-const TOOL_ICONS: Record<string, React.ReactNode> = {
-  terminal: <Terminal size={11} />,
-  file_read: <FileText size={11} />,
-  file_write: <Pencil size={11} />,
-  search: <Search size={11} />,
-  web: <Globe2 size={11} />,
-  folder: <FolderOpen size={11} />,
-  sub_agent: <Bot size={11} />,
+const TOOL_ICONS: Partial<Record<NonNullable<ActivityItem["toolKind"]>, React.ReactNode>> = {
+  command: <Terminal size={13} />,
+  read: <FileText size={13} />,
+  edit: <Pencil size={13} />,
+  search: <Search size={13} />,
+  web: <Globe2 size={13} />,
+  directory: <FolderOpen size={13} />,
+  agent: <Bot size={13} />,
 };
 
 function ConversationActivityItem(props: {
@@ -577,7 +626,7 @@ function ConversationActivityItem(props: {
 }) {
   const { item } = props;
   const toolKind = item.toolKind ?? resolveActivityToolKind(item);
-  const icon = TOOL_ICONS[toolKind] ?? <Wrench size={11} />;
+  const icon = TOOL_ICONS[toolKind] ?? <Wrench size={13} />;
   const isActive = item.phase === "executing" || item.phase === "preparing";
   const isFailed = item.phase === "failed";
   const displayText = item.lead !== undefined ? `${item.lead.action} ${item.lead.subject}` : item.copy.detail;
@@ -586,43 +635,35 @@ function ConversationActivityItem(props: {
     item.copy.expandedDetail !== undefined ||
     (props.toolResult !== undefined && props.showCanonicalToolResult);
   const [open, setOpen] = useState(false);
+  const evidenceId = React.useId();
 
   return (
-    <div className="ui-activity-item min-w-0" style={{ color: "var(--ui-text-2)" }}>
+    <div className="ui-activity-item min-w-0" data-state={isFailed ? "failed" : isActive ? "running" : "settled"}>
       <button
         type="button"
-        className="flex w-full min-w-0 items-center gap-2 text-left"
+        className="ui-activity-item__trigger"
+        data-conversation-disclosure={hasEvidence || undefined}
         onClick={hasEvidence ? () => setOpen((value) => !value) : undefined}
+        disabled={!hasEvidence}
         aria-expanded={hasEvidence ? open : undefined}
-        style={{ cursor: hasEvidence ? "pointer" : "default" }}
+        aria-controls={hasEvidence ? evidenceId : undefined}
+        title={displayText}
       >
-      {/* 状态指示 */}
-      {isActive ? (
-        <span
-          className="h-2.5 w-2.5 shrink-0 rounded-full border-[1.5px] border-t-transparent animate-spin"
-          style={{ borderColor: "var(--ui-accent)", borderTopColor: "transparent" }}
-        />
-      ) : isFailed ? (
-        <CircleAlert size={10} className="shrink-0" style={{ color: "var(--ui-status-error, #C84040)" }} />
-      ) : (
-        <Check size={10} className="shrink-0" style={{ color: "var(--ui-status-done, #48A870)" }} />
-      )}
-      {/* 工具图标 */}
-      <span className="shrink-0" style={{ color: "var(--ui-text-3)", lineHeight: 0 }}>{icon}</span>
-      {/* 标签 */}
-      <span className="min-w-0 truncate">{displayText}</span>
-      {/* 详情 */}
-      {badgeLabel !== undefined && (
-        <span className="ui-activity-item__badge ml-auto shrink-0" style={{ color: "var(--ui-text-3)" }}>{badgeLabel}</span>
-      )}
-      {hasEvidence && (
-        <span className="ml-auto shrink-0" style={{ color: "var(--ui-text-3)" }}>
-          {open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+        <span className="ui-activity-item__icon" aria-hidden="true">
+          {isFailed ? <CircleAlert size={13} /> : icon}
         </span>
-      )}
+        <span className="ui-activity-item__label">
+          {item.lead === undefined ? displayText : (
+            <><span className="ui-activity-item__verb">{item.lead.action}</span>{" "}<span className="ui-activity-item__subject">{item.lead.subject}</span></>
+          )}
+        </span>
+        {badgeLabel !== undefined && <span className="ui-activity-item__badge">{badgeLabel}</span>}
+        <span className="ui-activity-item__disclosure" aria-hidden="true" data-visible={hasEvidence}>
+          {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        </span>
       </button>
       {open && hasEvidence && (
-        <div className="min-w-0 pb-1 pl-[34px] pt-2">
+        <div id={evidenceId} className="ui-activity-item__detail" data-conversation-detail role="region" aria-label={displayText}>
           <ActivityEvidencePanel
             item={item}
             toolResult={props.toolResult}
@@ -631,7 +672,7 @@ function ConversationActivityItem(props: {
         </div>
       )}
       {item.children !== undefined && item.children.length > 0 && (
-        <div className="ml-3 mt-1 space-y-1 border-l pl-3" style={{ borderColor: "var(--ui-border)" }}>
+        <div className="ui-activity-item__children">
           {item.children.map((child) => (
             <ConversationActivityItem
               key={child.key}

@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+import { runModelConfiguration } from "./run-model-configuration.js";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
@@ -5,6 +7,8 @@ import { renameWithRetry } from "../../kernel/fs/atomic-write.js";
 import { isNodeError, toPersistedJsonShape } from "../../kernel/values/index.js";
 import { cloneToolInputSchema, isCanonicalToolName, toolInvocationId, type ToolInputSchema } from "../../domain/tools/index.js";
 import type { ConfirmationRequest } from "../../domain/confirmation/contracts.js";
+import { modelProviderConnectionSettingsSchema } from "../../domain/config/model-connection-settings-schema.js";
+import { modelConfigurationSchema, modelSettingsSchema } from "../../domain/config/model-configuration-schema.js";
 import {
   ORDINARY_RUN_SCHEMA_VERSION,
   OrdinaryFeatureError,
@@ -175,17 +179,45 @@ const toolCallSchema = z.object({
 });
 const configSchema = z.object({
   profileId: z.string().min(1), providerKind: z.literal("openai_compatible"),
-  protocolKind: z.enum(["anthropic_messages", "openai_responses", "openai_compatible_chat_completions"]),
-  baseUrl: z.string(), defaultAiMode: z.enum(["anthropic-messages", "openai-compatible", "openai-responses"]),
+  protocolKind: z.enum(["anthropic_messages", "openai_responses", "openai_compatible_chat_completions", "native"]),
+  baseUrl: z.string(), defaultAiMode: z.enum(["none", "anthropic-messages", "openai-compatible", "openai-responses", "native"]),
+  label: z.string().optional(),
+  logoDataUrl: z.string().optional(),
+  model: z.string().optional(),
+  modelSettings: modelSettingsSchema.optional(),
+  openAI: z.object({
+    temperature: z.number().min(0).max(2).optional(),
+    topP: z.number().min(0).max(1).optional(),
+    maxOutputTokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
+    reasoningEffort: z.enum(["none", "minimal", "low", "medium", "high", "xhigh", "max"]).optional(),
+    reasoningSummary: z.enum(["auto", "concise", "detailed"]).optional(),
+    textVerbosity: z.enum(["low", "medium", "high"]).optional(),
+    serviceTier: z.enum(["auto", "default", "flex", "priority"]).optional(),
+    truncation: z.enum(["auto", "disabled"]).optional(),
+    parallelToolCalls: z.boolean().optional(),
+    store: z.boolean().optional(),
+  }).strict().optional(),
+  piProviderId: z.string().min(1).optional(),
+  connection: modelProviderConnectionSettingsSchema.optional(),
+  enabled: z.boolean().optional(),
+  secretUpdatedAt: z.string().optional(),
   secretRef: z.string(), secretConfigured: z.boolean(), updatedAt: z.string().min(1),
-}).passthrough();
+}).strict().superRefine((config, context) => {
+  if (config.protocolKind !== "native") return;
+  if (config.piProviderId === undefined) {
+    context.addIssue({ code: "custom", message: "native connections require a provider identity", path: ["piProviderId"] });
+  }
+  if (config.connection === undefined) {
+    context.addIssue({ code: "custom", message: "native connections require connection settings", path: ["connection"] });
+  }
+}).transform(runModelConfiguration);
 const resolvedModelCapabilitiesSchema = z.object({
   facts: z.union([
     z.object({
       status: z.literal("confirmed"),
       piProviderId: z.string().min(1),
       modelId: z.string(),
-      transport: z.enum(["openai_compatible_chat_completions", "openai_responses"]),
+      transport: z.enum(["anthropic_messages", "openai_compatible_chat_completions", "openai_responses", "native"]).optional(),
       contextWindowTokens: z.number().positive(),
       maxOutputTokens: z.number().positive(),
       supportsVisionInput: z.boolean(),
@@ -193,13 +225,15 @@ const resolvedModelCapabilitiesSchema = z.object({
       thinkingLevels: z.array(z.enum(["off", "minimal", "low", "medium", "high", "xhigh", "max"])),
       supportsStrictToolSchemas: z.boolean(),
       supportsParallelToolCalls: z.boolean(),
-    }).passthrough(),
+    }).strict(),
     z.object({
       status: z.literal("unconfirmed"),
       modelId: z.string(),
-    }).passthrough(),
+    }).strict(),
   ]),
-}).passthrough();
+  configuration: modelConfigurationSchema.optional(),
+  transport: z.enum(["anthropic_messages", "openai_compatible_chat_completions", "openai_responses", "native"]).optional(),
+}).strict();
 const capabilitySnapshotSchema = z.object({
   snapshotId: z.string().min(1), createdAt: z.string().min(1), activeModel: configSchema,
   modelCapabilities: resolvedModelCapabilitiesSchema,
@@ -222,25 +256,16 @@ const capabilitySnapshotSchema = z.object({
 }).passthrough();
 const memoryOwnerSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("space"), id: z.string().min(1) }).strict(),
-  z.object({ kind: z.literal("workspace"), id: z.string().min(1) }).strict(),
 ]);
-const agentNoteVersionSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/u);
-const agentNoteVersionsSchema = z.object({
-  global: agentNoteVersionSchema,
-  owner: z.object({
-    scope: memoryOwnerSchema,
-    version: agentNoteVersionSchema,
-  }).strict(),
-}).strict();
 const birthSchema = z.object({
-  instructions: z.string(), aiMode: z.enum(["none", "anthropic-messages", "openai-compatible", "openai-responses"]), config: configSchema,
-  reasoningEffort: z.enum(["minimal", "low", "medium", "high", "xhigh", "max"]).optional(),
+  recordToolMetrics: z.boolean().optional(),
+  instructions: z.string(), aiMode: z.enum(["none", "anthropic-messages", "openai-compatible", "openai-responses", "native"]), config: configSchema,
+  reasoningEffort: z.enum(["low", "medium", "high", "xhigh", "max"]).optional(),
   agentDefinitionRef: z.object({
     agentId: z.string().min(1), agentDisplayName: z.string(), promptRef: z.string().min(1), promptVersion: z.string().min(1),
     outputContractId: z.string().min(1), toolVisibilityProfileId: z.string().min(1), definitionHash: z.string().optional(),
   }).strict(),
   capabilitySnapshot: capabilitySnapshotSchema,
-  agentNoteVersions: agentNoteVersionsSchema.optional(),
   memoryOwner: memoryOwnerSchema,
   ownerContext: z.string().max(16_000).optional(),
   collaborationRulesContext: z.string().max(4_256).optional(),
@@ -254,17 +279,7 @@ const birthSchema = z.object({
     approvalMode: z.enum(["prompt", "bypass"]),
     filesystemScope: z.enum(["owner_only", "unrestricted"]),
   }).strict(),
-}).strict().superRefine((birth, context) => {
-  if (birth.agentNoteVersions === undefined) return;
-  if (birth.agentNoteVersions.owner.scope.kind !== birth.memoryOwner.kind ||
-      birth.agentNoteVersions.owner.scope.id !== birth.memoryOwner.id) {
-    context.addIssue({
-      code: "custom",
-      message: "memoryOwner must match the owner captured in agentNoteVersions",
-      path: ["agentNoteVersions", "owner", "scope"],
-    });
-  }
-});
+}).strict();
 const statusSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("queued") }).strict(),
   z.object({ kind: z.literal("running") }).strict(),
@@ -282,7 +297,7 @@ const capabilityResolutionSchema = z.object({
   toolVisibilityProfileId: z.string().min(1),
   capabilityPlan: z.object({
     protocolToolCallCapabilities: z.object({
-      protocolKind: z.enum(["openai_responses", "openai_compatible_chat_completions"]),
+      protocolKind: z.enum(["anthropic_messages", "openai_responses", "openai_compatible_chat_completions", "native"]),
       canSendToolDefinitions: z.boolean(),
       canReceiveToolCalls: z.boolean(),
       canRoundTripToolResults: z.boolean(),
@@ -388,6 +403,7 @@ const rawStateSchema = z.object({
   turn: z.object({
     conversationId: z.string().min(1), ordinal: z.number().int().positive(),
     userTurnId: z.string().min(1), assistantTurnId: z.string().min(1), predecessorRunId: z.string().min(1).optional(),
+    replacesRunId: z.string().min(1).optional(),
   }).strict(),
   input: z.object({
     userMessage: z.string(),
@@ -558,10 +574,26 @@ const rawStateSchema = z.object({
 });
 // Schema output is structurally the persisted state; the assertion bridges the
 // passthrough fields whose domain types declare more members than the schema.
-const stateSchema = rawStateSchema as unknown as z.ZodType<OrdinaryRunState>;
+const stateSchema = rawStateSchema.transform((state) => {
+  const { capabilityResolution: _resolution, toolMetrics, ...facts } = state;
+  return { ...facts, ...(state.birth.recordToolMetrics === true && toolMetrics !== undefined ? { toolMetrics } : {}) };
+}) as unknown as z.ZodType<OrdinaryRunState>;
 const documentSchema: z.ZodType<OrdinaryRunSnapshotDocument> = z.object({
   schemaVersion: z.literal(ORDINARY_RUN_SCHEMA_VERSION), revision: z.number().int().positive(), savedAt: z.string().min(1), state: stateSchema,
 }).strict();
+const storedSnapshotSchema = z.object({
+  schemaVersion: z.literal(ORDINARY_RUN_SCHEMA_VERSION),
+  revision: z.number().int().positive(), savedAt: z.string().min(1),
+  birthFile: z.literal("birth.json"),
+  state: z.record(z.string(), z.unknown()),
+}).strict().superRefine((document, context) => {
+  if (Object.hasOwn(document.state, "birth")) context.addIssue({ code: "custom", message: "mutable state cannot contain Run birth" });
+});
+const storedBirthSchema = z.object({
+  schemaVersion: z.literal("ordinary-run-birth/v1"), runId: z.string().min(1),
+  birth: z.record(z.string(), z.unknown()),
+}).strict();
+
 const summarySchema = z.object({
   runId: z.string().min(1), conversationId: z.string().min(1), userTurnId: z.string().min(1), assistantTurnId: z.string().min(1),
   status: z.enum(["queued", "running", "awaiting_approval", "completed", "failed", "cancelled", "blocked"]),
@@ -642,15 +674,19 @@ export function createFileSystemOrdinaryRunRepository(rootDir: string): Ordinary
           );
           throw new OrdinaryFeatureError("ordinary_revision_conflict", cause.message, { cause });
         }
-        const document: OrdinaryRunSnapshotDocument = {
+        const validation = documentSchema.safeParse({
           schemaVersion: ORDINARY_RUN_SCHEMA_VERSION,
           revision: actualRevision + 1,
           savedAt: state.timestamps.updatedAt,
           state: toPersistedJsonShape(state),
-        };
-        const validation = documentSchema.safeParse(document);
+        });
         if (!validation.success) throw new OrdinaryRunSnapshotIncompatibleError(state.runId, z.prettifyError(validation.error));
-        await writeJsonAtomically(snapshotPath(rootDir, state.runId), document);
+        const document = validation.data;
+        if (current !== undefined && !isDeepStrictEqual(current.state.birth, document.state.birth)) {
+          throw new OrdinaryFeatureError("ordinary_run_state_conflict", "Run birth is immutable after creation");
+        }
+        if (current === undefined) await writeRunBirth(rootDir, document);
+        await writeMutableRunSnapshot(rootDir, document);
         // The snapshot is the commit. Index maintenance is deliberately separate
         // from run writes so unrelated runs never wait for a full snapshot scan.
         await updateManifest((entries) => entries.set(state.runId, summaryFromDocument(document))).catch(() => undefined);
@@ -660,18 +696,22 @@ export function createFileSystemOrdinaryRunRepository(rootDir: string): Ordinary
     get(runId) { return readSnapshot(rootDir, runId); },
     async list(limit = 50) {
       const normalizedLimit = Math.max(0, Math.floor(limit));
-      const forceRepair = normalizedLimit >= Number.MAX_SAFE_INTEGER;
-      // Manifest entries are committed alongside every snapshot save; listing
-      // consumes them directly instead of re-reading every snapshot. Drift is
-      // reconciled by the forceRepair scan used on the recovery path.
+      // Recovery owns full inventory repair. Query limits never trigger a filesystem scan.
       const summaries = await enqueueManifest(async () => {
-        const entries = await currentManifest(forceRepair);
+        const entries = await currentManifest();
         return sortedSummaries(entries.values());
       });
       return toPersistedJsonShape(summaries.slice(0, normalizedLimit));
     },
-    inspectRecoveryInventory() {
-      return scanRecoveryInventory(rootDir);
+    async inspectRecoveryInventory() {
+      const inventory = await scanRecoveryInventory(rootDir);
+      await enqueueManifest(async () => {
+        manifestEntries = new Map(inventory.summaries.map((entry) => [entry.runId, entry]));
+        manifestDirty = false;
+        try { await writeManifest(rootDir, sortedSummaries(manifestEntries.values())); }
+        catch { manifestDirty = true; }
+      });
+      return inventory;
     },
     delete(runId) {
       return enqueueRun(runId, async () => {
@@ -683,14 +723,50 @@ export function createFileSystemOrdinaryRunRepository(rootDir: string): Ordinary
 }
 
 async function readSnapshot(rootDir: string, runId: string): Promise<OrdinaryRunSnapshotDocument | undefined> {
-  const filePath = snapshotPath(rootDir, runId);
-  const stored = await readStoredJson(filePath, runId);
+  const stored = await readStoredJson(snapshotPath(rootDir, runId), runId);
   if (stored === undefined) return undefined;
-  const result = documentSchema.safeParse(stored.raw);
+  const snapshot = storedSnapshotSchema.safeParse(stored.raw);
+  if (!snapshot.success) throw new OrdinaryRunSnapshotIncompatibleError(runId,
+    "Run storage requires immutable birth.json plus mutable snapshot.json; explicitly run compact:run-storage before opening previous development snapshots");
+  const birthStored = await readStoredJson(birthPath(rootDir, runId), runId);
+  const parsedBirth = storedBirthSchema.safeParse(birthStored?.raw);
+  if (!parsedBirth.success || parsedBirth.data.runId !== runId) {
+    throw new OrdinaryRunSnapshotIncompatibleError(runId, "Run birth is missing or invalid");
+  }
+  const { model, capabilitySnapshot, ...facts } = parsedBirth.data.birth;
+  if (typeof capabilitySnapshot !== "object" || capabilitySnapshot === null || Array.isArray(capabilitySnapshot)) {
+    throw new OrdinaryRunSnapshotIncompatibleError(runId, "Run capability contract is invalid");
+  }
+  const birth = { ...facts, config: model, capabilitySnapshot: { ...capabilitySnapshot, activeModel: model } };
+  const { birthFile: _birthFile, ...header } = snapshot.data;
+  const result = documentSchema.safeParse({ ...header, state: { ...snapshot.data.state, birth } });
   if (!result.success || result.data.state.runId !== runId) {
     throw new OrdinaryRunSnapshotIncompatibleError(runId, result.success ? "run identity is invalid" : z.prettifyError(result.error));
   }
   return result.data;
+}
+
+function birthPath(rootDir: string, runId: string) { return path.join(runDirectory(rootDir, runId), "birth.json"); }
+
+function storedRunBirth(document: OrdinaryRunSnapshotDocument) {
+  const { config, capabilitySnapshot, ...facts } = document.state.birth;
+  const { activeModel, ...capabilities } = capabilitySnapshot;
+  if (!isDeepStrictEqual(config, activeModel)) throw new OrdinaryRunSnapshotIncompatibleError(document.state.runId, "Run model configuration differs from its capability contract");
+  return { schemaVersion: "ordinary-run-birth/v1" as const, runId: document.state.runId,
+    birth: { ...facts, model: config, capabilitySnapshot: capabilities } };
+}
+
+async function writeRunBirth(rootDir: string, document: OrdinaryRunSnapshotDocument) {
+  await writeJsonAtomically(birthPath(rootDir, document.state.runId), storedRunBirth(document));
+}
+
+function storedMutableSnapshot(document: OrdinaryRunSnapshotDocument) {
+  const { birth: _birth, capabilityResolution: _resolution, ...state } = document.state;
+  return { ...document, birthFile: "birth.json" as const, state };
+}
+
+async function writeMutableRunSnapshot(rootDir: string, document: OrdinaryRunSnapshotDocument) {
+  await writeJsonAtomically(snapshotPath(rootDir, document.state.runId), storedMutableSnapshot(document));
 }
 
 async function scanSummaries(rootDir: string): Promise<OrdinaryRunSummary[]> {
@@ -790,7 +866,7 @@ async function writeJsonAtomically(filePath: string, value: unknown): Promise<vo
   const tempDirectory = path.join(directory, ".tmp");
   const tempPath = path.join(tempDirectory, `${path.basename(filePath)}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`);
   await fs.mkdir(tempDirectory, { recursive: true });
-  await fs.writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  await fs.writeFile(tempPath, `${JSON.stringify(value)}\n`, { encoding: "utf8", mode: 0o600 });
   try { await renameWithRetry(tempPath, filePath); }
   catch (error) { await fs.rm(tempPath, { force: true }).catch(() => undefined); throw error; }
 }
@@ -826,4 +902,41 @@ function sameStringList(left: readonly string[], right: readonly string[]): bool
     if (left[index] !== right[index]) return false;
   }
   return true;
+}
+
+/** Offline maintenance validates all targets and preserves originals before converting previous development snapshots. */
+export async function compactOrdinaryRunStorage(rootDir: string, backupRoot: string): Promise<{
+  readonly count: number; readonly bytesBefore: number; readonly bytesAfter: number;
+}> {
+  const entries = await fs.readdir(path.join(rootDir, "runs"), { withFileTypes: true });
+  const pending = await Promise.all(entries.filter((entry) => entry.isDirectory()).map(async (entry) => {
+    const runId = decodeURIComponent(entry.name);
+    const original = await fs.readFile(snapshotPath(rootDir, runId), "utf8");
+    const originalBirth = await fs.readFile(birthPath(rootDir, runId), "utf8").catch((error) => {
+      if (isNodeError(error, "ENOENT")) return undefined;
+      throw error;
+    });
+    const raw = JSON.parse(original) as unknown;
+    const document = storedSnapshotSchema.safeParse(raw).success
+      ? await readSnapshot(rootDir, runId)
+      : documentSchema.parse(raw);
+    if (document === undefined || document.state.runId !== runId) throw new OrdinaryRunSnapshotIncompatibleError(runId, "run identity is invalid");
+    const mutable = `${JSON.stringify(storedMutableSnapshot(document))}\n`;
+    const birth = `${JSON.stringify(storedRunBirth(document))}\n`;
+    return { runId, original, originalBirth, document, mutable, birth };
+  }));
+  let count = 0, bytesBefore = 0, bytesAfter = 0;
+  for (const item of pending) {
+    bytesBefore += Buffer.byteLength(item.original) + Buffer.byteLength(item.originalBirth ?? "");
+    bytesAfter += Buffer.byteLength(item.mutable) + Buffer.byteLength(item.birth);
+    if (item.original === item.mutable && item.originalBirth === item.birth) continue;
+    const backupDir = path.join(backupRoot, encodeURIComponent(item.runId));
+    await fs.mkdir(backupDir, { recursive: true });
+    await fs.writeFile(path.join(backupDir, "snapshot.json"), item.original, { encoding: "utf8", flag: "wx", mode: 0o600 });
+    if (item.originalBirth !== undefined) await fs.writeFile(path.join(backupDir, "birth.json"), item.originalBirth, { encoding: "utf8", flag: "wx", mode: 0o600 });
+    await writeRunBirth(rootDir, item.document);
+    await writeMutableRunSnapshot(rootDir, item.document);
+    count += 1;
+  }
+  return { count, bytesBefore, bytesAfter };
 }

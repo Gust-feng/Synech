@@ -3,6 +3,7 @@ import type { OrdinaryRunContext } from "../../../domain/ordinary/index.js";
 import {
   createAgentSessionLoop,
   createModelCollectionChannel,
+  modelToolDefinitionSerialization,
   type AgentSessionToolDefinitionMetrics,
 } from "../../../adapters/intelligence/index.js";
 import {
@@ -92,18 +93,13 @@ export type CreateOrdinaryAgentRunResourceAcquirerInput = {
   readonly resolveAgentDefinition: OrdinaryAgentDefinitionResolver;
   readonly resolveSkillContexts?: OrdinaryAgentSkillContextResolver;
   readonly resolveFeatureToolContributions?: HostFeatureAgentToolContributionResolver;
-  /** Binds feature-tool reads and explicit adoption to this exact Ordinary run. */
-  readonly resolveMemoryFactSink?: (input: {
-    readonly runId: string;
-    readonly conversationId: string;
-  }) => NonNullable<Parameters<HostFeatureAgentToolContributionResolver>[0]["memoryFacts"]>;
   /**
    * Resolves the conversation memory background binding for this run
    * (0.6.0 正式设计 §9.1)：绑定一次（none|revision），返回首个请求可用的背景块与
    * 每次 freeze 的供给复核闭包。Degrades to undefined when Memory is unavailable.
    */
   readonly resolveMemoryBackground?: (input: {
-    readonly owner: import("../../../domain/memory/index.js").MemoryOwner;
+    readonly owner: import("../../../domain/execution-scope/index.js").ConversationOwner;
     readonly conversationId: string;
   }) => Promise<{
     readonly initialBlock: string | undefined;
@@ -191,6 +187,7 @@ export function createOrdinaryAgentRunResourceAcquirer(
             thinkingLevel: providerBinding.thinkingLevel,
             transformProviderPayload: providerBinding.transformProviderPayload,
             providerKind: input.birth.config.providerKind,
+            protocolKind: input.birth.config.protocolKind,
             supportedPurposes: ["skill_routing"],
           });
         const skillContexts = await options.resolveSkillContexts?.({
@@ -206,7 +203,7 @@ export function createOrdinaryAgentRunResourceAcquirer(
           runContext,
           workspaceRoot: resources.workspaceRoot,
         });
-        const toolMetrics = new OrdinaryToolMetricsCollector();
+        const toolMetrics = input.birth.recordToolMetrics === true ? new OrdinaryToolMetricsCollector() : undefined;
         const tokenCounter = (dependencies.createTokenCounter ?? createOpenAITokenCounter)(
           input.birth.config.model,
         );
@@ -232,14 +229,7 @@ export function createOrdinaryAgentRunResourceAcquirer(
               featureContributions: options.resolveFeatureToolContributions?.({
                 workspaceRoot: resources.workspaceRoot,
                 runContext,
-                memoryOwner: input.birth.memoryOwner,
-                agentNoteVersions: input.birth.agentNoteVersions,
-                run: { runId: input.runId, conversationId: input.conversationId },
-                memoryFacts: options.resolveMemoryFactSink?.({
-                  runId: input.runId,
-                  conversationId: input.conversationId,
-                }),
-                countMemoryTokens: tokenCounter.countText,
+                memoryOwner: input.birth.memoryOwner,                run: { runId: input.runId, conversationId: input.conversationId },
               }),
             }),
             (register) => {
@@ -274,6 +264,7 @@ export function createOrdinaryAgentRunResourceAcquirer(
             agentToolDefinitions: subAgentToolCatalog.definitions,
             skillContexts,
             toolDefinitionTokenCounter,
+            toolDefinitionSerialization: modelToolDefinitionSerialization(providerBinding.selectedModel),
           });
         } catch (error) {
           throw expectedOrWrappedExecutionError(
@@ -282,7 +273,7 @@ export function createOrdinaryAgentRunResourceAcquirer(
             "Ordinary tool boundary could not be resolved.",
           );
         }
-        const observedToolGateway = new ToolExecutionObservationGateway(toolCenter, toolMetrics);
+        const observedToolGateway = toolMetrics === undefined ? toolCenter : new ToolExecutionObservationGateway(toolCenter, toolMetrics);
         const tools = ordinaryToolBoundary(
           input,
           definition,
@@ -330,9 +321,9 @@ export function createOrdinaryAgentRunResourceAcquirer(
           thinkingLevel: providerBinding.thinkingLevel,
           transformProviderPayload: providerBinding.transformProviderPayload,
           toolDefinitionTokenCounter: tokenCounter.countText,
-          onProviderToolDefinitionMetrics: (metrics) => {
-            recordProviderToolDefinitionMetrics(toolMetrics, metrics);
-          },
+          ...(toolMetrics === undefined ? {} : {
+            onProviderToolDefinitionMetrics: (metrics: AgentSessionToolDefinitionMetrics) => recordProviderToolDefinitionMetrics(toolMetrics, metrics),
+          }),
           agentSession: sessionLease.session,
           ...(activeSessionLease === undefined
             ? {}
@@ -424,6 +415,8 @@ async function createCustomProviderBindingForRun(
     modelProvider: input.birth.config,
   });
   return (dependencies.createProviderBinding ?? createFrozenProviderBinding)({
+    configCenter: options.host.configCenter,
+    abortSignal: input.abortSignal,
     resolved: resolvedProvider,
     profileId: input.birth.config.profileId,
     apiKey: resolvedProvider.apiKey,
@@ -550,11 +543,12 @@ async function releaseAfterAcquireFailure(
 
 function requireResolvedModelRuntimeMode(
   mode: AcquireOrdinaryAgentLoopRunResourcesInput["birth"]["aiMode"],
-): "anthropic-messages" | "openai-compatible" | "openai-responses" {
+): "anthropic-messages" | "openai-compatible" | "openai-responses" | "native" {
   if (
     mode === "anthropic-messages" ||
     mode === "openai-compatible" ||
-    mode === "openai-responses"
+    mode === "openai-responses" ||
+    mode === "native"
   ) return mode;
   throw new CodedExecutionError(
     "unsupported_provider_protocol",

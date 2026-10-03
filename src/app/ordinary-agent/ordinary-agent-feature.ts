@@ -1,5 +1,5 @@
 import type { ConfirmationDecision } from "../../domain/confirmation/index.js";
-import { memoryOwnerKey, memoryOwnersForConversation } from "../../domain/memory/index.js";
+import { memoryOwnerKey } from "../../domain/memory/index.js";
 import {
   toolInvocationId,
   sameResultForIdempotency,
@@ -25,8 +25,6 @@ import type {
   OrdinaryRunInput,
   OrdinaryRunTurn,
   OrdinaryStableEvidenceRun,
-  OrdinaryMemoryFact,
-  OrdinaryMemoryFactRepository,
   OrdinaryConversationTitleGenerator,
   StartOrdinaryRunInput,
   SubmitOrdinaryTurnInput,
@@ -56,7 +54,6 @@ import {
 } from "./state.js";
 import type { OrdinaryManagedAttachmentRepository } from "./managed-attachment-repository.js";
 import { createManagedAttachmentLifecycle, managedAttachmentIds } from "./attachment-lifecycle.js";
-import { createInMemoryOrdinaryMemoryFactRepository } from "./memory-fact-repository.js";
 import {
   ordinaryRunActivityCursor,
 } from "./activity-replay.js";
@@ -107,10 +104,14 @@ export function createOrdinaryAgentFeature(input: {
   readonly execution: OrdinaryExecutionPort;
   readonly sessionRepository: AgentSessionRepository;
   readonly releaseToolEvidenceOwner?: (ownerId: string) => void | Promise<void>;
+  /** Awaited branch-selection lifecycle event, composed through WorkbenchCoordination. */
+  readonly onConversationBranchSelected?: (input: {
+    readonly conversationId: string;
+    readonly owner: import("../../domain/execution-scope/index.js").ConversationOwner;
+    readonly retainedThroughOrdinal: number;
+  }) => Promise<void>;
   readonly managedAttachmentRepository?: OrdinaryManagedAttachmentRepository;
   readonly managedAttachmentInstanceId?: string;
-  /** Durable Ordinary-owned read/reference facts for memory tools. */
-  readonly memoryFactRepository?: OrdinaryMemoryFactRepository;
   /**
    * Host-provided neutral model capability for conversation title generation
    * (ADR：UI 摘要字段）。未接线时列表继续使用首条消息截断回退。
@@ -129,7 +130,6 @@ export function createOrdinaryAgentFeature(input: {
   const visibleAssistantCheckpointIntervalMs = 250;
   const now = input.now ?? nowIso;
   const idFactory = input.idFactory ?? createId;
-  const memoryFactRepository = input.memoryFactRepository ?? createInMemoryOrdinaryMemoryFactRepository();
   const managedAttachments = createManagedAttachmentLifecycle({
     repository: input.managedAttachmentRepository,
     instanceId: input.managedAttachmentInstanceId,
@@ -228,7 +228,6 @@ export function createOrdinaryAgentFeature(input: {
     runStore,
     sessionRepository: input.sessionRepository,
     managedAttachments,
-    memoryFactRepository,
     releaseToolEvidenceOwner: input.releaseToolEvidenceOwner,
     activity: activityHub,
     execution: {
@@ -241,6 +240,7 @@ export function createOrdinaryAgentFeature(input: {
     },
     settlement: terminalSettlement,
     generateConversationTitle: input.generateConversationTitle,
+    onConversationBranchSelected: input.onConversationBranchSelected,
     now,
     idFactory,
     isReleased: () => released,
@@ -370,6 +370,7 @@ export function createOrdinaryAgentFeature(input: {
         conversationCoordinator.markUnavailable(summary.conversationId, error);
       }
     }
+    await conversationCoordinator.recoverPendingBranchChanges();
     await reconcileRecoveredSessionBranches();
     await recoverManagedAttachments();
     for (const control of conversationCoordinator.controls()) {
@@ -419,7 +420,7 @@ export function createOrdinaryAgentFeature(input: {
       if (control.state.deletedAt !== undefined || conversationCoordinator.unavailable(conversationId)) continue;
       const runs = runStore.cachedDocuments()
         .map((document) => document.state)
-        .filter((run) => run.turn.conversationId === conversationId);
+        .filter((run) => run.turn.conversationId === conversationId && !control.state.retiredRunIds?.includes(run.runId));
       if (runs.length === 0) continue;
       try {
         const target = await recoveredSessionCheckpoint(
@@ -445,6 +446,16 @@ export function createOrdinaryAgentFeature(input: {
   async function recoverManagedAttachments(): Promise<void> {
     const attachmentIdsByConversation = new Map<string, Set<string>>();
     const preserveConversationIds = new Set(conversationCoordinator.unavailableIds());
+    // A claim is written before the Run snapshot so the file cannot be read
+    // through an unclaimed draft during birth. If the process exits in that
+    // small window, the live conversation is the remaining durable owner fact.
+    // Preserve it; deleting the upload is worse than retaining it for the next
+    // submission or the conversation`s eventual cleanup.
+    for (const control of conversationCoordinator.controls()) {
+      if (control.state.deletedAt === undefined) {
+        preserveConversationIds.add(control.state.conversationId);
+      }
+    }
     if (runStore.enumerationFailed()) {
       for (const control of conversationCoordinator.controls()) preserveConversationIds.add(control.state.conversationId);
     }
@@ -505,16 +516,6 @@ export function createOrdinaryAgentFeature(input: {
     return conversationCoordinator.setConversationPinned(conversationId, pinned);
   }
 
-  async function rollbackConversation(inputValue: {
-    readonly conversationId: string;
-    readonly targetRunId?: string;
-    readonly stepsBack?: number;
-  }): Promise<OrdinaryConversationReadModel> {
-    assertLive();
-    await readyPromise;
-    return conversationCoordinator.rollbackConversation(inputValue);
-  }
-
   async function deleteConversation(conversationId: string): Promise<void> {
     assertLive();
     await readyPromise;
@@ -558,80 +559,19 @@ export function createOrdinaryAgentFeature(input: {
     return conversationCoordinator.isHiddenRun(state);
   }
 
-  async function recordMemoryRead(
-    factInput: Omit<OrdinaryMemoryFact, "kind" | "memoryKind" | "recordedAt" | "conversationId">,
-  ): Promise<void> {
-    await readyPromise;
-    await runStore.withExclusiveRun(factInput.runId, async () => {
-      const document = await runStore.load(factInput.runId);
-      if (document === undefined || isHiddenRun(document.state)) {
-        throw new OrdinaryFeatureError("ordinary_run_not_found", `Ordinary run ${factInput.runId} was not found.`);
-      }
-      assertMemoryFactOwnerAllowed(document.state, factInput.owner);
-      await memoryFactRepository.append({
-        ...factInput,
-        conversationId: document.state.turn.conversationId,
-        kind: "read",
-        memoryKind: "path_dependency",
-        recordedAt: now(),
-      });
-    });
-  }
-
-  async function recordMemoryReference(
-    factInput: Omit<OrdinaryMemoryFact, "kind" | "memoryKind" | "recordedAt" | "conversationId">,
-  ): Promise<"recorded" | "already_recorded" | "not_read"> {
-    await readyPromise;
-    return runStore.withExclusiveRun(factInput.runId, async () => {
-      const document = await runStore.load(factInput.runId);
-      if (document === undefined || isHiddenRun(document.state)) {
-        throw new OrdinaryFeatureError("ordinary_run_not_found", `Ordinary run ${factInput.runId} was not found.`);
-      }
-      assertMemoryFactOwnerAllowed(document.state, factInput.owner);
-      const facts = await memoryFactRepository.list({ runId: factInput.runId, memoryId: factInput.memoryId });
-      const read = facts.some((fact) =>
-        fact.kind === "read" &&
-        fact.memoryKind === "path_dependency" &&
-        fact.revision === factInput.revision &&
-        fact.title === factInput.title &&
-        memoryOwnerKey(fact.owner) === memoryOwnerKey(factInput.owner));
-      if (!read) return "not_read";
-      return memoryFactRepository.append({
-        ...factInput,
-        conversationId: document.state.turn.conversationId,
-        kind: "applied",
-        memoryKind: "path_dependency",
-        recordedAt: now(),
-      });
-    });
-  }
-
-  function assertMemoryFactOwnerAllowed(run: OrdinaryRunState, owner: OrdinaryMemoryFact["owner"]): void {
-    const runOwner = run.birth.memoryOwner;
-    if (!memoryOwnersForConversation(runOwner)
-      .some((candidate) => memoryOwnerKey(candidate) === memoryOwnerKey(owner))) {
-      throw new OrdinaryFeatureError(
-        "ordinary_memory_scope_unavailable",
-        `Memory owner ${memoryOwnerKey(owner)} is outside the frozen scope of Ordinary run ${run.runId}.`,
-      );
-    }
-  }
-
   return {
     commands: {
       start,
       submitTurn,
       renameConversation,
       setConversationPinned,
-      rollbackConversation,
+      async selectConversationBranch(input) { await readyPromise; return conversationCoordinator.selectConversationBranch(input); },
       bindMemoryBackground: (input) => conversationCoordinator.bindMemoryBackground(input.conversationId, input.background),
       deleteConversation,
       createManagedAttachmentDraft,
       discardManagedAttachmentDraft,
       cancel,
       decideApproval,
-      recordMemoryRead,
-      recordMemoryReference,
     },
     queries: {
       async getRun(runId) {
@@ -665,17 +605,14 @@ export function createOrdinaryAgentFeature(input: {
         // ordinal，含排队与未稳定运行（正式设计 §11.2）。
         const summaries = await runStore.listSummaries(Number.MAX_SAFE_INTEGER);
         const maxByConversation = new Map<string, number>();
-        const loadedRunIds: string[] = [];
         for (const summary of summaries) {
           if (isHiddenConversation(summary.conversationId)) continue;
           const document = await runStore.load(summary.runId);
           if (document === undefined || isHiddenRun(document.state)) continue;
-          loadedRunIds.push(summary.runId);
           const ordinal = document.state.turn.ordinal;
           const current = maxByConversation.get(document.state.turn.conversationId) ?? 0;
           if (ordinal > current) maxByConversation.set(document.state.turn.conversationId, ordinal);
         }
-        for (const runId of loadedRunIds) runStore.evictCachedTerminal(runId);
         const result: { conversationId: string; ownerKey: string; allocatedThroughOrdinal: number }[] = [];
         for (const [conversationId, ordinal] of maxByConversation) {
           const owner = await conversationCoordinator.loadControl(conversationId)
@@ -689,6 +626,10 @@ export function createOrdinaryAgentFeature(input: {
         await readyPromise;
         return conversationCoordinator.listConversationsByOwner(owner);
       },
+      async listConversationSummaries(input) {
+        await readyPromise;
+        return conversationCoordinator.listConversationSummaries(input);
+      },
       async listConversations(limit = 50) {
         await readyPromise;
         return conversationCoordinator.listConversations(limit);
@@ -698,38 +639,33 @@ export function createOrdinaryAgentFeature(input: {
         const record = await managedAttachments.get(attachmentId);
         return record === undefined ? undefined : clone(record);
       },
-      async listMemoryFacts(query) {
-        await readyPromise;
-        return memoryFactRepository.list(query);
-      },
       async releaseTerminalRunCaches(runIds) {
         await readyPromise;
-        for (const runId of runIds) runStore.evictCachedTerminal(runId);
+        // Run documents also drive turn order and idempotency. Only their
+        // rebuildable activity projections are disposable caches.
+        for (const runId of runIds) terminalSettlement.releaseStableResources(runId);
       },
       async getStableTerminalRunFacts(runId) {
         // Startup reconciliation must finish first so recovered runs already
         // closed their lost continuations, pending tool rounds and approvals.
         await readyPromise;
         const document = await runStore.load(runId);
-        if (document === undefined || isHiddenRun(document.state) || !terminalSettlement.isStable(document.state)) return undefined;
+        if (document === undefined || isHiddenRun(document.state) || conversationCoordinator.isRetiredRun(document.state) || !terminalSettlement.isStable(document.state)) return undefined;
         return projectStableTerminalRunFacts(document);
       },
       async listStableEvidenceRuns(conversationId, range) {
         // Startup reconciliation first (same reason as getStableTerminalRunFacts).
         await readyPromise;
-        // MAX_SAFE_INTEGER selects the force-repair manifest scan, so a long
-        // conversation's early stable runs are not truncated by the recent-N limit.
+        // Use the complete maintained manifest; recovery owns disk repair scans.
         const summaries = await runStore.listSummaries(Number.MAX_SAFE_INTEGER);
         const matched = summaries.filter((summary) => summary.conversationId === conversationId);
         const evidence: OrdinaryStableEvidenceRun[] = [];
-        const loadedRunIds: string[] = [];
         for (const summary of matched) {
           const document = await runStore.load(summary.runId);
-          if (document === undefined || isHiddenRun(document.state)) continue;
+          if (document === undefined || isHiddenRun(document.state) || conversationCoordinator.isRetiredRun(document.state)) continue;
           if (!terminalSettlement.isStable(document.state)) continue;
           const ordinal = document.state.turn.ordinal;
           if (ordinal < range.fromOrdinal || ordinal > range.throughOrdinal) continue;
-          loadedRunIds.push(summary.runId);
           evidence.push({
             runId: document.state.runId,
             ordinal,
@@ -741,8 +677,6 @@ export function createOrdinaryAgentFeature(input: {
             occurredAt: summary.createdAt,
           });
         }
-        // Bulk read must not pin terminal snapshots; release what it loaded.
-        for (const runId of loadedRunIds) runStore.evictCachedTerminal(runId);
         evidence.sort((left, right) => left.ordinal - right.ordinal);
         return evidence;
       },

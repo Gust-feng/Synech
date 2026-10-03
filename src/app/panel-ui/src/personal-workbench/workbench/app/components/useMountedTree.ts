@@ -544,18 +544,13 @@ export function useMountedTree(options: UseMountedTreeOptions): UseMountedTreeRe
       refreshAllExpanded()
     }
     if (change.owners.includes('spaces') && change.referenceIds !== undefined) {
-      const removed = new Set(change.referenceIds)
-      setDirectories((current) => {
-        const next = new Map(current)
-        for (const [key, state] of next) {
-          if ([...removed].some((id) => state.directoryId === id || state.directoryId.startsWith(`${id}::`))) next.delete(key)
-        }
-        return next.size === current.size ? current : next
-      })
-      setExpandedIds((current) => {
-        const next = new Set([...current].filter((id) => ![...removed].some((root) => id === root || id.startsWith(`${root}::`))))
-        return next.size === current.size ? current : next
-      })
+      // Space updates are not necessarily structural. Caption and annotation
+      // edits update the same reference identity and must not make the current
+      // selection disappear while the user is reading or editing it.
+      // Refresh mounted directories instead; a real removal is reflected by
+      // the authoritative snapshot and the existing selection guard then picks
+      // a valid fallback.
+      refreshAllExpanded()
     }
   }), [expandedIds, refreshAllExpanded, tree])
 

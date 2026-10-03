@@ -90,6 +90,9 @@ html[data-style='default'][data-color='dark'] .ui-agent-home__scene--dark {
 
 .ui-agent-home__composer .ui-conversation-composer__input {
   min-height: 72px;
+  max-height: 128px;
+  font-size: max(15px, calc(var(--reading-body-size, 16px) - 1px));
+  line-height: 1.5;
   padding: 14px 16px 6px;
 }
 

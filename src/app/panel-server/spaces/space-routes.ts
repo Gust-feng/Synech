@@ -29,6 +29,7 @@ const referenceSchema = z.discriminatedUnion("kind", [
 
 const createFolderSchema = z.object({ title: titleSchema }).strict();
 const attachWorkspaceSchema = z.object({ rootPath: z.string().trim().min(1).max(4_096), title: titleSchema.optional() }).strict();
+const reconnectWorkspaceSchema = z.object({ rootPath: z.string().trim().min(1).max(4_096) }).strict();
 const addReferenceSchema = z.object({ title: titleSchema, reference: referenceSchema }).strict();
 const renameSchema = z.object({ title: titleSchema }).strict();
 const moveSchema = z.object({
@@ -63,7 +64,7 @@ export type SpaceReferenceRouteDependencies = {
     readonly queries: Pick<WorkspaceFeature["queries"], "get">;
   };
   readonly workbenchCoordination: {
-    readonly commands: Pick<WorkbenchCoordination["commands"], "attachWorkspaceToSpace">;
+    readonly commands: Pick<WorkbenchCoordination["commands"], "attachWorkspaceToSpace" | "reconnectWorkspace">;
   };
   readonly managedSpaceFolderApplication: ManagedSpaceFolderApplication<SpaceReferenceItem>;
   readonly spaceReferenceContentApplication: SpaceReferenceContentApplication;
@@ -124,6 +125,24 @@ export async function handlePanelSpaceRoute(
       actor: { kind: "user" },
     });
     writeJson(response, 201, { ok: true, item: attached.item, workspace: attached.workspace });
+    return true;
+  }
+
+  const workspaceReconnectMatch = /^\/api\/spaces\/references\/([^/]+)\/reconnect$/u.exec(url.pathname);
+  if (workspaceReconnectMatch !== null && request.method === "POST") {
+    const referenceId = decode(workspaceReconnectMatch[1]);
+    const reference = await feature.queries.getReference(referenceId);
+    if (reference === undefined) throw new PanelHttpError(404, "space_reference_not_found", "未找到空间引用。");
+    if (reference.reference.kind !== "workspace") {
+      throw new PanelHttpError(409, "space_reference_kind_invalid", "只有本地目录资源可以重新连接。");
+    }
+    runtime.spaceConversationDeletion.assertAvailable(reference.spaceId);
+    const input = parse(reconnectWorkspaceSchema, await readJsonBody(request), "工作区目录无效。");
+    const reconnected = await runtime.workbenchCoordination.commands.reconnectWorkspace({
+      workspaceId: reference.reference.workspaceId,
+      rootPath: path.resolve(input.rootPath),
+    });
+    writeJson(response, 200, { ok: true, workspace: reconnected.workspace, mount: reconnected.mount });
     return true;
   }
 

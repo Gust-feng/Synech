@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { diffLines, type Change } from 'diff'
-import { AlertTriangle, Brain, Check, ChevronRight, Code2, Maximize2 } from 'lucide-react'
+import { AlertTriangle, Brain, ChevronRight, Code2, Maximize2 } from 'lucide-react'
 import { EditorContent, useEditor } from '@tiptap/react'
 import { useBrain } from './brainStore'
 import type { Note } from './notesStore'
@@ -260,10 +260,7 @@ export function NoteEditor({ note, onSave, onOpenFocus, onClose, onRestoreAsNew 
         </div>
         <div className="ui-preview-toolbar-actions">
         <CollaborationToggle available={incoming?.status !== 'deleted'} />
-        <span className="flex items-center gap-1 text-xs shrink-0" style={{ color: 'var(--ui-text-3, #aba39b)' }}>
-          {saved && durableSaveState.status === 'saved' ? <Check size={12} /> : <span className="w-2 h-2 rounded-full animate-pulse" style={{ background: durableSaveState.status === 'error' ? '#b85c52' : 'var(--ui-accent, #6865a7)' }} />}
-          {durableSaveState.status === 'error' ? '保存失败' : saved && durableSaveState.status === 'saved' ? '已保存' : '保存中…'}
-        </span>
+        {durableSaveState.status === 'error' && <span className="text-xs shrink-0" style={{ color: '#b85c52' }}>保存失败</span>}
         <button onClick={toggleSourceMode} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs transition-colors hover:bg-[var(--ui-hover-tint)]" style={{ color: sourceMode ? 'var(--ui-accent, #6865a7)' : 'var(--ui-text-2, #87827c)' }}>
           <Code2 size={12} />{sourceMode ? '编辑' : '源码'}
         </button>

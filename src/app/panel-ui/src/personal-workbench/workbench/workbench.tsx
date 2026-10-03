@@ -7,7 +7,6 @@ import { WorkbenchBootstrapLoading } from "../../components/workbench-bootstrap-
 import type { Conversation, ConversationSummary } from "../../contracts/conversation";
 import type { PendingConfirmation } from "../../contracts/run";
 import type { PersonalSpaceActions, PersonalSpaceProjection } from "../space";
-import { useWorkspaceProjection } from "../../features/spaces/workspace-state";
 import type { SettingsGroup } from "../../features/settings/components/types";
 
 import { SurfaceErrorBoundary } from "./app/components/SurfaceErrorBoundary";
@@ -49,13 +48,14 @@ export type PersonalWorkbenchProps = {
   readonly conversations: readonly ConversationSummary[];
   readonly currentRun: CurrentRunProjection;
   readonly inputProps: ChatInputProps;
-  readonly showModelUsage: boolean;
   readonly developerModeEnabled: boolean;
   readonly error?: string;
   readonly onDismissError?: () => void;
   readonly pendingConfirmation?: PendingConfirmation | NonNullable<CurrentRunProjection["workView"]>["pendingConfirmation"];
   readonly confirmationBusy: boolean;
   readonly onDecision: (decision: "approve_once" | "deny" | "guidance", guidance?: string) => void;
+  readonly onSelectBranch: (runId: string) => Promise<void>;
+  readonly onEditTurn: (runId: string, content: string) => Promise<boolean>;
   readonly onStartNewConversation: (owner?: ConversationOwnerSelection) => Promise<boolean>;
   readonly onResetConversation: () => void;
   readonly onOpenConversation: (conversationId: string) => boolean | Promise<boolean>;
@@ -88,7 +88,6 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
     setBrainSelection,
     setSpaceTarget,
     setActiveSpace,
-    setActiveWorkspace,
     setHomeOwner,
     focusHomeInput,
     syncContextSelection,
@@ -99,7 +98,6 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
     brainSelectedId,
     spaceTargetId,
     activeSpaceId,
-    activeWorkspaceId,
     homeOwnerSelection,
     homeFocusRequest,
   } = navigationState;
@@ -111,7 +109,7 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
   const conversationRef = useRef(props.conversation);
   conversationRef.current = props.conversation;
   const activeConversation = props.conversation;
-  const displayedOwner = useMemo(() => selectedConversationOwner(navigationState), [view, activeSpaceId, activeWorkspaceId]);
+  const displayedOwner = useMemo(() => selectedConversationOwner(navigationState), [view, activeSpaceId]);
   // The runtime has one active Conversation, while this surface represents one owner.
   // Never render a previous Space's transcript inside the newly selected Space.
   const foreignConversationActive = activeConversation !== undefined
@@ -124,21 +122,17 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
     error: visibleConversation === undefined ? undefined : props.error,
     runStatus: visibleConversation === undefined ? undefined : props.currentRun.run?.status,
   });
-  const workspaceProjection = useWorkspaceProjection(true);
   const { knowledgeLoadState, knowledgeError, retryKnowledge, refreshKnowledge, dismissKnowledgeError } = useWorkbenchEnvironment({
     rootRef,
     personalKnowledgePersistenceEnabled: props.personalKnowledgePersistenceEnabled === true,
     spaceLoadStateLoading: props.spaceLoadState?.loading === true,
     spaces: props.spaces ?? [],
-    workspaceIds: workspaceProjection.workspaces.map((workspace) => workspace.workspaceId),
     view,
     syncContextSelection,
   });
   const surfaceTitle = view === "space"
     ? props.spaces?.find((space) => space.spaceId === activeSpaceId)?.title ?? "空间"
-    : view === "workspace"
-      ? workspaceProjection.workspaces.find((workspace) => workspace.workspaceId === activeWorkspaceId)?.title ?? "工作区"
-      : undefined;
+    : undefined;
   const layout = useWorkbenchLayout();
   const layoutMode = view === "home" ? "reading" : layout.mode;
   const conversationScope = displayedOwner ?? visibleConversation?.owner ?? homeOwnerSelection;
@@ -157,13 +151,12 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
     if (!layout.splitEnabled || viewRef.current === "home") {
       const effectiveOwner = owner ?? conversationRef.current?.owner ?? homeOwnerSelection;
       if (effectiveOwner === undefined || effectiveOwner === null) return;
-      if (effectiveOwner.kind === "workspace") setActiveWorkspace(effectiveOwner.id);
-      else setActiveSpace(effectiveOwner.id);
-      viewRef.current = effectiveOwner.kind;
-      reduceNavigation(effectiveOwner.kind);
+      setActiveSpace(effectiveOwner.id);
+      viewRef.current = "space";
+      reduceNavigation("space");
     }
     layout.showConversation();
-  }, [homeOwnerSelection, layout.splitEnabled, layout.showConversation, reduceNavigation, setActiveSpace, setActiveWorkspace]);
+  }, [homeOwnerSelection, layout.splitEnabled, layout.showConversation, reduceNavigation, setActiveSpace]);
 
   const activateReading = useCallback(() => {
     navigationIntentRef.current += 1;
@@ -198,7 +191,7 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
     const updateNavigation = (): void => {
       reduceNavigation(target);
       if (target === "home") layout.setMode("reading");
-      else if (target === "space" || target === "workspace") layout.setMode("conversation");
+      else if (target === "space") layout.setMode("reading");
       else layout.showReading();
     };
     if (conversationMode === "focus") {
@@ -265,7 +258,8 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
   const newConversation = () => {
     if (props.inputProps.busy || props.inputProps.running === true || conversationScope === null) return;
     navigationIntentRef.current += 1;
-    setHomeOwner(conversationScope);
+    if (conversationScope.kind !== "space") return;
+    setHomeOwner({ kind: "space", id: conversationScope.id });
     props.onResetConversation();
     layout.showConversation();
   };
@@ -277,10 +271,11 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
       state={conversationState}
       input={conversationInput}
       currentRun={props.currentRun}
-      showModelUsage={props.showModelUsage}
       developerModeEnabled={props.developerModeEnabled}
       confirmationBusy={props.confirmationBusy}
       onDecision={props.onDecision}
+      onEditTurn={props.onEditTurn}
+      onSelectBranch={props.onSelectBranch}
       focus={conversationMode === "focus"}
       onExitFocus={() => setConversationMode("normal")}
     />
@@ -372,25 +367,10 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
         collapsed={props.sidebarCollapsed}
         spaces={props.spaces ?? []}
         spaceLoadState={props.spaceLoadState}
-        workspaces={workspaceProjection.workspaces}
-        workspaceLoadState={{
-          loading: workspaceProjection.loading,
-          mutationPending: workspaceProjection.mutationPending,
-          error: workspaceProjection.error,
-          onRetry: workspaceProjection.refresh,
-        }}
-        onAddWorkspace={workspaceProjection.addWorkspace}
-        onHideWorkspace={workspaceProjection.hideWorkspace}
-        onReconnectWorkspace={workspaceProjection.reconnectWorkspace}
         activeSpaceId={activeSpaceId}
-        activeWorkspaceId={activeWorkspaceId}
         onNavigate={navigate}
         onOpenSpace={props.onOpenSpace}
         onActiveSpaceChange={(id) => setActiveSpace(id)}
-        onActiveWorkspaceChange={(id) => {
-          setActiveWorkspace(id);
-          navigate("workspace");
-        }}
         onCreateSpace={props.onCreateSpace}
         onRenameSpace={props.spaceActions?.rename === undefined
           ? undefined
@@ -413,7 +393,7 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
             revealConversation();
           }}
           explorerCollapsed={layout.explorerCollapsed}
-          onToggleExplorer={view === "space" || view === "brain" || view === "workspace" ? layout.toggleExplorer : undefined}
+          onToggleExplorer={view === "space" || view === "brain" ? layout.toggleExplorer : undefined}
           onBrainRoot={() => selectKnowledge(null)}
         />
 
@@ -444,13 +424,11 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
                     onOpenPreview={openReadingPreview}
                     homeInput={homeInput}
                     homeFocusRequest={homeFocusRequest}
-                    workspaceProjection={workspaceProjection}
                     homeOwnerSelection={homeOwnerSelection}
                     onHomeOwnerChange={setHomeOwner}
                     brainSelectedId={brainSelectedId}
                     spaceTargetId={spaceTargetId}
                     activeSpaceId={activeSpaceId}
-                    activeWorkspaceId={activeWorkspaceId}
                     onBrainSelect={selectKnowledge}
                     navigate={navigate}
                     onOpenInSpace={(spaceId, id) => {
@@ -499,7 +477,6 @@ function viewLabel(view: WorkbenchView): string {
   switch (view) {
     case "home": return "个人首页";
     case "space": return "空间";
-    case "workspace": return "工作区";
     case "brain": return "知识库";
     case "search": return "搜索";
   }

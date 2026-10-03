@@ -15,15 +15,9 @@ import type {
   OrdinaryPanelWorkView,
 } from "../../panel-api/ordinary-agent.js";
 
-export function projectCapabilityResolution(
-  resolution: OrdinaryRunState["capabilityResolution"],
-): OrdinaryPanelCapabilityResolution | undefined {
-  if (resolution === undefined) return undefined;
-  return {
-    ...(resolvedContextWindowTokens(resolution.capabilityPlan.modelCapabilities) === undefined
-      ? {}
-      : { modelContextWindowTokens: resolvedContextWindowTokens(resolution.capabilityPlan.modelCapabilities) }),
-  };
+export function projectRunModelCapabilities(run: OrdinaryRunState): OrdinaryPanelCapabilityResolution | undefined {
+  const tokens = resolvedContextWindowTokens(run.birth.capabilitySnapshot.modelCapabilities);
+  return tokens === undefined ? undefined : { modelContextWindowTokens: tokens };
 }
 
 export function projectOrdinaryRun(

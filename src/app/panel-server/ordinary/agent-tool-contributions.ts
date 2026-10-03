@@ -1,19 +1,10 @@
-import {
-  createNoteWriteTool,
-  type AgentNotesFeature,
-  type AgentNoteVersions,
-} from "../../agent-notes/index.js";
+import { createCollaborationRulesTools } from "../../collaboration-rules/index.js";
+import type { CollaborationRulesApplication } from "../../application/collaboration-rules-application.js";
 import { createSpaceRevocationOverlay, createSpaceToolRegistryContribution, type SpaceFeature, type SpaceRevocationOverlay } from "../../spaces/index.js";
 import {
   createPersonalKnowledgeToolRegistryContribution,
   type PersonalKnowledgeFeature,
 } from "../../personal-knowledge/index.js";
-import {
-  createPathDependencyToolRegistryContribution,
-  type OrdinaryMemoryFactSink,
-  type PathDependencyTokenCounter,
-  type PathDependencyFeature,
-} from "../../path-dependencies/index.js";
 import type {
   AgentToolProviderFetch,
   AgentToolRegistryContribution,
@@ -32,19 +23,13 @@ export type HostFeatureAgentToolContributionResolver = (input: {
   readonly runContext?: ContextAttachmentRunContext;
   /** Undefined while CapabilityCenter is building a catalog outside a concrete run. */
   readonly memoryOwner?: ConversationOwner;
-  readonly agentNoteVersions?: AgentNoteVersions;
   /** Present only for a concrete Ordinary run; never supplied by the model. */
   readonly run?: { readonly runId: string; readonly conversationId: string };
-  /** Ordinary-owned durable sink for read/adoption facts. */
-  readonly memoryFacts?: OrdinaryMemoryFactSink;
-  /** Token counter frozen with the concrete run's model. */
-  readonly countMemoryTokens?: PathDependencyTokenCounter;
 }) => readonly AgentToolRegistryContribution[];
 
 /** Selects feature-owned tool contributions once at the Host composition boundary. */
 export function createHostFeatureAgentToolContributionResolver(input: {
-  readonly agentNotes?: Pick<AgentNotesFeature, "commands" | "queries">;
-  readonly pathDependencies?: Pick<PathDependencyFeature, "commands" | "queries">;
+  readonly collaborationRules?: () => CollaborationRulesApplication;
   readonly spaces?: Pick<SpaceFeature, "commands" | "queries" | "events">;
   readonly personalKnowledge?: Pick<PersonalKnowledgeFeature, "commands" | "queries">;
   /** search_history / read_history 的查询端口（Memory Feature 经窄端口提供）。 */
@@ -74,29 +59,22 @@ export function createHostFeatureAgentToolContributionResolver(input: {
   const revocationOverlay = input.revocationOverlay ?? (input.spaces === undefined
     ? undefined
     : createSpaceRevocationOverlay(input.spaces.events));
-  return ({ workspaceRoot, runContext, memoryOwner, agentNoteVersions, run, memoryFacts, countMemoryTokens }) => {
+  return ({ workspaceRoot, runContext, memoryOwner }) => {
     const managedSpaceFolderApplication = input.managedSpaceFolderApplication?.();
     return [
-    ...(input.agentNotes === undefined
+    ...(input.collaborationRules === undefined
       ? []
-      : [(register: Parameters<AgentToolRegistryContribution>[0]) => register({
-          executor: createNoteWriteTool({
-            notes: input.agentNotes!,
+      : [(register: Parameters<AgentToolRegistryContribution>[0]) => {
+          for (const executor of createCollaborationRulesTools({
+            application: {
+              get: (scope) => input.collaborationRules!().get(scope),
+              write: (command) => input.collaborationRules!().write(command),
+            },
             owner: memoryOwner,
-            initialVersions: agentNoteVersions,
-          }),
-          scopes: ["agent-basic"],
-          enabledByDefault: true,
-        })]),
-    ...(input.pathDependencies === undefined
-      ? []
-      : [createPathDependencyToolRegistryContribution({
-          dependencies: input.pathDependencies,
-          owner: memoryOwner,
-          run,
-          memoryFacts,
-          countMemoryTokens,
-        })]),
+          })) {
+            register({ executor, scopes: ["agent-basic"], enabledByDefault: true });
+          }
+        }]),
     ...(input.memoryHistory === undefined
       ? []
       : [createMemoryHistoryToolRegistryContribution({

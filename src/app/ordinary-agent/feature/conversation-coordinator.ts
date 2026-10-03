@@ -1,3 +1,4 @@
+import { recoveredSessionCheckpoint } from "../session-branch-recovery.js";
 import type { IdFactory } from "../../../kernel/id.js";
 import type { AgentSessionRef, AgentSessionRepository } from "../../model-runtime/agent-session.js";
 import {
@@ -8,7 +9,6 @@ import {
   type OrdinaryConversationReadModel,
   type OrdinaryConversationTitleGenerator,
   type OrdinaryFeatureDiagnostic,
-  type OrdinaryMemoryFactRepository,
   type OrdinaryRunSnapshotDocument,
   type OrdinaryRunState,
   type StartOrdinaryRunInput,
@@ -16,7 +16,7 @@ import {
   type SubmitOrdinaryTurnResult,
 } from "../contracts.js";
 import { createInitialOrdinaryRunState } from "../state.js";
-import { normalizeOrdinaryConversationTitle, projectOrdinaryConversation, visibleOrdinaryConversationRuns } from "../conversation-projection.js";
+import { isPreSessionTerminalRun, normalizeOrdinaryConversationTitle, projectOrdinaryConversation, projectOrdinaryConversationSummary, visibleOrdinaryConversationRuns } from "../conversation-projection.js";
 import { isSchedulingBarrierCleared, nextEligibleQueuedRun, orderedConversationRuns, type OrdinaryRunSchedulingFacts } from "../conversation-scheduler.js";
 import { conversationCleanupJobIsIdle, createConversationCleanupJob, prepareConversationCleanup, recordConversationCleanupSuccess, type ConversationCleanupDisposition, type ConversationCleanupJob } from "../conversation-cleanup.js";
 import { assertConversationWritable, normalizedSubmissionId, sameSubmissionInput } from "../conversation-submission-policy.js";
@@ -30,7 +30,7 @@ type OrdinaryTerminalSettlement = ReturnType<typeof createTerminalSettlement>;
 const AUTO_TITLE_RETRY_DELAYS_MS = [0, 1_000, 2_000] as const;
 type ConversationRunStore = Pick<
   OrdinaryRunStore,
-  "cached" | "cachedDocuments" | "delete" | "has" | "inspectPersisted" |
+  "cached" | "cachedDocuments" | "delete" | "has" | "inspectPersisted" | "adoptPersisted" |
   "listSummaries" | "load" | "mutate" | "mutateLocked" | "persistUnpublished" |
   "publishBirth" | "withExclusiveRun"
 >;
@@ -46,7 +46,7 @@ type ConversationActivity = Pick<OrdinaryRunActivityHub, "recordTransition" | "r
 type ConversationSettlement = Pick<
   OrdinaryTerminalSettlement,
   "clearAcceptedToolResults" | "finalizationFailure" | "hasAcceptedToolResults" |
-  "isFinalizationPending" | "isStable" | "notifyStable" | "retryFinalization" | "settleExecution"
+  "finalizeSession" | "isFinalizationPending" | "isStable" | "notifyStable" | "retryFinalization" | "settleExecution"
 >;
 type ConversationExecutionPort = {
   readonly start: (runId: string) => void;
@@ -64,8 +64,12 @@ export function createOrdinaryConversationCoordinator(options: {
   readonly runStore: ConversationRunStore;
   readonly sessionRepository: ConversationSessionStore;
   readonly managedAttachments: ConversationManagedAttachments;
-  readonly memoryFactRepository: Pick<OrdinaryMemoryFactRepository, "deleteByRunIds">;
   readonly releaseToolEvidenceOwner?: (ownerId: string) => void | Promise<void>;
+  readonly onConversationBranchSelected?: (input: {
+    readonly conversationId: string;
+    readonly owner: import("../../../domain/execution-scope/index.js").ConversationOwner;
+    readonly retainedThroughOrdinal: number;
+  }) => Promise<void>;
   readonly activity: ConversationActivity;
   readonly execution: ConversationExecutionPort;
   readonly settlement: ConversationSettlement;
@@ -89,7 +93,6 @@ export function createOrdinaryConversationCoordinator(options: {
   const executionState = options.execution;
   const executionCoordinator = options.execution;
   const terminalSettlement = options.settlement;
-  const memoryFactRepository = options.memoryFactRepository;
   const now = options.now;
   const idFactory = options.idFactory;
 
@@ -142,6 +145,10 @@ export function createOrdinaryConversationCoordinator(options: {
 
   function isHiddenRun(state: OrdinaryRunState): boolean {
     return isHiddenConversation(state.turn.conversationId);
+  }
+
+  function isRetiredRun(state: OrdinaryRunState): boolean {
+    return conversationDocuments.get(state.turn.conversationId)?.state.retiredRunIds?.includes(state.runId) === true;
   }
   async function requestAutoConversationTitleIfMissing(runId: string): Promise<void> {
     const generator = options.generateConversationTitle;
@@ -456,6 +463,47 @@ function schedulingFacts(runId: string): OrdinaryRunSchedulingFacts {
     });
   }
 
+  async function recoverPendingBranchChange(conversationId: string): Promise<void> {
+    const control = await loadControl(conversationId);
+    const intent = control?.state.pendingBranchChange;
+    if (control === undefined || intent === undefined) return;
+    const replacement = await runStore.inspectPersisted(intent.runId);
+    if (replacement === undefined) {
+      await options.onConversationBranchSelected?.({ conversationId, owner: control.state.owner, retainedThroughOrdinal: intent.originalThroughOrdinal });
+      await options.sessionRepository.moveActiveCheckpoint(control.state.sessionRef, intent.originalCheckpoint);
+    } else {
+      if (replacement.state.turn.conversationId !== conversationId || (intent.kind === "edit" && replacement.state.turn.replacesRunId === undefined)) {
+        throw new OrdinaryFeatureError("ordinary_run_state_conflict", "Branch edit birth does not match its Conversation");
+      }
+      if (intent.kind === "selection") {
+        await options.onConversationBranchSelected?.({ conversationId, owner: control.state.owner, retainedThroughOrdinal: intent.retainedThroughOrdinal });
+      }
+      if (intent.kind === "selection" || replacement.state.session.phase === "not_started") {
+        await options.sessionRepository.moveActiveCheckpoint(control.state.sessionRef, intent.targetCheckpoint);
+      }
+      if (!runStore.has(intent.runId)) await runStore.adoptPersisted(replacement);
+    }
+    const { pendingBranchChange: _intent, ...state } = control.state;
+    const saved = await options.conversationRepository.save({
+      ...state,
+      retiredRunIds: replacement === undefined ? intent.originalRetiredRunIds : state.retiredRunIds,
+      previousBranchRunId: replacement === undefined ? intent.originalPreviousBranchRunId : state.previousBranchRunId,
+      branchUndoDirection: replacement === undefined ? intent.originalUndoDirection : state.branchUndoDirection,
+    }, control.revision, now());
+    conversationDocuments.set(conversationId, saved);
+  }
+
+  async function recoverPendingBranchChanges(): Promise<void> {
+    for (const control of conversationDocuments.values()) {
+      if (control.state.pendingBranchChange === undefined || control.state.deletedAt !== undefined) continue;
+      try {
+        await withConversationLock(control.state.conversationId, () => recoverPendingBranchChange(control.state.conversationId));
+      } catch (error) {
+        markUnavailable(control.state.conversationId, error);
+      }
+    }
+  }
+
   async function submitTurn(submitInput: SubmitOrdinaryTurnInput): Promise<SubmitOrdinaryTurnResult> {
     assertLive();
     if (submitInput.conversationId !== undefined && submitInput.newConversationId !== undefined) {
@@ -464,6 +512,14 @@ function schedulingFacts(runId: string): OrdinaryRunSchedulingFacts {
         "conversationId and newConversationId are mutually exclusive",
       );
     }
+    if (submitInput.replacesRunId !== undefined && submitInput.conversationId === undefined) {
+      throw new OrdinaryFeatureError("ordinary_submission_conflict", "Editing requires an existing Conversation");
+    }
+    const source = submitInput.replacesRunId === undefined ? undefined : await runStore.load(submitInput.replacesRunId);
+    const runInput = source === undefined ? submitInput.input : {
+      ...submitInput.input,
+      context: source.state.input.context,
+    };
     const submissionId = normalizedSubmissionId(submitInput.submissionId);
     const submissionTurnId = submissionId === undefined ? undefined : `submission:${submissionId}`;
     const conversationId = submitInput.conversationId ?? submitInput.newConversationId ?? (
@@ -478,7 +534,8 @@ function schedulingFacts(runId: string): OrdinaryRunSchedulingFacts {
           document.state.turn.userTurnId === submissionTurnId);
         if (existing !== undefined) {
           if (existing.state.turn.conversationId !== conversationId ||
-            !sameSubmissionInput(existing.state.input, submitInput.input)) {
+            !sameSubmissionInput(existing.state.input, runInput) ||
+            existing.state.turn.replacesRunId !== submitInput.replacesRunId) {
             throw new OrdinaryFeatureError(
               "ordinary_submission_conflict",
               `Ordinary submission ${submissionId} was already used for different input.`,
@@ -540,10 +597,40 @@ function schedulingFacts(runId: string): OrdinaryRunSchedulingFacts {
         createdConversation = true;
       }
       assertConversationWritable(control);
-      const runs = await visibleRuns(control);
-      const predecessor = runs.at(-1);
+      let runs = await visibleRuns(control);
       const runId = idFactory("ordinary-run");
+      if (submitInput.replacesRunId !== undefined) {
+        if (runs.some((run) => !isTerminal(run) || !schedulingBarrierCleared(run))) {
+          throw new OrdinaryFeatureError("ordinary_conversation_busy", "Wait for the Conversation to finish before editing");
+        }
+        const sourceIndex = runs.findIndex((run) => run.runId === submitInput.replacesRunId);
+        if (sourceIndex < 0) {
+          throw new OrdinaryFeatureError("ordinary_branch_target_not_found", "The edited turn is no longer on the selected branch");
+        }
+        const prefix = runs.slice(0, sourceIndex);
+        const targetCheckpoint = await recoveredSessionCheckpoint(options.sessionRepository, prefix, control.state.sessionRef, conversationId);
+        const originalCheckpoint = await recoveredSessionCheckpoint(options.sessionRepository, runs, control.state.sessionRef, conversationId);
+        const originalRetiredRunIds = control.state.retiredRunIds ?? [];
+        control = await options.conversationRepository.save({
+          ...control.state,
+          retiredRunIds: [...originalRetiredRunIds, ...runs.slice(sourceIndex).map((run) => run.runId)],
+          previousBranchRunId: runs.at(-1)?.runId,
+          branchUndoDirection: "undo",
+          pendingBranchChange: { kind: "edit", originalPreviousBranchRunId: control.state.previousBranchRunId,
+            originalUndoDirection: control.state.branchUndoDirection,
+            runId, targetCheckpoint, originalCheckpoint, originalRetiredRunIds,
+            retainedThroughOrdinal: prefix.at(-1)?.turn.ordinal ?? 0,
+            originalThroughOrdinal: runs.at(-1)?.turn.ordinal ?? 0 },
+        }, control.revision, now());
+        conversationDocuments.set(conversationId, control);
+        runs = prefix;
+      }
+      const predecessor = runs.at(-1);
       try {
+        if (control.state.pendingBranchChange !== undefined) {
+          await options.onConversationBranchSelected?.({ conversationId, owner: control.state.owner, retainedThroughOrdinal: control.state.pendingBranchChange.retainedThroughOrdinal });
+          await options.sessionRepository.moveActiveCheckpoint(control.state.sessionRef, control.state.pendingBranchChange.targetCheckpoint);
+        }
         const run = await startWithinConversation({
           runId,
           sessionRef: control.state.sessionRef,
@@ -553,14 +640,25 @@ function schedulingFacts(runId: string): OrdinaryRunSchedulingFacts {
             userTurnId: submissionTurnId ?? idFactory("ordinary-user-turn"),
             assistantTurnId: idFactory("ordinary-assistant-turn"),
             ...(predecessor === undefined ? {} : { predecessorRunId: predecessor.runId }),
+            ...(submitInput.replacesRunId === undefined ? {} : { replacesRunId: submitInput.replacesRunId }),
           },
-          input: submitInput.input,
+          input: runInput,
           birth: submitInput.birth,
         });
+        if (control.state.pendingBranchChange !== undefined) {
+          // Birth is durable: recovery now owns completion if clearing the intent fails.
+          const { pendingBranchChange: _intent, ...state } = control.state;
+          control = await options.conversationRepository.save(state, control.revision, now());
+          conversationDocuments.set(conversationId, control);
+        }
         const conversation = await conversationView(control);
         if (conversation === undefined) throw new Error(`Ordinary conversation ${conversationId} has no visible run after submission`);
         return { conversation, run };
       } catch (error) {
+        if (control.state.pendingBranchChange !== undefined) {
+          // Read durable birth, rather than guessing from the thrown write error.
+          await recoverPendingBranchChange(conversationId);
+        }
         if (createdConversation && createdConversationSession !== undefined) {
           await cleanupFailedInitialConversationBirth({
             conversationId,
@@ -622,6 +720,7 @@ function schedulingFacts(runId: string): OrdinaryRunSchedulingFacts {
   }
 
   async function settlePendingUncommittedConversationCleanup(conversationId: string): Promise<void> {
+    await recoverPendingBranchChange(conversationId);
     if (pendingUncommittedConversationBirths.has(conversationId)) {
       await reconcilePendingUncommittedConversationBirth(conversationId);
       if (pendingUncommittedConversationBirths.has(conversationId)) {
@@ -748,42 +847,85 @@ function schedulingFacts(runId: string): OrdinaryRunSchedulingFacts {
     return requireConversationView(control);
   }
 
-  async function rollbackConversation(rollback: {
-    readonly conversationId: string;
-    readonly targetRunId?: string;
-    readonly stepsBack?: number;
-  }): Promise<OrdinaryConversationReadModel> {
-    const control = await withConversationLock(rollback.conversationId, async () => {
-      await settlePendingUncommittedConversationCleanup(rollback.conversationId);
-      const current = await loadControl(rollback.conversationId);
-      if (current === undefined) {
-        throw new OrdinaryFeatureError("ordinary_conversation_not_found", `Ordinary conversation ${rollback.conversationId} was not found`);
+  async function selectBranchWithinConversation(
+    control: OrdinaryConversationControlDocument,
+    targetRunId: string,
+  ): Promise<OrdinaryConversationReadModel> {
+    assertConversationWritable(control);
+    const currentRuns = await visibleRuns(control);
+    if (currentRuns.some((run) => !isTerminal(run) || !schedulingBarrierCleared(run))) {
+      throw new OrdinaryFeatureError("ordinary_conversation_busy", "Wait for the Conversation to finish before changing branches");
+    }
+    const allRuns = runStore.cachedDocuments().map((document) => document.state)
+      .filter((run) => run.turn.conversationId === control.state.conversationId);
+    const target = allRuns.find((run) => run.runId === targetRunId);
+    if (target === undefined) throw new OrdinaryFeatureError("ordinary_branch_target_not_found", "Conversation branch was not found");
+    let leaf: OrdinaryRunState = target;
+    for (;;) {
+      const parent = leaf;
+      const children = allRuns.filter((run) => run.turn.predecessorRunId === parent.runId)
+        .sort((left, right) => left.timestamps.createdAt.localeCompare(right.timestamps.createdAt) || left.runId.localeCompare(right.runId));
+      const child = children.at(-1);
+      if (child === undefined) break;
+      if (child.turn.ordinal <= parent.turn.ordinal) throw new OrdinaryFeatureError("ordinary_run_state_conflict", "Invalid branch turn order");
+      leaf = child;
+    }
+    const selected: OrdinaryRunState[] = [];
+    let cursor: OrdinaryRunState | undefined = leaf;
+    while (cursor !== undefined) {
+      selected.unshift(cursor);
+      if (cursor.turn.predecessorRunId === undefined) break;
+      const parent = allRuns.find((run) => run.runId === cursor!.turn.predecessorRunId);
+      if (parent === undefined || parent.turn.ordinal >= cursor.turn.ordinal) {
+        throw new OrdinaryFeatureError("ordinary_run_state_conflict", "Incomplete branch predecessor chain");
       }
-      assertConversationWritable(current);
-      const runs = await visibleRuns(current);
-      if (runs.some((run) => !isTerminal(run))) {
-        throw new OrdinaryFeatureError("ordinary_conversation_busy", "Cannot roll back a busy Ordinary conversation");
-      }
-      const completed = runs.filter((run) => run.status.kind === "completed");
-      const target = rollback.targetRunId === undefined
-        ? completed[Math.max(0, completed.length - Math.max(1, Math.floor(rollback.stepsBack ?? 1)) - 1)]
-        : completed.find((run) => run.runId === rollback.targetRunId);
-      if (target === undefined || target.session.phase !== "rollbackable") {
-        throw new OrdinaryFeatureError("ordinary_rollback_target_not_found", "Ordinary rollback target was not found in completed visible runs");
-      }
-      const targetIndex = runs.findIndex((run) => run.runId === target.runId);
-      const unretiredPreSessionTurns = runs.slice(targetIndex + 1).filter((run) =>
-        run.session.phase === "not_started" && isTerminal(run));
-      if (unretiredPreSessionTurns.length > 0) {
-        throw new OrdinaryFeatureError(
-          "ordinary_run_state_conflict",
-          "Cannot roll back across terminal turns that never entered the Session until those turns have a durable retirement fact",
-        );
-      }
-      await options.sessionRepository.moveActiveCheckpoint(current.state.sessionRef, target.session.endCheckpoint);
-      return current;
+      cursor = parent;
+    }
+    if (selected.some((run) => !isTerminal(run) || !schedulingBarrierCleared(run))) {
+      throw new OrdinaryFeatureError("ordinary_conversation_busy", "The selected branch has unsettled work");
+    }
+    if (currentRuns.at(-1)?.runId === leaf.runId) return requireConversationView(control);
+    const conversationId = control.state.conversationId;
+    const targetCheckpoint = selectedBranchCheckpoint(selected);
+    const originalCheckpoint = await recoveredSessionCheckpoint(options.sessionRepository, currentRuns, control.state.sessionRef, conversationId);
+    const selectedIds = new Set(selected.map((run) => run.runId));
+    const saved = await options.conversationRepository.save({
+      ...control.state,
+      retiredRunIds: allRuns.filter((run) => !selectedIds.has(run.runId)).map((run) => run.runId),
+      previousBranchRunId: currentRuns.at(-1)?.runId,
+      branchUndoDirection: "undo",
+      pendingBranchChange: {
+        kind: "selection", runId: leaf.runId, targetCheckpoint, originalCheckpoint,
+        originalRetiredRunIds: control.state.retiredRunIds ?? [],
+        originalPreviousBranchRunId: control.state.previousBranchRunId,
+        originalUndoDirection: control.state.branchUndoDirection,
+        retainedThroughOrdinal: leaf.turn.ordinal,
+        originalThroughOrdinal: currentRuns.at(-1)?.turn.ordinal ?? 0,
+      },
+    }, control.revision, now());
+    conversationDocuments.set(conversationId, saved);
+    await recoverPendingBranchChange(conversationId);
+    return requireConversationView((await loadControl(conversationId))!);
+  }
+
+  function selectedBranchCheckpoint(runs: readonly OrdinaryRunState[]) {
+    // An inactive branch cannot be located on the current tip. Its immutable
+    // Run checkpoints already name exact entries; the Adapter validates them when moving.
+    for (const run of [...runs].reverse()) {
+      if (run.session.phase === "rollbackable") return run.session.endCheckpoint;
+      if (run.session.phase === "completion_candidate") return run.session.rollbackCheckpoint;
+      if (run.session.phase === "started" && run.session.startCheckpoint !== null) return run.session.startCheckpoint;
+    }
+    return null;
+  }
+
+  async function selectConversationBranch(input: { readonly conversationId: string; readonly targetRunId: string }): Promise<OrdinaryConversationReadModel> {
+    return withConversationLock(input.conversationId, async () => {
+      await settlePendingUncommittedConversationCleanup(input.conversationId);
+      const control = await loadControl(input.conversationId);
+      if (control === undefined) throw new OrdinaryFeatureError("ordinary_conversation_not_found", "Conversation was not found");
+      return selectBranchWithinConversation(control, input.targetRunId);
     });
-    return requireConversationView(control);
   }
 
   async function deleteConversation(conversationId: string): Promise<void> {
@@ -857,6 +999,12 @@ function schedulingFacts(runId: string): OrdinaryRunSchedulingFacts {
         await executionState.waitForRunExecution(runId);
         await executionState.waitForCancellationCleanup(runId);
         try {
+          // Cancellation cleanup can finish after a failed finalization.
+          // Replay its sticky target before removing the Run needed for retry.
+          const document = await runStore.load(runId);
+          if (document !== undefined) {
+            await terminalSettlement.finalizeSession(runId, document.state, document.state.status.kind !== "completed");
+          }
           await terminalSettlement.settleExecution(runId);
         } catch (error) {
           cleanupFailed = true;
@@ -873,13 +1021,6 @@ function schedulingFacts(runId: string): OrdinaryRunSchedulingFacts {
           }
         }
         try {
-          await memoryFactRepository.deleteByRunIds([runId]);
-        } catch (error) {
-          cleanupFailed = true;
-          emitDiagnostic({ kind: "conversation_cleanup_failed", conversationId, phase: "memory_facts", runId, error });
-          continue;
-        }
-        try {
           await runStore.delete(runId);
         } catch (error) {
           cleanupFailed = true;
@@ -889,7 +1030,7 @@ function schedulingFacts(runId: string): OrdinaryRunSchedulingFacts {
         terminalSettlement.clearAcceptedToolResults(runId);
         activityHub.releaseRun(runId);
       }
-      if (request.disposition === "retain_tombstone" || (!cleanupFailed && cleanupRunIds.size > 0)) {
+      if (!cleanupFailed && (request.disposition === "retain_tombstone" || cleanupRunIds.size > 0)) {
         try {
           await managedAttachments.deleteConversation(conversationId);
         } catch (error) {
@@ -897,7 +1038,7 @@ function schedulingFacts(runId: string): OrdinaryRunSchedulingFacts {
           emitDiagnostic({ kind: "managed_attachment_cleanup_failed", conversationId, error });
         }
       }
-      if (request.disposition === "retain_tombstone" || !cleanupFailed) {
+      if (!cleanupFailed) {
         try {
           await options.sessionRepository.delete(request.control.state.sessionRef);
         } catch (error) {
@@ -968,6 +1109,7 @@ function schedulingFacts(runId: string): OrdinaryRunSchedulingFacts {
     return projectOrdinaryConversation({
       control,
       runs,
+      allRuns: runStore.cachedDocuments().map((document) => document.state),
       completedAssistantTextByRunId: new Map(completedAnswers.flatMap((answer) => {
         const text = assistantTextByCheckpointId.get(answer.checkpoint.checkpointId);
         return text === undefined ? [] : [[answer.runId, text] as const];
@@ -998,6 +1140,28 @@ function schedulingFacts(runId: string): OrdinaryRunSchedulingFacts {
     return clone(projected.filter((view): view is OrdinaryConversationReadModel => view !== undefined));
   }
 
+  async function listConversationSummaries(input: { readonly owner?: import("../../../domain/execution-scope/index.js").ConversationOwner; readonly limit?: number } = {}) {
+    const updatedByConversation = new Map<string, string>();
+    for (const { state } of runStore.cachedDocuments()) {
+      if (isHiddenRun(state) || isRetiredRun(state)) continue;
+      const previous = updatedByConversation.get(state.turn.conversationId) ?? "";
+      if (state.timestamps.updatedAt > previous) updatedByConversation.set(state.turn.conversationId, state.timestamps.updatedAt);
+    }
+    const candidates = [...conversationDocuments.values()].filter((control) =>
+      !isHiddenConversation(control.state.conversationId) && (input.owner === undefined ||
+        control.state.owner.kind === input.owner.kind && control.state.owner.id === input.owner.id));
+    const updatedAt = (control: OrdinaryConversationControlDocument) => {
+      const runTime = updatedByConversation.get(control.state.conversationId);
+      return runTime !== undefined && runTime > control.savedAt ? runTime : control.savedAt;
+    };
+    candidates.sort((left, right) => (right.state.pinnedAt ?? "").localeCompare(left.state.pinnedAt ?? "") ||
+      updatedAt(right).localeCompare(updatedAt(left)));
+    const selected = input.limit === undefined ? candidates : candidates.slice(0, Math.max(0, Math.floor(input.limit)));
+    const summaries = await Promise.all(selected.map(async (control) =>
+      projectOrdinaryConversationSummary({ control, runs: await visibleRuns(control) })));
+    return summaries.filter((summary): summary is NonNullable<typeof summary> => summary !== undefined);
+  }
+
   async function listConversations(limit = 50): Promise<readonly OrdinaryConversationReadModel[]> {
     const projected = await Promise.all([...conversationDocuments.values()].map(conversationView));
     const views = projected.filter((view): view is OrdinaryConversationReadModel => view !== undefined).sort((left, right) => {
@@ -1008,6 +1172,8 @@ function schedulingFacts(runId: string): OrdinaryRunSchedulingFacts {
   }
 
   return {
+    recoverPendingBranchChanges,
+    selectConversationBranch,
     requestAutoConversationTitleIfMissing,
     subscribeConversationTitleChanges(listener: (conversationId: string) => void) {
       conversationTitleListeners.add(listener);
@@ -1021,7 +1187,6 @@ function schedulingFacts(runId: string): OrdinaryRunSchedulingFacts {
     settlePendingUncommittedConversationCleanup,
     renameConversation,
     setConversationPinned,
-    rollbackConversation,
     deleteConversation,
     scheduleConversationCleanup,
     createManagedAttachmentDraft,
@@ -1031,6 +1196,7 @@ function schedulingFacts(runId: string): OrdinaryRunSchedulingFacts {
     requireConversationView,
     getConversation,
     listConversationsByOwner,
+    listConversationSummaries,
     listConversations,
     loadControl,
     getMemoryBackground,
@@ -1038,6 +1204,7 @@ function schedulingFacts(runId: string): OrdinaryRunSchedulingFacts {
     markUnavailable,
     isHiddenConversation,
     isHiddenRun,
+    isRetiredRun,
     controls: () => [...conversationDocuments.values()],
     unavailable: (conversationId: string) => unavailableConversationIds.has(conversationId),
     unavailableIds: () => [...unavailableConversationIds],

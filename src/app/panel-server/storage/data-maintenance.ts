@@ -21,8 +21,7 @@ import { renameWithRetry } from "../../../kernel/fs/atomic-write.js";
 import type { ProductPaths } from "../../../platform/storage/index.js";
 import { PRODUCT_DATA_FORMAT_ID, PRODUCT_NAMESPACE } from "../../../platform/product-identity.js";
 
-// v3 adds the durable memory-data root so user rules, agent notes and path
-// dependencies travel with the SQLite state they reference.
+// v3 includes the durable memory-data root for managed collaboration rules.
 const BACKUP_MANIFEST_VERSION = 3;
 const DATABASE_FILE_SUFFIXES = ["", "-wal", "-shm"] as const;
 const OWNED_STORAGE_NAMES = ["knowledge-assets", "space-files", "memory-data"] as const;

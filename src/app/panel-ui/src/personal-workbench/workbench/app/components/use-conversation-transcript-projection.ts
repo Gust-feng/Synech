@@ -81,5 +81,13 @@ export function useConversationTranscriptProjection(input: ConversationTranscrip
     input.pending, input.standaloneRun,
   ])
 
-  return { conversationDisplay, toolResultsByRunId }
+  const nodesByRunId = useMemo(() => ({
+    ...cachedHistoricalNodes,
+    ...(input.currentRunId === undefined ? {} : { [input.currentRunId]: input.currentRunNodes }),
+    ...(input.standaloneRun?.currentRunId === undefined ? {} : {
+      [input.standaloneRun.currentRunId]: input.standaloneRun.runProjection.nodes,
+    }),
+  }), [cachedHistoricalNodes, input.currentRunId, input.currentRunNodes, input.standaloneRun])
+
+  return { conversationDisplay, toolResultsByRunId, nodesByRunId }
 }

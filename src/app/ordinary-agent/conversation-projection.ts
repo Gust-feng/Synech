@@ -1,23 +1,49 @@
 import type {
   OrdinaryConversationControlDocument,
   OrdinaryConversationReadModel,
+  OrdinaryConversationSummaryReadModel,
   OrdinaryRunState,
 } from "./contracts.js";
 import type { AgentSessionCheckpointRef, AgentSessionRepository } from "../model-runtime/agent-session.js";
+import { isTerminal } from "./run-lifecycle-policy.js";
 
 export async function visibleOrdinaryConversationRuns(
   store: Pick<AgentSessionRepository, "locateSessionCheckpoints">,
   control: OrdinaryConversationControlDocument,
   allRuns: readonly OrdinaryRunState[],
 ): Promise<readonly OrdinaryRunState[]> {
-  const conversationRuns = allRuns.filter((run) => run.turn.conversationId === control.state.conversationId);
+  const retired = new Set(control.state.retiredRunIds);
+  const conversationRuns = allRuns.filter((run) =>
+    run.turn.conversationId === control.state.conversationId && !retired.has(run.runId));
   assertConversationSessionOwnership(control, conversationRuns);
   const onBranch = await runsOnActiveBranch(store, control, conversationRuns);
   if (onBranch.length === 0 && conversationRuns.some(hasDurableSessionEntry)) {
     throw new Error(`Ordinary conversation ${control.state.conversationId} has durable runs but no active Session branch`);
   }
-  const visible = [...onBranch];
-  const included = new Set(visible.map((run) => run.runId));
+  const byRunId = new Map(conversationRuns.map((run) => [run.runId, run]));
+  const visible: OrdinaryRunState[] = [];
+  const included = new Set<string>();
+  for (const run of onBranch) {
+    // Early cancelled turns have no Session position, but remain ancestors
+    // of a later accepted turn. Include only that proven predecessor chain.
+    const predecessors: OrdinaryRunState[] = [];
+    let current = run;
+    while (current.turn.predecessorRunId !== undefined) {
+      const predecessor = byRunId.get(current.turn.predecessorRunId);
+      if (predecessor === undefined || included.has(predecessor.runId) || !isPreSessionTerminalRun(predecessor)) break;
+      if (predecessor.turn.ordinal >= current.turn.ordinal) {
+        throw new Error(`Ordinary conversation ${control.state.conversationId} has an invalid predecessor order`);
+      }
+      predecessors.push(predecessor);
+      current = predecessor;
+    }
+    for (const predecessor of predecessors.reverse()) {
+      visible.push(predecessor);
+      included.add(predecessor.runId);
+    }
+    visible.push(run);
+    included.add(run.runId);
+  }
   let predecessorRunId = visible.at(-1)?.runId;
   while (true) {
     const candidates = conversationRuns.filter((run) =>
@@ -79,7 +105,7 @@ async function runsOnActiveBranch(
         : positionByCheckpointId.get(checkpoint.checkpointId);
       return position === undefined ? [] : [{ run, position }];
     })
-    .sort((left, right) => left.position - right.position)
+    .sort((left, right) => left.position - right.position || left.run.turn.ordinal - right.run.turn.ordinal)
     .map((item) => item.run);
 }
 
@@ -111,12 +137,48 @@ function isPendingOrPreSessionTerminal(run: OrdinaryRunState): boolean {
   }
   // A run cancelled or failed before its first Session write has no branch
   // entry of its own. It remains a product turn and must not hide successors.
-  return run.session.phase === "not_started";
+  return isPreSessionTerminalRun(run);
+}
+
+/** Capturing a null start leaf does not give a cancelled turn a transcript entry. */
+export function isPreSessionTerminalRun(run: OrdinaryRunState): boolean {
+  return isTerminal(run) && !hasDurableSessionEntry(run);
+}
+
+export function projectOrdinaryConversationSummary(input: {
+  readonly control: OrdinaryConversationControlDocument;
+  readonly runs: readonly OrdinaryRunState[];
+}): OrdinaryConversationSummaryReadModel | undefined {
+  if (input.control.state.deletedAt !== undefined || input.runs.length === 0) return undefined;
+  const first = input.runs[0]!;
+  const latest = input.runs.at(-1)!;
+  const active = input.runs.find((run) => run.status.kind === "running" || run.status.kind === "awaiting_approval");
+  const current = active ?? latest;
+  const content = latest.visibleAssistantText?.trim() || latest.input.userMessage;
+  return {
+    conversationId: input.control.state.conversationId,
+    owner: input.control.state.owner,
+    title: input.control.state.titleOverride ?? input.control.state.autoTitle ?? compactTitle(first.input.userMessage),
+    titleEditedAt: input.control.state.titleEditedAt,
+    pinnedAt: input.control.state.pinnedAt,
+    createdAt: input.control.state.createdAt,
+    updatedAt: input.runs.reduce((value, run) => run.timestamps.updatedAt > value ? run.timestamps.updatedAt : value, input.control.savedAt),
+    activeRunId: active?.runId,
+    latestRunId: latest.runId,
+    queuedRunIds: input.runs.filter((run) => run.status.kind === "queued").map((run) => run.runId),
+    status: current.status.kind,
+    preview: content.replace(/\s+/gu, " ").slice(0, 180),
+    executionRoot: latest.birth.capabilitySnapshot.executionRoot,
+    ...(current.status.kind === "awaiting_approval" ? {
+      pendingAction: { kind: "approval" as const, runId: current.runId, assistantTurnId: current.turn.assistantTurnId },
+    } : {}),
+  };
 }
 
 export function projectOrdinaryConversation(input: {
   readonly control: OrdinaryConversationControlDocument;
   readonly runs: readonly OrdinaryRunState[];
+  readonly allRuns?: readonly OrdinaryRunState[];
   readonly completedAssistantTextByRunId?: ReadonlyMap<string, string>;
 }): OrdinaryConversationReadModel | undefined {
   if (input.control.state.deletedAt !== undefined || input.runs.length === 0) return undefined;
@@ -140,6 +202,7 @@ export function projectOrdinaryConversation(input: {
     queuedRunIds: queued,
     turns: input.runs.flatMap((run) => [{
       role: "user" as const,
+      branchVersions: branchVersions(run, input.allRuns ?? input.runs),
       turnId: run.turn.userTurnId,
       runId: run.runId,
       content: run.input.userMessage,
@@ -220,4 +283,13 @@ function interruptionProjection(
     return { interruption: "runtime_stopped" };
   }
   return {};
+}
+
+function branchVersions(run: OrdinaryRunState, allRuns: readonly OrdinaryRunState[]) {
+  const versions = allRuns.filter((candidate) =>
+    candidate.turn.conversationId === run.turn.conversationId &&
+    candidate.turn.predecessorRunId === run.turn.predecessorRunId)
+    .sort((left, right) => left.timestamps.createdAt.localeCompare(right.timestamps.createdAt) || left.runId.localeCompare(right.runId));
+  if (versions.length < 2) return undefined;
+  return { runIds: versions.map((candidate) => candidate.runId), selectedIndex: versions.findIndex((candidate) => candidate.runId === run.runId) };
 }

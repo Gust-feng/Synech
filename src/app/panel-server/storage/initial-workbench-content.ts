@@ -61,17 +61,25 @@ export const INITIAL_WORKBENCH_MANAGED_FOLDERS: readonly InitialWorkbenchManaged
         source: "text",
         content: `# 随手记
 
-## 我正在想什么
+把刚刚想到、还没有整理成结论的内容先放在这里。先记录，再判断是否值得展开。
 
--
+## 一个想法
+
+我注意到：
+（用自己的话写下一个观察、疑问或灵感。）
+
+## 还没想明白
+
+我想继续确认：
+（留下一个可以在阅读或对话中追问的问题。）
 
 ## 下一步
 
-- [ ]
+- [ ] 用一两句话补充背景，或找一份相关资料
 
 ## 相关资料
 
--
+（链接、文件名或来源。）
 `,
       },
     ],
@@ -135,8 +143,7 @@ export const INITIAL_WORKBENCH_NOTES: readonly InitialWorkbenchNoteDefinition[] 
     id: "builtin-note-notebook-start",
     spaceId: LEARNING_SPACE_ID,
     title: "从记事本开始",
-    bodyMarkdown: `> 起步于微末之处，不惧其浅陋；
-
+    bodyMarkdown: `> 起步于微末之处，不惧其浅陋； \
 > 迭代于寸进之中，自有其峥嵘。
 
 任何系统性的理解，都不是直接生成的终态，而是在大量局部判断的反复修正中逐步拼合而成。这些判断往往是临时的、不完整的，甚至会在之后被推翻，但正是由它们所构成的中间过程，使认知得以从不确定中逐渐走向稳定。对这些过程的记录，其意义并不在于确认当下的结论，而在于保留理解如何形成与变化的轨迹。

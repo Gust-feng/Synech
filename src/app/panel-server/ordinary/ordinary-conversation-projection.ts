@@ -2,6 +2,7 @@ import type { ConversationOwner } from "../../../domain/execution-scope/index.js
 import { isConversationOwnerContextRef } from "../../../domain/ordinary/index.js";
 import type {
   OrdinaryConversationReadModel,
+  OrdinaryConversationSummaryReadModel,
   OrdinaryConversationTurnReadModel,
   OrdinaryRunState,
 } from "../../ordinary-agent/contracts.js";
@@ -76,6 +77,7 @@ function projectConversationTurn(turn: OrdinaryConversationTurnReadModel): Ordin
     return {
       turnId: turn.turnId,
       role: turn.role,
+      branchVersions: turn.branchVersions,
       title: "你的消息",
       content: turn.content,
       status: turn.status,
@@ -98,6 +100,7 @@ function projectConversationTurn(turn: OrdinaryConversationTurnReadModel): Ordin
     runId: turn.runId,
     responseModel: {
       profileId: turn.model.profileId,
+      piProviderId: turn.model.piProviderId,
       label: turn.model.label,
       providerKind: turn.model.providerKind,
       protocolKind: turn.model.protocolKind,
@@ -188,4 +191,19 @@ function attachmentTitle(kind: "workspace" | "file" | "project" | "web", ref: st
 function compact(value: string, limit: number): string {
   const normalized = value.replace(/\s+/gu, " ").trim();
   return normalized.length <= limit ? normalized : `${normalized.slice(0, limit - 1)}…`;
+}
+
+export function projectConversationListItem(summary: OrdinaryConversationSummaryReadModel): OrdinaryPanelConversationSummary {
+  const status: OrdinaryPanelConversationStatus = summary.status === "queued" ? "pending"
+    : summary.status === "awaiting_approval" ? "approval_needed" : summary.status;
+  const { executionRoot, ...facts } = summary;
+  return {
+    ...facts, status,
+    spaceId: summary.owner.kind === "space" ? summary.owner.id : undefined,
+    currentAction: conversationCurrentAction(status, summary.pendingAction, undefined),
+    nextStep: conversationNextStep(status),
+    requiresUserAction: summary.pendingAction !== undefined,
+    queuedRunCount: summary.queuedRunIds.length,
+    workspaceFolder: workspaceFolderSummaryFromPath(executionRoot),
+  };
 }

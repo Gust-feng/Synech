@@ -62,6 +62,7 @@ export function resolveDefaultSubAgentRoots(input: {
   const builtinRoot = input.builtinRoot ?? path.resolve(
     path.dirname(fileURLToPath(import.meta.url)),
     "..",
+    "..",
     "sub-agents",
     "builtin",
   );

@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import type { ChatInputProps } from '@ui/contracts/composer'
-import type { PersonalWorkspaceProjection } from '../../../workspace'
 import { ConversationComposer } from './ConversationComposer'
 import { HomeAmbientCopy } from './HomeAmbientCopy'
 import {
@@ -9,7 +8,8 @@ import {
   selectHomeAmbientCopy,
 } from './home-ambient-copy'
 import { HomeBackdrop } from './HomeBackdrop'
-import { type HomeOwnerSelection, HomeOwnerPicker } from './HomeOwnerPicker'
+import { HomeOwnerPicker } from './HomeOwnerPicker'
+import type { ConversationOwnerSelection } from '../../../../workbench/navigation-state'
 import { panelStorageKey } from '@ui/shell/local-preferences'
 import './home-page.css'
 
@@ -37,16 +37,14 @@ function rememberAmbientCopyMemory(memory: HomeAmbientCopyMemory): void {
 
 interface HomePageProps {
   spaces?: readonly { readonly spaceId: string; readonly title: string }[]
-  workspaces?: readonly PersonalWorkspaceProjection[]
-  ownerSelection?: HomeOwnerSelection | null
-  onOwnerChange?: (owner: HomeOwnerSelection | null) => void
+  ownerSelection?: ConversationOwnerSelection | null
+  onOwnerChange?: (owner: ConversationOwnerSelection | null) => void
   input: ChatInputProps
   focusRequest: number
 }
 
 export function HomePage({
   spaces = [],
-  workspaces = [],
   ownerSelection = null,
   onOwnerChange,
   input,
@@ -86,7 +84,6 @@ export function HomePage({
           <div className="ui-agent-home__context">
             <HomeOwnerPicker
               spaces={spaces}
-              workspaces={workspaces}
               value={ownerSelection}
               onChange={(owner) => onOwnerChange?.(owner)}
             />

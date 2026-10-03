@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
-import { ArrowUp, Check, ChevronDown, FileText, Plus, ShieldCheck, X } from 'lucide-react'
+import { ArrowUp, Check, ChevronDown, FileText, Plus, ShieldCheck, Square, X } from 'lucide-react'
 import type { ChatInputProps } from '@ui/contracts/composer'
 import type { ComposerToolConfirmationPolicy } from '@ui/features/settings/config-projection'
 import { formatCompactTokenCount, formatContextUsagePercent } from '@ui/features/conversations/context-window-usage'
 import { ModelOptionPicker } from '@ui/features/settings/model/option-picker'
-import { runReasoningEffortOptions } from '@ui/features/settings/model/capability-display'
 import { ActionConfirmationDialog } from './ActionConfirmationDialog'
 import { composerSurface } from './tokens'
+import { useAutoSizeTextarea } from './use-auto-size-textarea'
 import { QueuedMessageList } from './QueuedMessageList'
 import { MOTION_EASING, MOTION_TIMING, useMotionEnabled } from '@ui/shell/motion-system'
 
@@ -18,42 +18,21 @@ interface ConversationComposerProps {
 
 export function ConversationComposer({ input, onCompositionChange }: ConversationComposerProps) {
   const [focused, setFocused] = useState(false)
-  const ref = useRef<HTMLTextAreaElement>(null)
+  const ref = useAutoSizeTextarea(input.value)
   const canEdit = !input.busy || input.allowInputWhileBusy === true
   const motionEnabled = useMotionEnabled()
   const canSend = input.value.trim().length > 0 && canEdit
 
   useEffect(() => {
-    const textarea = ref.current
-    if (textarea === null) return
-    textarea.style.height = 'auto'
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 128)}px`
-  }, [input.value])
-
-  useEffect(() => {
     if (input.autoFocus === true) ref.current?.focus()
   }, [input.autoFocus])
-
-  useEffect(() => {
-    const textarea = ref.current
-    if (textarea === null) return
-    let previousWidth = textarea.clientWidth
-    const observer = new ResizeObserver(() => {
-      if (textarea.clientWidth === previousWidth) return
-      previousWidth = textarea.clientWidth
-      textarea.style.height = 'auto'
-      textarea.style.height = `${Math.min(textarea.scrollHeight, 128)}px`
-    })
-    observer.observe(textarea)
-    return () => observer.disconnect()
-  }, [])
 
   const submit = (): void => {
     if (canSend) input.onSubmit()
   }
 
   return (
-    <div className="ui-conversation-composer" style={composerSurface(focused)}>
+    <div className="ui-conversation-composer" data-focused={focused} style={composerSurface(focused)}>
       {input.queuedMessages !== undefined && input.queuedMessages.length > 0 && (
         <QueuedMessageList
           messages={input.queuedMessages}
@@ -63,7 +42,7 @@ export function ConversationComposer({ input, onCompositionChange }: Conversatio
         />
       )}
       {input.attachments.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 px-3 pt-3">
+        <div className="ui-composer-attachments">
           <AnimatePresence initial={false}>
             {input.attachments.map((attachment) => (
               <motion.span
@@ -99,7 +78,7 @@ export function ConversationComposer({ input, onCompositionChange }: Conversatio
         onCompositionStart={() => onCompositionChange?.(true)}
         onCompositionEnd={() => onCompositionChange?.(false)}
         onKeyDown={(event) => {
-          if (event.nativeEvent.isComposing) return
+          if (event.nativeEvent.isComposing || event.keyCode === 229) return
           if (event.key === 'Enter' && !event.shiftKey) {
             event.preventDefault()
             submit()
@@ -109,18 +88,18 @@ export function ConversationComposer({ input, onCompositionChange }: Conversatio
         rows={1}
         spellCheck={false}
         disabled={!canEdit}
-        className="ui-conversation-composer__input w-full resize-none px-3 pt-2 pb-1 outline-none disabled:cursor-not-allowed"
-        style={{ color: 'var(--ui-text-1)', background: 'transparent', lineHeight: 1.5 }}
+        className="ui-conversation-composer__input"
+        aria-label="消息"
       />
       <div className="ui-conversation-composer__toolbar">
         <div className="ui-conversation-composer__toolbar-left">
-          {input.reasoningEffortEnabled && <ComposerReasoningSelect input={input} />}
           <button
             type="button"
             onClick={input.onSelectAttachment}
             className="ui-conversation-composer__icon-button"
             style={{ color: 'var(--ui-text-3)' }}
             aria-label="添加引用"
+            title="添加引用"
           >
             <Plus size={17} strokeWidth={1.8} aria-hidden="true" />
           </button>
@@ -129,26 +108,15 @@ export function ConversationComposer({ input, onCompositionChange }: Conversatio
           {input.contextUsage !== undefined && <ComposerContextUsage usage={input.contextUsage} />}
           <ComposerAccessSelect input={input} />
           <ComposerModelSelect input={input} />
-          {input.running && input.onCancel !== undefined && (
-            <button
-              type="button"
-              onClick={input.onCancel}
-              className="rounded-md px-2 py-1 text-[11px] font-medium transition-colors"
-              style={{ background: 'rgba(200,64,64,0.1)', color: 'var(--ui-status-error)' }}
-            >
-              {input.cancelLabel ?? '停止'}
-            </button>
+          {input.running && input.onCancel !== undefined && canSend && <button type="button" className="ui-conversation-composer__icon-button"
+            onClick={input.onCancel} aria-label={input.cancelLabel ?? "停止生成"} title={input.cancelLabel ?? "停止生成"}><Square size={13} fill="currentColor" aria-hidden="true" /></button>}
+          {input.running && input.onCancel !== undefined && !canSend ? (
+            <button type="button" className="ui-conversation-composer__send" data-active="true" onClick={input.onCancel}
+              aria-label={input.cancelLabel ?? "停止生成"} title={input.cancelLabel ?? "停止生成"}><Square size={13} fill="currentColor" aria-hidden="true" /></button>
+          ) : (
+            <button type="button" onClick={submit} disabled={!canSend} aria-label="发送" title="发送 · Enter"
+              className="ui-conversation-composer__send" data-active={canSend}><ArrowUp size={18} strokeWidth={2.2} aria-hidden="true" /></button>
           )}
-          <button
-            type="button"
-            onClick={submit}
-            disabled={!canSend}
-            aria-label="发送"
-            className="ui-conversation-composer__send disabled:cursor-not-allowed"
-            data-active={canSend}
-          >
-            <ArrowUp size={17} strokeWidth={2.2} aria-hidden="true" />
-          </button>
         </div>
       </div>
     </div>
@@ -171,6 +139,10 @@ function ComposerModelSelect({ input }: { readonly input: ChatInputProps }) {
       ariaLabel="选择模型"
       variant="composer"
       placement="top"
+      reasoning={input.reasoningEffortEnabled ? {
+        value: input.reasoningEffort,
+        onChange: input.onReasoningEffortChange,
+      } : undefined}
     />
   )
 }
@@ -204,7 +176,7 @@ function ComposerContextUsage({ usage }: { readonly usage: NonNullable<ChatInput
   }, [open])
 
   return (
-    <div ref={popoverRef} className="ui-context-usage relative hidden shrink-0 sm:block">
+    <div ref={popoverRef} className="ui-context-usage relative shrink-0">
       <button
         type="button"
         className="ui-context-usage__trigger flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-[var(--ui-hover-tint)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--ui-accent)]"
@@ -314,29 +286,6 @@ function ContextUsageRing({ progress, color }: { readonly progress: number; read
   )
 }
 
-function ComposerReasoningSelect({ input }: { readonly input: ChatInputProps }) {
-  const selectedModel = input.models.find((model) => model.id === input.selectedModelId)
-  const effortOptions = runReasoningEffortOptions(selectedModel?.capabilities)
-  return (
-    <label className="relative shrink-0">
-      <span className="sr-only">推理力度</span>
-      <select
-        aria-label="推理力度"
-        value={input.reasoningEffort}
-        onChange={(event) => input.onReasoningEffortChange(event.target.value as ChatInputProps['reasoningEffort'])}
-        className="h-6 appearance-none rounded-md bg-transparent py-0 pl-2 pr-6 text-[11px] outline-none transition-colors hover:bg-[var(--ui-hover-tint)] focus-visible:ring-1 focus-visible:ring-[var(--ui-accent)]"
-        style={{ color: 'var(--ui-text-2)' }}
-      >
-        <option value="">自动</option>
-        {effortOptions.map((option) => (
-          <option value={option.value} key={option.value}>{option.label}</option>
-        ))}
-      </select>
-      <ChevronDown size={10} className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2" style={{ color: 'var(--ui-text-3)' }} aria-hidden="true" />
-    </label>
-  )
-}
-
 function accessPolicyLabel(policy: ComposerToolConfirmationPolicy): string {
   return policy === 'full_access' ? '完全访问' : '标准访问'
 }
@@ -373,7 +322,7 @@ function ComposerAccessSelect({ input }: { readonly input: ChatInputProps }) {
   }
 
   return (
-    <div ref={rootRef} className="ui-composer-access hidden shrink-0 sm:inline-flex">
+    <div ref={rootRef} className="ui-composer-access">
       <button
         type="button"
         className="ui-composer-access__chip"
@@ -381,6 +330,7 @@ function ComposerAccessSelect({ input }: { readonly input: ChatInputProps }) {
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label="命令确认方式"
+        title={accessPolicyLabel(policy)}
         onClick={() => setOpen((current) => !current)}
       >
         <ShieldCheck size={12} strokeWidth={1.8} aria-hidden="true" />

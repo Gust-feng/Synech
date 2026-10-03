@@ -24,6 +24,7 @@ export type ConversationTurnAttachment = {
 };
 
 export type ConversationTurn = {
+  readonly branchVersions?: { readonly runIds: readonly string[]; readonly selectedIndex: number };
   readonly turnId: string;
   readonly role: "user" | "assistant";
   readonly title?: string;
@@ -33,6 +34,7 @@ export type ConversationTurn = {
   readonly runId?: string;
   readonly attachments?: readonly ConversationTurnAttachment[];
   readonly responseModel?: {
+    readonly piProviderId?: string;
     readonly profileId: string;
     readonly label?: string;
     readonly providerKind?: string;
@@ -43,7 +45,7 @@ export type ConversationTurn = {
 };
 
 export type ConversationOwnerView = {
-  readonly kind: "space" | "workspace";
+  readonly kind: "space";
   readonly id: string;
 };
 

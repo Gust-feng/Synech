@@ -12,7 +12,7 @@ export type SpaceMetadataRouteDependencies = {
     readonly queries: Pick<SpaceFeature["queries"], "list" | "getTree">;
   };
   readonly ordinaryAgentFeature: {
-    readonly queries: Pick<OrdinaryAgentFeature["queries"], "listConversationsByOwner" | "getConversation">;
+    readonly queries: Pick<OrdinaryAgentFeature["queries"], "listConversationSummaries" | "getConversation">;
   };
   readonly workspaceFeature: { readonly queries: Pick<WorkspaceFeature["queries"], "get"> };
   readonly workbenchCoordination: {
@@ -51,7 +51,7 @@ export async function handlePanelSpaceMetadataRoute(
     const spaceId = decode(treeMatch[1]);
     const tree = await dependencies.spaceFeature.queries.getTree(spaceId);
     if (tree === undefined) throw new PanelHttpError(404, "space_not_found", "未找到空间。");
-    const canonicalConversations = await dependencies.ordinaryAgentFeature.queries.listConversationsByOwner({ kind: "space", id: spaceId });
+    const canonicalConversations = await dependencies.ordinaryAgentFeature.queries.listConversationSummaries({ owner: { kind: "space", id: spaceId } });
     const entries = await Promise.all(tree.entries.map(async (entry) => {
       if (entry.item.reference.kind !== "workspace") return entry;
       const workspace = await dependencies.workspaceFeature.queries.get(entry.item.reference.workspaceId);

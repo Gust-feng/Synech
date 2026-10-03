@@ -41,6 +41,7 @@ export function assistantModelForTurn(
     const identity = resolveModelProviderIdentity({
       title: turn.responseModel.label,
       profileId: turn.responseModel.profileId,
+      piProviderId: turn.responseModel.piProviderId,
       baseUrl: turn.responseModel.baseUrl,
       model: turn.responseModel.model,
     });

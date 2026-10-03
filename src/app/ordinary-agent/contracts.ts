@@ -1,6 +1,5 @@
 import type { ConfirmationDecision, ConfirmationRequest } from "../../domain/confirmation/index.js";
 import type { ConversationOwner } from "../../domain/execution-scope/index.js";
-import type { MemoryContentKind, MemoryOwner } from "../../domain/memory/index.js";
 import type {
   OrdinaryCapabilitySnapshot,
   ModelRunReasoningEffort,
@@ -24,7 +23,6 @@ import type {
   AgentSessionWriteCheckpoint,
 } from "../model-runtime/agent-session.js";
 import type { OrdinaryRunContextInput } from "../../domain/ordinary/index.js";
-import type { AgentNoteVersions } from "../agent-notes/contracts.js";
 import type { OrdinaryToolMetricsSnapshot } from "./tool-runtime-metrics.js";
 import type {
   CreateOrdinaryManagedAttachmentDraftResult,
@@ -44,14 +42,13 @@ export type OrdinaryFeatureErrorCode =
   | "ordinary_revision_conflict"
   | "ordinary_run_state_conflict"
   | "ordinary_conversation_busy"
-  | "ordinary_rollback_target_not_found"
+  | "ordinary_branch_target_not_found"
   | "ordinary_confirmation_not_found"
   | "ordinary_confirmation_in_progress"
   | "ordinary_tool_result_conflict"
   | "ordinary_submission_conflict"
   | "ordinary_conversation_cleanup_pending"
   | "ordinary_managed_attachment_unavailable"
-  | "ordinary_memory_scope_unavailable"
   | "ordinary_completion_commit_failed";
 
 /** Expected command/query failures that protocol adapters may map without parsing messages. */
@@ -95,6 +92,7 @@ export type OrdinaryFeatureDiagnostic =
       readonly kind: "successor_activation_failed";
       readonly conversationId: string;
       readonly predecessorRunId?: string;
+      readonly replacesRunId?: string;
       readonly error: unknown;
     }
   | {
@@ -108,7 +106,7 @@ export type OrdinaryFeatureDiagnostic =
       /** Durable deletion remains authoritative while cleanup is incomplete. */
       readonly kind: "conversation_cleanup_failed";
       readonly conversationId: string;
-    readonly phase: "run_enumeration" | "tool_evidence" | "memory_facts" | "run_snapshot" | "session" | "terminal_settlement" | "conversation_control";
+    readonly phase: "run_enumeration" | "tool_evidence" | "run_snapshot" | "session" | "terminal_settlement" | "conversation_control";
       readonly runId?: string;
       readonly error: unknown;
     }
@@ -152,8 +150,8 @@ export type OrdinaryRunBirth = {
   readonly reasoningEffort?: ModelRunReasoningEffort;
   readonly agentDefinitionRef: RunAgentDefinitionRef;
   readonly capabilitySnapshot: OrdinaryCapabilitySnapshot;
-  /** Versions of the Agent Notes text frozen into this run's instructions. */
-  readonly agentNoteVersions?: AgentNoteVersions;
+  /** Explicit per-run opt-in; absent means no detailed diagnostic collection. */
+  readonly recordToolMetrics?: boolean;
   /** Stable non-global memory owner frozen with this run; never derived from cwd. */
   readonly memoryOwner: ConversationOwner;
   /** 模型可见的 Owner 与环境上下文，随 Run 出生事实冻结。 */
@@ -178,6 +176,7 @@ export type OrdinaryRunTurn = {
   readonly userTurnId: string;
   readonly assistantTurnId: string;
   readonly predecessorRunId?: string;
+  readonly replacesRunId?: string;
 };
 
 /**
@@ -213,6 +212,22 @@ export type OrdinaryConversationControlState = {
   readonly pinnedAt?: string;
   readonly deletedAt?: string;
   readonly memoryBackground?: OrdinaryMemoryBackgroundBinding;
+  /** Product turns retired by an explicit branch selection; Pi retains their transcript. */
+  readonly retiredRunIds?: readonly string[];
+  readonly previousBranchRunId?: string;
+  readonly branchUndoDirection?: "undo" | "redo";
+  /** Write-ahead intent until a replacement Run's birth is known durable. */
+  readonly pendingBranchChange?: {
+    readonly kind: "edit" | "selection";
+    readonly originalPreviousBranchRunId?: string;
+    readonly originalUndoDirection?: "undo" | "redo";
+    readonly runId: string;
+    readonly targetCheckpoint: AgentSessionCheckpointRef | null;
+    readonly originalCheckpoint: AgentSessionCheckpointRef | null;
+    readonly originalRetiredRunIds: readonly string[];
+    readonly retainedThroughOrdinal: number;
+    readonly originalThroughOrdinal: number;
+  };
 };
 
 export type OrdinaryConversationControlDocument = {
@@ -370,31 +385,6 @@ export type OrdinaryRunSummary = {
   readonly createdAt: string;
   readonly updatedAt: string;
 };
-
-/**
- * Ordinary owns these facts because only it can truthfully bind a memory read
- * or explicit adoption to a specific run. The memory feature never increments
- * usage counters by itself.
- */
-export type OrdinaryMemoryFact = {
-  readonly factId: string;
-  readonly runId: string;
-  readonly conversationId: string;
-  readonly kind: "read" | "applied";
-  readonly memoryId: string;
-  readonly memoryKind: MemoryContentKind;
-  readonly owner: MemoryOwner;
-  readonly revision: number;
-  readonly title: string;
-  readonly recordedAt: string;
-  readonly note?: string;
-};
-
-export interface OrdinaryMemoryFactRepository {
-  append(fact: OrdinaryMemoryFact): Promise<"recorded" | "already_recorded">;
-  list(query?: { readonly runId?: string; readonly memoryId?: string }): Promise<readonly OrdinaryMemoryFact[]>;
-  deleteByRunIds(runIds: readonly string[]): Promise<void>;
-}
 
 export type OrdinaryRunRecoveryInventory = {
   readonly summaries: readonly OrdinaryRunSummary[];
@@ -565,6 +555,7 @@ export type StartOrdinaryRunInput = {
 };
 
 export type SubmitOrdinaryTurnInput = {
+  readonly replacesRunId?: string;
   readonly conversationId?: string;
   /** Host-selected identity for a new conversation; mutually exclusive with conversationId. */
   readonly newConversationId?: string;
@@ -588,6 +579,7 @@ export type DecideOrdinaryApprovalInput = {
 export type OrdinaryConversationTurnReadModel =
   | {
       readonly role: "user";
+      readonly branchVersions?: { readonly runIds: readonly string[]; readonly selectedIndex: number };
       readonly turnId: string;
       readonly runId: string;
       readonly content: string;
@@ -609,6 +601,14 @@ export type OrdinaryConversationTurnReadModel =
       readonly createdAt: string;
       readonly updatedAt: string;
     };
+
+export type OrdinaryConversationSummaryReadModel = Omit<OrdinaryConversationReadModel, "turns"> & {
+  readonly owner: ConversationOwner;
+  readonly status: OrdinaryRunStatus["kind"];
+  readonly preview: string;
+  readonly executionRoot: string;
+  readonly pendingAction?: { readonly kind: "approval"; readonly runId: string; readonly assistantTurnId: string };
+};
 
 export type OrdinaryConversationReadModel = {
   readonly conversationId: string;
@@ -703,7 +703,7 @@ export interface OrdinaryAgentFeature {
     submitTurn(input: SubmitOrdinaryTurnInput): Promise<SubmitOrdinaryTurnResult>;
     renameConversation(conversationId: string, title: string): Promise<OrdinaryConversationReadModel>;
     setConversationPinned(conversationId: string, pinned: boolean): Promise<OrdinaryConversationReadModel>;
-    rollbackConversation(input: { readonly conversationId: string; readonly targetRunId?: string; readonly stepsBack?: number }): Promise<OrdinaryConversationReadModel>;
+    selectConversationBranch(input: { readonly conversationId: string; readonly targetRunId: string }): Promise<OrdinaryConversationReadModel>;
     deleteConversation(conversationId: string): Promise<void>;
     /**
      * 会话背景绑定（幂等）：已绑定时原样返回既有绑定，不覆盖；仅未初始化时写入。
@@ -722,14 +722,13 @@ export interface OrdinaryAgentFeature {
     discardManagedAttachmentDraft(attachmentId: string): Promise<void>;
     cancel(runId: string, reason?: string): Promise<OrdinaryRunState>;
     decideApproval(input: DecideOrdinaryApprovalInput): Promise<OrdinaryRunState>;
-    recordMemoryRead(input: Omit<OrdinaryMemoryFact, "kind" | "memoryKind" | "recordedAt" | "conversationId">): Promise<void>;
-    recordMemoryReference(input: Omit<OrdinaryMemoryFact, "kind" | "memoryKind" | "recordedAt" | "conversationId">): Promise<"recorded" | "already_recorded" | "not_read">;
   };
   readonly queries: {
     getRun(runId: string): Promise<OrdinaryRunState | undefined>;
     listRuns(limit?: number): Promise<readonly OrdinaryRunSummary[]>;
     getConversation(conversationId: string): Promise<OrdinaryConversationReadModel | undefined>;
     listConversations(limit?: number): Promise<readonly OrdinaryConversationReadModel[]>;
+    listConversationSummaries(input?: { readonly owner?: ConversationOwner; readonly limit?: number }): Promise<readonly OrdinaryConversationSummaryReadModel[]>;
     /** Canonical owner captured by the conversation workflow. */
     getConversationOwner(conversationId: string): Promise<ConversationOwner | undefined>;
     /** 会话背景绑定读取；undefined 表示尚未初始化（区别于显式 none）。 */
@@ -744,8 +743,8 @@ export interface OrdinaryAgentFeature {
     /** Owner 视角的对话列表，供删除协调与资源页 read-model 使用。 */
     listConversationsByOwner(owner: ConversationOwner): Promise<readonly OrdinaryConversationReadModel[]>;
     getManagedAttachment(attachmentId: string): Promise<OrdinaryManagedAttachmentRecord | undefined>;
-    listMemoryFacts(query?: { readonly runId?: string; readonly memoryId?: string }): Promise<readonly OrdinaryMemoryFact[]>;
     /** Releases cached terminal run snapshots after bulk reads so full-history scans do not pin them in memory. */
+    /** Release rebuildable activity projections, never the conversation's Run index. */
     releaseTerminalRunCaches(runIds: readonly string[]): Promise<void>;
     /** Returns undefined until the run's terminal facts are durably settled. */
     getStableTerminalRunFacts(runId: string): Promise<OrdinaryStableTerminalRunFacts | undefined>;

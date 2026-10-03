@@ -49,6 +49,7 @@ export function ConversationPicker(props: ConversationPickerProps) {
   const triggerRef = useRef<HTMLButtonElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const requestRef = useRef(0)
+  const insidePointerEventRef = useRef<PointerEvent | null>(null)
   const popoverId = useId()
   const title = props.conversation?.title ?? '新对话'
   const ordered = useMemo(() => props.conversations
@@ -90,12 +91,11 @@ export function ConversationPicker(props: ConversationPickerProps) {
   useEffect(() => {
     if (!open) return
     const dismiss = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
+      // Portal 菜单仍属于当前 React 子树；不能只用 DOM contains 判断外部点击。
+      if (insidePointerEventRef.current !== event) setOpen(false)
     }
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented) return
-      // 行内 FloatingMenu 打开时先让它自己处理 Escape（收起菜单）。
-      if (document.querySelector('.ui-floating-menu__popover') !== null) return
       event.preventDefault()
       setOpen(false)
       triggerRef.current?.focus({ preventScroll: true })
@@ -157,7 +157,7 @@ export function ConversationPicker(props: ConversationPickerProps) {
   }
 
   return (
-    <div className="ui-conversation-picker" ref={rootRef}>
+    <div className="ui-conversation-picker" ref={rootRef} onPointerDownCapture={(event) => { insidePointerEventRef.current = event.nativeEvent }}>
       <button
         ref={triggerRef}
         type="button"
@@ -167,7 +167,6 @@ export function ConversationPicker(props: ConversationPickerProps) {
         aria-expanded={open}
         aria-controls={open ? popoverId : undefined}
         disabled={ordered.length === 0}
-        title={title}
         onClick={() => setOpen((value) => !value)}
       >
         <span>{title}</span>
@@ -185,6 +184,7 @@ export function ConversationPicker(props: ConversationPickerProps) {
               type="search"
               aria-label="搜索对话"
               placeholder="搜索对话"
+              spellCheck={false}
               value={query}
               onChange={(event) => setQuery(event.target.value)}
             />
@@ -224,10 +224,10 @@ export function ConversationPicker(props: ConversationPickerProps) {
                             <InlineName value={item.title} label="对话名称" onCancel={() => setRenamingId(null)} onCommit={(name) => { void mutate(item.conversationId, () => props.onRename(item.conversationId, name)) }} />
                           </div>
                         ) : (
-                          <button type="button" data-conversation-option className="ui-conversation-history-open" disabled={busy} aria-current={current ? 'true' : undefined} aria-busy={pending || undefined} onClick={() => { void openConversation(item.conversationId) }} title={item.title}>
+                          <button type="button" data-conversation-option className="ui-conversation-history-open" disabled={busy} aria-current={current ? 'true' : undefined} aria-busy={pending || undefined} onClick={() => { void openConversation(item.conversationId) }}>
                             <span className="ui-conversation-history-copy">
                               <span className="ui-conversation-history-title">{item.title}</span>
-                              {item.pinnedAt !== undefined && <span className="ui-conversation-history-pin" role="img" aria-label="已置顶" title="已置顶"><Pin size={11} aria-hidden="true" /></span>}
+                              {item.pinnedAt !== undefined && <span className="ui-conversation-history-pin" role="img" aria-label="已置顶"><Pin size={11} aria-hidden="true" /></span>}
                             </span>
                             <span className="ui-conversation-history-meta" data-status={pending ? 'working' : status?.kind}>
                               {openingId === item.conversationId ? '打开中…' : pending ? '处理中…' : status?.label ?? relativeDate(item.updatedAt)}

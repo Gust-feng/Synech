@@ -1,12 +1,10 @@
 import type { ChatInputProps } from "../../../../contracts/composer";
 import type { ConversationSummary } from "../../../../contracts/conversation";
 import type { PersonalSpaceActions, PersonalSpaceProjection } from "../../../space";
-import type { WorkspaceProjectionState } from "../../../../features/spaces/workspace-state";
 import { BrainPage } from "./BrainPage";
 import { HomePage } from "./HomePage";
 import { SearchPage } from "./SearchPage";
 import { SpacePage } from "./SpacePage";
-import { WorkspacePage } from "./WorkspacePage";
 import type {
   ConversationOwnerSelection,
   WorkbenchView,
@@ -25,13 +23,11 @@ export type WorkbenchViewRendererProps = {
   readonly onOpenPreview: () => void;
   readonly homeInput: ChatInputProps;
   readonly homeFocusRequest: number;
-  readonly workspaceProjection: WorkspaceProjectionState;
   readonly homeOwnerSelection: ConversationOwnerSelection | null;
   readonly onHomeOwnerChange: (owner: ConversationOwnerSelection | null) => void;
   readonly brainSelectedId: string | null;
   readonly spaceTargetId: string | null;
   readonly activeSpaceId: string | null;
-  readonly activeWorkspaceId: string | null;
   readonly onBrainSelect: (id: string | null) => void;
   readonly navigate: (view: WorkbenchView) => void;
   readonly onOpenInSpace: (spaceId: string, id: string) => void;
@@ -42,7 +38,6 @@ export function WorkbenchViewRenderer(input: WorkbenchViewRendererProps): React.
   if (input.view === "home") {
     return <HomePage
       spaces={input.spaces}
-      workspaces={input.workspaceProjection.workspaces}
       ownerSelection={input.homeOwnerSelection}
       onOwnerChange={input.onHomeOwnerChange}
       input={input.homeInput}
@@ -60,16 +55,6 @@ export function WorkbenchViewRenderer(input: WorkbenchViewRendererProps): React.
       explorerCollapsed={input.explorerCollapsed}
       onActivateReading={input.onActivateReading}
       onOpenPreview={input.onOpenPreview}
-    />;
-  }
-  if (input.view === "workspace") {
-    const activeWorkspace = input.workspaceProjection.workspaces.find(
-      (workspace) => workspace.workspaceId === input.activeWorkspaceId,
-    );
-    return <WorkspacePage
-      workspace={activeWorkspace}
-      explorerCollapsed={input.explorerCollapsed}
-      onReconnectWorkspace={input.workspaceProjection.reconnectWorkspace}
     />;
   }
   if (input.view === "brain") {

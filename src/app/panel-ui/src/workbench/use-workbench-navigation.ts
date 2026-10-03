@@ -13,12 +13,10 @@ export type WorkbenchNavigationController = {
   readonly setBrainSelection: (id: string | null) => void;
   readonly setSpaceTarget: (id: string | null) => void;
   readonly setActiveSpace: (id: string | null) => void;
-  readonly setActiveWorkspace: (id: string | null) => void;
   readonly setHomeOwner: (owner: ConversationOwnerSelection | null) => void;
   readonly focusHomeInput: () => void;
   readonly syncContextSelection: (input: {
     readonly spaceIds: readonly string[];
-    readonly workspaceIds: readonly string[];
   }) => void;
 };
 
@@ -41,9 +39,6 @@ export function useWorkbenchNavigation(): WorkbenchNavigationController {
   const setActiveSpace = useCallback((id: string | null) => {
     dispatch({ type: "set-active-space", id });
   }, []);
-  const setActiveWorkspace = useCallback((id: string | null) => {
-    dispatch({ type: "set-active-workspace", id });
-  }, []);
   const setHomeOwner = useCallback((owner: ConversationOwnerSelection | null) => {
     dispatch({ type: "set-home-owner", owner });
   }, []);
@@ -52,7 +47,6 @@ export function useWorkbenchNavigation(): WorkbenchNavigationController {
   }, []);
   const syncContextSelection = useCallback((input: {
     readonly spaceIds: readonly string[];
-    readonly workspaceIds: readonly string[];
   }) => {
     dispatch({ type: "sync-context-selection", ...input });
   }, []);
@@ -63,7 +57,6 @@ export function useWorkbenchNavigation(): WorkbenchNavigationController {
     setBrainSelection,
     setSpaceTarget,
     setActiveSpace,
-    setActiveWorkspace,
     setHomeOwner,
     focusHomeInput,
     syncContextSelection,

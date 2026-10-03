@@ -357,8 +357,8 @@ export function SpacePage({
   }
 
   function handleReconnectWorkspace(item: SpaceItem) {
-    if (item.workspaceId === undefined || actions?.reconnectWorkspace === undefined) return
-    void runSpaceAction(() => actions.reconnectWorkspace!(item.workspaceId!))
+    if (actions?.reconnectWorkspace === undefined) return
+    void runSpaceAction(() => actions.reconnectWorkspace!(item.id))
   }
 
   async function handleOpenReference(item: SpaceItem) {

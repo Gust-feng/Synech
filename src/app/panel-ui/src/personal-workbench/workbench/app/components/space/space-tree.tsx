@@ -30,6 +30,8 @@ import type { SpaceItem } from '../useMountedTree'
 import { InlineName } from '@ui/components/inline-name'
 
 const NOTE_DRAG_TYPE = 'space-note-row'
+// Keep the empty prompt, saved note and inline editor in the same row geometry.
+const NOTE_ROW_CLASS_NAME = 'relative flex h-9 w-full items-center gap-2 rounded-md pl-[10px] pr-2 py-1.5 text-sm'
 
 export function countSpaceItems(tree: readonly SpaceItem[]): number {
   return tree.reduce((count, item) => count + 1 + (item.children ? countSpaceItems(item.children) : 0), 0)
@@ -66,7 +68,7 @@ export function SpaceExplorer({
       <header className="px-4 pt-4 pb-3 shrink-0">
         <div className="flex items-center gap-2.5 mb-1">
           <span className="w-3 h-3 rounded-full shrink-0" style={{ background: space?.color ?? '#a8c4b4' }} />
-          <h1 className="m-0 min-w-0 flex-1 truncate text-sm font-semibold" title={space?.title ?? '空间'} style={{ color: 'var(--ui-text-1, #292722)' }}>
+          <h1 className="m-0 min-w-0 flex-1 truncate text-sm font-semibold" style={{ color: 'var(--ui-text-1, #292722)' }}>
             {space?.title ?? '空间'}
           </h1>
           <button
@@ -145,12 +147,13 @@ function SpaceNotesSection({
         <button
           type="button"
           onClick={onCreate}
-          className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-sm text-left transition-colors hover:bg-[var(--ui-hover-tint)]"
+          className={`${NOTE_ROW_CLASS_NAME} text-left transition-colors hover:bg-[var(--ui-hover-tint)]`}
           style={{ color: 'var(--ui-text-3, #aba39b)' }}
         >
-          <span style={{ width: 12 }} />
-          <NotebookPen size={13} />
-          <span>写下第一篇笔记</span>
+          <span aria-hidden="true" className="w-3 shrink-0" />
+          <NotebookPen size={13} className="shrink-0" />
+          <span className="min-w-0 flex-1 truncate">写下第一篇笔记</span>
+          <span aria-hidden="true" className="h-6 w-6 shrink-0" />
         </button>
       )}
 
@@ -414,7 +417,6 @@ function TreeNode({
             aria-label={item.name}
             aria-selected={selected}
             aria-expanded={item.type === 'folder' ? expanded : undefined}
-            title={item.name}
             onClick={() => {
               if (item.type === 'folder') onToggleExpand(item.id)
               else onSelect(item.id)
@@ -572,12 +574,8 @@ function NoteRow({
     <div
       ref={ref}
       data-note-row
-      className="group/note relative flex items-center gap-2 rounded-md cursor-pointer"
+      className={`${NOTE_ROW_CLASS_NAME} group/note cursor-pointer`}
       style={{
-        paddingLeft: 10,
-        paddingRight: 8,
-        paddingTop: 6,
-        paddingBottom: 6,
         opacity: isDragging ? 0.4 : 1,
         background: selected
           ? 'var(--ui-surface-active, #e5e1db)'
@@ -598,7 +596,6 @@ function NoteRow({
           type="button"
           aria-label={`打开${title}`}
           aria-current={selected ? 'page' : undefined}
-          title={title}
           onClick={onSelect}
           className="absolute inset-0 z-0 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset"
         />
@@ -611,7 +608,7 @@ function NoteRow({
       >
         <GripVertical size={12} />
       </span>
-      <NotebookPen size={13} style={{ color: '#6f8778' }} />
+      <NotebookPen size={13} className="shrink-0" style={{ color: '#6f8778' }} />
       {editing ? (
         <InlineName
           value={title}

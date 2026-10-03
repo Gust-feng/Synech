@@ -1,5 +1,6 @@
-import type { ReactNode, RefObject } from 'react'
+import type { RefObject } from 'react'
 import { NoteEditor } from '../NoteEditor'
+import { SpaceLanding } from './space-landing'
 import { ReferencePreview, type ReferencePreviewHandle } from '../ReferencePreview'
 import { SurfaceErrorBoundary } from '../SurfaceErrorBoundary'
 import { useBrain } from '../brainStore'
@@ -73,20 +74,8 @@ export function SpaceContent({
               />}
         />
       ) : (
-        <CenteredCard>
-          <p className="text-xs leading-relaxed text-center" style={{ color: 'var(--ui-text-3, #aba39b)' }}>
-            从左侧选择一篇笔记或材料
-            <br />
-            即可在此书写或查看
-          </p>
-        </CenteredCard>
+        <SpaceLanding />
       )}
     </div>
-  )
-}
-
-function CenteredCard({ children }: { children: ReactNode }) {
-  return (
-    <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">{children}</div>
   )
 }

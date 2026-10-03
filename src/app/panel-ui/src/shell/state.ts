@@ -1,8 +1,4 @@
 import { useState, type Dispatch, type SetStateAction } from "react";
-import {
-  getModelUsageDisplayEnabled,
-  saveModelUsageDisplayEnabled,
-} from "../features/settings/model/usage-display";
 import { type SettingsGroup } from "../features/settings/components/types";
 import { readLocalPreference, writeLocalPreference } from "./local-preferences";
 import { getDeveloperModeEnabled, saveDeveloperModeEnabled } from "./developer-mode";
@@ -15,8 +11,6 @@ export type AppShellState = {
   readonly settingsGroup: SettingsGroup;
   readonly sidebarCollapsed: boolean;
   readonly setSidebarCollapsed: Dispatch<SetStateAction<boolean>>;
-  readonly modelUsageDisplayEnabled: boolean;
-  readonly setModelUsageDisplayEnabled: Dispatch<SetStateAction<boolean>>;
   readonly developerModeEnabled: boolean;
   readonly conversationFollowUpMode: ConversationFollowUpMode;
   readonly pinningConversationIds: ReadonlySet<string>;
@@ -25,7 +19,6 @@ export type AppShellState = {
   readonly setInputCloseSignal: Dispatch<SetStateAction<number>>;
   readonly openSettings: (group?: SettingsGroup) => void;
   readonly closeSettings: () => void;
-  readonly changeModelUsageDisplay: (enabled: boolean) => void;
   readonly changeDeveloperMode: (enabled: boolean) => void;
   readonly changeConversationFollowUpMode: (mode: ConversationFollowUpMode) => void;
 };
@@ -34,7 +27,6 @@ export function useAppShellState(): AppShellState {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsGroup, setSettingsGroup] = useState<SettingsGroup>("models");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(loadSidebarCollapsedPreference);
-  const [modelUsageDisplayEnabled, setModelUsageDisplayEnabled] = useState(getModelUsageDisplayEnabled);
   const [developerModeEnabled, setDeveloperModeEnabled] = useState(getDeveloperModeEnabled);
   const [conversationFollowUpMode, setConversationFollowUpMode] = useState(getConversationFollowUpMode);
   const [pinningConversationIds, setPinningConversationIds] = useState<ReadonlySet<string>>(() => new Set());
@@ -48,11 +40,6 @@ export function useAppShellState(): AppShellState {
 
   function closeSettings(): void {
     setSettingsOpen(false);
-  }
-
-  function changeModelUsageDisplay(enabled: boolean): void {
-    setModelUsageDisplayEnabled(enabled);
-    saveModelUsageDisplayEnabled(enabled);
   }
 
   function changeDeveloperMode(enabled: boolean): void {
@@ -71,8 +58,6 @@ export function useAppShellState(): AppShellState {
     settingsGroup,
     sidebarCollapsed,
     setSidebarCollapsed,
-    modelUsageDisplayEnabled,
-    setModelUsageDisplayEnabled,
     developerModeEnabled,
     conversationFollowUpMode,
     pinningConversationIds,
@@ -81,7 +66,6 @@ export function useAppShellState(): AppShellState {
     setInputCloseSignal,
     openSettings,
     closeSettings,
-    changeModelUsageDisplay,
     changeDeveloperMode,
     changeConversationFollowUpMode,
   };

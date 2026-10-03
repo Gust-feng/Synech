@@ -57,7 +57,13 @@ export function ImageDocumentSurface({
       skipNextCommitRef.current = false
       return
     }
-    if ((!editing && !caption) || saving || onCaptionChange === undefined) return
+    if (!editing || saving || onCaptionChange === undefined) return
+    const originalCaption = caption ?? ''
+    if (draftRef.current === originalCaption) {
+      setError(undefined)
+      setEditing(false)
+      return
+    }
     setSaving(true)
     try {
       await onCaptionChange(draftRef.current)

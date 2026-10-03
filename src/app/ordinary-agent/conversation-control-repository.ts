@@ -22,7 +22,6 @@ export class OrdinaryConversationSnapshotIncompatibleError extends Error {
 
 const ownerSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("space"), id: z.string().min(1) }).strict(),
-  z.object({ kind: z.literal("workspace"), id: z.string().min(1) }).strict(),
 ]);
 
 const memoryBackgroundSchema: z.ZodType<import("./contracts.js").OrdinaryMemoryBackgroundBinding> = z.discriminatedUnion("kind", [
@@ -36,6 +35,10 @@ const memoryBackgroundSchema: z.ZodType<import("./contracts.js").OrdinaryMemoryB
   }).strict(),
 ]);
 
+const checkpointSchema = z.object({
+  sessionId: z.string().min(1), checkpointId: z.string().min(1),
+  kind: z.enum(["run_started", "input_committed", "assistant_tool_calls_committed", "tool_results_committed", "compaction_committed", "assistant_response_committed"]),
+}).strict();
 const stateSchema: z.ZodType<OrdinaryConversationControlState> = z.object({
   conversationId: z.string().min(1),
   createdAt: z.string().min(1),
@@ -53,7 +56,26 @@ const stateSchema: z.ZodType<OrdinaryConversationControlState> = z.object({
   pinnedAt: z.string().min(1).optional(),
   deletedAt: z.string().min(1).optional(),
   memoryBackground: memoryBackgroundSchema.optional(),
+  retiredRunIds: z.array(z.string().min(1)).optional(),
+  previousBranchRunId: z.string().min(1).optional(),
+  branchUndoDirection: z.enum(["undo", "redo"]).optional(),
+  pendingBranchChange: z.object({
+    kind: z.enum(["edit", "selection"]),
+    originalPreviousBranchRunId: z.string().min(1).optional(),
+    originalUndoDirection: z.enum(["undo", "redo"]).optional(),
+    runId: z.string().min(1),
+    targetCheckpoint: checkpointSchema.nullable(),
+    originalCheckpoint: checkpointSchema.nullable(),
+    originalRetiredRunIds: z.array(z.string().min(1)),
+    retainedThroughOrdinal: z.number().int().nonnegative(),
+    originalThroughOrdinal: z.number().int().nonnegative(),
+  }).strict().optional(),
 }).strict().superRefine((state, context) => {
+  for (const checkpoint of [state.pendingBranchChange?.targetCheckpoint, state.pendingBranchChange?.originalCheckpoint]) {
+    if (checkpoint != null && checkpoint.sessionId !== state.sessionRef.sessionId) {
+      context.addIssue({ code: "custom", message: "branch edit checkpoint belongs to another Session" });
+    }
+  }
   if ((state.titleOverride === undefined) !== (state.titleEditedAt === undefined)) {
     context.addIssue({ code: "custom", message: "title override and edit time must appear together" });
   }

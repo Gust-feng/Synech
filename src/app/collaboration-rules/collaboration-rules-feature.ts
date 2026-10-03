@@ -1,6 +1,7 @@
 import { nowIso } from "../../kernel/id.js";
 import {
   COLLABORATION_RULES_MAX_CHARS,
+  WORKSPACE_COLLABORATION_RULES_FILE_NAME,
   CollaborationRulesError,
   assertCollaborationRuleScope,
   type CollaborationRuleOwner,
@@ -14,6 +15,14 @@ import {
 } from "./contracts.js";
 import { collaborationRuleScopeIdentity } from "./scope-identity.js";
 
+/**
+ * Managed-store owner of global/Space collaboration rules.
+ *
+ * Workspace rules are the root AGENTS.md of a mounted directory and are routed by
+ * `CollaborationRulesApplication` through the Workspace rules port; this Feature
+ * never stores a second copy of them. Model-visible startup assembly also lives in
+ * the Application because it must consult that port.
+ */
 export function createCollaborationRulesFeature(input: {
   readonly repository: CollaborationRulesRepository;
   readonly now?: () => string;
@@ -41,30 +50,14 @@ export function createCollaborationRulesFeature(input: {
     queries: {
       async get(scope) {
         assertCollaborationRuleScope(scope);
+        assertManagedScope(scope);
         return await runStorageExclusive(async () => await input.repository.read(scope));
-      },
-      async startupSnapshot(owner) {
-        assertConcreteOwner(owner);
-        const [global, local] = await runStorageExclusive(async () => await Promise.all([
-          input.repository.read({ kind: "global" }),
-          input.repository.read(owner),
-        ]));
-        const sections: string[] = [];
-        if (global.content.trim().length > 0) sections.push(`## 全局协作规则\n\n${global.content.trim()}`);
-        if (local.content.trim().length > 0) {
-          const heading = owner.kind === "space" ? "当前 Space 协作规则" : "当前工作区协作规则";
-          sections.push(`## ${heading}\n\n${local.content.trim()}`);
-        }
-        return {
-          injection: sections.length === 0
-            ? undefined
-            : `[Standing collaboration rules]\n${sections.join("\n\n")}`,
-        };
       },
     },
     commands: {
       async write(command: CollaborationRulesWriteInput): Promise<CollaborationRulesWriteResult> {
         assertCollaborationRuleScope(command.scope);
+        assertManagedScope(command.scope);
         if (command.content.length > COLLABORATION_RULES_MAX_CHARS) {
           throw new CollaborationRulesError(
             "collaboration_rule_too_large",
@@ -77,6 +70,7 @@ export function createCollaborationRulesFeature(input: {
       },
       async delete(command: CollaborationRulesDeleteInput): Promise<CollaborationRulesDeleteResult> {
         assertCollaborationRuleScope(command.scope);
+        assertManagedScope(command.scope);
         assertOwnerWritable(command.scope, deletedOwners);
         return await enqueue(command.scope, async () => await runStorageExclusive(async () =>
           await input.repository.delete(command)));
@@ -90,6 +84,15 @@ export function createCollaborationRulesFeature(input: {
       },
     },
   };
+}
+
+/** Workspace scope is external; reaching the managed store with it is a wiring bug. */
+function assertManagedScope(scope: CollaborationRuleScope): void {
+  if (scope.kind !== "workspace") return;
+  throw new CollaborationRulesError(
+    "collaboration_rule_invalid_scope",
+    `Workspace ${scope.id} rules are stored in its root ${WORKSPACE_COLLABORATION_RULES_FILE_NAME}; the managed store only holds global and Space rules.`,
+  );
 }
 
 function assertConcreteOwner(owner: unknown): asserts owner is CollaborationRuleOwner {

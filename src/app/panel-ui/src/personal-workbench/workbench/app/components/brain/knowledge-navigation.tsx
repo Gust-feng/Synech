@@ -478,7 +478,6 @@ function NavItem({
       type="button"
       onClick={onClick}
       aria-current={active ? 'page' : undefined}
-      title={label}
       className="relative isolate flex min-h-8 w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-[var(--ui-hover-tint)]"
       style={{
         color: active ? 'var(--ui-accent-fg, #fff)' : 'var(--ui-text-1, #292722)',

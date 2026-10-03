@@ -36,10 +36,7 @@ import {
   ContextAttachmentUploadApplicationError,
 } from "../application/context-attachment-application.js";
 import { SpaceReferenceContentApplicationError } from "../application/space-reference-content-application.js";
-import { agentMemoryHttpError, handlePanelAgentMemoryRoute } from "./ordinary/agent-memory-routes.js";
-import { AgentNotesError } from "../agent-notes/index.js";
-import { CollaborationRulesError } from "../collaboration-rules/index.js";
-import { PathDependencyFeatureError } from "../path-dependencies/index.js";
+import { CollaborationRulesApplicationError, CollaborationRulesError } from "../collaboration-rules/index.js";
 import { SpaceFeatureError } from "../spaces/index.js";
 import { handlePanelSpaceRoute, spaceFeatureHttpError } from "./spaces/space-routes.js";
 import type { ManagedSpaceFolderApplication } from "../../domain/managed-space-folder.js";
@@ -51,10 +48,10 @@ import { WorkbenchCoordinationError } from "../workbench-coordination/index.js";
 import { MemoryError } from "../memory/index.js";
 import { handlePanelPersonalKnowledgeRoute, personalKnowledgeHttpError } from "./storage/personal-knowledge-routes.js";
 import {
-  handleMemoryCapabilityRoute,
+  handleMemoryStatusRoute,
   handleMemoryDiagnosticsRoute,
   handleMemoryMutationRoute,
-  handleMemorySpaceViewRoute,
+  handleMemoryDocumentRoute,
 } from "./routes-memory.js";
 import { handleCollaborationRulesRoute } from "./routes-collaboration-rules.js";
 import { createPanelUsageStatistics } from "./workbench/panel-usage-statistics.js";
@@ -227,11 +224,7 @@ function createPanelRequestHandler(runtime: PanelHost): (request: IncomingMessag
         writePanelError(response, ordinaryFeatureHttpError(error));
         return;
       }
-      if (error instanceof AgentNotesError || error instanceof PathDependencyFeatureError) {
-        writePanelError(response, agentMemoryHttpError(error));
-        return;
-      }
-      if (error instanceof CollaborationRulesError) {
+      if (error instanceof CollaborationRulesApplicationError || error instanceof CollaborationRulesError) {
         writePanelError(response, collaborationRulesHttpError(error));
         return;
       }
@@ -336,13 +329,17 @@ function agentSessionHttpError(error: AgentSessionRepositoryError): PanelHttpErr
   }
 }
 
-function collaborationRulesHttpError(error: CollaborationRulesError): PanelHttpError {
+function collaborationRulesHttpError(error: CollaborationRulesApplicationError | CollaborationRulesError): PanelHttpError {
   switch (error.code) {
+    case "collaboration_rules_scope_unsupported":
     case "collaboration_rule_invalid_scope":
     case "collaboration_rule_too_large":
       return new PanelHttpError(400, error.code, error.message);
+    case "collaboration_rules_scope_unavailable":
     case "collaboration_rule_owner_deleted":
       return new PanelHttpError(409, error.code, error.message);
+    case "collaboration_rules_capacity_exceeded":
+      return new PanelHttpError(413, error.code, error.message);
     case "collaboration_rule_io_failure":
       return new PanelHttpError(500, error.code, error.message);
   }
@@ -409,6 +406,7 @@ async function handlePanelRequest(
 
   if (await handlePanelConfigRoute({
     configCenter: runtime.configCenter,
+    modelProviderAuth: runtime.modelProviderAuth,
     capabilityCenter: runtime.capabilityCenter,
     managedMcpBinDirectory: runtime.productPaths.state.runtimeTools.mcp.bin,
     configDirectory: runtime.configDirectory,
@@ -446,7 +444,6 @@ async function handlePanelRequest(
     ordinaryTurnApplication: runtime.ordinaryTurnApplication,
     conversationLifecycle: runtime.conversationLifecycle,
     spaceConversationDeletion: runtime.spaceConversationDeletion,
-    workspaceDeletion: runtime.workspaceDeletion,
   }, request, response, url)) {
     return;
   }
@@ -455,22 +452,11 @@ async function handlePanelRequest(
     return;
   }
 
-  if (await handlePanelAgentMemoryRoute({
-    pathDependencyFeature: runtime.pathDependencyFeature,
-    agentNotesFeature: runtime.agentNotesFeature,
-    ordinaryAgentFeature: runtime.ordinaryAgentFeature,
-    spaceFeature: runtime.spaceFeature,
-    workspaceFeature: runtime.workspaceFeature,
-    spaceConversationDeletion: runtime.spaceConversationDeletion,
-    workspaceDeletion: runtime.workspaceDeletion,
-  }, request, response, url)) {
-    return;
-  }
 
-  if (await handleMemoryCapabilityRoute(runtime.memoryFeature, request, response, url)) {
+  if (await handleMemoryStatusRoute(runtime.memoryFeature, request, response, url)) {
     return;
   }
-  if (await handleMemorySpaceViewRoute(runtime.memoryFeature, request, response, url)) {
+  if (await handleMemoryDocumentRoute(runtime.memoryFeature, request, response, url)) {
     return;
   }
   if (await handleMemoryDiagnosticsRoute(runtime.memoryFeature, request, response, url)) {
@@ -508,10 +494,7 @@ async function handlePanelRequest(
     return;
   }
 
-  if (await handlePanelWorkspaceRoute({
-    workspaceFeature: runtime.workspaceFeature,
-    workbenchCoordination: runtime.workbenchCoordination,
-  }, request, response, url)) {
+  if (await handlePanelWorkspaceRoute({}, request, response, url)) {
     return;
   }
 
@@ -594,9 +577,13 @@ function workbenchCoordinationHttpError(error: WorkbenchCoordinationError): Pane
 function memoryHttpError(error: MemoryError): PanelHttpError {
   switch (error.code) {
     case "memory_invalid_owner":
+    case "memory_invalid_edit":
       return new PanelHttpError(400, error.code, error.message);
     case "memory_owner_deleted":
+    case "memory_entry_not_found":
       return new PanelHttpError(404, error.code, error.message);
+    case "memory_source_unavailable":
+    case "memory_request_conflict":
     case "memory_policy_revision_stale":
     case "memory_generation_fenced":
       return new PanelHttpError(409, error.code, error.message);
@@ -657,7 +644,14 @@ export async function closePanelServer(
   // callbacks may still run while active jobs converge, but they must not
   // admit the next queued conversation run.
   runtime.isQuiescing = true;
-  const ordinaryDisposal = runtime.ordinaryAgentFeature.release();
+  const authDisposal = runtime.modelProviderAuth.dispose();
+  void authDisposal.catch(() => undefined);
+  const memoryDisposal = runtime.releaseMemoryRuntime();
+  void memoryDisposal.catch(() => undefined);
+  const ordinaryDisposal = memoryDisposal.then(
+    () => runtime.ordinaryAgentFeature.release(),
+    () => runtime.ordinaryAgentFeature.release(),
+  );
   void ordinaryDisposal.catch(() => undefined);
   let serverCloseError: unknown;
   const serverClosed = close(server).catch((error: unknown) => {
@@ -665,6 +659,7 @@ export async function closePanelServer(
   });
 
   const runtimeCleanup = (async () => {
+    await authDisposal;
     await cleanupPanelHostOwnedProcesses(runtime);
     await waitForPanelRequestIdle(server, runtime);
     await releasePanelHostResources(runtime, ordinaryDisposal);
@@ -713,12 +708,15 @@ async function disposePanelHostAfterFailedStart(runtime: PanelHost): Promise<voi
 /** Releases every resource owned by the Panel composition root, without server transport cleanup. */
 export async function releasePanelHostResources(
   runtime: PanelHost,
-  ordinaryDisposal: Promise<void> = runtime.ordinaryAgentFeature.release(),
+  ordinaryDisposal?: Promise<void>,
 ): Promise<void> {
   runtime.isQuiescing = true;
+  const memoryDisposal = runtime.releaseMemoryRuntime();
+  void memoryDisposal.catch(() => undefined);
   const errors: unknown[] = [];
-  await captureCleanupError(errors, () => ordinaryDisposal);
-  await captureCleanupError(errors, () => runtime.pathDependencyFeature.release());
+  await captureCleanupError(errors, () => runtime.modelProviderAuth.dispose());
+  await captureCleanupError(errors, () => memoryDisposal);
+  await captureCleanupError(errors, () => ordinaryDisposal ?? runtime.ordinaryAgentFeature.release());
   await captureCleanupError(errors, () => runtime.webReferenceMetadataWorker.release());
   await captureCleanupError(errors, () => runtime.webReferenceMetadataDiagnostics.release());
   await captureCleanupError(errors, async () => runtime.spaceReferenceRuntimeGuard.release());
@@ -755,7 +753,7 @@ function ordinaryFeatureHttpError(error: OrdinaryFeatureError): PanelHttpError {
     case "ordinary_conversation_owner_required":
       return new PanelHttpError(409, "conversation_owner_required", error.message);
     case "ordinary_confirmation_not_found":
-    case "ordinary_rollback_target_not_found":
+    case "ordinary_branch_target_not_found":
       return new PanelHttpError(404, error.code, error.message);
     case "ordinary_conversation_deleted":
     case "ordinary_run_conflict":
@@ -767,7 +765,6 @@ function ordinaryFeatureHttpError(error: OrdinaryFeatureError): PanelHttpError {
     case "ordinary_submission_conflict":
     case "ordinary_conversation_cleanup_pending":
     case "ordinary_managed_attachment_unavailable":
-    case "ordinary_memory_scope_unavailable":
     case "ordinary_completion_commit_failed":
       return new PanelHttpError(409, error.code, error.message);
   }

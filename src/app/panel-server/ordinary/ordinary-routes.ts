@@ -1,3 +1,4 @@
+import { projectConversationListItem } from "./ordinary-conversation-projection.js";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   isTerminal,
@@ -23,14 +24,13 @@ import {
   parseConfirmationDecision,
   parseConversationPinInput,
   parseConversationRenameInput,
-  parseConversationRollbackInput,
+  parseConversationBranchSelectionInput,
   parseRunInput,
 } from "../request-parsers.js";
 import type { PanelRunInput } from "../request-parsers.js";
 import type {
   ConversationLifecycleCoordinator,
   SpaceConversationDeletionCoordinator,
-  WorkspaceDeletionCoordinator,
 } from "../../workbench-coordination/index.js";
 import { SseResponseWriter } from "../sse-response-writer.js";
 import type { OrdinaryTurnApplication, OrdinaryTurnInput } from "../../application/ordinary-turn-application.js";
@@ -41,14 +41,13 @@ const ORDINARY_STREAM_MAX_QUEUED_FRAMES = 256;
 
 export type OrdinaryRouteDependencies = {
   readonly ordinaryAgentFeature: {
-    readonly commands: Pick<OrdinaryAgentFeature["commands"], "renameConversation" | "setConversationPinned" | "rollbackConversation" | "cancel" | "decideApproval">;
-    readonly queries: Pick<OrdinaryAgentFeature["queries"], "getConversation" | "getConversationOwner" | "listConversations" | "getRun">;
+    readonly commands: Pick<OrdinaryAgentFeature["commands"], "renameConversation" | "setConversationPinned" | "selectConversationBranch" | "cancel" | "decideApproval">;
+    readonly queries: Pick<OrdinaryAgentFeature["queries"], "getConversation" | "getConversationOwner" | "listConversationSummaries" | "getRun">;
     readonly events: Pick<OrdinaryAgentFeature["events"], "replay" | "subscribe">;
   };
   readonly ordinaryTurnApplication: OrdinaryTurnApplication;
   readonly conversationLifecycle: Pick<ConversationLifecycleCoordinator, "deleteConversation" | "assertConversationAvailable">;
   readonly spaceConversationDeletion: Pick<SpaceConversationDeletionCoordinator, "assertAvailable">;
-  readonly workspaceDeletion: Pick<WorkspaceDeletionCoordinator, "assertAvailable">;
 };
 
 export async function handlePanelOrdinaryRoute(
@@ -97,25 +96,12 @@ export async function handlePanelOrdinaryRoute(
     });
     return true;
   }
-  const rollback = /^\/api\/conversations\/([^/]+)\/rollback$/u.exec(url.pathname);
-  if (request.method === "POST" && rollback !== null) {
-    const conversationId = decode(rollback[1]);
+  const branchSelection = /^\/api\/conversations\/([^/]+)\/branches\/select$/u.exec(url.pathname);
+  if (request.method === "POST" && branchSelection !== null) {
+    const conversationId = decode(branchSelection[1]);
     await assertConversationMutationAvailable(runtime, conversationId);
-    const input = parseConversationRollbackInput(await readJsonBody(request));
-    const existing = await runtime.ordinaryAgentFeature.queries.getConversation(conversationId);
-    if (existing === undefined) throw new PanelHttpError(404, "conversation_not_found", "未找到对话。");
-    const targetTurnId = input.targetTurnId;
-    const targetRunId = targetTurnId === undefined
-      ? input.targetRunId
-      : existing.turns.find((turn) => turn.turnId === targetTurnId)?.runId;
-    if (targetTurnId !== undefined && targetRunId === undefined) {
-      throw new PanelHttpError(404, "conversation_turn_not_found", "未找到要回退到的对话轮次。");
-    }
-    const conversation = await runtime.ordinaryAgentFeature.commands.rollbackConversation({
-      conversationId,
-      targetRunId,
-      stepsBack: input.stepsBack,
-    });
+    const input = parseConversationBranchSelectionInput(await readJsonBody(request));
+    const conversation = await runtime.ordinaryAgentFeature.commands.selectConversationBranch({ conversationId, targetRunId: input.targetRunId });
     writeJson(response, 200, { ok: true, conversation: await projectConversation(runtime, conversation) });
     return true;
   }
@@ -201,6 +187,8 @@ async function submitTurn(
 function toOrdinaryTurnInput(input: PanelRunInput): OrdinaryTurnInput {
   return {
     goal: input.goal,
+    ...(input.recordToolMetrics === true ? { recordToolMetrics: true } : {}),
+    ...(input.replacesRunId === undefined ? {} : { replacesRunId: input.replacesRunId }),
     ...(input.submissionId === undefined ? {} : { submissionId: input.submissionId }),
     ...(input.owner === undefined ? {} : { owner: input.owner }),
     ...(input.aiMode === undefined ? {} : { aiMode: input.aiMode }),
@@ -217,26 +205,11 @@ async function assertConversationMutationAvailable(runtime: OrdinaryRouteDepende
   if (owner === undefined) {
     throw new PanelHttpError(409, "conversation_owner_required", "Conversation 缺少 owner，不能继续修改。");
   }
-  if (owner.kind === "space") {
-    runtime.spaceConversationDeletion.assertAvailable(owner.id);
-  } else {
-    runtime.workspaceDeletion.assertAvailable(owner.id);
-  }
+  runtime.spaceConversationDeletion.assertAvailable(owner.id);
 }
 
 async function listConversations(runtime: OrdinaryRouteDependencies) {
-  return Promise.all((await runtime.ordinaryAgentFeature.queries.listConversations(50)).map(async (conversation) => {
-    const workspaceRun = conversation.latestRunId === undefined
-      ? undefined
-      : await runtime.ordinaryAgentFeature.queries.getRun(conversation.latestRunId);
-    const owner = await conversationOwnerForList(runtime, conversation.conversationId);
-    return projectOrdinaryPanelConversationSummary(
-      conversation,
-      workspaceRun,
-      owner?.kind === "space" ? owner.id : undefined,
-      owner,
-    );
-  }));
+  return (await runtime.ordinaryAgentFeature.queries.listConversationSummaries({ limit: 50 })).map(projectConversationListItem);
 }
 
 async function conversationOwnerForList(

@@ -19,11 +19,9 @@ export type WorkbenchEnvironmentInput = {
   readonly personalKnowledgePersistenceEnabled: boolean;
   readonly spaceLoadStateLoading: boolean;
   readonly spaces: readonly PersonalSpaceProjection[];
-  readonly workspaceIds: readonly string[];
   readonly view: WorkbenchView;
   readonly syncContextSelection: (input: {
     readonly spaceIds: readonly string[];
-    readonly workspaceIds: readonly string[];
   }) => void;
 };
 
@@ -42,7 +40,6 @@ export function useWorkbenchEnvironment(input: WorkbenchEnvironmentInput): Workb
     getPersonalKnowledgeLoadState,
   );
   const spaceIdsKey = input.spaces.map((space) => space.spaceId).join("\\0");
-  const workspaceIdsKey = input.workspaceIds.join("\\0");
   const knowledgeError = useSyncExternalStore(
     subscribePersonalKnowledge,
     getPersonalKnowledgeError,
@@ -56,7 +53,6 @@ export function useWorkbenchEnvironment(input: WorkbenchEnvironmentInput): Workb
   useEffect(() => {
     input.syncContextSelection({
       spaceIds: input.spaces.map((space) => space.spaceId),
-      workspaceIds: input.workspaceIds,
     });
     if (input.personalKnowledgePersistenceEnabled && !input.spaceLoadStateLoading) {
       void initializePersonalKnowledge().catch(() => undefined);
@@ -66,7 +62,6 @@ export function useWorkbenchEnvironment(input: WorkbenchEnvironmentInput): Workb
     input.spaceLoadStateLoading,
     spaceIdsKey,
     input.syncContextSelection,
-    workspaceIdsKey,
   ]);
 
   useEffect(() => {

@@ -7,7 +7,7 @@ import { createSqliteManagedAssetRepository } from "../../managed-assets/index.j
 import {
   createSqliteMemoryDocumentRepository,
   createSqliteMemoryControlRepository,
-} from "../../memory/index.js";
+} from "../../memory/composition.js";
 import { createSqlitePersonalKnowledgeRepository } from "../../personal-knowledge/index.js";
 import { migrateResearchSchema } from "../../research/research-schema-fossil.js";
 import {

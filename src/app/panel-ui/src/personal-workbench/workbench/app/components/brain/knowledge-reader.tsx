@@ -30,7 +30,7 @@ export function KnowledgeReader({
       <div className="flex-1 flex flex-col overflow-hidden min-w-0">
         <header className="ui-preview-toolbar">
           <div className="ui-preview-location">
-            <nav className="ui-preview-breadcrumb" aria-label="知识库路径" title={page.title}>
+            <nav className="ui-preview-breadcrumb" aria-label="知识库路径">
               <button type="button" onClick={onBack}>知识库</button>
               <ChevronRight size={12} aria-hidden="true" />
               <span aria-current="page">{page.title}</span>
@@ -236,7 +236,6 @@ function LinkChip({ page, onClick, onRemove }: { page: ResolvedPage; onClick: ()
       <button
         type="button"
         aria-label={`打开${page.title}`}
-        title={page.title}
         onClick={onClick}
         className="absolute inset-0 z-0 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset"
       />

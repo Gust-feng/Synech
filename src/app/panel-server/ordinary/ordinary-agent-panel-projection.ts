@@ -26,7 +26,7 @@ import {
   continuationAvailability,
   currentAction,
   pendingConfirmationFrom,
-  projectCapabilityResolution,
+  projectRunModelCapabilities,
   projectContextAttachments,
   projectOrdinaryRun,
   runError,
@@ -133,7 +133,7 @@ export function projectOrdinaryPanelRunView(input: {
   return {
     run,
     agentDefinitionRef: input.run.birth.agentDefinitionRef,
-    capabilityResolution: projectCapabilityResolution(input.run.capabilityResolution),
+    capabilityResolution: projectRunModelCapabilities(input.run),
     workView,
     detail: {
       runId: input.run.runId,

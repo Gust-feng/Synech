@@ -80,10 +80,14 @@ export type AppWorkbenchRuntime = {
   readonly savingEnvironment: boolean;
   readonly savingOrdinaryAgentPrompt: boolean;
   readonly savingTools: boolean;
+  readonly savingWebSearch: boolean;
+  readonly savingSkillTrigger: boolean;
   readonly runActions: Pick<
     ReturnType<typeof createAppRunController>,
     | "loadConversation"
     | "startTask"
+    | "editTurn"
+    | "selectBranch"
     | "startNewConversation"
     | "cancelRun"
     | "decideConfirmation"
@@ -109,6 +113,8 @@ export function useAppWorkbenchRuntime(options: AppWorkbenchRuntimeOptions): App
   const [savingEnvironment, setSavingEnvironment] = useState(false);
   const [savingOrdinaryAgentPrompt, setSavingOrdinaryAgentPrompt] = useState(false);
   const [savingTools, setSavingTools] = useState(false);
+  const [savingWebSearch, setSavingWebSearch] = useState(false);
+  const [savingSkillTrigger, setSavingSkillTrigger] = useState(false);
   const [cancellingRunId, setCancellingRunId] = useState<string | undefined>(undefined);
   const [pendingConversationIds, setPendingConversationIds] = useState<ReadonlySet<string>>(() => new Set());
 
@@ -120,6 +126,7 @@ export function useAppWorkbenchRuntime(options: AppWorkbenchRuntimeOptions): App
   const fallbackPollRef = useRef<AbortController | undefined>(undefined);
   const activeRunIdRef = useRef<string | undefined>(undefined);
   const viewEpochRef = useRef(0);
+  const branchMutationRef = useRef(false);
   const submissionAttemptRef = useRef<{ readonly key: string; readonly id: string } | undefined>(undefined);
   const attachmentUploadAttemptRef = useRef<{ readonly key: string; readonly id: string } | undefined>(undefined);
 
@@ -214,6 +221,7 @@ export function useAppWorkbenchRuntime(options: AppWorkbenchRuntimeOptions): App
     selectedModelId: options.selectedModelId,
     selectedModelSupportsReasoningEffort: options.selectedModelSupportsReasoningEffort,
     confirmationBusy,
+    branchMutationRef,
     setConfirmationBusy,
     mountedRef,
     pollTimer,
@@ -296,6 +304,8 @@ export function useAppWorkbenchRuntime(options: AppWorkbenchRuntimeOptions): App
     setSavingEnvironment,
     setSavingOrdinaryAgentPrompt,
     setSavingTools,
+    setSavingWebSearch,
+    setSavingSkillTrigger,
   }), [
     options.aiMode,
     options.app,
@@ -353,9 +363,13 @@ export function useAppWorkbenchRuntime(options: AppWorkbenchRuntimeOptions): App
     savingEnvironment,
     savingOrdinaryAgentPrompt,
     savingTools,
+    savingWebSearch,
+    savingSkillTrigger,
     runActions: {
       loadConversation: runController.loadConversation,
       startTask: runController.startTask,
+      editTurn: runController.editTurn,
+      selectBranch: runController.selectBranch,
       startNewConversation: runController.startNewConversation,
       cancelRun: runController.cancelRun,
       decideConfirmation: runController.decideConfirmation,

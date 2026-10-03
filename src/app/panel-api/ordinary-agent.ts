@@ -251,6 +251,7 @@ export type OrdinaryPanelConversationStatus =
   | "blocked";
 
 export type OrdinaryPanelConversationTurnModel = {
+  readonly piProviderId?: string;
   readonly profileId: string;
   readonly label?: string;
   readonly providerKind?: string;
@@ -280,6 +281,7 @@ export type OrdinaryPanelConversationTurnAttachment = {
 };
 
 export type OrdinaryPanelConversationTurn = {
+  readonly branchVersions?: { readonly runIds: readonly string[]; readonly selectedIndex: number };
   readonly turnId: string;
   readonly role: "user" | "assistant";
   readonly title: string;

@@ -26,7 +26,7 @@ interface TopBarProps {
 }
 
 // 有自己完整 header 的视图 → TopBar 只保留返回 + 标题。
-const MINIMAL_VIEWS: View[] = ['space', 'workspace']
+const MINIMAL_VIEWS: View[] = ['space']
 
 export function TopBar({
   view,
@@ -132,7 +132,7 @@ export function TopBar({
               <span className="topbar-surface-context">
                 <span className="topbar-surface-title">{surfaceTitle}</span>
                 {surfaceOwner !== undefined && (
-                  <span className="topbar-surface-owner" title={surfaceOwner}>
+                  <span className="topbar-surface-owner">
                     {surfaceOwner}
                   </span>
                 )}

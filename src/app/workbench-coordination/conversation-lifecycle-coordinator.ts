@@ -1,4 +1,4 @@
-import type { ConversationOwner } from "../../domain/execution-scope/index.js";
+import { validateConversationOwner, type ConversationOwner } from "../../domain/execution-scope/index.js";
 import type {
   OrdinaryAgentFeature,
   OrdinaryRunBirth,
@@ -10,7 +10,6 @@ import {
   type InMemoryProcessRegistry,
   type ProcessTerminator,
 } from "../runtime-guard/process-registry.js";
-import type { WorkspaceFeature } from "../workspaces/index.js";
 import type { RemovalTicket } from "../memory/contracts.js";
 import { WorkbenchCoordinationError } from "./contracts.js";
 import {
@@ -49,13 +48,9 @@ export function createConversationLifecycleCoordinator(input: {
     readonly commands: Pick<OrdinaryAgentFeature["commands"], "submitTurn" | "deleteConversation">;
     readonly queries: Pick<OrdinaryAgentFeature["queries"], "getConversation" | "getConversationOwner">;
   };
-  readonly workspaces?: {
-    readonly queries: Pick<WorkspaceFeature["queries"], "get">;
-  };
   readonly processes: Pick<InMemoryProcessRegistry, "cleanupByConversation">;
   readonly processTerminator: ProcessTerminator;
   readonly journal: ConversationLifecycleJournal;
-  readonly workspaceAdmission?: <T>(workspaceId: string, operation: () => Promise<T>) => Promise<T>;
   readonly spaceAdmission?: <T>(spaceId: string, operation: () => Promise<T>) => Promise<T>;
   /**
    * Memory v2 lifecycle wraps the raw Conversation deletion: prepare fences
@@ -171,6 +166,7 @@ export function createConversationLifecycleCoordinator(input: {
       return admitInOrder(conversationId, operation);
     },
     submit(submission) {
+      validateConversationOwner(submission.owner);
       const operation = () => serialize(async () => await runExclusive(async () => {
         const conversationId = `conversation:${submission.submissionId}`;
         if (deletingConversationIds.has(conversationId)) {
@@ -198,13 +194,6 @@ export function createConversationLifecycleCoordinator(input: {
             birth: submission.birth,
           });
         }
-        if (submission.owner.kind === "workspace") {
-          const workspace = await input.workspaces?.queries.get(submission.owner.id);
-          if (workspace === undefined || workspace.status !== "available") {
-            throw new WorkbenchCoordinationError("workspace_not_found", "所选工作区不存在或不可用。");
-          }
-        }
-
         const record = newConversationBirthRecord({
           conversationId,
           owner: submission.owner,
@@ -235,10 +224,7 @@ export function createConversationLifecycleCoordinator(input: {
           throw error;
         }
       }));
-      if (submission.owner.kind === "workspace" && input.workspaceAdmission !== undefined) {
-        return input.workspaceAdmission(submission.owner.id, operation);
-      }
-      if (submission.owner.kind === "space" && input.spaceAdmission !== undefined) {
+      if (input.spaceAdmission !== undefined) {
         return input.spaceAdmission(submission.owner.id, operation);
       }
       return operation();

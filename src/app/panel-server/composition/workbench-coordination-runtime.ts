@@ -6,7 +6,6 @@ import {
 } from "../../application/managed-space-folder-application.js";
 import type { ManagedSpaceFolderApplication } from "../../../domain/managed-space-folder.js";
 import type { ProductPaths } from "../../../platform/storage/index.js";
-import type { AgentNotesFeature } from "../../agent-notes/index.js";
 import type { CollaborationRulesFeature } from "../../collaboration-rules/index.js";
 import type { OrdinaryAgentFeature } from "../../ordinary-agent/index.js";
 import {
@@ -26,7 +25,6 @@ import type {
 import { deletionLifecycleLockKey } from "./deletion-lifecycle-lock.js";
 import type { PersonalKnowledgeFeature } from "../../personal-knowledge/index.js";
 import type { MemoryLifecycle } from "../../memory/contracts.js";
-import type { PathDependencyFeature } from "../../path-dependencies/index.js";
 import type { SpaceFeature } from "../../spaces/index.js";
 import type { WorkspaceFeature } from "../../workspaces/index.js";
 import type { InMemoryProcessRegistry, ProcessTerminator } from "../../runtime-guard/index.js";
@@ -54,9 +52,7 @@ export function createApplicationRuntime(input: {
   readonly workspaceFeature: Pick<WorkspaceFeature, "commands" | "queries">;
   readonly ordinaryAgentFeature: Pick<OrdinaryAgentFeature, "commands" | "queries">;
   readonly personalKnowledgeFeature: Pick<PersonalKnowledgeFeature, "commands">;
-  readonly agentNotesFeature: Pick<AgentNotesFeature, "commands">;
   readonly collaborationRulesFeature: Pick<CollaborationRulesFeature, "commands">;
-  readonly pathDependencyFeature: Pick<PathDependencyFeature, "commands">;
   readonly memoryLifecycle: Pick<
     MemoryLifecycle,
     "prepareOwnerRemoval" | "finalizeOwnerRemoval" | "prepareConversationRemoval" | "finalizeConversationRemoval"
@@ -78,9 +74,7 @@ export function createApplicationRuntime(input: {
     spaces: input.spaceFeature,
     ordinary: input.ordinaryAgentFeature,
     personalKnowledge: input.personalKnowledgeFeature,
-    agentNotes: input.agentNotesFeature.commands,
     collaborationRules: input.collaborationRulesFeature.commands,
-    memory: input.pathDependencyFeature.commands,
     memoryLifecycle: input.memoryLifecycle,
     processes: input.processRegistry,
     processTerminator: input.processTerminator,
@@ -107,16 +101,7 @@ export function createApplicationRuntime(input: {
       },
     },
     spaceAdmission: { admit: (spaceId, operation) => spaceConversationDeletion.admit(spaceId, operation) },
-    ordinary: {
-      commands: { deleteConversation: input.ordinaryAgentFeature.commands.deleteConversation },
-      queries: { listConversationsByOwner: input.ordinaryAgentFeature.queries.listConversationsByOwner },
-    },
-    agentNotes: input.agentNotesFeature.commands,
     collaborationRules: input.collaborationRulesFeature.commands,
-    memory: input.pathDependencyFeature.commands,
-    memoryLifecycle: input.memoryLifecycle,
-    processes: input.processRegistry,
-    processTerminator: input.processTerminator,
     runExclusive: runDeletionExclusive,
     runWorkspaceExclusive: async (workspaceId, operation) => {
       const workspace = await input.workspaceFeature.queries.get(workspaceId);
@@ -129,8 +114,6 @@ export function createApplicationRuntime(input: {
 
   const conversationLifecycle = createConversationLifecycleCoordinator({
     ordinary: input.ordinaryAgentFeature,
-    workspaces: { queries: input.workspaceFeature.queries },
-    workspaceAdmission: (workspaceId, operation) => workspaceDeletion.admit(workspaceId, operation),
     spaceAdmission: (spaceId, operation) => spaceConversationDeletion.admit(spaceId, operation),
     processes: input.processRegistry,
     processTerminator: input.processTerminator,
@@ -146,7 +129,6 @@ export function createApplicationRuntime(input: {
     ordinaryAgentFeature: input.ordinaryAgentFeature,
     conversationLifecycle,
     spaceConversationDeletion,
-    workspaceDeletion,
     resolveSpaceAccess: input.resolveSpaceAccess,
     prepareOrdinaryRunBirth: input.prepareOrdinaryRunBirth,
   });
@@ -181,9 +163,10 @@ export function createApplicationRuntime(input: {
     },
     inspectDirectory: input.inspectDirectory,
     withSpaceAdmission: (spaceId, operation) => spaceConversationDeletion.admit(spaceId, operation),
-    listWorkspaceConversationIds: async (workspaceId) =>
-      (await input.ordinaryAgentFeature.queries.listConversationsByOwner({ kind: "workspace", id: workspaceId }))
-        .map((conversation) => conversation.conversationId),
+    // Workspace is a Space resource, never a Conversation owner. A newly
+    // attached implicit Workspace therefore cannot own conversations that need
+    // compensation here.
+    listWorkspaceConversationIds: async (_workspaceId) => [],
     withWorkspaceAdmission: (workspaceId, operation) => workspaceDeletion.admit(workspaceId, operation),
     withWorkspacePathLease: async (workspaceId, operation) => {
       const workspace = await input.workspaceFeature.queries.get(workspaceId);

@@ -1,5 +1,6 @@
-import { ArrowUpRight, Check, PencilLine, X } from "lucide-react";
+import { ArrowUpRight, PencilLine, X } from "lucide-react";
 import { useState } from "react";
+import { MessageEditor } from "./MessageEditor";
 import type { QueuedChatMessage } from "@ui/contracts/composer";
 
 export type QueuedMessageListProps = {
@@ -47,64 +48,23 @@ export function QueuedMessageList({ messages, onRemove, onUpdate, onGuide }: Que
         <span>待发送</span>
         <span aria-label={`${messages.length} 条待发送消息`}>{messages.length}</span>
       </div>
-      <div className="flex max-h-32 flex-col gap-1.5 overflow-y-auto">
+      <div className="ui-queued-messages">
         {messages.map((message) => {
           const editing = editingId === message.id;
           return (
             <div
               key={message.id}
               role="listitem"
-              className="flex items-start gap-2 rounded-md border px-2.5 py-2 text-xs"
-              style={{
-                borderColor: "var(--ui-border)",
-                background: "var(--ui-surface-hover)",
-                color: "var(--ui-text-2)",
-              }}
+              className="ui-queued-message"
+              data-editing={editing}
             >
               {editing ? (
-                <textarea
-                  value={editingContent}
-                  onChange={(event) => setEditingContent(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" && !event.shiftKey) {
-                      event.preventDefault();
-                      commitEditing(message.id);
-                    }
-                    if (event.key === "Escape") cancelEditing();
-                  }}
-                  autoFocus
-                  rows={2}
-                  spellCheck={false}
-                  className="min-h-8 min-w-0 flex-1 resize-none bg-transparent leading-5 outline-none"
-                  aria-label="编辑待发送消息"
-                />
+                <MessageEditor compact allowEmpty value={editingContent} onChange={setEditingContent} onCancel={cancelEditing}
+                  onSubmit={() => commitEditing(message.id)} submitLabel="保存" ariaLabel="编辑待发送消息" />
               ) : (
                 <span className="min-w-0 flex-1 whitespace-pre-wrap break-words leading-5">{message.content}</span>
               )}
-              <div className="flex shrink-0 items-center gap-0.5">
-                {editing ? (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => commitEditing(message.id)}
-                      className="flex h-5 w-5 items-center justify-center rounded transition-colors hover:bg-[var(--ui-hover-tint)]"
-                      style={{ color: "var(--ui-accent)" }}
-                      aria-label="保存待发送消息"
-                    >
-                      <Check size={12} />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={cancelEditing}
-                      className="flex h-5 w-5 items-center justify-center rounded transition-colors hover:bg-[var(--ui-hover-tint)]"
-                      style={{ color: "var(--ui-text-3)" }}
-                      aria-label="取消编辑待发送消息"
-                    >
-                      <X size={12} />
-                    </button>
-                  </>
-                ) : (
-                  <>
+              {!editing && <div className="ui-queued-message__actions">
                     <button
                       type="button"
                       onClick={() => void onGuide(message.id)}
@@ -133,9 +93,7 @@ export function QueuedMessageList({ messages, onRemove, onUpdate, onGuide }: Que
                     >
                       <X size={12} />
                     </button>
-                  </>
-                )}
-              </div>
+              </div>}
             </div>
           );
         })}

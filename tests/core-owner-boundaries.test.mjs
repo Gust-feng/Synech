@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { createSpaceFeature } from "../dist/app/spaces/index.js";
 import { createWorkspaceFeature } from "../dist/app/workspaces/index.js";
+import { validateConversationOwner } from "../dist/domain/execution-scope/index.js";
 
 test("Workspace owns mount identity and reconnect keeps workspace identity", async () => {
   let snapshot = { schemaVersion: "workspaces/v1", workspaces: [], mounts: [] };
@@ -36,4 +37,13 @@ test("Space owns membership independently from Workspace identity", async () => 
   assert.deepEqual(item.reference, { kind: "workspace", workspaceId: "workspace-1" });
   await feature.commands.unlinkReference(item.id);
   assert.equal(await feature.queries.getReference(item.id), undefined);
+});
+
+
+test("Conversation owner accepts Space only; Workspace remains a resource identity", () => {
+  assert.deepEqual(validateConversationOwner({ kind: "space", id: "space-1" }), { kind: "space", id: "space-1" });
+  assert.throws(
+    () => validateConversationOwner({ kind: "workspace", id: "workspace-1" }),
+    /conversation owner kind must be "space"/,
+  );
 });

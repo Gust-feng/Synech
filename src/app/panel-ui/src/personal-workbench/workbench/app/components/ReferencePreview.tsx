@@ -1,6 +1,6 @@
 import { Fragment, forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ForwardedRef, type ReactNode, type UIEvent } from 'react'
 import { diffLines, type Change } from 'diff'
-import { AlertTriangle, Check, ChevronRight, Clipboard, Code2, ExternalLink, FileText, Folder, RefreshCw } from 'lucide-react'
+import { AlertTriangle, ChevronRight, Clipboard, Code2, ExternalLink, FileText, Folder, RefreshCw } from 'lucide-react'
 import { fetchDocumentPreview, getCachedReferencePreview, refreshDocumentPreview, saveDocumentCaption, saveDocumentText, subscribeReferencePreviewCache, type DocumentPreview } from './referencePreviewClient'
 import type { SpaceReferenceAnnotation } from '@panel-api/spaces'
 import { MarkdownDocumentSurface } from './MarkdownDocumentSurface'
@@ -468,10 +468,9 @@ function ReferenceHeader({ rootTitle, relativePath, source, actions, canOpen, on
       <ReferenceBreadcrumb rootTitle={rootTitle} relativePath={relativePath} source={source} />
       <div className="ui-reference-preview__actions">
         <CollaborationToggle available={splitAvailable} />
-        {saveState !== undefined && (
+        {saveState === 'error' && (
           <span className="ui-reference-preview__save-state" data-state={saveState}>
-            {saveState === 'saved' ? <Check size={12} /> : <span />}
-            {saveState === 'saved' ? '已保存' : saveState === 'saving' ? '保存中…' : '保存失败'}
+            保存失败
           </span>
         )}
         {sourceMode !== undefined && onToggleSourceMode !== undefined && (

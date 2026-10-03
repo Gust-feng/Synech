@@ -15,9 +15,10 @@ export type ConversationSurfaceProps = {
   readonly state: LiveConversationState;
   readonly input: ChatInputProps;
   readonly currentRun: CurrentRunProjection;
-  readonly showModelUsage: boolean;
   readonly developerModeEnabled: boolean;
   readonly confirmationBusy: boolean;
+  readonly onSelectBranch: (runId: string) => Promise<void>;
+  readonly onEditTurn: (runId: string, content: string) => Promise<boolean>;
   readonly onDecision: (decision: "approve_once" | "deny" | "guidance", guidance?: string) => void;
   readonly focus?: boolean;
   readonly onExitFocus?: () => void;
@@ -44,7 +45,6 @@ export function ConversationSurface(props: ConversationSurfaceProps): ReactEleme
         live={props.currentRun.live}
         workView={props.currentRun.workView}
         pending={active.pending}
-        showModelUsage={props.showModelUsage}
         developerModeEnabled={props.developerModeEnabled}
         standaloneRun={active.workline.standaloneRun !== true ? undefined : {
           currentRunId: active.currentRunId,
@@ -58,6 +58,8 @@ export function ConversationSurface(props: ConversationSurfaceProps): ReactEleme
         models={props.input.models}
         selectedModelId={props.input.selectedModelId}
         onDecision={props.onDecision}
+        onEditTurn={props.input.busy || props.input.running || active.pending !== undefined ? undefined : props.onEditTurn}
+        onSelectBranch={props.input.busy || props.input.running || active.pending !== undefined ? undefined : props.onSelectBranch}
         confirmationBusy={props.confirmationBusy}
       />
     </SurfaceErrorBoundary>

@@ -1,4 +1,4 @@
-import type { ConversationOwner } from "../../domain/execution-scope/index.js";
+import { validateConversationOwner, type ConversationOwner } from "../../domain/execution-scope/index.js";
 import type { OrdinaryRunContextInput } from "../../domain/ordinary/index.js";
 import type { ModelRunReasoningEffort } from "../../domain/config/index.js";
 import type { ToolConfirmationPolicy } from "../../domain/tools/index.js";
@@ -11,6 +11,8 @@ import type {
 } from "../ordinary-agent/index.js";
 
 export type OrdinaryTurnInput = {
+  readonly recordToolMetrics?: boolean;
+  readonly replacesRunId?: string;
   readonly goal: string;
   readonly submissionId?: string;
   readonly owner?: ConversationOwner;
@@ -73,10 +75,6 @@ export type OrdinaryTurnApplicationDependencies = {
     assertAvailable(spaceId: string): void;
     admit<T>(spaceId: string, operation: () => Promise<T>): Promise<T>;
   };
-  readonly workspaceDeletion: {
-    assertAvailable(workspaceId: string): void;
-    admit<T>(workspaceId: string, operation: () => Promise<T>): Promise<T>;
-  };
   readonly resolveSpaceAccess: (input: {
     readonly conversationId?: string;
     readonly contextInput?: OrdinaryRunContextInput;
@@ -94,19 +92,18 @@ export function createOrdinaryTurnApplication(
         runtime.conversationLifecycle.assertConversationAvailable(conversationId);
       }
 
-      const explicitOwner = runInput.owner;
+      const explicitOwner = runInput.owner === undefined
+        ? undefined
+        : validateConversationOwner(runInput.owner);
       const canonicalOwner = conversationId === undefined
         ? undefined
         : await runtime.ordinaryAgentFeature.queries.getConversationOwner(conversationId);
+      if (canonicalOwner !== undefined) validateConversationOwner(canonicalOwner);
       if (conversationId !== undefined && canonicalOwner === undefined) {
         throw new OrdinaryTurnApplicationError("conversation_owner_required", "Conversation 缺少稳定 owner，不能继续提交。");
       }
       if (canonicalOwner !== undefined) {
-        if (canonicalOwner.kind === "space") {
-          runtime.spaceConversationDeletion.assertAvailable(canonicalOwner.id);
-        } else {
-          runtime.workspaceDeletion.assertAvailable(canonicalOwner.id);
-        }
+        runtime.spaceConversationDeletion.assertAvailable(canonicalOwner.id);
       }
       if (explicitOwner !== undefined && canonicalOwner !== undefined && !sameConversationOwner(explicitOwner, canonicalOwner)) {
         throw new OrdinaryTurnApplicationError(
@@ -117,11 +114,11 @@ export function createOrdinaryTurnApplication(
 
       const owner = canonicalOwner ?? explicitOwner;
       if (owner === undefined) {
-        throw new OrdinaryTurnApplicationError("new_conversation_owner_required", "开始新对话前请选择空间或工作区。");
+        throw new OrdinaryTurnApplicationError("new_conversation_owner_required", "开始新对话前请选择空间。");
       }
+      validateConversationOwner(owner);
 
-      const selectedSpaceId = owner.kind === "space" ? owner.id : undefined;
-      if (owner.kind === "workspace") runtime.workspaceDeletion.assertAvailable(owner.id);
+      const selectedSpaceId = owner.id;
 
       const submissionId = conversationId === undefined
         ? runInput.submissionId ?? crypto.randomUUID()
@@ -154,9 +151,8 @@ export function createOrdinaryTurnApplication(
             },
             birth,
           })
-        : owner.kind === "workspace"
-          ? await runtime.workspaceDeletion.admit(owner.id, () => submitExistingConversationTurn(runtime, conversationId, owner, effectiveRunInput, birth))
-          : await runtime.spaceConversationDeletion.admit(owner.id, () => submitExistingConversationTurn(runtime, conversationId, owner, effectiveRunInput, birth));
+        : await runtime.spaceConversationDeletion.admit(owner.id, () =>
+            submitExistingConversationTurn(runtime, conversationId, owner, effectiveRunInput, birth));
 
       return { submitted, owner, spaceId: spaceAccess.spaceId };
     },
@@ -174,6 +170,7 @@ async function submitExistingConversationTurn(
     conversationId,
     owner,
     submissionId: input.submissionId,
+    replacesRunId: input.replacesRunId,
     input: {
       userMessage: input.goal,
       context: input.contextInput,

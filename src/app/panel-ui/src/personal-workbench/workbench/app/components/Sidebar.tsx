@@ -8,7 +8,6 @@ import {
   Plus,
   AlertCircle,
   RotateCcw,
-  FolderOpen,
 } from 'lucide-react'
 import { SidebarAnimation } from './SidebarAnimation'
 import { SidebarFooter } from './SidebarFooter'
@@ -19,8 +18,6 @@ import {
 } from './SidebarRows'
 import { ActionConfirmationDialog } from './ActionConfirmationDialog'
 import type { PersonalSpaceProjection } from '../../../space'
-import type { PersonalWorkspaceProjection } from '../../../workspace'
-import { WorkspaceSidebarLoadingRows, WorkspaceSidebarRow } from './WorkspaceSidebarRow'
 import type { WorkbenchView } from '../../../../workbench/navigation-state'
 
 /** Global navigation selects resource contexts; conversation navigation belongs to the right pane. */
@@ -38,22 +35,9 @@ interface SidebarProps {
     readonly error?: string
     readonly onRetry: () => void | Promise<void>
   }
-  workspaces?: readonly PersonalWorkspaceProjection[]
-  workspaceLoadState?: {
-    readonly loading: boolean
-    readonly mutationPending?: boolean
-    readonly error?: string
-    readonly onRetry: () => void | Promise<void>
-  }
-  onAddWorkspace?: () => void | Promise<void>
-  /** 仅移出侧栏；外部文件、Space 引用与历史对话保留。 */
-  onHideWorkspace?: (workspaceId: string) => void | Promise<void>
-  onReconnectWorkspace?: (workspaceId: string) => void | Promise<void>
   activeSpaceId: string | null
-  activeWorkspaceId: string | null
   onOpenSpace?: (spaceId: string) => void | Promise<void>
   onActiveSpaceChange: (spaceId: string) => void
-  onActiveWorkspaceChange: (workspaceId: string) => void
   onCreateSpace?: (title: string) => void | Promise<void>
   onRenameSpace?: (spaceId: string, title: string) => void | Promise<void>
   onDeleteSpace?: (spaceId: string) => void | Promise<void>
@@ -72,16 +56,9 @@ export function Sidebar({
   collapsed,
   spaces,
   spaceLoadState,
-  workspaces = [],
-  workspaceLoadState,
-  onAddWorkspace,
-  onHideWorkspace,
-  onReconnectWorkspace,
   activeSpaceId,
-  activeWorkspaceId,
   onOpenSpace,
   onActiveSpaceChange,
-  onActiveWorkspaceChange,
   onCreateSpace,
   onRenameSpace,
   onDeleteSpace,
@@ -100,7 +77,6 @@ export function Sidebar({
   const [renameSelectAll, setRenameSelectAll] = useState(false)
   const pendingSpaceIdsRef = useRef<Set<string> | null>(null)
   const [pendingSpaceDeletion, setPendingSpaceDeletion] = useState<{ readonly id: string; readonly label: string } | null>(null)
-  const [pendingWorkspaceRemoval, setPendingWorkspaceRemoval] = useState<{ readonly id: string; readonly label: string } | null>(null)
 
   useEffect(() => {
     const previousIds = pendingSpaceIdsRef.current
@@ -139,18 +115,6 @@ export function Sidebar({
     setPendingSpaceDeletion(null)
     try {
       const result = onDeleteSpace(pending.id)
-      void Promise.resolve(result).catch(() => undefined)
-    } catch {
-      // The owner projects the mutation error; the sidebar only closes its confirmation surface.
-    }
-  }
-
-  function confirmWorkspaceRemoval(): void {
-    const pending = pendingWorkspaceRemoval
-    if (pending === null || onHideWorkspace === undefined) return
-    setPendingWorkspaceRemoval(null)
-    try {
-      const result = onHideWorkspace(pending.id)
       void Promise.resolve(result).catch(() => undefined)
     } catch {
       // The owner projects the mutation error; the sidebar only closes its confirmation surface.
@@ -268,43 +232,6 @@ export function Sidebar({
         </div>
         </div>
 
-        {/* Workspaces */}
-        <div className="group/workspaces">
-        <SidebarSectionLabel
-          label="工作区"
-          labelsVisible={labelsVisible}
-          leadingIcon={<FolderOpen size={12}/>}
-          action={
-            <button
-              type="button"
-              onClick={() => void onAddWorkspace?.()}
-              disabled={onAddWorkspace === undefined || workspaceLoadState?.mutationPending === true}
-              aria-label="添加工作区"
-              className="flex items-center justify-center rounded transition-opacity hover:bg-[var(--ui-hover-tint)] opacity-0 group-hover/workspaces:opacity-50 hover:!opacity-100"
-              style={{ width: 18, height: 18, color: 'var(--ui-text-3)', marginRight: -3 }}
-            >
-              <Plus size={12}/>
-            </button>
-          }
-        />
-        <div className="space-y-0.5">
-          {workspaceLoadState?.loading === true && workspaces.length === 0 && <WorkspaceSidebarLoadingRows />}
-          {workspaces.map((workspace) => (
-            <WorkspaceSidebarRow
-              key={workspace.workspaceId}
-              workspace={workspace}
-              active={view === 'workspace' && activeWorkspaceId === workspace.workspaceId}
-              onOpen={() => onActiveWorkspaceChange(workspace.workspaceId)}
-              onDelete={() => setPendingWorkspaceRemoval({ id: workspace.workspaceId, label: workspace.title })}
-              onReconnect={() => { void onReconnectWorkspace?.(workspace.workspaceId) }}
-            />
-          ))}
-          {workspaceLoadState?.error !== undefined && (
-            <SpaceLoadFailure message={workspaceLoadState.error} onRetry={workspaceLoadState.onRetry} />
-          )}
-        </div>
-        </div>
-
         {/* 知识库 */}
         <div className="space-y-0.5 mt-4">
           <SidebarNavRow
@@ -331,18 +258,6 @@ export function Sidebar({
         }}
         onCancel={() => setPendingSpaceDeletion(null)}
         onConfirm={confirmSpaceDeletion}
-      />
-
-      <ActionConfirmationDialog
-        request={pendingWorkspaceRemoval === null ? undefined : {
-          eyebrow: '工作区操作',
-          title: `将“${pendingWorkspaceRemoval.label}”移出侧栏`,
-          description: '真实目录、空间引用和历史对话都会保留；重新添加同一目录即可恢复。',
-          consequence: '这不会删除电脑上的任何文件。',
-          confirmLabel: '移除工作区',
-        }}
-        onCancel={() => setPendingWorkspaceRemoval(null)}
-        onConfirm={confirmWorkspaceRemoval}
       />
 
     </aside>

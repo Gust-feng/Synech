@@ -22,7 +22,7 @@ import { collaborationRuleScopeIdentity } from "./scope-identity.js";
  * ```text
  * <root>/global/RULES.md
  * <root>/spaces/<hash>/{RULES.md,owner.json}
- * <root>/workspaces/<hash>/{RULES.md,owner.json}
+ * Workspace root AGENTS.md is accessed through the Host port.
  * ```
  */
 export function createFileSystemCollaborationRulesRepository(
@@ -38,11 +38,13 @@ export function createFileSystemCollaborationRulesRepository(
   return {
     async read(scope) {
       assertCollaborationRuleScope(scope);
+      assertManagedScope(scope);
       return await readDocument(rulePath(rootDir, scope), scope);
     },
 
     async write(input) {
       assertCollaborationRuleScope(input.scope);
+      assertManagedScope(input.scope);
       const file = rulePath(rootDir, input.scope);
       const directory = path.dirname(file);
       const temporaryDirectory = path.join(directory, ".tmp");
@@ -88,6 +90,7 @@ export function createFileSystemCollaborationRulesRepository(
 
     async delete(input) {
       assertCollaborationRuleScope(input.scope);
+      assertManagedScope(input.scope);
       const current = await readDocument(rulePath(rootDir, input.scope), input.scope);
       if (current.version !== input.expectedVersion) return { status: "conflict", current };
       const directory = path.dirname(rulePath(rootDir, input.scope));
@@ -112,6 +115,9 @@ export function createFileSystemCollaborationRulesRepository(
       if ((owner as CollaborationRuleScope).kind === "global") {
         throw new CollaborationRulesError("collaboration_rule_invalid_scope", "Owner deletion requires a concrete Space or Workspace owner.");
       }
+      // A Workspace has no internal rules store, and its root AGENTS.md belongs to
+      // the user's directory: registering a deletion never unlinks that file.
+      if (owner.kind === "workspace") return;
       const directory = ownerDirectoryPath(rootDir, owner);
       try {
         await fs.rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
@@ -164,6 +170,15 @@ async function readDocument(file: string, scope: CollaborationRuleScope): Promis
     }
     throw new CollaborationRulesError("collaboration_rule_io_failure", `Collaboration-rule read failed: ${file}`, { cause: error });
   }
+}
+
+/** Workspace rules live in the mounted directory, never in this managed store. */
+function assertManagedScope(scope: CollaborationRuleScope): void {
+  if (scope.kind !== "workspace") return;
+  throw new CollaborationRulesError(
+    "collaboration_rule_invalid_scope",
+    `Workspace ${scope.id} rules are not stored in the managed rules store.`,
+  );
 }
 
 function rulePath(rootDir: string, scope: CollaborationRuleScope): string {

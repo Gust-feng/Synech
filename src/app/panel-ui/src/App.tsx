@@ -1,5 +1,6 @@
 import React, { useCallback, useState } from "react";
 import { PersonalWorkbench } from "./personal-workbench/personal-workbench";
+import type { ConversationOwnerView } from "./contracts/conversation";
 import { useAppShellEffects } from "./shell/effects";
 import { persistSidebarCollapsedPreference, useAppShellState } from "./shell/state";
 import { useAppQueuedMessages } from "./features/conversations/queued-message-state";
@@ -53,15 +54,12 @@ export function App(): React.ReactElement {
     settingsGroup,
     sidebarCollapsed,
     setSidebarCollapsed,
-    modelUsageDisplayEnabled,
-    setModelUsageDisplayEnabled,
     developerModeEnabled,
     conversationFollowUpMode,
     inputCloseSignal,
     setInputCloseSignal,
     openSettings,
     closeSettings,
-    changeModelUsageDisplay,
     changeDeveloperMode,
     changeConversationFollowUpMode,
   } = shellState;
@@ -105,6 +103,8 @@ export function App(): React.ReactElement {
     savingEnvironment,
     savingOrdinaryAgentPrompt,
     savingTools,
+    savingWebSearch,
+    savingSkillTrigger,
     runActions,
     sidebarActions,
     settingsController,
@@ -125,7 +125,6 @@ export function App(): React.ReactElement {
   useAppShellEffects({
     sidebarCollapsed,
     persistSidebarCollapsed: persistSidebarCollapsedPreference,
-    setModelUsageDisplayEnabled,
   });
   const {
     enqueueMessage,
@@ -174,7 +173,7 @@ export function App(): React.ReactElement {
     onUpdateQueuedMessage: updateQueuedMessage,
     onGuideQueuedMessage: guideQueuedMessage,
   };
-  const startNewConversation = useCallback((owner?: { readonly kind: "space" | "workspace"; readonly id: string }) => {
+  const startNewConversation = useCallback((owner?: ConversationOwnerView) => {
     clearQueuedMessages();
     return runActions.startNewConversation(owner);
   }, [clearQueuedMessages, runActions.startNewConversation]);
@@ -206,8 +205,6 @@ export function App(): React.ReactElement {
       setMcpServerForm,
     },
     preferences: {
-      modelUsageDisplayEnabled,
-      onModelUsageDisplayChange: changeModelUsageDisplay,
       developerModeEnabled,
       onDeveloperModeChange: changeDeveloperMode,
       conversationFollowUpMode,
@@ -218,6 +215,8 @@ export function App(): React.ReactElement {
       workspace: savingEnvironment,
       ordinaryAgent: savingOrdinaryAgentPrompt,
       tools: savingTools,
+      webSearch: savingWebSearch,
+      skillTrigger: savingSkillTrigger,
     },
     actions: settingsController,
   });
@@ -235,7 +234,6 @@ export function App(): React.ReactElement {
       conversations={app.conversations}
       currentRun={currentRun}
       inputProps={inputProps}
-      showModelUsage={modelUsageDisplayEnabled}
       developerModeEnabled={developerModeEnabled}
       error={app.error}
       onDismissError={() => setApp((previous) => ({ ...previous, error: undefined }))}
@@ -243,6 +241,8 @@ export function App(): React.ReactElement {
       confirmationBusy={confirmationBusy}
       onDecision={(decision, guidance) => void decideConfirmation(decision, guidance)}
       onStartNewConversation={startNewConversation}
+      onEditTurn={runActions.editTurn}
+      onSelectBranch={runActions.selectBranch}
       onResetConversation={resetConversation}
       onOpenConversation={openConversation}
       pendingConversationIds={pendingConversationIds}
@@ -278,7 +278,7 @@ export function App(): React.ReactElement {
 function memorySettingsScopeFromConversation(
   conversation: {
     readonly conversationId: string;
-    readonly owner?: { readonly kind: "space" | "workspace"; readonly id: string };
+    readonly owner?: ConversationOwnerView;
   } | undefined,
 ): MemorySettingsScope | null {
   if (conversation === undefined || conversation.owner === undefined) return null;

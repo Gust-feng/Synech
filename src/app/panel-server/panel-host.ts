@@ -1,3 +1,6 @@
+import { createWorkspaceRulesPort } from "./ordinary/workspace-collaboration-rules.js";
+import { createOpenAITokenCounter } from "../context-maintenance/index.js";
+import { createConversationBranchMemoryCoordinator } from "../workbench-coordination/conversation-branch-memory.js";
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -36,26 +39,15 @@ import {
 } from "../ordinary-agent/agent-loop-execution.js";
 import {
   createOrdinaryAgentFeature,
-  createFileSystemOrdinaryMemoryFactRepository,
   createFileSystemOrdinaryManagedAttachmentRepository,
   OrdinaryManagedAttachmentRepositoryError,
   type OrdinaryAgentFeature,
 } from "../ordinary-agent/index.js";
 import {
-  createAgentNotesFeature,
-  createFileSystemAgentNoteRepository,
-  type AgentNotesFeature,
-} from "../agent-notes/index.js";
-import {
   createCollaborationRulesFeature,
   createFileSystemCollaborationRulesRepository,
   type CollaborationRulesFeature,
 } from "../collaboration-rules/index.js";
-import {
-  createFileSystemPathDependencyRepository,
-  createPathDependencyFeature,
-  type PathDependencyFeature,
-} from "../path-dependencies/index.js";
 import {
   canonicalSpacePathIdentity,
   createSpaceRunPathAuthorization,
@@ -72,17 +64,11 @@ import {
   type PersonalKnowledgeFeature,
 } from "../personal-knowledge/index.js";
 import {
-  createMemoryAdminApplication,
-  createMemoryFeature,
-  createMemoryDiagnostics,
-  createMemoryRuntime,
-  createMemoryRuntimeHealthTracker,
-  POLICY_KEY,
+  createMemoryAdminApplication, createMemoryFeature, createMemoryDiagnostics,
+  createMemoryRuntime, createMemoryRuntimeHealthTracker, POLICY_KEY,
   type MemoryControlRepository,
-  type MemoryFeature,
-  type MemoryRuntime,
-  type MemoryMaintenanceOutcomeTrace,
-} from "../memory/index.js";
+} from "../memory/composition.js";
+import type { MemoryFeature, MemoryRuntime, MemoryMaintenanceOutcomeTrace } from "../memory/index.js";
 import { createMemoryMaintenanceScheduler } from "./memory/capture-scheduler.js";
 import { createConfigCenterConsolidationModel } from "./memory/consolidation-model.js";
 import { createMemoryBackgroundResolver } from "./memory/memory-background-resolver.js";
@@ -184,6 +170,8 @@ import {
 } from "../application/collaboration-rules-application.js";
 import { createWebReferenceMetadataWorker, type WebReferenceMetadataWorker } from "./spaces/web-reference-metadata-worker.js";
 import { createWebReferenceMetadataDiagnostics, type WebReferenceMetadataDiagnostics } from "./spaces/web-reference-metadata-diagnostics.js";
+import { createModelProviderAuthApplication } from "./composition/model-provider-auth-runtime.js";
+import type { ModelProviderAuthApplication } from "../model-service-auth/model-provider-auth-application.js";
 
 /**
  * The sole process-lifetime composition root for the local Panel host. Route
@@ -194,6 +182,7 @@ export type PanelHost = {
   /** True once server shutdown starts; terminal callbacks must not admit new work. */
   isQuiescing: boolean;
   readonly configCenter: ConfigCenter;
+  readonly modelProviderAuth: ModelProviderAuthApplication;
   readonly capabilityCenter: CapabilityCenter;
   readonly ordinaryAgentDefinition: AgentDefinition;
   readonly agentDefinitions: AgentDefinitionRegistry;
@@ -215,10 +204,8 @@ export type PanelHost = {
   readonly ordinaryAgentFeature: OrdinaryAgentFeature;
   readonly resolveManagedAttachmentPath: (attachmentId: string) => Promise<string | undefined>;
   readonly contextAttachmentUploadApplication: ContextAttachmentUploadApplication;
-  readonly agentNotesFeature: AgentNotesFeature;
   readonly collaborationRulesFeature: CollaborationRulesFeature;
   readonly collaborationRulesApplication: CollaborationRulesApplication;
-  readonly pathDependencyFeature: PathDependencyFeature;
   readonly spaceFeature: SpaceFeature;
   readonly webReferenceMetadataWorker: WebReferenceMetadataWorker;
   readonly webReferenceMetadataDiagnostics: WebReferenceMetadataDiagnostics;
@@ -238,6 +225,8 @@ export type PanelHost = {
   /** Memory 发布默认策略完成后，Panel Server 才开始接受请求。 */
   readonly memoryReady: Promise<void>;
   readonly memoryCaptureApplication: MemoryCaptureApplication;
+  /** Idempotent shutdown/restore barrier: stop admission and drain Memory before storage closes. */
+  readonly releaseMemoryRuntime: () => Promise<void>;
   readonly onRunBirthActivity?: (input: { readonly conversationId?: string; readonly owner: import("../../domain/execution-scope/index.js").ConversationOwner }) => void;
   readonly dataMaintenance: DataMaintenance;
   readonly toolOutputStore: ToolOutputStore;
@@ -420,10 +409,6 @@ function assemblePanelHost(input: {
       throw error;
     }
   };
-  const agentNotesFeature = createAgentNotesFeature({
-    repository: createFileSystemAgentNoteRepository(productPaths.data.memory.agentNotes),
-    runStorageExclusive: async (operation) => await fileMutationCoordinator.runExclusive(memoryDataRoot, operation),
-  });
   const collaborationRulesFeature = createCollaborationRulesFeature({
     repository: createFileSystemCollaborationRulesRepository(productPaths.data.memory.collaborationRules),
     runStorageExclusive: async (operation) => await fileMutationCoordinator.runExclusive(memoryDataRoot, operation),
@@ -432,13 +417,6 @@ function assemblePanelHost(input: {
   // live beside, rather than inside, Ordinary run snapshots: Ordinary owns
   // the run-bound read/adoption facts, while this feature owns the reusable
   // content and its revision history.
-  const pathDependencyFeature = createPathDependencyFeature({
-    repository: createFileSystemPathDependencyRepository(productPaths.data.memory.methods),
-    runStorageExclusive: async (operation) => await fileMutationCoordinator.runExclusive(memoryDataRoot, operation),
-  });
-  const ordinaryMemoryFactRepository = createFileSystemOrdinaryMemoryFactRepository(
-    agentDataRoot,
-  );
   const spaceFeature = createSpaceFeature({
     repository: spaceRepository,
     workspaceMountIdentity: canonicalWorkspaceMountIdentity,
@@ -592,11 +570,12 @@ function assemblePanelHost(input: {
       }
     },
   });
-  void memoryReady
-    .then(() => memoryCaptureScheduler.recoverQueuedJobs())
-    .catch((error) => {
-      console.error("[panel-server] Memory consolidation startup recovery failed", error);
-    });
+  let memoryReleased = false;
+  const memoryStartupRecovery = memoryReady
+    .then(() => { if (!memoryReleased) return memoryCaptureScheduler.recoverQueuedJobs(); });
+  void memoryStartupRecovery.catch((error) => {
+    console.error("[panel-server] Memory consolidation startup recovery failed", error);
+  });
   const initialWorkbenchData = createInitialWorkbenchDataInitializer(async () =>
     await initializeInitialWorkbenchData({
       database,
@@ -658,8 +637,7 @@ function assemblePanelHost(input: {
   let spaceReferenceApplications!: SpaceReferenceApplicationRuntime;
   let managedSpaceFolderApplication!: ManagedSpaceFolderApplication<import("../spaces/index.js").SpaceReferenceItem>;
   const resolveFeatureToolContributions = createHostFeatureAgentToolContributionResolver({
-    agentNotes: agentNotesFeature,
-    pathDependencies: pathDependencyFeature,
+    collaborationRules: () => collaborationRulesApplication,
     spaces: spaceFeature,
     personalKnowledge: personalKnowledgeFeature,
     memoryHistory: { historyQueryPort: memoryRuntime.historyQueryPort },
@@ -714,6 +692,7 @@ function assemblePanelHost(input: {
   const agentSessionRepository = new FileSystemAgentSessionRepository({
     executionEnvironment: agentSessionEnvironment,
     sessionsRoot: productPaths.data.agent.sessions,
+    idleSessionCacheSize: 4,
   });
   const ordinaryRunResources = createOrdinaryAgentRunResourceAcquirer({
     host: {
@@ -748,13 +727,6 @@ function assemblePanelHost(input: {
         : { routingMode: "keyword", abortSignal: context.abortSignal },
     ),
     resolveFeatureToolContributions,
-    resolveMemoryFactSink: ({ runId }) => ({
-      recordRead: async (fact) => {
-        await ordinaryAgentFeature.commands.recordMemoryRead({ runId, ...fact });
-      },
-      recordReference: async (fact) =>
-        await ordinaryAgentFeature.commands.recordMemoryReference({ runId, ...fact }),
-    }),
     resolveMemoryBackground: createMemoryBackgroundResolver({
       backgroundPort: memoryRuntime.backgroundPort,
       // 惰性委托：ordinaryAgentFeature 在组合根后段装配。
@@ -793,12 +765,12 @@ function assemblePanelHost(input: {
   });
   const ordinaryAgentFeature = createOrdinaryAgentFeature({
     repository: createFileSystemOrdinaryRunRepository(agentDataRoot),
+    onConversationBranchSelected: createConversationBranchMemoryCoordinator(memoryRuntime.lifecycle),
     conversationRepository: createFileSystemOrdinaryConversationControlRepository(agentDataRoot),
     sessionRepository: agentSessionRepository,
     releaseToolEvidenceOwner: (ownerId) => toolOutputStore.releaseOwner(ownerId).then(() => undefined),
     managedAttachmentRepository,
     managedAttachmentInstanceId,
-    memoryFactRepository: ordinaryMemoryFactRepository,
     onDiagnostic: (diagnostic) => {
       if (diagnostic.kind === "session_finalization_failed") {
         console.error(`[panel-server] Agent run ${diagnostic.runId} session finalization failed; the conversation queue remains paused`, diagnostic.error);
@@ -840,16 +812,38 @@ function assemblePanelHost(input: {
     captureRuntime: memoryRuntime.captureRuntime,
     onActivity: (conversationId) => memoryCaptureScheduler.noteActivity({ conversationId }),
   });
+  const stableCaptureJobs = new Set<Promise<unknown>>();
   const unsubscribeStableTerminalRuns = ordinaryAgentFeature.events.subscribeStableTerminalRuns((runId) => {
-    void (async () => {
-      try {
-        // Memory v2 Capture Application owns facts → owner → capture → idle order.
-        await memoryCaptureApplication.acceptStableRun(runId);
-      } catch (error) {
+    if (memoryReleased) return;
+    // Track the Application too: it may still be resolving Ordinary facts when
+    // shutdown stops admission at the narrower Capture Runtime boundary.
+    const job = memoryCaptureApplication.acceptStableRun(runId);
+    stableCaptureJobs.add(job);
+    void job.then(
+      () => stableCaptureJobs.delete(job),
+      (error) => {
+        stableCaptureJobs.delete(job);
         console.error("[panel-server] Could not accept stable memory capture signal", error);
-      }
-    })();
+      },
+    );
   });
+  let memoryReleasePromise: Promise<void> | undefined;
+  const releaseMemoryRuntime = (): Promise<void> => {
+    memoryReleased = true;
+    return memoryReleasePromise ??= (async () => {
+      unsubscribeStableTerminalRuns();
+      // Both release calls synchronously stop new work, then await the actual
+      // in-flight operations. Ordinary/SQLite remain available until they settle.
+      const results = await Promise.allSettled([
+        memoryCaptureScheduler.release(),
+        memoryRuntime.captureRuntime.release(),
+        memoryStartupRecovery,
+        ...stableCaptureJobs,
+      ]);
+      const errors = results.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
+      if (errors.length > 0) throw new AggregateError(errors, "Memory runtime cleanup did not complete.");
+    })();
+  };
   const contextAttachmentUploadApplication = createContextAttachmentUploadApplication({
     ordinaryAgentFeature,
     resolveManagedAttachmentPath,
@@ -862,9 +856,7 @@ function assemblePanelHost(input: {
     workspaceFeature,
     ordinaryAgentFeature,
     personalKnowledgeFeature,
-    agentNotesFeature,
     collaborationRulesFeature,
-    pathDependencyFeature,
     memoryLifecycle: memoryRuntime.lifecycle,
     processRegistry,
     processTerminator,
@@ -889,6 +881,8 @@ function assemblePanelHost(input: {
   } = applicationRuntime;
   const collaborationRulesApplication = createCollaborationRulesApplication({
     rules: collaborationRulesFeature,
+    workspaceRules: createWorkspaceRulesPort({ workspaces: workspaceFeature, mutations: fileMutationCoordinator }),
+    countTokens: createOpenAITokenCounter().countText,
     spaceAdmission: {
       admit: (spaceId, operation) => spaceConversationDeletion.admit(spaceId, operation),
     },
@@ -923,15 +917,8 @@ function assemblePanelHost(input: {
       assertAvailable: (spaceId) => spaceConversationDeletion.assertAvailable(spaceId),
       admit: (spaceId, operation) => spaceConversationDeletion.admit(spaceId, operation),
     },
-    workspaceAdmission: {
-      admit: (workspaceId, operation) => workspaceDeletion.admit(workspaceId, operation),
-    },
     ownerExistsQuery: {
       isSpaceAvailable: async (spaceId) => await spaceFeature.queries.getTree(spaceId) !== undefined,
-      isWorkspaceAvailable: async (workspaceId) => {
-        const workspace = await workspaceFeature.queries.get(workspaceId);
-        return workspace?.status === "available" && !workspaceDeletion.isDeleting(workspaceId);
-      },
     },
     runtimeHealth: { read: () => memoryRuntimeHealth.read() },
   });
@@ -953,7 +940,14 @@ function assemblePanelHost(input: {
         };
       },
       getBinding: (id) => ordinaryAgentFeature.queries.getMemoryBackground(id),
-      getSpaceTitle: async (id) => (await spaceFeature.queries.getTree(id))?.space.title,
+      ownerQuery: {
+        isOwnerAvailable: async (owner) => owner.kind === "space"
+          ? await spaceFeature.queries.getTree(owner.id) !== undefined && !spaceConversationDeletion.isDeleting(owner.id)
+          : (await workspaceFeature.queries.get(owner.id))?.status === "available" && !workspaceDeletion.isDeleting(owner.id),
+        getOwnerTitle: async (owner) => owner.kind === "space"
+          ? (await spaceFeature.queries.getTree(owner.id))?.space.title
+          : (await workspaceFeature.queries.get(owner.id))?.title,
+      },
     }),
   });
   managedSpaceFolderApplication = applicationRuntime.managedSpaceFolderApplication;
@@ -983,6 +977,7 @@ function assemblePanelHost(input: {
   host = {
     isQuiescing: false,
     configCenter: input.configCenter,
+    modelProviderAuth: createModelProviderAuthApplication(input.configCenter, undefined, input.externalResourceOpener),
     capabilityCenter,
     ordinaryAgentDefinition: input.ordinaryAgentDefinition,
     agentDefinitions: input.agentDefinitions,
@@ -1005,10 +1000,8 @@ function assemblePanelHost(input: {
     ordinaryAgentFeature,
     resolveManagedAttachmentPath,
     contextAttachmentUploadApplication,
-    agentNotesFeature,
     collaborationRulesFeature,
     collaborationRulesApplication,
-    pathDependencyFeature,
     spaceFeature,
     webReferenceMetadataWorker,
     webReferenceMetadataDiagnostics,
@@ -1025,6 +1018,7 @@ function assemblePanelHost(input: {
     memoryFeature,
     memoryReady,
     memoryCaptureApplication,
+    releaseMemoryRuntime,
     // run birth 时异步补扫 Capture 缺口（典型为上次关闭错过稳定信号）；
     // Memory v2 Capture 口要求不阻塞、不向主链路抛出。
     onRunBirthActivity: ({ conversationId }) => {
@@ -1045,17 +1039,15 @@ function assemblePanelHost(input: {
     knowledgeAssetsReady,
     ensureDefaultSpace: ensurePanelDefaultData,
     flushSpaceKnowledgeSync: () => spaceKnowledgeSync,
-    releaseAgentSessionStorage: () => sharedExecutionEnvs.releaseAll(),
+    releaseAgentSessionStorage: async () => { await agentSessionRepository.release(); await sharedExecutionEnvs.releaseAll(); },
   };
 
   let restorePreparation: Promise<void> | undefined;
   beforeRestoreStage = () => restorePreparation ??= (async () => {
     host.isQuiescing = true;
-    unsubscribeStableTerminalRuns();
-    await memoryCaptureScheduler.release();
-    await memoryRuntime.captureRuntime.release();
+    await host.releaseMemoryRuntime();
     await ordinaryAgentFeature.release();
-    await pathDependencyFeature.release();
+    await agentSessionRepository.release();
     await initialWorkbenchData.ensure();
     await personalKnowledgeFeature.release();
     await webReferenceMetadataWorker.release();

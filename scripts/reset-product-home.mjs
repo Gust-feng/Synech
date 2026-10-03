@@ -36,11 +36,14 @@ async function main() {
   }
 
   try {
-    console.log(`Synech Product Home reset target:\n${target}`);
+    console.log(`Synech ${args.dataOnly ? "test-data" : "Product Home"} reset target:\n${target}`);
     const exists = await lstat(target).then(() => true, (error) => {
       if (error?.code === "ENOENT") return false;
       throw error;
     });
+    if (exists && (await lstat(target)).isSymbolicLink()) {
+      throw new Error("Refusing to reset a symlink or junction Product Home.");
+    }
     if (!exists) {
       console.log("Nothing to reset; the Product Home does not exist.");
       return;
@@ -62,25 +65,57 @@ async function main() {
       throw new Error("Confirmation did not exactly match the resolved Synech Product Home; nothing was deleted.");
     }
 
-    await rm(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
-    console.log(`Removed Synech Product Home: ${target}`);
+    if (args.dataOnly) {
+      const dataRoot = path.resolve(target, "data");
+      const journalsRoot = path.resolve(target, "state", "journals");
+      const restoreMarkersRoot = path.resolve(target, "state", "restore-markers");
+      // Drop incompatible test content and lifecycle intents together. Config,
+      // credentials, external workspace files and runtime lease state stay intact.
+      for (const candidate of [dataRoot, journalsRoot, restoreMarkersRoot]) {
+        assertContainedTarget(target, candidate);
+        const parent = await lstat(path.dirname(candidate)).catch((error) => {
+          if (error?.code === "ENOENT") return undefined;
+          throw error;
+        });
+        if (parent?.isSymbolicLink()) throw new Error(`Refusing to reset through a symlink or junction: ${candidate}`);
+        await rm(candidate, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+        const remaining = await lstat(candidate).then(() => true, (error) => {
+          if (error?.code === "ENOENT") return false;
+          throw error;
+        });
+        if (remaining) throw new Error(`Test-data reset did not remove ${candidate}; no success is reported.`);
+      }
+      console.log(`Removed Synech test data and lifecycle state; preserved config: ${target}`);
+    } else {
+      await rm(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      console.log(`Removed Synech Product Home: ${target}`);
+    }
   } finally {
     await lease.release();
+  }
+}
+
+function assertContainedTarget(root, target) {
+  const relative = path.relative(root, target);
+  if (relative.length === 0 || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error(`Refusing to reset outside Product Home: ${target}`);
   }
 }
 
 function parseArgs(values) {
   let home;
   let confirm;
+  let dataOnly = false;
   for (let index = 0; index < values.length; index += 1) {
     const value = values[index];
     if (value === "--home") home = requireNext(values, ++index, "--home");
     else if (value.startsWith("--home=")) home = value.slice("--home=".length);
     else if (value === "--confirm") confirm = requireNext(values, ++index, "--confirm");
     else if (value.startsWith("--confirm=")) confirm = value.slice("--confirm=".length);
+    else if (value === "--data-only") dataOnly = true;
     else throw new Error(`Unknown argument: ${value}`);
   }
-  return { home: nonBlank(home), confirm: nonBlank(confirm) };
+  return { home: nonBlank(home), confirm: nonBlank(confirm), dataOnly };
 }
 
 function requireNext(values, index, flag) {

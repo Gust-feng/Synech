@@ -57,6 +57,18 @@ for (const file of files) {
   for (const reference of moduleGraph.get(file)) {
     const { node, specifier } = reference;
     const target = resolveSourceImport(file, specifier);
+    if ((isRouteAdapter(file) || normalized(file).includes("/src/app/panel-ui/")) && target !== undefined &&
+      (normalized(target).endsWith("/src/app/memory/composition.ts") ||
+        normalized(target).includes("/src/app/memory/store/") || normalized(target).includes("/src/app/memory/capture/"))) {
+      report("memory-route-internal-dependency", file, node,
+        "Routes use the Memory facade and UI uses Panel DTOs; neither may import Memory assembly or internal workers", sourceText, source);
+    }
+    if (sourceFeature === "memory" && target !== undefined &&
+      normalized(target).endsWith("/src/app/memory/capture/consolidation.ts") &&
+      ["admin", "diagnostics", "history"].some(directory => normalized(file).includes("/src/app/memory/" + directory + "/"))) {
+      report("memory-maintenance-coupling", file, node,
+        "Memory consumers must use shared policy/token/output modules instead of the maintenance orchestrator", sourceText, source);
+    }
     const targetFeatures = target === undefined ? new Set() : reachableOwnedFeatures(target);
     for (const targetFeature of targetFeatures) {
       if (sourceFeature !== undefined && sourceFeature !== targetFeature &&
@@ -165,6 +177,7 @@ for (const file of files) {
   }
 }
 
+checkMemoryProductBoundary();
 checkDataBaseline();
 checkStaleAllowlistEntries();
 
@@ -172,6 +185,27 @@ if (violations.length > 0) {
   console.error("Architecture baseline violations detected:");
   for (const violation of violations) console.error(`- [${violation.rule}] ${violation.file}:${violation.line} ${violation.message}`);
   process.exitCode = 1;
+}
+
+function checkMemoryProductBoundary() {
+  const entry = path.resolve(sourceRoot, "app", "memory", "index.ts");
+  if (!sourceSet.has(entry)) return;
+  const { sourceText, source } = parsedSources.get(entry);
+  for (const statement of source.statements) {
+    if (!ts.isExportDeclaration(statement) || statement.isTypeOnly || !statement.exportClause ||
+      !ts.isNamedExports(statement.exportClause)) continue;
+    if (statement.exportClause.elements.some(element => !element.isTypeOnly &&
+      (element.name.text.startsWith("create") || element.name.text === "MEMORY_MIGRATIONS"))) {
+      report("memory-product-assembly-export", entry, statement,
+        "Memory factories and schema belong to composition.ts, not the product contract entry", sourceText, source);
+    }
+  }
+  for (const dependency of reachableSourceFiles(entry, runtimeModuleGraph)) {
+    if (["store", "capture", "admin"].some(directory => normalized(dependency).includes("/src/app/memory/" + directory + "/"))) {
+      report("memory-product-runtime-dependency", entry, source.statements[0],
+        "Memory product entry must not load persistence or maintenance implementations", sourceText, source);
+    }
+  }
 }
 
 function report(rule, file, node, message, sourceText, sourceFile) {

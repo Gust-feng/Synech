@@ -26,13 +26,13 @@ export function ConversationPage(props: ConversationPageProps) {
       <div key="conversation-body" className="ui-conversation-body flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <ConversationScrollArea
           scrollKey={props.scrollKey}
-          contentClassName="ui-conversation-transcript reading-prose mx-auto px-6 pb-24 pt-8"
+          contentClassName="ui-conversation-transcript ui-conversation-transcript-frame reading-prose mx-auto"
         >
           {props.content}
         </ConversationScrollArea>
 
-        <div className="shrink-0 px-6 pb-6 pt-2">
-          <div className="ui-conversation-composer-frame mx-auto" style={{ width: '100%', maxWidth: 'var(--reading-width)' }}>
+        <div className="ui-conversation-composer-dock">
+          <div className="ui-conversation-composer-frame">
             <ConversationComposer input={props.input} />
           </div>
         </div>

@@ -30,15 +30,16 @@ export function createOrdinaryConversationTitleGenerator(input: {
   const createModelChannel = input.createModelChannel ?? createAuxiliaryModelChannel;
   return async ({ conversationId, userMessage, birth }) => {
     const mode = birth.aiMode;
-    if (mode !== "anthropic-messages" && mode !== "openai-compatible" && mode !== "openai-responses") return undefined;
-    if (birth.config.secretConfigured !== true) return undefined;
+    if (mode === "none") return undefined;
+    if (mode !== "native" && birth.config.secretConfigured !== true) return undefined;
     const environment = await input.configCenter.createModelRuntimeEnvironment({
       modelProvider: birth.config,
       informationAccess: birth.informationAccess,
     });
     const resolved = resolveRuntimeConfig({ mode, environment, birth });
     if (resolved === undefined) return undefined;
-    const channel = createModelChannel({
+    const channel = await createModelChannel({
+      configCenter: input.configCenter,
       resolved,
       profileId: birth.config.profileId,
       resolveApiKey: createConfigCenterApiKeyResolver({

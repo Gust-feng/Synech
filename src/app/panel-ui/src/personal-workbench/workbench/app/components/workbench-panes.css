@@ -537,10 +537,6 @@
   opacity: 0.4;
 }
 
-.ui-conversation-body {
-  container: conversation-pane / inline-size;
-}
-
 @container workbench-reader (max-width: 560px) {
   .ui-preview-toolbar {
     flex-wrap: wrap;
@@ -555,25 +551,6 @@
 
   .ui-preview-toolbar-actions {
     max-width: 100%;
-  }
-}
-
-@container conversation-pane (max-width: 520px) {
-  .ui-conversation-transcript {
-    padding: 20px 16px 40px;
-  }
-
-  .ui-conversation-body > .shrink-0 {
-    padding-inline: 12px;
-  }
-
-  .ui-conversation-composer__toolbar {
-    flex-wrap: wrap;
-  }
-
-  .ui-conversation-composer__toolbar-right {
-    flex-wrap: wrap;
-    justify-content: flex-end;
   }
 }
 

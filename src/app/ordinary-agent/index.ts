@@ -7,7 +7,6 @@ export * from "./conversation-control-repository.js";
 export * from "./conversation-projection.js";
 export * from "./file-system-repository.js";
 export * from "./managed-attachment-repository.js";
-export * from "./memory-fact-repository.js";
 export * from "./model-input.js";
 export * from "./model-input-attachments.js";
 export * from "./ordinary-agent-feature.js";

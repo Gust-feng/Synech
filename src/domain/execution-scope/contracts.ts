@@ -1,7 +1,5 @@
-/** Conversation 的单一 owner，创建时必选且只能选一个，创建后不可切换。 */
-export type ConversationOwner =
-  | { readonly kind: "space"; readonly id: string }
-  | { readonly kind: "workspace"; readonly id: string };
+/** Conversation 的唯一用户级 owner，创建时必选且只能选一个，创建后不可切换。 */
+export type ConversationOwner = { readonly kind: "space"; readonly id: string };
 
 /** owner 的稳定字符串键，用于对话列表按 owner 分组、去重与 read-model 关联。 */
 export function conversationOwnerKey(owner: ConversationOwner): string {
@@ -15,8 +13,8 @@ export function validateConversationOwner(value: unknown): ConversationOwner {
   }
   const candidate = value as Record<string, unknown>;
   const kind = candidate.kind;
-  if (kind !== "space" && kind !== "workspace") {
-    throw new Error(`conversation owner kind must be "space" or "workspace", got ${String(kind)}`);
+  if (kind !== "space") {
+    throw new Error(`conversation owner kind must be "space", got ${String(kind)}`);
   }
   const id = candidate.id;
   if (typeof id !== "string" || id.length === 0) {

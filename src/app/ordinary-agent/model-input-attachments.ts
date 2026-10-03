@@ -1,4 +1,3 @@
-import { promises as fs } from "node:fs";
 import path from "node:path";
 import { CodedExecutionError } from "../execution-errors/index.js";
 import { imageMimeTypeForPath } from "../local-filesystem/index.js";
@@ -14,8 +13,7 @@ import {
   runContextAttachmentRead,
   type ContextAttachmentToolOptions,
 } from "../tool-center/adapters/context-attachment-access.js";
-
-const MAX_IMAGE_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+import { readImageInput } from "../tool-center/adapters/image-input.js";
 
 type ImageAttachmentReadOptions = Pick<ContextAttachmentToolOptions,
   "workspaceRoot" | "resolveManagedAttachmentPath" | "readAuthorization" | "pathAuthorization" | "mutationCoordinator"
@@ -100,22 +98,18 @@ async function resolveImageAttachments(input: ImageAttachmentReadOptions): Promi
         },
       }, async (target): Promise<ModelInputAttachment> => {
         const mimeType = imageMimeTypeFor(ref, target.targetAbsolutePath);
-        if (mimeType === undefined) throw new Error("image MIME type could not be determined");
-        const stat = await fs.stat(target.targetAbsolutePath);
-        if (!stat.isFile()) throw new Error("not a readable file");
-        if (stat.size > MAX_IMAGE_ATTACHMENT_BYTES) {
-          throw new Error(`exceeds the ${MAX_IMAGE_ATTACHMENT_BYTES} byte image limit`);
-        }
-        const data = await fs.readFile(target.targetAbsolutePath, { signal: input.abortSignal });
-        return {
-          kind: "image",
+        // Resolve bytes even for text-only turns: Pi retains them for a later visual model.
+        const image = await readImageInput({
+          absolutePath: target.targetAbsolutePath,
+          mimeType,
           attachmentId: ref.attachmentId,
           inputRef: ref.ref,
-          source: { kind: "data", mimeType, data: data.toString("base64") },
           filename: path.basename(target.targetAbsolutePath),
           detail: "auto",
-          byteLength: data.byteLength,
-        };
+          abortSignal: input.abortSignal,
+        });
+        if (!image.readable) throw new Error(image.reason);
+        return image.attachment;
       });
       attachments.push(attachment);
     } catch (error) {
