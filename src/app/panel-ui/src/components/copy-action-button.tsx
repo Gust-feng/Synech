@@ -30,6 +30,7 @@ export function CopyActionButton(props: {
       className={props.className === undefined ? "copy-action-button" : `copy-action-button ${props.className}`}
       data-state={state}
       aria-label={title}
+      title={title}
       onClick={() => {
         void copyText(props.value).then((copied) => {
           setState(copied ? "copied" : "failed");

@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { MoreHorizontal } from 'lucide-react'
 import '../styles/floating-menu.css'
@@ -52,7 +52,10 @@ export function FloatingMenu({ label, visible, actions, trigger, align = 'right'
       setOpen(false)
     }
     const handleKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') setOpen(false)
+      if (event.key !== 'Escape' || event.defaultPrevented) return
+      event.preventDefault()
+      setOpen(false)
+      triggerRef.current?.focus({ preventScroll: true })
     }
     const closeOnViewportChange = (): void => setOpen(false)
     document.addEventListener('pointerdown', handlePointerDown)
@@ -65,6 +68,10 @@ export function FloatingMenu({ label, visible, actions, trigger, align = 'right'
       window.removeEventListener('scroll', closeOnViewportChange, { capture: true })
       window.removeEventListener('resize', closeOnViewportChange)
     }
+  }, [open])
+
+  useLayoutEffect(() => {
+    if (open) popoverRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus({ preventScroll: true })
   }, [open])
 
   useEffect(() => {
@@ -101,11 +108,33 @@ export function FloatingMenu({ label, visible, actions, trigger, align = 'right'
 
   const select = (action: FloatingMenuAction): void => {
     setOpen(false)
+    triggerRef.current?.focus({ preventScroll: true })
     action.onClick()
   }
 
+  function handleKeyDown(event: ReactKeyboardEvent<HTMLSpanElement>): void {
+    if (!open) return
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      event.stopPropagation()
+      setOpen(false)
+      triggerRef.current?.focus({ preventScroll: true })
+      return
+    }
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+    event.preventDefault()
+    event.stopPropagation()
+    const items = Array.from(popoverRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [])
+    const current = items.indexOf(document.activeElement as HTMLButtonElement)
+    const next = event.key === 'Home' ? 0
+      : event.key === 'End' ? items.length - 1
+      : event.key === 'ArrowDown' ? (current + 1) % items.length
+      : (current - 1 + items.length) % items.length
+    items[next]?.focus({ preventScroll: true })
+  }
+
   return (
-    <span className="ui-floating-menu" onClick={(event) => event.stopPropagation()}>
+    <span className="ui-floating-menu" onClick={(event) => event.stopPropagation()} onKeyDown={handleKeyDown}>
       <button
         ref={triggerRef}
         type="button"

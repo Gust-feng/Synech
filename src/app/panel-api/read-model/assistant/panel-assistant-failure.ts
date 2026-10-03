@@ -23,11 +23,19 @@ export function assistantTerminalStatus(status: string): AssistantTerminalStatus
   }
 }
 
-export function assistantTerminalNoticeTitle(status: AssistantTerminalStatus): string | undefined {
+export function assistantTerminalNoticeTitle(
+  status: AssistantTerminalStatus,
+  failureCode?: string,
+): string | undefined {
   switch (status) {
     case "blocked": return "需要处理";
     case "cancelled": return "已取消";
-    case "failed": return undefined;
+    case "failed":
+      switch (failureCode) {
+        case "model_unavailable": return "当前模型未能加载，请重新选择模型后重试。";
+        case "configured_tools_unavailable": return "本轮工具配置未能加载，请重试。";
+        default: return undefined;
+      }
   }
 }
 
