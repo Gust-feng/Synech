@@ -2,6 +2,8 @@ export type StreamingTextTone = "formal" | "process" | "thinking";
 
 const STREAM_SMOOTH_WINDOW_MS = 90;
 const STREAM_MAX_LAG_MS = 160;
+const THINKING_SMOOTH_WINDOW_MS = 300;
+const THINKING_MAX_LAG_MS = 1200;
 const ESTIMATED_FRAME_MS = 1000 / 60;
 
 export type StreamingTextState = {
@@ -9,6 +11,10 @@ export type StreamingTextState = {
   readonly displayed: string;
   readonly animationStartedAt?: number;
   readonly deadlineAt?: number;
+  readonly lastTargetAt?: number;
+  readonly arrivalIntervalMs?: number;
+  readonly pendingStartedAt?: number;
+  readonly revealStartLength?: number;
 };
 
 export function createStreamingTextState(text = ""): StreamingTextState {
@@ -23,12 +29,13 @@ export function createInitialStreamingTextState(
   live: boolean,
   animateOnMount: boolean,
   now: number,
+  tone: StreamingTextTone = "formal",
 ): StreamingTextState {
   if (!live || !animateOnMount || text.length === 0) {
     return createStreamingTextState(text);
   }
   return consumeStreamingTextFrame(
-    updateStreamingTextTarget(createStreamingTextState(), text, true, now),
+    updateStreamingTextTarget(createStreamingTextState(), text, true, now, tone),
     now,
   );
 }
@@ -38,6 +45,7 @@ export function updateStreamingTextTarget(
   target: string,
   live: boolean,
   now: number,
+  tone: StreamingTextTone = "formal",
 ): StreamingTextState {
   if (!live) {
     return createStreamingTextState(target);
@@ -48,8 +56,26 @@ export function updateStreamingTextTarget(
   if (state.target.startsWith(target)) {
     return state;
   }
-  if (!target.startsWith(state.displayed)) {
+  if (!target.startsWith(state.target)) {
     return createStreamingTextState(target);
+  }
+
+  if (tone === "thinking") {
+    const interval = state.lastTargetAt === undefined ? undefined : Math.min(1200, Math.max(16, now - state.lastTargetAt));
+    const arrivalIntervalMs = interval === undefined ? state.arrivalIntervalMs
+      : state.arrivalIntervalMs === undefined ? interval : state.arrivalIntervalMs * 0.75 + interval * 0.25;
+    const smoothWindowMs = Math.min(900, Math.max(160, (arrivalIntervalMs ?? THINKING_SMOOTH_WINDOW_MS) * 0.9));
+    const pendingStartedAt = state.displayed.length < state.target.length ? state.pendingStartedAt ?? now : now;
+    return {
+      target,
+      displayed: state.displayed,
+      animationStartedAt: now,
+      deadlineAt: Math.min(now + smoothWindowMs, pendingStartedAt + THINKING_MAX_LAG_MS),
+      lastTargetAt: now,
+      arrivalIntervalMs,
+      pendingStartedAt,
+      revealStartLength: state.displayed.length,
+    };
   }
 
   const smoothing = state.displayed.length < state.target.length &&
@@ -77,10 +103,21 @@ export function consumeStreamingTextFrame(
   if (state.displayed === state.target) {
     return state.animationStartedAt === undefined && state.deadlineAt === undefined
       ? state
-      : createStreamingTextState(state.target);
+      : settleStreamingTextState(state);
   }
   if (!state.target.startsWith(state.displayed)) {
     return createStreamingTextState(state.target);
+  }
+
+  if (state.revealStartLength !== undefined) {
+    const startedAt = state.animationStartedAt ?? now;
+    const windowMs = (state.deadlineAt ?? now) - startedAt;
+    const progress = windowMs <= 0 ? 1 : Math.min(1, Math.max(0, (now - startedAt) / windowMs));
+    if (progress === 1) return settleStreamingTextState(state);
+    const characters = Array.from(state.target.slice(state.revealStartLength));
+    const count = Math.floor(characters.length * progress);
+    const displayed = state.target.slice(0, state.revealStartLength) + characters.slice(0, count).join("");
+    return { ...state, displayed };
   }
 
   const remaining = Array.from(state.target.slice(state.displayed.length));
@@ -94,6 +131,15 @@ export function consumeStreamingTextFrame(
   return displayed === state.target
     ? createStreamingTextState(state.target)
     : { ...state, displayed };
+}
+
+function settleStreamingTextState(state: StreamingTextState): StreamingTextState {
+  return {
+    target: state.target,
+    displayed: state.target,
+    lastTargetAt: state.lastTargetAt,
+    arrivalIntervalMs: state.arrivalIntervalMs,
+  };
 }
 
 export function streamingTextHasPendingDisplay(state: StreamingTextState): boolean {
