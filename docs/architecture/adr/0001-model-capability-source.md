@@ -156,7 +156,7 @@ model = profile.model.toLowerCase()
 
 ### 3.3 不需要新增测试
 
-按 AGENTS.md 规则 11：本变更不触及数据持久化、权限、删除、并发或发布阻断路径；能力解析是纯函数，且已有 `tests/` 覆盖核心链路。验证手段是**漂移报告**（下节）与既有构建/类型/基线检查。
+依据仓库测试做减法原则：本变更不触及数据持久化、权限、删除、并发或发布阻断路径；能力解析是纯函数，且已有 `tests/` 覆盖核心链路。验证手段是**漂移报告**（下节）与既有构建/类型/基线检查。
 
 ## 4. 备选方案（已评估，不采用）
 
@@ -190,7 +190,7 @@ model = profile.model.toLowerCase()
 
 ## 7. 验证
 
-- AGENTS.md 清单：`pnpm check:baseline`、`pnpm typecheck:panel`、`pnpm build:panel`、`pnpm check:whitespace` 全部通过。
+- 仓库验证清单：`pnpm check:baseline`、`pnpm typecheck:panel`、`pnpm build:panel`、`pnpm check:whitespace` 全部通过。
 - `pnpm test:core`：**139/139 通过**（本工作树从 `main` 干净切出；主工作树那 2 个 schema 哈希失败源于该树的脏改动，与本变更无关）。
 - 行为核对（一次性脚本，未入库）：20 个用例逐条比对 `resolveModelCapabilities` 结果——pi 覆盖的模型取 pi 值且 `imageInput.source = "pi_catalog"`；pi 缺失的 4 个模式取手工值且为 `registry`；完全不认识的 id 落 `protocol_default`。结果 20/20 符合预期。
 - 已知上游断裂（与本变更无关，HEAD 即存在）：`pnpm build:node` 在 `src/app/panel-demo/panel-demo-transport.ts` 报 `@panel-api/workbench` 解析错误，导致 `pnpm build` / `pnpm test` 无法整链跑通；本变更是用 `tsc -p tsconfig.json` 直跑验证 emit 的。

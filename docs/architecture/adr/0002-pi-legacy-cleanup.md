@@ -74,13 +74,13 @@ Pi 的 `generateSummaryWithRequest` 与 `generateTurnPrefixSummary` 将 `convert
 
 ## 3. 验证
 
-七项各自完成后按 AGENTS.md 清单验证（`check:baseline` / `typecheck:panel` / `build:panel` / `check:whitespace`）+ `pnpm test:core` **139/139**；合并后复跑同样全绿。逐项行为验证：
+七项各自完成后按仓库验证清单执行（`check:baseline` / `typecheck:panel` / `build:panel` / `check:whitespace`）+ `pnpm test:core` **139/139**；合并后复跑同样全绿。逐项行为验证：
 
 - 厂商识别：22/22 用例（含网关 URL + kimi model、大小写与点号变体、URL 兜底不回归）；
 - `addedToolNames`：e2e 临时脚本（真实 `createAgentSessionLoop` + 假 provider 流，三轮 McpLoad→调用→收尾）证明转录与 `buildContext` 不含该字段，且激活链路完好；并对旧代码做反向证明（旧代码确有 1 条带字段的落库）；
 - 含图压缩：视觉/纯文本/无图三种会话均 `compacted`，计数 3/3/0，summarizer 输入不含原始图片数据，面板文案正确。
 
-按 AGENTS.md 规则 11 未新增常驻测试（均属收敛/降级语义，且 139 项核心测试全绿）。**建议后续权衡**：2.4 的「转录无传输层字段」与 2.5 的「含图降级不失败」是两条长期不变量，值得各补一个最小场景测试。
+依据仓库测试做减法原则，未新增常驻测试（均属收敛/降级语义，且 139 项核心测试全绿）。**建议后续权衡**：2.4 的「转录无传输层字段」与 2.5 的「含图降级不失败」是两条长期不变量，值得各补一个最小场景测试。
 
 ## 4. 后续待办（本 ADR 未做，需单独决策）
 
