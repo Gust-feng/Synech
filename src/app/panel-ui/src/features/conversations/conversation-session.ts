@@ -5,7 +5,7 @@ import { shouldKeepRefreshing, stopLiveUpdates } from "./run/runtime-controls";
 import type { AppState } from "../../workbench/state";
 import { liveRunForObservedReplay } from "./run/task-submit-flow";
 import { mergeTranscriptNodesByRunId } from "@panel-api/ui-read-model";
-import { resetTranscriptCache, updateTranscriptRunCache } from "./transcript/store";
+import { getTranscriptCache, transcriptNodesCacheForConversation, resetTranscriptCache, updateTranscriptRunCache } from "./transcript/store";
 import type { PanelToolCallResult as ToolCallResult } from "@panel-api/ordinary-agent";
 import type { Conversation } from "../../contracts/conversation";
 import type { TranscriptNode } from "../../contracts/run";
@@ -38,7 +38,8 @@ export type ConversationSessionControllerOptions = {
 
 export async function loadConversationSession(
   options: ConversationSessionControllerOptions,
-  conversationId: string
+  conversationId: string,
+  providedConversation?: Conversation,
 ): Promise<boolean> {
   const currentLoad = options.conversationLoadAbortRef.current;
   if (currentLoad !== undefined && !currentLoad.signal.aborted) {
@@ -65,10 +66,9 @@ export async function loadConversationSession(
   stopLiveUpdates(options.pollTimer, options.streamRef, options.fallbackPollRef);
   let response: { readonly conversation: Conversation };
   try {
-    response = await getJson<{ readonly conversation: Conversation }>(
-      `/api/conversations/${encodeURIComponent(conversationId)}`,
-      { signal: abortController.signal }
-    );
+    response = providedConversation === undefined
+      ? await getJson<{ readonly conversation: Conversation }>(`/api/conversations/${encodeURIComponent(conversationId)}`, { signal: abortController.signal })
+      : { conversation: providedConversation };
   } catch (error) {
     if (options.conversationLoadAbortRef.current === abortController) {
       options.conversationLoadAbortRef.current = undefined;
@@ -125,6 +125,7 @@ export async function loadConversationSession(
   options.setApp((previous) => ({
     ...previous,
     conversation: response.conversation,
+    busy: false,
     run,
     workView,
     capabilityResolution,
@@ -143,7 +144,7 @@ export async function loadConversationSession(
       : undefined,
     error: undefined,
   }));
-  options.setAttachments([]);
+  if (providedConversation === undefined) options.setAttachments([]);
   if (run !== undefined && shouldKeepRefreshing(run.status)) {
     options.startLiveUpdates({
       runId: run.runId,
@@ -171,8 +172,9 @@ export async function loadConversationSession(
     response.conversation.turns.length,
     initialVisibleTranscriptTurnCount(response.conversation.turns.length)
   );
+  const cachedNodes = transcriptNodesCacheForConversation(getTranscriptCache(), conversationId);
   const historicalRunIds = runIdsForTurnWindow(response.conversation.turns, initialVisibleWindow.startIndex)
-    .filter((id) => id !== latestRunId);
+    .filter((id) => id !== latestRunId && !Object.hasOwn(cachedNodes, id));
   if (historicalRunIds.length > 0) {
     // Historical runs fill the external transcript cache without blocking the
     // navigation contract. A slow or failed backfill must not turn an already

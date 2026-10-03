@@ -13,7 +13,7 @@ import { submitPanelTask } from "./task-submission";
 import { invalidateUsageStatistics } from "../../../workbench/usage-statistics-query";
 import type { AppState } from "../../../workbench/state";
 import type { ContextAttachment } from "../../../contracts/context";
-import type { ConversationSummary } from "../../../contracts/conversation";
+import type { Conversation, ConversationOwnerView, ConversationSummary } from "../../../contracts/conversation";
 import type { OrdinaryRun } from "../../../contracts/run";
 import { createRunObservationGuard } from "./observation-state";
 
@@ -23,7 +23,9 @@ export type AppRunController = {
   readonly submissionAttemptRef: React.MutableRefObject<{ readonly key: string; readonly id: string } | undefined>;
   readonly loadConversation: (conversationId: string) => Promise<boolean>;
   readonly startTask: (explicitGoal?: string) => Promise<boolean>;
-  readonly startNewConversation: (owner?: { readonly kind: "space" | "workspace"; readonly id: string }) => Promise<boolean>;
+  readonly selectBranch: (runId: string) => Promise<void>;
+  readonly editTurn: (runId: string, content: string) => Promise<boolean>;
+  readonly startNewConversation: (owner?: ConversationOwnerView) => Promise<boolean>;
   readonly refreshConversations: () => Promise<void>;
   readonly startLiveUpdates: (input: LiveRunSubscription) => void;
   readonly cancelRun: () => Promise<void>;
@@ -43,6 +45,7 @@ export type AppRunControllerOptions = {
   readonly toolConfirmationPolicy: ComposerToolConfirmationPolicy;
   readonly selectedModelId: string;
   readonly selectedModelSupportsReasoningEffort: boolean;
+  readonly branchMutationRef: React.MutableRefObject<boolean>;
   readonly confirmationBusy: boolean;
   readonly setConfirmationBusy: React.Dispatch<React.SetStateAction<boolean>>;
   readonly mountedRef: React.MutableRefObject<boolean>;
@@ -95,14 +98,44 @@ export function createAppRunController(options: AppRunControllerOptions): AppRun
     return await submitTask("continue", explicitGoal);
   }
 
-  async function startNewConversation(owner?: { readonly kind: "space" | "workspace"; readonly id: string }): Promise<boolean> {
+  async function selectBranch(targetRunId: string): Promise<void> {
+    const conversationId = options.app.conversation?.conversationId;
+    if (conversationId === undefined || options.app.busy || options.branchMutationRef.current) return;
+    options.branchMutationRef.current = true;
+    options.conversationLoadAbortRef.current?.abort();
+    options.conversationLoadAbortRef.current = undefined;
+    options.conversationLoadTargetRef.current = undefined;
+    const epoch = ++options.viewEpochRef.current;
+    options.setApp((previous) => ({ ...previous, busy: true, error: undefined }));
+    try {
+      const response = await postJson<{ readonly conversation: Conversation }>(`/api/conversations/${encodeURIComponent(conversationId)}/branches/select`, { targetRunId });
+      if (!options.mountedRef.current || options.viewEpochRef.current !== epoch) return;
+      await loadConversationSession({ ...options, refreshConversations, startLiveUpdates: liveUpdates.startLiveUpdates }, conversationId, response.conversation);
+      // A version switch does not require recomputing every conversation.
+      options.setApp((previous) => ({ ...previous, conversations: previous.conversations.map((summary) =>
+        summary.conversationId === conversationId ? { ...summary, latestRunId: response.conversation.latestRunId,
+          activeRunId: response.conversation.activeRunId, updatedAt: response.conversation.updatedAt } : summary) }));
+    } catch (error) {
+      if (!options.mountedRef.current || options.viewEpochRef.current !== epoch) return;
+      options.setApp((previous) => ({ ...previous, busy: false, error: error instanceof Error ? error.message : "切换消息版本失败。" }));
+    } finally {
+      options.branchMutationRef.current = false;
+    }
+  }
+
+  async function editTurn(runId: string, content: string): Promise<boolean> {
+    return submitPanelTask({ ...options, refreshConversations, startLiveUpdates: liveUpdates.startLiveUpdates },
+      content, "continue", undefined, undefined, runId);
+  }
+
+  async function startNewConversation(owner?: ConversationOwnerView): Promise<boolean> {
     return await submitTask("new", undefined, owner);
   }
 
   async function submitTask(
     conversationBehavior: "continue" | "new",
     explicitGoal?: string,
-    newConversationOwner?: { readonly kind: "space" | "workspace"; readonly id: string },
+    newConversationOwner?: ConversationOwnerView,
   ): Promise<boolean> {
     return await submitPanelTask({
       ...options,
@@ -201,6 +234,8 @@ export function createAppRunController(options: AppRunControllerOptions): AppRun
     submissionAttemptRef: options.submissionAttemptRef,
     loadConversation,
     startTask,
+    editTurn,
+    selectBranch,
     startNewConversation,
     refreshConversations,
     startLiveUpdates: liveUpdates.startLiveUpdates,

@@ -1,3 +1,4 @@
+import { getDeveloperModeEnabled, getToolMetricsRecordingEnabled } from "../../../shell/developer-mode";
 import type React from "react";
 import { postJson } from "../../../api";
 import { conversationTurnAttachmentsFromContextAttachments, contextInputFromAttachments } from "../../../workbench/attachments";
@@ -18,7 +19,7 @@ import { shouldKeepRefreshing, stopLiveUpdates } from "./runtime-controls";
 import { parseModelOptionId } from "../../settings/model/options";
 import type { AppState } from "../../../workbench/state";
 import type { ContextAttachment } from "../../../contracts/context";
-import type { Conversation } from "../../../contracts/conversation";
+import type { Conversation, ConversationOwnerView } from "../../../contracts/conversation";
 import type { TranscriptNode } from "../../../contracts/run";
 import {
   immediateRunForStartedConversation,
@@ -70,29 +71,39 @@ export async function submitPanelTask(
   explicitGoal?: string,
   conversationBehavior: PanelTaskConversationBehavior = "continue",
   _unusedSpaceId?: string,
-  newConversationOwner?: { readonly kind: "space" | "workspace"; readonly id: string },
+  newConversationOwner?: ConversationOwnerView,
+  replacesRunId?: string,
 ): Promise<boolean> {
   const trimmed = (explicitGoal ?? options.goal).trim();
   const startsNewConversation = conversationBehavior === "new";
+  const editing = replacesRunId !== undefined;
+  if (editing && (options.app.busy || options.app.conversation === undefined)) return false;
   // An active conversation can accept a successor run; a new conversation
   // still remains blocked while another run is busy.
   const activeConversationRun = !startsNewConversation && options.app.conversation !== undefined &&
     options.app.run !== undefined &&
     shouldKeepRefreshing(options.app.run.status);
   if (trimmed.length === 0 || (options.app.busy && !activeConversationRun)) return false;
-  const conversationForSubmit = startsNewConversation ? undefined : options.app.conversation;
+  const originalConversation = startsNewConversation ? undefined : options.app.conversation;
+  const sourceIndex = editing ? originalConversation?.turns.findIndex((turn) => turn.runId === replacesRunId) ?? -1 : -1;
+  if (editing && sourceIndex < 0) return false;
+  const conversationForSubmit = editing && originalConversation !== undefined
+    ? { ...originalConversation, turns: originalConversation.turns.slice(0, sourceIndex) }
+    : originalConversation;
   const runForSubmit = startsNewConversation ? undefined : options.app.run;
   const epoch = options.viewEpochRef.current + 1;
   const previousObservedRunId = startsNewConversation
     ? undefined
     : options.activeRunIdRef.current ?? options.app.run?.runId;
   const appBeforeSubmit = options.app;
-  const attachmentsBeforeSubmit = options.attachments;
+  const attachmentsBeforeSubmit = editing ? [] : options.attachments;
   const path = conversationForSubmit?.conversationId === undefined
     ? "/api/conversations"
     : `/api/conversations/${encodeURIComponent(conversationForSubmit.conversationId)}/messages`;
   const requestBody = {
     goal: trimmed,
+    ...(getDeveloperModeEnabled() && getToolMetricsRecordingEnabled() ? { recordToolMetrics: true } : {}),
+    ...(replacesRunId === undefined ? {} : { replacesRunId }),
     aiMode: options.aiMode,
     toolConfirmationPolicy: options.toolConfirmationPolicy,
     modelOverride: modelOverrideFromSelectedOption(options.selectedModelId),
@@ -118,8 +129,10 @@ export async function submitPanelTask(
     stopLiveUpdates(options.pollTimer, options.streamRef, options.fallbackPollRef);
   }
   options.activeRunIdRef.current = previousObservedRunId;
-  options.setGoal("");
-  options.setAttachments([]);
+  if (!editing) {
+    options.setGoal("");
+    options.setAttachments([]);
+  }
   options.setApp((previous) => {
     const capabilityState = likelyQueuesBehindActiveRun && previous.run !== undefined
       ? nextRunCapabilityState(previous, { runId: previous.run.runId })
@@ -128,7 +141,7 @@ export async function submitPanelTask(
       ...previous,
       ...capabilityState,
       busy: true,
-      conversation: optimisticConversationForSubmit(
+      conversation: editing ? previous.conversation : optimisticConversationForSubmit(
         conversationForSubmit,
         trimmed,
         undefined,
@@ -155,8 +168,10 @@ export async function submitPanelTask(
     }>(path, { ...requestBody, submissionId });
   } catch (error) {
     if (!options.mountedRef.current || options.viewEpochRef.current !== epoch) return false;
-    options.setGoal(trimmed);
-    options.setAttachments(attachmentsBeforeSubmit);
+    if (!editing) {
+      options.setGoal(trimmed);
+      options.setAttachments(attachmentsBeforeSubmit);
+    }
     if (startsNewConversation) {
       options.activeRunIdRef.current = undefined;
     }
