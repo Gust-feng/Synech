@@ -101,7 +101,7 @@ export function truncateReadFileContent(value: string, maxLength: number): {
   let high = maxRawChars;
   while (low < high) {
     const middle = Math.ceil((low + high) / 2);
-    const candidate = `${value.slice(0, middle)}…`;
+    const candidate = `${value.slice(0, utf16SafePrefixLength(value, middle))}…`;
     if (JSON.stringify(candidate).length <= DEFAULT_MAX_INLINE_TOOL_CONTENT_JSON_CHARS) low = middle;
     else high = middle - 1;
   }
@@ -120,15 +120,14 @@ export async function readLineRange(
   let lineNumber = 0;
   let hasMoreAfter = false;
   let pending = "";
-  let endedWithLineEnding = false;
   const acceptLine = (line: TextLine): boolean => {
     lineNumber += 1;
     if (lineNumber >= range.startLine && lineNumber <= range.endLine) lines.push(line);
-    if (lineNumber >= range.endLine && line.ending.length > 0) {
+    if (lineNumber > range.endLine) {
       hasMoreAfter = true;
       return true;
     }
-    return lineNumber > range.endLine;
+    return false;
   };
   try {
     streamLoop: for await (const chunk of stream) {
@@ -146,7 +145,6 @@ export async function readLineRange(
           ending: pending.slice(boundary.index, boundary.index + boundary.length),
         };
         pending = pending.slice(boundary.index + boundary.length);
-        endedWithLineEnding = pending.length === 0;
         if (acceptLine(line)) break streamLoop;
       }
     }
@@ -164,10 +162,9 @@ export async function readLineRange(
           ending: pending.slice(boundary.index, boundary.index + boundary.length),
         };
         pending = pending.slice(boundary.index + boundary.length);
-        endedWithLineEnding = pending.length === 0;
         if (acceptLine(line)) break;
       }
-      if (!hasMoreAfter && (pending.length > 0 || endedWithLineEnding)) {
+      if (!hasMoreAfter && pending.length > 0) {
         acceptLine({ text: pending, ending: "" });
       }
     }
@@ -290,7 +287,6 @@ function textLinesPreservingEndings(raw: string): readonly TextLine[] {
     });
     remaining = remaining.slice(boundary.index + boundary.length);
     if (remaining.length === 0) {
-      lines.push({ text: "", ending: "" });
       break;
     }
   }

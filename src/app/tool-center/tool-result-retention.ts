@@ -1,6 +1,5 @@
-import type { ToolCallResult, ToolErrorDomain, ToolErrorFacts } from "../../domain/tools/index.js";
+import type { ToolExecutionResult, ToolErrorDomain, ToolErrorFacts } from "../../domain/tools/index.js";
 import {
-  copyToolModelAttachments,
   normalizeToolErrorFacts,
   toolInvocationId,
 } from "../../domain/tools/index.js";
@@ -105,14 +104,14 @@ export class ToolResultRetention {
     return this.outputTokenCounter?.countText(text);
   }
 
-  envelopeTokens(result: ToolCallResult): number | undefined {
+  envelopeTokens(result: ToolExecutionResult): number | undefined {
     // This is the text delivery budget. Binary attachments travel separately;
     // their base64 bytes are not text tokens or recoverable through ReadOutput.
     const { attachments: _attachments, ...envelope } = toolResultMessage(result);
     return this.outputTokenCounter?.countText(JSON.stringify(envelope));
   }
 
-  async prepareResult(result: ToolCallResult, context: DeliveryContext): Promise<ToolCallResult> {
+  async prepareResult(result: ToolExecutionResult, context: DeliveryContext): Promise<ToolExecutionResult> {
     if (result.toolName === TOOL_OUTPUT_READER_NAME) return result;
 
     const failureCandidate = oversizedExplicitFailureCandidate(
@@ -144,10 +143,7 @@ export class ToolResultRetention {
 
     try {
       const retained = await this.outputStore.retain(retentionInput(result, candidate, context.ownerId));
-      const deliveryOutput = copyToolModelAttachments(
-        result.output,
-        retainedContentDelivery(preview, retained),
-      );
+      const deliveryOutput = retainedContentDelivery(preview, retained);
       return this.fitRetainedDeliveryPreview(
         { ...result, output: deliveryOutput },
         candidate.content,
@@ -163,10 +159,12 @@ export class ToolResultRetention {
   }
 
   async prepareThrownError(
-    result: ToolCallResult,
+    result: ToolExecutionResult,
     error: RetainableToolError,
     context: DeliveryContext,
-  ): Promise<ToolCallResult> {
+  ): Promise<ToolExecutionResult> {
+    // An executor that throws has no returned output. This path retains only
+    // error evidence; returned failures with attachments use prepareResult.
     const completeErrorResult = { ...result, errorFacts: error.fullFacts };
     const candidate = oversizedThrownErrorCandidate(
       error,
@@ -201,10 +199,10 @@ export class ToolResultRetention {
   }
 
   private async prepareExplicitFailure(
-    result: ToolCallResult,
+    result: ToolExecutionResult,
     candidate: OversizedOutputCandidate,
     context: DeliveryContext,
-  ): Promise<ToolCallResult> {
+  ): Promise<ToolExecutionResult> {
     const preview = retainedOutputPreview(candidate.content);
     if (this.outputStore === undefined || !context.readerAvailable) {
       return explicitFailureRetentionFailure(result, candidate, preview, {
@@ -217,10 +215,7 @@ export class ToolResultRetention {
       const retained = await this.outputStore.retain(retentionInput(result, candidate, context.ownerId));
       return this.fitRetainedDeliveryPreview({
         ...result,
-        output: copyToolModelAttachments(
-          result.output,
-          retainedContentDelivery(preview, retained),
-        ),
+        output: retainedContentDelivery(preview, retained),
         error: retainedErrorMessage(result.error),
         errorFacts: retainedExplicitFailureFacts(result.errorFacts, retained),
       }, candidate.content);
@@ -234,15 +229,15 @@ export class ToolResultRetention {
     }
   }
 
-  private exceedsTokenEnvelope(result: ToolCallResult): boolean {
+  private exceedsTokenEnvelope(result: ToolExecutionResult): boolean {
     const envelopeTokens = this.envelopeTokens(result);
     return envelopeTokens !== undefined && envelopeTokens > this.maxInlineOutputTokens;
   }
 
   private fitRetainedDeliveryPreview(
-    result: ToolCallResult,
+    result: ToolExecutionResult,
     sourceContent: string,
-  ): ToolCallResult {
+  ): ToolExecutionResult {
     if (this.outputTokenCounter === undefined) return result;
     const output = result.output;
     if (typeof output !== "object" || output === null || Array.isArray(output)) return result;
@@ -267,13 +262,13 @@ export class ToolResultRetention {
     }
     return {
       ...result,
-      output: copyToolModelAttachments(output, { ...output, contentPreview: best }),
+      output: { ...output, contentPreview: best },
     };
   }
 }
 
 function retentionInput(
-  result: ToolCallResult,
+  result: ToolExecutionResult,
   candidate: OversizedOutputCandidate,
   ownerId: string,
 ) {
@@ -288,7 +283,7 @@ function retentionInput(
 }
 
 function oversizedOutputCandidate(
-  output: ToolCallResult["output"],
+  output: ToolExecutionResult["output"],
   maxInlineChars: number,
   exceedsTokenEnvelope: boolean,
 ): OversizedOutputCandidate | undefined {
@@ -305,7 +300,7 @@ function oversizedOutputCandidate(
 }
 
 function oversizedExplicitFailureCandidate(
-  result: ToolCallResult,
+  result: ToolExecutionResult,
   maxInlineChars: number,
   exceedsTokenEnvelope: boolean,
 ): OversizedOutputCandidate | undefined {
@@ -387,21 +382,21 @@ function retainedExplicitFailureFacts(
 }
 
 function explicitFailureRetentionFailure(
-  result: ToolCallResult,
+  result: ToolExecutionResult,
   candidate: OversizedOutputCandidate,
   preview: string,
   failure: RetentionFailure,
-): ToolCallResult {
+): ToolExecutionResult {
   return {
     ...result,
-    output: copyToolModelAttachments(result.output, {
+    output: {
       mediaType: candidate.mediaType,
       contentChars: candidate.content.length,
       contentPreview: preview,
       hasMoreAfter: true,
       contentIncomplete: true,
       retentionFailed: true,
-    }),
+    },
     error: retainedErrorMessage(result.error) ?? failure.message,
     errorFacts: mergeToolErrorFacts(compactErrorFactsForDelivery(result.errorFacts), {
       ...(failure.facts ?? {}),
@@ -413,11 +408,11 @@ function explicitFailureRetentionFailure(
 }
 
 function errorRetentionFailure(
-  result: ToolCallResult,
+  result: ToolExecutionResult,
   candidate: OversizedOutputCandidate,
   preview: string,
   failure: RetentionFailure,
-): ToolCallResult {
+): ToolExecutionResult {
   return {
     ...result,
     output: {
@@ -438,12 +433,12 @@ function errorRetentionFailure(
 }
 
 function outputRetentionFailure(
-  result: ToolCallResult,
+  result: ToolExecutionResult,
   candidate: OversizedOutputCandidate,
   preview: string,
   failure: RetentionFailure,
-): ToolCallResult {
-  const output = copyToolModelAttachments(result.output, {
+): ToolExecutionResult {
+  const output = {
     mediaType: candidate.mediaType,
     contentChars: candidate.content.length,
     contentPreview: preview,
@@ -454,7 +449,7 @@ function outputRetentionFailure(
     deliveryMessage: failure.message,
     sourceExecutionStatus: result.status,
     doNotBlindlyRetry: result.status === "completed",
-  });
+  };
   if (result.status !== "completed") {
     return {
       ...result,

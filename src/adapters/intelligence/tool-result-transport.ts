@@ -5,11 +5,11 @@ import { canonicalToolResultMessage } from "../../app/model-runtime/tool-result-
 import type { ConfirmationDecision, ConfirmationRequest } from "../../domain/confirmation/index.js";
 import type { ModelInputAttachment, ModelInputAttachmentRef } from "../../domain/intelligence/index.js";
 import {
-  copyToolModelAttachments,
+  durableToolCallResult,
   toolInvocationId,
-  toolModelAttachmentsFromOutput,
   type ToolCallRequest,
   type ToolCallResult,
+  type ToolExecutionResult,
 } from "../../domain/tools/index.js";
 import { errorMessage } from "../../kernel/values/index.js";
 
@@ -21,7 +21,7 @@ export type ToolExecutionDetails = {
 };
 
 export type PendingToolResultDelivery = {
-  readonly result: ToolCallResult;
+  readonly result: ToolExecutionResult;
 };
 
 type ToolExecutionEndEvent = Extract<HarnessEvent, { readonly type: "tool_end" }>;
@@ -33,7 +33,7 @@ export function piImmediateToolResult(input: {
   readonly prepared: boolean;
   readonly knownActiveTool: boolean;
   readonly cancellationRequested: boolean;
-}): ToolCallResult {
+}): ToolExecutionResult {
   const error = piToolResultText(input.rawResult.content) ||
     `Pi did not return a canonical result for ${input.request.toolName}.`;
   if (input.cancellationRequested) {
@@ -75,7 +75,7 @@ export function piImmediateToolResult(input: {
 }
 
 export function harnessToolResult(
-  result: ToolCallResult,
+  result: ToolExecutionResult,
   modelInput: {
     readonly supportsVisionInput: boolean;
     readonly modelInputSupportsImage: boolean;
@@ -91,7 +91,7 @@ export function harnessToolResult(
   const imageContent = toolResultImageContentFromAttachments(message.attachments);
   return {
     content: [{ type: "text" as const, text: message.content }, ...imageContent],
-    details: { kind: "result" as const, result: cloneToolResult(deliverable) },
+    details: { kind: "result" as const, result: durableToolCallResult(deliverable) },
     ...(terminate || deliverable.errorFacts?.code === "tool_result_attachment_not_supported" ||
         deliverable.errorFacts?.code === "tool_result_image_input_unsupported" ||
         deliverable.errorFacts?.code === "tool_result_image_input_projection_mismatch"
@@ -101,11 +101,11 @@ export function harnessToolResult(
 }
 
 export function toolResultForPiTransport(
-  result: ToolCallResult,
+  result: ToolExecutionResult,
   supportsVisionInput: boolean,
   modelInputSupportsImage: boolean,
-): ToolCallResult {
-  const attachments = toolModelAttachmentsFromOutput(result.output);
+): ToolExecutionResult {
+  const attachments = result.modelAttachments;
   const unsupported = attachments?.find((attachment) =>
     attachment.kind !== "image" || attachment.source.kind !== "data"
   );
@@ -126,6 +126,7 @@ export function toolResultForPiTransport(
     ...result,
     output: result.output === undefined ? undefined : globalThis.structuredClone(result.output),
     modelAttachmentRefs: undefined,
+    modelAttachments: undefined,
     status: "failed",
     error: deliveryFailureCode === undefined
       ? `Tool result could not be delivered to the Pi model because ${attachment.kind} attachments are unsupported by the active model transport.`
@@ -145,9 +146,9 @@ export function toolResultForPiTransport(
 }
 
 export function deniedToolResult(
-  approval: ToolCallResult & { readonly status: "approval_required" },
+  approval: ToolExecutionResult & { readonly status: "approval_required" },
   decision: ConfirmationDecision,
-): ToolCallResult {
+): ToolExecutionResult {
   const guidance = decision.decision === "guidance" ? decision.guidance?.trim() : undefined;
   return {
     ...approval,
@@ -162,9 +163,9 @@ export function deniedToolResult(
 }
 
 export function cancelledApprovalResult(
-  approval: ToolCallResult & { readonly status: "approval_required" },
+  approval: ToolExecutionResult & { readonly status: "approval_required" },
   reason: unknown,
-): ToolCallResult {
+): ToolExecutionResult {
   return {
     ...approval,
     status: "cancelled",
@@ -175,7 +176,7 @@ export function cancelledApprovalResult(
   };
 }
 
-export function toolResultAcceptanceFailure(result: ToolCallResult, error: unknown): ToolCallResult {
+export function toolResultAcceptanceFailure(result: ToolExecutionResult, error: unknown): ToolExecutionResult {
   return {
     ...result,
     output: undefined,
@@ -191,7 +192,7 @@ export function toolResultAcceptanceFailure(result: ToolCallResult, error: unkno
   };
 }
 
-export function requireConfirmationRequest(result: ToolCallResult): ConfirmationRequest {
+export function requireConfirmationRequest(result: ToolExecutionResult): ConfirmationRequest {
   if (result.confirmationRequest === undefined) {
     throw new Error(`Approval-required tool result ${toolInvocationId(result)} is missing its confirmation request.`);
   }
@@ -199,15 +200,15 @@ export function requireConfirmationRequest(result: ToolCallResult): Confirmation
 }
 
 export function requireApprovalRequiredResult(
-  result: ToolCallResult,
-): ToolCallResult & { readonly status: "approval_required" } {
+  result: ToolExecutionResult,
+): ToolExecutionResult & { readonly status: "approval_required" } {
   if (result.status !== "approval_required") {
     throw new Error(`Expected an approval-required tool result, received ${result.status}.`);
   }
-  return result as ToolCallResult & { readonly status: "approval_required" };
+  return result as ToolExecutionResult & { readonly status: "approval_required" };
 }
 
-export function toolRequestFromResult(result: ToolCallResult): ToolCallRequest {
+export function toolRequestFromResult(result: ToolExecutionResult): ToolCallRequest {
   return {
     providerCallId: result.providerCallId,
     invocationId: result.invocationId,
@@ -242,21 +243,12 @@ export function pendingToolResultForMessage(
   return matches[0];
 }
 
-export function toolResultHasInlineImage(result: ToolCallResult): boolean {
+export function toolResultHasInlineImage(result: ToolExecutionResult): boolean {
   return toolResultImageContentFromAttachments(canonicalToolResultMessage(result).attachments).length > 0;
 }
 
-export function cloneToolResult(result: ToolCallResult): ToolCallResult {
-  const cloned = globalThis.structuredClone(result);
-  if (result.output !== undefined && cloned.output !== undefined &&
-      typeof result.output === "object" && result.output !== null &&
-      typeof cloned.output === "object" && cloned.output !== null) {
-    return {
-      ...cloned,
-      output: copyToolModelAttachments(result.output, cloned.output),
-    };
-  }
-  return cloned;
+export function cloneToolResult(result: ToolExecutionResult): ToolExecutionResult {
+  return globalThis.structuredClone(result);
 }
 
 function modelAttachmentRefsFromAttachments(

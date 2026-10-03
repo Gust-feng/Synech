@@ -1,40 +1,43 @@
+import { z } from "zod";
 import type { ModelInputAttachment } from "../model-input/index.js";
+import type { ToolCallResult, ToolExecutionResult, ToolExecutorOutput } from "./contracts.js";
 
-const TOOL_MODEL_ATTACHMENTS = Symbol("synech.toolModelAttachments");
-
-type ToolModelAttachmentCarrier = {
-  readonly [TOOL_MODEL_ATTACHMENTS]?: readonly ModelInputAttachment[];
+const sourceSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("data"), mimeType: z.string().min(1), data: z.string().min(1) }).strict(),
+  z.object({ kind: z.literal("url"), url: z.string().min(1) }).strict(),
+  z.object({ kind: z.literal("file_id"), fileId: z.string().min(1) }).strict(),
+]);
+const fields = {
+  source: sourceSchema,
+  attachmentId: z.string().min(1).optional(),
+  inputRef: z.string().min(1).optional(),
+  byteLength: z.number().int().nonnegative().optional(),
 };
+const attachmentsSchema = z.array(z.discriminatedUnion("kind", [
+  z.object({ ...fields, kind: z.literal("image"), filename: z.string().optional(),
+    detail: z.enum(["auto", "low", "high", "original"]).optional() }).strict(),
+  z.object({ ...fields, kind: z.literal("audio"), filename: z.string() }).strict(),
+  z.object({ ...fields, kind: z.literal("file"), filename: z.string(),
+    detail: z.enum(["low", "high"]).optional() }).strict(),
+]));
 
-export function withToolModelAttachments<T extends object>(
-  output: T,
-  attachments: readonly ModelInputAttachment[]
-): T {
-  if (attachments.length === 0) {
-    return output;
-  }
-  Object.defineProperty(output, TOOL_MODEL_ATTACHMENTS, {
-    value: attachments.map((attachment) => globalThis.structuredClone(attachment)),
-    enumerable: false,
-    configurable: false,
-    writable: false,
-  });
-  return output;
+/** Explicit fields survive normal copies; business output stays free of binary data. */
+export function toolOutputWithAttachments(
+  output: unknown,
+  modelAttachments: readonly ModelInputAttachment[],
+): ToolExecutorOutput {
+  return { kind: "tool_output", output, modelAttachments };
 }
 
-export function toolModelAttachmentsFromOutput(output: unknown): readonly ModelInputAttachment[] | undefined {
-  if (typeof output !== "object" || output === null) {
-    return undefined;
-  }
-  const attachments = (output as ToolModelAttachmentCarrier)[TOOL_MODEL_ATTACHMENTS];
-  if (attachments === undefined || attachments.length === 0) {
-    return undefined;
-  }
-  return attachments.map((attachment) => globalThis.structuredClone(attachment));
+/** Executor/MCP data is validated once at the ToolCenter boundary. */
+export function normalizeToolModelAttachments(value: unknown): readonly ModelInputAttachment[] | undefined {
+  if (value === undefined) return undefined;
+  const attachments = attachmentsSchema.parse(value);
+  return attachments.length === 0 ? undefined : attachments;
 }
 
-/** Preserves the out-of-band model carrier while the JSON fact body is normalized. */
-export function copyToolModelAttachments<T extends object>(source: unknown, target: T): T {
-  const attachments = toolModelAttachmentsFromOutput(source);
-  return attachments === undefined ? target : withToolModelAttachments(target, attachments);
+/** The adapter uses this at every product/Session-details exit, never during live delivery. */
+export function durableToolCallResult(result: ToolExecutionResult): ToolCallResult {
+  const { modelAttachments: _modelAttachments, ...fact } = result;
+  return globalThis.structuredClone(fact);
 }

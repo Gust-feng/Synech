@@ -6,10 +6,10 @@ import { splitStreamingMarkdownWithOffsets, stabilizeStreamingMarkdown } from ".
 import { useStreamingText } from "../features/conversations/transcript/use-streaming-text";
 import "../styles/rich-text.css";
 
-export const RichText = React.memo(function RichText({ text }: { readonly text: string }): React.ReactElement {
+export const RichText = React.memo(function RichText({ text, allowImages = true }: { readonly text: string; readonly allowImages?: boolean }): React.ReactElement {
   return (
     <div className="rich-text">
-      <RichTextContent text={text} />
+      <RichTextContent text={text} allowImages={allowImages} />
     </div>
   );
 });
@@ -37,10 +37,10 @@ export function StreamingRichText({ text, live = true }: { readonly text: string
   );
 }
 
-const RichTextContent = React.memo(function RichTextContent({ text }: { readonly text: string }): React.ReactElement {
+const RichTextContent = React.memo(function RichTextContent({ text, allowImages = true }: { readonly text: string; readonly allowImages?: boolean }): React.ReactElement {
   return (
     <ReactMarkdown
-      components={markdownComponents}
+      components={allowImages ? markdownComponents : textOnlyMarkdownComponents}
       remarkPlugins={[remarkGfm]}
       skipHtml
       urlTransform={safeUrlTransform}
@@ -154,4 +154,10 @@ const markdownComponents = {
   ul({ children }) {
     return <ul className="rich-list rich-list-unordered">{children}</ul>;
   },
+} satisfies Components;
+
+// Text-only documents must not trigger remote media requests while being read.
+const textOnlyMarkdownComponents = {
+  ...markdownComponents,
+  img({ alt }) { return alt ? <span>{alt}</span> : null; },
 } satisfies Components;

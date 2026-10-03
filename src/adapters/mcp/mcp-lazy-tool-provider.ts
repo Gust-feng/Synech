@@ -1,5 +1,6 @@
 import type { McpServerSettings } from "../../domain/config/index.js";
-import type { ToolExecutor } from "../../domain/tools/index.js";
+import { isDeepStrictEqual } from "node:util";
+import type { ToolDefinition, ToolExecutor } from "../../domain/tools/index.js";
 import {
   DEFAULT_MCP_MAX_CONCURRENT_CALLS_PER_SERVER,
   McpClientWrapper,
@@ -9,6 +10,7 @@ import {
 import {
   assertCachedMcpToolCatalogWithinLimits,
   normalizeCachedMcpToolCatalog,
+  createMcpToolDefinition,
   type NormalizedCachedMcpToolCatalogEntry,
 } from "../../domain/mcp/index.js";
 import { createLazyMcpToolExecutor } from "./mcp-tool-adapter.js";
@@ -29,6 +31,7 @@ type LazyServerSession = {
   client?: McpClientWrapper;
   connecting?: Promise<McpClientWrapper>;
   connectAbortController?: AbortController;
+  tools?: readonly McpToolInfo[];
 };
 
 type LazyCachedToolSource = {
@@ -77,7 +80,7 @@ export class LazyMcpToolExecutorProvider {
   getToolsForRegistry(): readonly ToolExecutor[] {
     return this.exposedCachedTools().map(({ session, tool, serverId, definition }) =>
       createLazyMcpToolExecutor(
-        () => this.getClient(session),
+        () => this.getVerifiedClient(session, tool, definition),
         tool,
         serverId,
         definition,
@@ -87,7 +90,7 @@ export class LazyMcpToolExecutorProvider {
   getDiscoveredToolsForRegistry(): readonly ToolExecutor[] {
     return this.cachedTools.map(({ session, tool, serverId, definition }) =>
       createLazyMcpToolExecutor(
-        () => this.getClient(session),
+        () => this.getVerifiedClient(session, tool, definition),
         tool,
         serverId,
         definition,
@@ -155,11 +158,11 @@ export class LazyMcpToolExecutorProvider {
     if (this.closed) {
       throw lazyProviderClosedError();
     }
-    if (session.client?.isConnected() === true) {
-      return session.client;
-    }
     if (session.connecting !== undefined) {
       return session.connecting;
+    }
+    if (session.client?.isConnected() === true) {
+      return session.client;
     }
     const client = session.client ?? (() => {
       const clientConfig = mcpClientConfigFromServer(session.server, this.config.env, {
@@ -172,11 +175,14 @@ export class LazyMcpToolExecutorProvider {
     const abortController = new AbortController();
     session.connectAbortController = abortController;
     let connecting!: Promise<McpClientWrapper>;
-    connecting = client.connect({ signal: abortController.signal }).then(() => {
+    session.tools = undefined;
+    connecting = client.connect({ signal: abortController.signal }).then(async () => {
+      const tools = await client.listTools({ signal: abortController.signal });
       if (this.closed || generation !== this.lifecycleGeneration) {
         throw lazyProviderClosedError();
       }
       session.client = client;
+      session.tools = tools;
       return client;
     }).catch(async (error: unknown) => {
       try {
@@ -201,6 +207,32 @@ export class LazyMcpToolExecutorProvider {
     });
     session.connecting = connecting;
     return connecting;
+  }
+
+  private async getVerifiedClient(
+    session: LazyServerSession,
+    tool: McpToolInfo,
+    frozen: ToolDefinition,
+  ): Promise<McpClientWrapper> {
+    const client = await this.getClient(session);
+    const matches = session.tools?.filter((candidate) => candidate.name === tool.name) ?? [];
+    const current = matches.length === 1 ? createMcpToolDefinition(matches[0]!, session.server.serverId, {
+      confirmationMode: session.server.confirmationMode,
+      autoApprovedTools: session.server.autoApprovedTools,
+    }) : undefined;
+    if (current === undefined || !isDeepStrictEqual({
+      inputSchema: current.inputSchema, outputSchema: current.outputSchema, metadata: current.metadata,
+    }, {
+      inputSchema: frozen.inputSchema, outputSchema: frozen.outputSchema, metadata: frozen.metadata,
+    })) {
+      const error = new Error(`MCP tool ${frozen.name} changed or disappeared; refresh its catalog and start a new run.`);
+      Object.assign(error, { code: "mcp_tool_contract_changed", errorDomain: "runtime_error", facts: {
+        code: "mcp_tool_contract_changed", serverId: session.server.serverId,
+        mcpToolName: tool.name, sourceExecutionStatus: "not_started", doNotBlindlyRetry: true,
+      } });
+      throw error;
+    }
+    return client;
   }
 
   private exposedCachedTools(): readonly NormalizedCachedMcpToolCatalogEntry<LazyCachedToolSource>[] {

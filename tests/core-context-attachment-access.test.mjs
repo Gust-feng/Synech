@@ -10,6 +10,41 @@ import { createSpaceRunPathAuthorization } from "../dist/app/spaces/space-run-pa
 import { inspectSpaceExternalSource } from "../dist/app/spaces/space-external-source.js";
 import { spaceReferenceAttachmentId, spaceScopePermission } from "../dist/app/spaces/space-file-access.js";
 import { InMemoryLocalWorkspaceMutationCoordinator } from "../dist/app/tool-center/adapters/local-workspace-mutation-coordinator.js";
+import { createAgentToolRegistry } from "../dist/app/tool-center/builtin-tool-runtime.js";
+import { harnessToolResult } from "../dist/adapters/intelligence/tool-result-transport.js";
+
+test("workspace image delivery uses the same path boundary as Read without selected attachments", async () => {
+  await withDirectory(async (directory) => {
+    const root = path.join(directory, "project");
+    const outside = path.join(directory, "private");
+    await fs.mkdir(root);
+    await fs.mkdir(outside);
+    const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a7WQAAAAASUVORK5CYII=", "base64");
+    await fs.writeFile(path.join(root, "image.png"), png);
+    await fs.writeFile(path.join(outside, "secret.png"), png);
+    await fs.symlink(outside, path.join(root, "linked"), process.platform === "win32" ? "junction" : "dir");
+    const registry = createAgentToolRegistry({ workspaceRoot: root, modelCapabilities: vision,
+      runContext: { contextRefs: [], permissionBoundaryRefs: [] } });
+    const catalog = registry.catalog("agent-basic");
+    assert.ok(catalog.allowedTools.includes("ViewImage"));
+    assert.equal(catalog.allowedTools.includes("AttachmentReadImage"), false);
+    const permission = { callerAgentId: context.callerAgentId, allowedTools: catalog.allowedTools };
+    const center = registry.createToolCenter("agent-basic");
+    const execute = (toolName, filePath) => center.execute({
+      providerCallId: `call-${toolName}`, invocationId: `invocation-${toolName}`, toolName, input: { path: filePath },
+    }, context, permission);
+    const result = await execute("ViewImage", "image.png");
+    assert.equal(result.status, "completed");
+    assert.equal(harnessToolResult(result, { supportsVisionInput: true, modelInputSupportsImage: true }).content[1].data, png.toString("base64"));
+    for (const name of ["Read", "ViewImage"]) {
+      for (const filePath of [path.join(outside, "secret.png"), "linked/secret.png"]) {
+        const rejected = await execute(name, filePath);
+        assert.equal(rejected.status, "failed", `${name} must enforce the actual file boundary`);
+        assert.equal(rejected.modelAttachments, undefined);
+      }
+    }
+  });
+});
 
 const context = { callerAgentId: "ordinary", traceId: "attachment-run", goalId: "attachment-goal" };
 const vision = { facts: {
@@ -128,7 +163,7 @@ test("owner file replacement is rejected while explicit uploads remain readable 
       resolveManagedAttachmentPath: async () => file,
     };
     const imageTool = createContextAttachmentTools(options).find((tool) => tool.definition.name === "AttachmentReadImage");
-    assert.equal((await imageTool.execute({ attachmentId: "uploaded-image" }, context)).readable, true);
+    assert.equal((await imageTool.execute({ attachmentId: "uploaded-image" }, context)).output.readable, true);
     const messages = await attachOrdinaryFileInputsToModelMessages({
       ...options, messages: [{ role: "user", content: "Inspect this" }], modelCapabilities: vision,
     });
@@ -143,7 +178,7 @@ test("owner file replacement is rejected while explicit uploads remain readable 
     };
     assert.equal((await createContextAttachmentTools(userOptions)
       .find((tool) => tool.definition.name === "AttachmentReadImage")
-      .execute({ attachmentId: "user-file" }, context)).readable, true);
+      .execute({ attachmentId: "user-file" }, context)).output.readable, true);
     const userMessages = await attachOrdinaryFileInputsToModelMessages({
       ...userOptions, messages: [{ role: "user", content: "Inspect my file" }], modelCapabilities: vision,
     });

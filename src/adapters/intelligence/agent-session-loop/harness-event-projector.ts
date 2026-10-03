@@ -7,7 +7,6 @@ import {
   type Session,
 } from "@earendil-works/pi-agent-core";
 import { TODO_CONTEXT } from "@earendil-works/pi-agent-core/harness/context";
-import type { Api, Model } from "@earendil-works/pi-ai";
 import type {
   AgentSessionCheckpointKind,
   AgentSessionCheckpointRef,
@@ -17,10 +16,6 @@ import type {
   ProviderToolCall,
 } from "../../../app/model-runtime/agent-loop.js";
 import type { AgentSessionExecutionRefs } from "../../../app/model-runtime/agent-session.js";
-import {
-  serializeModelVisibleToolDefinitions,
-  type ModelVisibleToolDefinitionSerialization,
-} from "../../../app/model-runtime/tool-definition-visibility-cost.js";
 import type { ModelUsage } from "../../../domain/intelligence/index.js";
 import {
   cloneToolInputSchema,
@@ -592,7 +587,7 @@ export function attachProviderPayloadHook(
   return harness.hooks.on("before_payload", async ({ model, payload }) => {
     const tools = await activeModelVisibleToolDefinitions(harness, lane, metadataByName);
     const transformedPayload = options.transformProviderPayload?.({ model, payload, tools }) ?? payload;
-    observeProviderToolDefinitionMetrics(options, tools, model);
+    observeProviderToolDefinitionMetrics(options, tools, transformedPayload);
     return { payload: transformedPayload };
   });
 }
@@ -623,16 +618,14 @@ function observeProviderToolDefinitionMetrics(
     "onProviderToolDefinitionMetrics" | "toolDefinitionTokenCounter"
   >,
   definitions: readonly ToolDefinition[],
-  model: Model<Api>,
+  payload: unknown,
 ): void {
   const observer = options.onProviderToolDefinitionMetrics;
   if (observer === undefined) return;
   try {
+    const serialized = providerToolDefinitions(payload, definitions);
+    if (serialized === undefined) return;
     const countTokens = options.toolDefinitionTokenCounter ?? defaultToolDefinitionTokenCount;
-    const serialized = serializeModelVisibleToolDefinitions(
-      definitions,
-      modelVisibleDefinitionSerialization(model),
-    );
     const totalTokens = definitions.length === 0
       ? 0
       : normalizedToolDefinitionTokenCount(countTokens(JSON.stringify(serialized)));
@@ -653,26 +646,28 @@ function observeProviderToolDefinitionMetrics(
   }
 }
 
-function modelVisibleDefinitionSerialization(model: Model<Api>): ModelVisibleToolDefinitionSerialization {
-  const api = toolDefinitionSerializationApiFor(model.api);
-  const compat = model.compat as { readonly supportsStrictMode?: boolean } | undefined;
-  return {
-    api,
-    includeStrict: api === "openai-responses" || compat?.supportsStrictMode !== false,
-  };
-}
-
-function toolDefinitionSerializationApiFor(piApi: Api): ModelVisibleToolDefinitionSerialization["api"] {
-  switch (piApi) {
-    case "anthropic-messages":
-      return "anthropic-messages";
-    case "openai-completions":
-      return "openai-completions";
-    case "openai-responses":
-      return "openai-responses";
-    default:
-      throw new Error(`Harness event projector cannot map Pi api ${JSON.stringify(piApi)} to a tool definition serialization.`);
+/** Read actual wire definitions; unfamiliar or renamed schemas are not guessed. */
+export function providerToolDefinitions(
+  payload: unknown,
+  definitions: readonly Pick<ToolDefinition, "name">[],
+): readonly Readonly<Record<string, unknown>>[] | undefined {
+  if (typeof payload !== "object" || payload === null || !("tools" in payload) || !Array.isArray(payload.tools)) {
+    return undefined;
   }
+  const byName = new Map<string, Readonly<Record<string, unknown>>>();
+  for (const tool of payload.tools) {
+    if (typeof tool !== "object" || tool === null) continue;
+    const record = tool as Readonly<Record<string, unknown>>;
+    const function_ = record.function;
+    const name = typeof function_ === "object" && function_ !== null && "name" in function_
+      ? function_.name
+      : record.name;
+    if (typeof name === "string") byName.set(name, record);
+  }
+  const selected = definitions.map((definition) => byName.get(definition.name));
+  return selected.some((tool) => tool === undefined)
+    ? undefined
+    : selected as readonly Readonly<Record<string, unknown>>[];
 }
 
 function defaultToolDefinitionTokenCount(serializedDefinition: string): number {

@@ -25,7 +25,7 @@ import {
   normalizeToolFactValue,
   toolInvocationId,
   type ToolCallRequest,
-  type ToolCallResult,
+  type ToolExecutionResult,
   type ToolDefinition,
   type ToolFactValue,
 } from "../../../domain/tools/index.js";
@@ -101,8 +101,8 @@ export type DelegatedRuntimeOptions = Pick<
 
 export type DelegatedAgentFactPorts = {
   readonly results: HarnessProjectionResultPort & {
-    acceptForDelivery(result: ToolCallResult): Promise<ProjectedHarnessToolResult | undefined>;
-    project(result: ToolCallResult, terminate: boolean): ProjectedHarnessToolResult;
+    acceptForDelivery(result: ToolExecutionResult): Promise<ProjectedHarnessToolResult | undefined>;
+    project(result: ToolExecutionResult, terminate: boolean): ProjectedHarnessToolResult;
   };
   readonly run: {
     emitToolRequested(request: ToolCallRequest): void;
@@ -167,7 +167,7 @@ export function createDelegatedAgentTool(input: {
       };
       input.facts.run.emitToolRequested(request);
       const startedAt = Date.now();
-      let result: ToolCallResult;
+      let result: ToolExecutionResult;
       try {
         const invocation = validateDelegatedToolBoundary(
           input.loopInput.tools,
@@ -213,7 +213,7 @@ async function runDelegatedAgent(input: {
   readonly createMechanicalTool: DelegatedMechanicalToolFactory;
   readonly facts: DelegatedAgentFactPorts;
   readonly dependencies?: DelegatedAgentRunnerDependencies;
-}): Promise<ToolCallResult> {
+}): Promise<ToolExecutionResult> {
   const parentInvocationId = toolInvocationId(input.request);
   const boundary = delegatedToolBoundary(input.loopInput.tools, input.invocation);
   const metrics: DelegatedAgentExecutionMetrics = { modelRounds: 0, toolCallCount: 0, usage: {} };
@@ -226,7 +226,7 @@ async function runDelegatedAgent(input: {
   let projectionFailure: { readonly code: string; readonly error: string } | undefined;
   let abortRequest: Promise<void> | undefined;
   const cleanups: (() => void)[] = [];
-  let result!: ToolCallResult;
+  let result!: ToolExecutionResult;
   const requestAbort = (): void => {
     if (lane === undefined || operationId === undefined || abortRequest !== undefined) return;
     // Pi closes the active drive's effect gate synchronously, before persisting
@@ -242,7 +242,7 @@ async function runDelegatedAgent(input: {
     requestAbort();
     input.facts.maintenance.record(projectionFailure);
   };
-  const projectionFailureResult = (failure: NonNullable<typeof projectionFailure>): ToolCallResult => ({
+  const projectionFailureResult = (failure: NonNullable<typeof projectionFailure>): ToolExecutionResult => ({
     ...delegatedAgentFailure(input.request, failure.error, false, input.startedAt, metrics, failure.code),
     errorDomain: "runtime_error",
   });
@@ -621,8 +621,8 @@ function delegatedToolBoundary(
 async function deliverDelegatedAgentResult(
   input: DelegatedLoopContext,
   gateway: DelegatedAgentResultGateway,
-  result: ToolCallResult,
-): Promise<ToolCallResult> {
+  result: ToolExecutionResult,
+): Promise<ToolExecutionResult> {
   try {
     return await gateway.deliverResult.call(
       gateway,
@@ -663,7 +663,7 @@ function delegatedAgentFailure(
   startedAt: number,
   metrics?: DelegatedAgentExecutionMetrics,
   failureCode?: string,
-): ToolCallResult {
+): ToolExecutionResult {
   return {
     ...request,
     output: undefined,
@@ -697,7 +697,7 @@ function delegatedAgentCompletedResult(
   startedAt: number,
   metrics: DelegatedAgentExecutionMetrics,
   contextWindow: number,
-): ToolCallResult {
+): ToolExecutionResult {
   if (assistant === undefined) {
     return delegatedAgentFailure(
       request, "Pi delegated run completed without an assistant message.",
@@ -743,7 +743,7 @@ function delegatedAgentProjectedFailure(
   startedAt: number,
   metrics: DelegatedAgentExecutionMetrics,
   contextWindow: number,
-): ToolCallResult {
+): ToolExecutionResult {
   const providerFailure = providerFailureFromAssistant(assistant, contextWindow);
   if (providerFailure !== undefined) {
     return delegatedAgentFailure(

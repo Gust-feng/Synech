@@ -30,7 +30,8 @@ import {
   normalizeToolFactValue,
   toolInvocationId,
   type ToolCallRequest,
-  type ToolCallResult,
+  type ToolExecutionResult,
+  durableToolCallResult,
   type ToolDefinition,
   type ToolExecutionContext,
 } from "../../domain/tools/index.js";
@@ -88,7 +89,7 @@ type Deferred<T> = {
 };
 
 type PendingApproval = {
-  readonly result: ToolCallResult & { readonly status: "approval_required" };
+  readonly result: ToolExecutionResult & { readonly status: "approval_required" };
   readonly decision: Deferred<ApprovalResolution>;
 };
 
@@ -99,7 +100,7 @@ type ApprovalResolution = {
 };
 
 type AgentSessionExecutionState = {
-  readonly toolResults: Map<string, ToolCallResult>;
+  readonly toolResults: Map<string, ToolExecutionResult>;
   readonly pendingToolResults: Map<string, PendingToolResultDelivery>;
   readonly approvals: ApprovalDecisionCoordinator;
   readonly supportsVisionInput: boolean;
@@ -200,8 +201,26 @@ export function createAgentSessionLoop(options: AgentSessionLoopOptions): AgentL
         }
       }
       const lane = await harness.lane("main", runContext);
+      // Harness creation only seeds new lanes. Restored lanes retain their
+      // previous configuration, so apply this run's frozen selection explicitly.
+      const currentModel = await lane.getModel(runContext);
+      if (currentModel?.provider !== options.selectedModel.provider || currentModel.id !== options.selectedModel.id) {
+        await lane.setModel({
+          provider: options.selectedModel.provider,
+          modelId: options.selectedModel.id,
+        }, runContext);
+      }
+      const thinkingLevel = options.thinkingLevel ?? "off";
+      if (await lane.getThinkingLevel(runContext) !== thinkingLevel) {
+        await lane.setThinkingLevel(thinkingLevel, runContext);
+      }
       harnessTools.bind?.(lane);
-      await lane.setActiveTools([...harnessTools.activeToolNames], TODO_CONTEXT);
+      const activeToolNames = [...harnessTools.activeToolNames];
+      const currentToolNames = await lane.getActiveTools(runContext);
+      if (currentToolNames.length !== activeToolNames.length ||
+        currentToolNames.some((name, index) => name !== activeToolNames[index])) {
+        await lane.setActiveTools(activeToolNames, runContext);
+      }
       rootEvents.attach(harness, lane, harnessTools.metadataByName);
       const startEntryId = await getMainLeafId(options.agentSession);
       await input.onSessionWriteCheckpoint?.({
@@ -379,13 +398,13 @@ function createHarnessTools(
 function delegatedAgentFactPorts(input: AgentLoopInput, state: AgentSessionExecutionState) {
   return {
     results: {
-      acceptObserved: (result: ToolCallResult) => acceptToolResult(input, state, result).then(() => undefined),
-      acceptForDelivery: (result: ToolCallResult) => acceptToolResultForDelivery(input, state, result),
+      acceptObserved: (result: ToolExecutionResult) => acceptToolResult(input, state, result).then(() => undefined),
+      acceptForDelivery: (result: ToolExecutionResult) => acceptToolResultForDelivery(input, state, result),
       deliverPendingMessage: (
         message: Extract<AgentMessage, { readonly role: "toolResult" }>,
         parentInvocationId?: string,
       ) => deliverPendingToolResultMessage(input, state, message, parentInvocationId),
-      project: (result: ToolCallResult, terminate: boolean) =>
+      project: (result: ToolExecutionResult, terminate: boolean) =>
         harnessToolResult(result, state, terminate),
     },
     run: {
@@ -420,9 +439,9 @@ function toolVisibilityHost(
     resolveInvocationId: (providerCallId: string) => (bindingTable ?? state.rootInvocationBindings).get(providerCallId),
     onToolRequested: (request: ToolCallRequest) => emitToolRequested(input, request),
     ...(onToolInvoked === undefined ? {} : { onToolInvoked }),
-    acceptResult: (result: ToolCallResult) => acceptToolResultForDelivery(input, state, result),
+    acceptResult: (result: ToolExecutionResult) => acceptToolResultForDelivery(input, state, result),
     projectResult: (
-      result: ToolCallResult,
+      result: ToolExecutionResult,
       terminate: boolean,
     ) => harnessToolResult(result, state, terminate),
     recordMaintenanceFailure: (failure: { readonly code: string; readonly error: string }) => {
@@ -545,7 +564,7 @@ function approvalResult(
 ): AgentLoopResult {
   return {
     status: "approval_required",
-    toolResults: [...state.toolResults.values()].map(cloneToolResult),
+    toolResults: [...state.toolResults.values()].map(durableToolCallResult),
     usage: state.rootEvents.usage,
     confirmationRequests: state.approvals.requests(),
     session: sessionExecutionRefs(state),
@@ -764,7 +783,7 @@ function cancelledBeforeStart(input: AgentLoopInput): AgentLoopResult {
 
 function resultFacts(state: AgentSessionExecutionState) {
   return {
-    toolResults: [...state.toolResults.values()].map(cloneToolResult),
+    toolResults: [...state.toolResults.values()].map(durableToolCallResult),
     usage: state.rootEvents.usage,
     confirmationRequests: [] as const,
     session: sessionExecutionRefs(state),
@@ -785,14 +804,14 @@ async function abortRun(state: AgentSessionExecutionState): Promise<void> {
 
 type ResolvedToolApproval =
   | { readonly kind: "approved"; readonly abortSignal: AbortSignal }
-  | { readonly kind: "denied"; readonly result: ToolCallResult }
-  | { readonly kind: "cancelled"; readonly result: ToolCallResult }
+  | { readonly kind: "denied"; readonly result: ToolExecutionResult }
+  | { readonly kind: "cancelled"; readonly result: ToolExecutionResult }
   | { readonly kind: "delivery_failure"; readonly response: ReturnType<typeof harnessToolResult> };
 
 async function resolveApproval(
   input: AgentLoopInput,
   state: AgentSessionExecutionState,
-  approval: ToolCallResult & { readonly status: "approval_required" },
+  approval: ToolExecutionResult & { readonly status: "approval_required" },
   context: ReturnType<typeof toolExecutionContext>,
 ): Promise<ResolvedToolApproval> {
   const deliveryFailure = await acceptToolResultForDelivery(input, state, approval);
@@ -825,7 +844,7 @@ class ApprovalDecisionCoordinator {
   private change = deferred<void>();
 
   async request(
-    result: ToolCallResult & { readonly status: "approval_required" },
+    result: ToolExecutionResult & { readonly status: "approval_required" },
     abortSignal: AbortSignal,
   ): Promise<ApprovalResolution> {
     if (abortSignal.aborted) throw abortReason(abortSignal);
@@ -892,7 +911,7 @@ class ApprovalDecisionCoordinator {
 async function acceptToolResult(
   input: AgentLoopInput,
   state: AgentSessionExecutionState,
-  result: ToolCallResult,
+  result: ToolExecutionResult,
 ): Promise<PendingToolResultDelivery> {
   const deliverable = toolResultForPiTransport(
     result,
@@ -918,7 +937,7 @@ async function deliverAcceptedToolResult(
   const result = delivery.result;
   state.pendingToolResults.delete(toolInvocationId(result));
   try {
-    await input.onToolResult?.(cloneToolResult(result));
+    await input.onToolResult?.(durableToolCallResult(result));
   } catch (error) {
     state.toolAcceptanceFailure ??= error;
     state.toolResults.set(toolInvocationId(result), toolResultAcceptanceFailure(result, error));
@@ -944,7 +963,7 @@ async function deliverPendingToolResultMessage(
 async function acceptToolResultForDelivery(
   input: AgentLoopInput,
   state: AgentSessionExecutionState,
-  result: ToolCallResult,
+  result: ToolExecutionResult,
 ) {
   try {
     await acceptToolResult(input, state, result);

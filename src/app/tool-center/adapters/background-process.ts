@@ -8,6 +8,7 @@ import {
   appendCommandProcessFact,
   COMMAND_CANCELLED_EXIT_CODE,
   markCommandProcessExited,
+  markCommandProcessStopPending,
   MAX_COMMAND_STDOUT_CHARS,
   registerCommandProcess,
   shellArgs,
@@ -21,8 +22,10 @@ import {
   readCommandLogPreview,
   releaseCommandLogPath,
 } from "./command-log.js";
+import { throwIfAborted } from "./local-workspace-common.js";
 
 const BACKGROUND_LOG_PREVIEW_CHARS = 2_000;
+const BACKGROUND_OUTPUT_DRAIN_TIMEOUT_MS = 5_000;
 
 export async function runBackgroundShellCommand(input: {
   readonly shell: SanitizedCommandShellConfig;
@@ -34,6 +37,7 @@ export async function runBackgroundShellCommand(input: {
   readonly maxLogBytes: number;
   readonly commandLogDirectory?: string;
   readonly processFacts?: CommandProcessFacts;
+  readonly abortSignal?: AbortSignal;
 }): Promise<CommandExecutionOutcome> {
   return runBackgroundCommand({
     file: input.shell.executable,
@@ -49,6 +53,7 @@ export async function runBackgroundShellCommand(input: {
     commandLogDirectory: input.commandLogDirectory,
     windowsVerbatimArguments: input.shell.syntax === "cmd",
     processFacts: input.processFacts,
+    abortSignal: input.abortSignal,
   });
 }
 
@@ -64,6 +69,7 @@ export async function runBackgroundProgramCommand(input: {
   readonly maxLogBytes: number;
   readonly commandLogDirectory?: string;
   readonly processFacts?: CommandProcessFacts;
+  readonly abortSignal?: AbortSignal;
 }): Promise<CommandExecutionOutcome> {
   return runBackgroundCommand({
     file: input.command,
@@ -78,6 +84,7 @@ export async function runBackgroundProgramCommand(input: {
     maxLogBytes: input.maxLogBytes,
     commandLogDirectory: input.commandLogDirectory,
     processFacts: input.processFacts,
+    abortSignal: input.abortSignal,
   });
 }
 
@@ -95,7 +102,9 @@ async function runBackgroundCommand(input: {
   readonly commandLogDirectory?: string;
   readonly windowsVerbatimArguments?: boolean;
   readonly processFacts?: CommandProcessFacts;
+  readonly abortSignal?: AbortSignal;
 }): Promise<CommandExecutionOutcome> {
+  throwIfAborted(input.abortSignal);
   const logTarget = await createCommandLogTarget(input.commandLine, {
     directory: input.commandLogDirectory,
   });
@@ -141,6 +150,7 @@ async function runBackgroundCommand(input: {
   };
 
   try {
+    throwIfAborted(input.abortSignal);
     const header = commandLogHeader(input.commandLine, input.relativeCwd);
     writeSync(logFd, header);
     logBytes = Buffer.byteLength(header, "utf8");
@@ -153,9 +163,35 @@ async function runBackgroundCommand(input: {
     });
     child.stdout?.on("data", (chunk: Buffer) => appendLogText("stdout", stdoutDecoder.write(chunk)));
     child.stderr?.on("data", (chunk: Buffer) => appendLogText("stderr", stderrDecoder.write(chunk)));
-    const start = await waitForBackgroundStart(child, input.waitMs);
+    processId = registerCommandProcess(input.processFacts, {
+      kind: "background",
+      lifetime: input.lifetime,
+      pid: child.pid,
+      commandLine: input.commandLine,
+      cwd: input.workingDirectory,
+      startedAt,
+      status: "starting",
+      logRef: logTarget.ref,
+      logPath,
+      stopCommand: child.pid === undefined ? undefined : stopCommandForPid(child.pid, input.platform, input.stopShellSyntax),
+    });
+    const start = await waitForBackgroundStart(child, input.waitMs, input.abortSignal);
     if (start.status === "exited") earlyExit = { code: start.code, signal: start.signal };
   } catch (error) {
+    if (child !== undefined) {
+      child.once("error", () => undefined);
+      terminateProcessTree(child);
+      markCommandProcessStopPending(input.processFacts, processId);
+      const drained = await waitForBackgroundOutputDrain(child);
+      if (drained && (child.exitCode !== null || child.signalCode !== null || child.pid === undefined)) {
+        markCommandProcessExited(input.processFacts, processId, {
+          exitCode: child.exitCode ?? undefined,
+          signal: child.signalCode ?? undefined,
+        });
+      }
+      child.unref();
+      unrefChildOutput(child);
+    }
     flushAndCloseLog();
     throw error;
   }
@@ -165,26 +201,27 @@ async function runBackgroundCommand(input: {
   }
   const pid = child.pid;
   if (earlyExit !== undefined) {
-    await waitForBackgroundOutputDrain(child);
+    const drained = await waitForBackgroundOutputDrain(child, input.abortSignal);
+    if (drained) {
+      markCommandProcessExited(input.processFacts, processId, {
+        exitCode: earlyExit.code ?? undefined,
+        signal: earlyExit.signal ?? undefined,
+      });
+    } else {
+      // Parent exit alone does not confirm termination of descendants holding the pipes.
+      markCommandProcessStopPending(input.processFacts, processId);
+      terminateProcessTree(child);
+      appendLogText("stderr", "Background command output did not close; process cleanup remains unconfirmed.");
+    }
     flushAndCloseLog();
-    processId = registerCommandProcess(input.processFacts, {
-      kind: "background",
-      lifetime: input.lifetime,
-      pid,
-      commandLine: input.commandLine,
-      cwd: input.workingDirectory,
-      startedAt,
-      status: "exited",
-      exitCode: typeof earlyExit.code === "number" ? earlyExit.code : COMMAND_CANCELLED_EXIT_CODE,
-      signal: earlyExit.signal ?? undefined,
-      logRef: logTarget.ref,
-      logPath,
-      facts: logLimitExceeded ? [commandLogLimitFact(input.maxLogBytes, logBytes)] : [],
-    });
+    recordCommandLogLimitFact();
+    throwIfAborted(input.abortSignal);
     const logPreview = await readCommandLogPreview(logPath, MAX_COMMAND_STDOUT_CHARS);
-    const stderr = logLimitExceeded
-      ? `Background command exceeded its ${input.maxLogBytes} byte log limit during startup and was terminated.`
-      : `Background command exited before it stayed running${earlyExit.signal == null ? "" : ` with signal ${earlyExit.signal}`}.`;
+    const stderr = !drained
+      ? "Background command parent exited, but process cleanup remains unconfirmed because its output pipes stayed open."
+      : logLimitExceeded
+        ? `Background command exceeded its ${input.maxLogBytes} byte log limit during startup and was terminated.`
+        : `Background command exited before it stayed running${earlyExit.signal == null ? "" : ` with signal ${earlyExit.signal}`}.`;
     return {
       processId,
       result: {
@@ -192,7 +229,7 @@ async function runBackgroundCommand(input: {
         stderr,
         exitCode: typeof earlyExit.code === "number" ? earlyExit.code : COMMAND_CANCELLED_EXIT_CODE,
         background: true,
-        processState: "exited",
+        processState: drained ? "exited" : "unknown",
         lifetime: input.lifetime,
         cwd: input.relativeCwd,
         signal: earlyExit.signal ?? undefined,
@@ -208,21 +245,12 @@ async function runBackgroundCommand(input: {
   }
   const stopCommand = pid === undefined ? undefined : stopCommandForPid(pid, input.platform, input.stopShellSyntax);
   try {
-    processId = registerCommandProcess(input.processFacts, {
-      kind: "background",
-      lifetime: input.lifetime,
-      pid,
-      commandLine: input.commandLine,
-      cwd: input.workingDirectory,
-      startedAt,
-      status: "running",
-      logRef: logTarget.ref,
-      logPath,
-      stopCommand,
-    });
+    if (processId !== undefined) input.processFacts?.registry.update?.(processId, { status: "running" });
   } catch (error) {
     child.once("error", () => undefined);
     terminateProcessTree(child);
+    markCommandProcessStopPending(input.processFacts, processId);
+    await waitForBackgroundOutputDrain(child, input.abortSignal);
     flushAndCloseLog();
     throw error;
   }
@@ -230,8 +258,13 @@ async function runBackgroundCommand(input: {
   child.unref();
   unrefChildOutput(child);
   observeBackgroundExit(child, input.processFacts, processId, logPath, async () => {
-    await waitForBackgroundOutputDrain(child);
+    const drained = await waitForBackgroundOutputDrain(child);
+    if (!drained) {
+      terminateProcessTree(child);
+      appendLogText("stderr", "Background command output did not close; process cleanup remains unconfirmed.");
+    }
     flushAndCloseLog();
+    return drained;
   });
   const initialLogPreview = await readCommandLogPreview(logPath, BACKGROUND_LOG_PREVIEW_CHARS);
   const stdout = [
@@ -273,20 +306,40 @@ function commandLogLimitFact(limitBytes: number, observedBytes: number): Process
   };
 }
 
-async function waitForBackgroundOutputDrain(child: ChildProcess): Promise<void> {
-  await Promise.all([waitForReadableEnd(child.stdout), waitForReadableEnd(child.stderr)]);
-}
-
-function waitForReadableEnd(stream: import("node:stream").Readable | null): Promise<void> {
-  if (stream === null || stream.readableEnded === true || stream.destroyed === true) return Promise.resolve();
+function waitForBackgroundOutputDrain(child: ChildProcess, signal?: AbortSignal): Promise<boolean> {
+  const streams = [child.stdout, child.stderr].filter((stream): stream is import("node:stream").Readable =>
+    stream !== null && !stream.readableEnded && !stream.destroyed,
+  );
+  if (streams.length === 0) return Promise.resolve(true);
   return new Promise((resolve) => {
-    const finish = () => {
-      stream.removeListener("end", finish);
-      stream.removeListener("close", finish);
-      resolve();
+    let timer: ReturnType<typeof setTimeout>;
+    let settled = false;
+    const pending = new Set(streams);
+    const settle = (drained: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      for (const [stream, onEnd] of listeners) {
+        stream.off("end", onEnd);
+        stream.off("close", onEnd);
+        if (!drained) stream.destroy();
+      }
+      resolve(drained);
     };
-    stream.once("end", finish);
-    stream.once("close", finish);
+    const onAbort = () => settle(false);
+    const listeners = streams.map((stream) => {
+      const onEnd = () => {
+        pending.delete(stream);
+        if (pending.size === 0) settle(true);
+      };
+      stream.once("end", onEnd);
+      stream.once("close", onEnd);
+      return [stream, onEnd] as const;
+    });
+    timer = setTimeout(() => settle(false), BACKGROUND_OUTPUT_DRAIN_TIMEOUT_MS);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted === true) onAbort();
   });
 }
 
@@ -295,7 +348,7 @@ function unrefChildOutput(child: ChildProcess): void {
   (child.stderr as (import("node:stream").Readable & { unref?: () => void }) | null)?.unref?.();
 }
 
-function waitForBackgroundStart(child: ChildProcess, waitMs: number): Promise<
+function waitForBackgroundStart(child: ChildProcess, waitMs: number, signal?: AbortSignal): Promise<
   | { readonly status: "running" }
   | { readonly status: "exited"; readonly code: number | null; readonly signal: NodeJS.Signals | null }
 > {
@@ -312,20 +365,30 @@ function waitForBackgroundStart(child: ChildProcess, waitMs: number): Promise<
       clearTimeout(timer);
       child.off("error", onError);
       child.off("exit", onExit);
+      signal?.removeEventListener("abort", onAbort);
       resolve(result);
     };
     const onError = (error: Error) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      child.off("error", onError);
       child.off("exit", onExit);
+      signal?.removeEventListener("abort", onAbort);
       reject(error);
     };
     const onExit = (code: number | null, signal: NodeJS.Signals | null) =>
       settle({ status: "exited", code, signal });
+    const onAbort = () => {
+      const error = new Error("Background command startup was cancelled.");
+      error.name = "AbortError";
+      onError(error);
+    };
     timer = setTimeout(() => settle({ status: "running" }), waitMs);
     child.once("error", onError);
     child.once("exit", onExit);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted === true) onAbort();
   });
 }
 
@@ -334,13 +397,17 @@ function observeBackgroundExit(
   processFacts: CommandProcessFacts | undefined,
   processId: string | undefined,
   logPath: string,
-  finalizeLog: () => Promise<void>,
+  finalizeLog: () => Promise<boolean>,
 ): void {
   const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
     void finalizeLog()
-      .catch(() => undefined)
-      .finally(() => {
+      .catch(() => false)
+      .then((drained) => {
         releaseCommandLogPath(logPath);
+        if (!drained) {
+          markCommandProcessStopPending(processFacts, processId);
+          return;
+        }
         markCommandProcessExited(processFacts, processId, {
           exitCode: typeof code === "number" ? code : undefined,
           signal: signal ?? undefined,

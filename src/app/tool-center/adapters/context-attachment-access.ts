@@ -94,7 +94,10 @@ export function attachmentEntries(runContext: ContextAttachmentRunContext | unde
     .filter((entry): entry is AttachmentEntry => entry !== undefined);
 }
 
-export function attachmentSummary(entry: AttachmentEntry): Readonly<Record<string, unknown>> {
+export function attachmentSummary(
+  entry: AttachmentEntry,
+  supportsVisionInput?: boolean,
+): Readonly<Record<string, unknown>> {
   const capabilities = attachmentCapabilities(entry.ref);
   const format = attachmentFormat(entry.ref);
   return {
@@ -117,7 +120,7 @@ export function attachmentSummary(entry: AttachmentEntry): Readonly<Record<strin
     canInspectArchive: capabilities.canInspectArchive,
     canListFiles: capabilities.canListFiles,
     canSearchFiles: capabilities.canSearchFiles,
-    canUseVisionInput: format === "image",
+    canUseVisionInput: supportsVisionInput === undefined ? undefined : capabilities.canReadImage && supportsVisionInput,
   };
 }
 

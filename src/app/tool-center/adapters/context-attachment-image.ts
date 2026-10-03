@@ -1,11 +1,9 @@
 import { stringOrUndefined } from "../../../kernel/values/index.js";
-import { promises as fs } from "node:fs";
 import path from "node:path";
 import { imageMimeTypeForExtension } from "../../local-filesystem/index.js";
-import type { ModelInputAttachment } from "../../../domain/intelligence/index.js";
 import type { OrdinaryRunContextReference } from "../../../domain/ordinary/index.js";
 import type { ToolExecutor } from "../../../domain/tools/index.js";
-import { withToolModelAttachments } from "../../../domain/tools/index.js";
+import { toolOutputWithAttachments } from "../../../domain/tools/index.js";
 import {
   asRecord,
   safeRefToken,
@@ -17,15 +15,13 @@ import {
   guardContextAttachmentTool,
   requireAttachmentEntry,
   resolveAttachmentTarget,
-  statAttachmentTarget,
   tableTargetExtension,
   tableTargetFormat,
   type AttachmentEntry,
   type AttachmentTarget,
   type ContextAttachmentToolOptions,
 } from "./context-attachment-access.js";
-
-const MAX_IMAGE_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+import { imageDetailFromUnknown, readImageInput } from "./image-input.js";
 
 /** Creates the attachment tool that adds an image to the next model turn. */
 export function createReadContextAttachmentImageTool(
@@ -65,67 +61,42 @@ export function createReadContextAttachmentImageTool(
         resolveManagedAttachmentPath: options.resolveManagedAttachmentPath,
         readAuthorization: options.readAuthorization,
       });
-      const stat = await statAttachmentTarget(target.targetAbsolutePath, "Attachment image target could not be read.");
       const detail = imageDetailFromUnknown(record.detail);
-      if (options.supportsVisionInput === false) {
-        return unsupportedImageResult({
-          entry,
-          target,
-          reason: "model_does_not_support_vision_input",
-          bytes: stat.size,
-          detail,
-        });
-      }
-      if (!stat.isFile()) {
-        return unsupportedImageResult({ entry, target, reason: "not_a_file", bytes: stat.size, detail });
-      }
       const mimeType = imageMimeTypeForTarget(entry.ref, target);
-      if (mimeType === undefined) {
-        return unsupportedImageResult({ entry, target, reason: "not_an_image", bytes: stat.size, detail });
-      }
-      if (stat.size > MAX_IMAGE_ATTACHMENT_BYTES) {
+      const refId = `context-attachment:${entry.attachmentId}:image:${safeRefToken(target.targetPath)}`;
+      const image = await readImageInput({
+        absolutePath: target.targetAbsolutePath,
+        mimeType,
+        supportsVisionInput: options.supportsVisionInput,
+        detail,
+        filename: imageModelFilename(entry, target),
+        inputRef: refId,
+        attachmentId: entry.attachmentId,
+        abortSignal: context.abortSignal,
+      });
+      if (!image.readable) {
         return unsupportedImageResult({
           entry,
           target,
-          reason: "image_file_too_large",
-          bytes: stat.size,
-          mimeType,
-          detail,
-        });
-      }
-      const buffer = await fs.readFile(target.targetAbsolutePath).catch(() => undefined);
-      if (buffer === undefined) {
-        return unsupportedImageResult({
-          entry,
-          target,
-          reason: "image_file_unreadable",
-          bytes: stat.size,
+          reason: image.reason,
+          bytes: image.bytes,
           mimeType,
           detail,
         });
       }
       const output = {
-        refId: `context-attachment:${entry.attachmentId}:image:${safeRefToken(target.targetPath)}`,
+        refId,
         attachmentId: entry.attachmentId,
         kind: entry.ref.kind,
         title: attachmentTitle(entry),
         path: target.targetPath,
         mimeType,
-        bytes: stat.size,
+        bytes: image.bytes,
         format: "image",
         readable: true,
-        modelInput: { attached: true, detail },
+        detail,
       };
-      return withToolModelAttachments(output, [
-        imageModelAttachment({
-          entry,
-          target,
-          mimeType,
-          data: buffer,
-          detail,
-          byteLength: stat.size,
-        }),
-      ]);
+      return toolOutputWithAttachments(output, [image.attachment]);
     },
   });
 }
@@ -150,26 +121,7 @@ function unsupportedImageResult(input: {
     format: mimeType === undefined ? tableTargetFormat(input.entry.ref, input.target.targetPath) : "image",
     readable: false,
     reason: input.reason,
-    modelInput: { attached: false, detail: input.detail },
-  };
-}
-
-function imageModelAttachment(input: {
-  readonly entry: AttachmentEntry;
-  readonly target: AttachmentTarget;
-  readonly mimeType: string;
-  readonly data: Buffer;
-  readonly detail: "auto" | "low" | "high";
-  readonly byteLength: number;
-}): ModelInputAttachment {
-  return {
-    kind: "image",
-    source: { kind: "data", mimeType: input.mimeType, data: input.data.toString("base64") },
-    attachmentId: input.entry.attachmentId,
-    inputRef: `context-attachment:${input.entry.attachmentId}:image:${safeRefToken(input.target.targetPath)}`,
-    filename: imageModelFilename(input.entry, input.target),
     detail: input.detail,
-    byteLength: input.byteLength,
   };
 }
 
@@ -192,8 +144,4 @@ function imageMimeTypeForTarget(ref: OrdinaryRunContextReference, target: Attach
   return metadataMimeType !== undefined && imageMimeTypeForExtension(`.${metadataMimeType.slice("image/".length)}`) === metadataMimeType
     ? metadataMimeType
     : undefined;
-}
-
-function imageDetailFromUnknown(value: unknown): "auto" | "low" | "high" {
-  return value === "low" || value === "high" ? value : "auto";
 }

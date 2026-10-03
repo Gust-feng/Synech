@@ -56,10 +56,13 @@ export async function readLocalFile(input: {
         ? await fs.readFile(target.absolutePath, { signal: input.context.abortSignal })
         : undefined;
       const observedSize = bytes?.length ?? stat.size;
-      const probe = bytes?.subarray(0, Math.min(bytes.length, 8192)) ?? Buffer.alloc(Math.min(stat.size, 8192));
+      let probe = bytes?.subarray(0, Math.min(bytes.length, 8192)) ?? Buffer.alloc(Math.min(stat.size, 8192));
       if (bytes === undefined) {
         const handle = await fs.open(target.absolutePath, "r");
-        try { await handle.read(probe, 0, probe.length, 0); } finally { await handle.close(); }
+        try {
+          const { bytesRead } = await handle.read(probe, 0, probe.length, 0);
+          probe = probe.subarray(0, bytesRead);
+        } finally { await handle.close(); }
       }
       throwIfAborted(input.context.abortSignal);
       if (probe.includes(0)) return { refId: `workspace:file:${target.relativePath}`, path: target.relativePath, ...pathFacts, bytes: observedSize, binary: true };

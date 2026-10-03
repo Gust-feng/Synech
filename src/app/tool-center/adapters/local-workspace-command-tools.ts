@@ -190,6 +190,7 @@ export function createLocalShellCommandTool(
                   maxLogBytes: maxBackgroundLogBytes,
                   commandLogDirectory: options.commandLogDirectory,
                   processFacts,
+                  abortSignal: context.abortSignal,
                 })
               : await runBackgroundProgramCommand({
                   shell: commandShell,
@@ -203,6 +204,7 @@ export function createLocalShellCommandTool(
                   maxLogBytes: maxBackgroundLogBytes,
                   commandLogDirectory: options.commandLogDirectory,
                   processFacts,
+                  abortSignal: context.abortSignal,
                 })
             : normalized.directProgram === undefined || !executeDirectly
               ? await runForegroundShellCommand({

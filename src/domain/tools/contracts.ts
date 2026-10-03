@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import type { ConfirmationRequest } from "../confirmation/contracts.js";
-import type { ModelInputAttachmentRef } from "../model-input/index.js";
+import type { ModelInputAttachment, ModelInputAttachmentRef } from "../model-input/index.js";
 import type { ToolFactValue } from "./fact-value.js";
 import type { ToolJsonSchema, ToolJsonSchemaValue } from "./schema.js";
 
@@ -51,6 +51,7 @@ export type ToolErrorFacts = Readonly<Record<string, ToolErrorFactValue>>;
 export type ToolFailureAttribution = "schema_validation" | "execution_failure";
 
 export type ToolRuntimeHint =
+  | { readonly kind: "http_request" }
   | {
       readonly kind: "command_shell";
       readonly shellId: string;
@@ -241,6 +242,18 @@ export type ToolCallResult = {
   readonly delegatedExecution?: DelegatedAgentExecutionMetadata;
   readonly durationMs: number;
   readonly confirmationRequest?: ConfirmationRequest;
+};
+
+/** Live tool delivery; binary payloads belong to Pi Session, not the product ledger. */
+export type ToolExecutionResult = ToolCallResult & {
+  readonly modelAttachments?: readonly ModelInputAttachment[];
+};
+
+/** Explicit media output before ToolCenter binds its execution identity and status. */
+export type ToolExecutorOutput = {
+  readonly kind: "tool_output";
+  readonly output: unknown;
+  readonly modelAttachments: readonly ModelInputAttachment[];
 };
 
 /** Resolves the authoritative Synech invocation identity for any accepted tool call fact. */
@@ -545,7 +558,7 @@ export interface ToolExecutor {
 
 export type ToolExecutorResult = {
   readonly kind: "tool_call_result";
-  readonly result: ToolCallResult;
+  readonly result: ToolExecutionResult;
 };
 
 export interface ToolExecutionBroker {
@@ -555,7 +568,7 @@ export interface ToolExecutionBroker {
     request: ToolCallRequest,
     context: ToolExecutionContext,
     permission: ToolPermissionCheck
-  ): Promise<ToolCallResult>;
+  ): Promise<ToolExecutionResult>;
   register?(executor: ToolExecutor): void;
 }
 
@@ -589,8 +602,8 @@ export interface ToolExecutionGateway extends ToolExecutionBroker {
   ): ToolExecutionPreflight;
   /** Applies the same model-delivery envelope to a tool-like fact produced outside a registered executor. */
   deliverResult?(
-    result: ToolCallResult,
+    result: ToolExecutionResult,
     permission: ToolPermissionCheck,
     ownerId: string,
-  ): Promise<ToolCallResult>;
+  ): Promise<ToolExecutionResult>;
 }

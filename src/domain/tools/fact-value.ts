@@ -1,5 +1,3 @@
-import { copyToolModelAttachments } from "./model-attachments.js";
-
 export type ToolFactValue =
   | null
   | string
@@ -29,10 +27,7 @@ export class InvalidToolFactError extends Error {
  * Values that JSON would silently corrupt or discard fail explicitly.
  */
 export function normalizeToolFactValue(value: unknown): ToolFactValue | undefined {
-  const normalized = normalize(value, "$", new Set<object>(), 0);
-  return normalized !== null && typeof normalized === "object"
-    ? copyToolModelAttachments(value, normalized)
-    : normalized;
+  return normalize(value, "$", new Set<object>(), 0);
 }
 
 function normalize(

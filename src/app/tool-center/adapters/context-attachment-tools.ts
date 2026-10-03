@@ -105,7 +105,7 @@ export function createListContextAttachmentsTool(options: ContextAttachmentToolO
     },
     execute: async (_input, context) => {
       throwIfAborted(context.abortSignal);
-      const attachments = attachmentEntries(options.runContext).map((entry) => attachmentSummary(entry));
+      const attachments = attachmentEntries(options.runContext).map((entry) => attachmentSummary(entry, options.supportsVisionInput));
       return {
         refId: "context-attachments:index",
         count: attachments.length,
@@ -194,10 +194,10 @@ export function createReadContextAttachmentTextTool(options: ContextAttachmentTo
         MIN_CHARACTER_WINDOW_CHARS,
       ) ?? DEFAULT_MAX_CHARS;
       const content = lineRange === undefined
-        ? charWindowContent(await readAttachmentTextFile(target.targetAbsolutePath), startChar)
+        ? charWindowContent(await readAttachmentTextFile(target.targetAbsolutePath, context.abortSignal), startChar)
         : stat.size > MAX_LOCAL_WORKSPACE_FILE_BYTES
-          ? await readLineRange(target.targetAbsolutePath, lineRange)
-          : sliceLines(await readAttachmentTextFile(target.targetAbsolutePath), lineRange);
+          ? await readLineRange(target.targetAbsolutePath, lineRange, context.abortSignal)
+          : sliceLines(await readAttachmentTextFile(target.targetAbsolutePath, context.abortSignal), lineRange);
       const truncated = content.content.length > maxLength;
       if (lineRange !== undefined && truncated) {
         throw new Error("attachment_read_text line range exceeds the text return budget; request fewer lines so continuation does not skip unread text.");

@@ -1,3 +1,4 @@
+import { stat } from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { z } from "zod";
@@ -7,13 +8,18 @@ import {
   type JsonlSessionMetadata,
 } from "@earendil-works/pi-agent-core";
 import { TODO_CONTEXT } from "@earendil-works/pi-agent-core/harness/context";
-import { appendList, list, SessionUnknownTargetError } from "@earendil-works/pi-agent-core/harness/session";
+import {
+  appendList, branchTip, deleteValue, insertEntry, insertUsage, laneState, list,
+  operationMeta, operationScopeOf, operationState, operationToolArgsPrefix,
+  pendingEntry, setValue, SessionUnknownTargetError,
+  type ToolsOperation, type Write,
+} from "@earendil-works/pi-agent-core/harness/session";
 import {
   agentRuntimeExecutionEnv,
   type AgentRuntimeEnvironment,
   type AgentSessionHandle,
 } from "./pi-agent/runtime-environment.js";
-import type { ImageContent } from "@earendil-works/pi-ai";
+import type { ImageContent, ToolResultMessage } from "@earendil-works/pi-ai";
 import type {
   AgentSessionCheckpointKind,
   AgentSessionCheckpointPosition,
@@ -36,7 +42,6 @@ import {
 import {
   SessionGenerationError,
   SessionWriteFence,
-  appendMainMessage,
   getMainBranchPathTo,
   getMainBranchEntries,
   getMainLeafId,
@@ -64,6 +69,8 @@ export type AgentSessionLease = {
 export type FileSystemAgentSessionRepositoryConfig = {
   readonly executionEnvironment: AgentRuntimeEnvironment;
   readonly sessionsRoot: string;
+  /** Host-owned bounded reuse; standalone/scoped consumers default to immediate close. */
+  readonly idleSessionCacheSize?: number;
 };
 
 /**
@@ -86,9 +93,17 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
    * checkpoint mapping commits on it.
    */
   private readonly writerSessions = new Map<string, Session<JsonlSessionMetadata>>();
+  private readonly idleSessions = new Map<string, {
+    readonly session: Session<JsonlSessionMetadata>;
+    readonly revision: string;
+    readonly timer: ReturnType<typeof setTimeout>;
+  }>();
+  private readonly idleSessionCacheSize: number;
+  private released = false;
 
   constructor(config: FileSystemAgentSessionRepositoryConfig) {
     this.sessionsRoot = path.resolve(config.sessionsRoot);
+    this.idleSessionCacheSize = config.idleSessionCacheSize ?? 0;
     this.fileSystem = agentRuntimeExecutionEnv(config.executionEnvironment);
     this.jsonlRepository = new JsonlSessionRepo({
       fileSystem: this.fileSystem,
@@ -127,8 +142,16 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
       let generation: SessionStorageGenerationLease<JsonlSessionMetadata>;
       try {
         generation = await fence.acquire(async () => {
-          const metadata = await this.readSessionMetadata(ref);
-          return this.openValidatedSession(ref, metadata);
+          const session = await this.openForAccess(ref);
+          // Fence close ends this generation. Only the underlying Pi handle may
+          // remain reusable; the old generation's proxy remains permanently revoked.
+          return new Proxy(session, {
+            get: (target, property) => property === "close"
+              ? () => this.releaseToIdle(ref, target)
+              : typeof Reflect.get(target, property) === "function"
+                ? Reflect.get(target, property).bind(target)
+                : Reflect.get(target, property),
+          });
         });
       } catch (error) {
         if (error instanceof SessionGenerationError && error.code === "generation_active") {
@@ -254,7 +277,7 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
       try {
         return await operation(session);
       } finally {
-        await session.close(TODO_CONTEXT);
+        await this.releaseToIdle(ref, session);
       }
     });
   }
@@ -263,31 +286,30 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
     ref: AgentSessionRef,
     target: AgentSessionCheckpointRef | null,
   ): Promise<AgentSessionCheckpointRef | null> {
-    if (target === null) {
-      throw new AgentSessionRepositoryError(
-        "agent_session_ref_invalid",
-        "Agent session active branch cannot be restored without a product checkpoint.",
-      );
-    }
-    this.assertCheckpointIdentity(ref, target);
-    const entryRef = await this.resolveTranscriptEntry(ref, target);
+    this.validateRef(ref);
+    if (target !== null) this.assertCheckpointIdentity(ref, target);
     const lease = await this.acquire(ref);
     try {
+      const index = target === null ? [] : await readEntireCheckpointIndex(lease.session);
+      const targetLeafId = target === null ? null : recordedCheckpointEntryId(index, target);
+      if (targetLeafId === undefined) throw new AgentSessionRepositoryError(
+        "agent_session_checkpoint_unknown", `Agent session ${ref.sessionId} has no checkpoint ${target?.checkpointId}.`,
+      );
       try {
-        await moveMainTip(lease.session, entryRef.entryId);
+        await moveMainTip(lease.session, targetLeafId);
       } catch (error) {
         if (!(error instanceof SessionUnknownTargetError)) throw error;
         throw new AgentSessionRepositoryError(
           "agent_session_ref_invalid",
-          `Agent session checkpoint ${target.checkpointId} does not name a durable entry.`,
+          `Agent session checkpoint ${target?.checkpointId ?? "root"} does not name a durable entry.`,
           { cause: error },
         );
       }
       const restored = await getMainLeafId(lease.session);
-      if (restored !== entryRef.entryId) {
+      if (restored !== targetLeafId) {
         throw new AgentSessionRepositoryError(
           "agent_session_ref_invalid",
-          `Agent session ${ref.sessionId} did not restore its active branch to checkpoint ${target.checkpointId}.`,
+          `Agent session ${ref.sessionId} did not restore its active branch to checkpoint ${target?.checkpointId ?? "root"}.`,
         );
       }
       return target;
@@ -313,12 +335,15 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
     for (const checkpoint of input.checkpoints) this.assertCheckpointIdentity(input.sessionRef, checkpoint);
     const unique = new Map(input.checkpoints.map((checkpoint) => [checkpoint.checkpointId, checkpoint] as const));
     if (unique.size === 0) return [];
-    const resolved = await this.resolveTranscriptEntries(input.sessionRef, [...unique.values()]);
-    const positions = await this.activeTranscriptPositions(input.sessionRef);
-    const positionByEntryId = new Map(positions.map((ref, index) => [ref.entryId, index] as const));
-    return resolved.flatMap(({ checkpoint, entryRef }) => {
-      const position = positionByEntryId.get(entryRef.entryId);
-      return position === undefined ? [] : [{ checkpoint, position }];
+    return this.readFromSession(input.sessionRef, async (session) => {
+      const index = await readEntireCheckpointIndex(session);
+      const resolved = resolveRecordedCheckpoints(input.sessionRef, [...unique.values()], index);
+      const entries = await getMainBranchEntries(session);
+      const positionByEntryId = new Map(entries.map((entry, position) => [entry.id, position] as const));
+      return resolved.flatMap(({ checkpoint, entryRef }) => {
+        const position = positionByEntryId.get(entryRef.entryId);
+        return position === undefined ? [] : [{ checkpoint, position }];
+      });
     });
   }
 
@@ -340,9 +365,13 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
     for (const checkpoint of input.checkpoints) {
       this.assertCheckpointIdentity(input.sessionRef, checkpoint);
     }
-    const entryRefs = await this.resolveTranscriptEntries(input.sessionRef, input.checkpoints);
-    const texts = await this.readTranscriptAssistantTexts(input.sessionRef, entryRefs);
-    return input.checkpoints.map((checkpoint, index) => ({ checkpoint, text: texts[index] ?? "" }));
+    if (input.checkpoints.length === 0) return [];
+    return this.readFromSession(input.sessionRef, async (session) => {
+      const index = await readEntireCheckpointIndex(session);
+      const records = resolveRecordedCheckpoints(input.sessionRef, input.checkpoints, index);
+      const texts = await Promise.all(records.map((record) => this.readAssistantText(session, record.entryRef)));
+      return input.checkpoints.map((checkpoint, index) => ({ checkpoint, text: texts[index] ?? "" }));
+    });
   }
 
   /** Mints a checkpoint on the live writer's own mutation line. */
@@ -432,16 +461,7 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
     if (checkpoints.length === 0) return [];
     for (const checkpoint of checkpoints) this.assertCheckpointIdentity(ref, checkpoint);
     const index = await this.readCheckpointIndex(ref);
-    return checkpoints.map((checkpoint) => {
-      const entryId = recordedCheckpointEntryId(index, checkpoint);
-      if (entryId === undefined) {
-        throw new AgentSessionRepositoryError(
-          "agent_session_checkpoint_unknown",
-          "Agent session " + ref.sessionId + " has no recorded checkpoint " + checkpoint.checkpointId + ".",
-        );
-      }
-      return { checkpoint, entryRef: { sessionId: ref.sessionId, entryId } };
-    });
+    return resolveRecordedCheckpoints(ref, checkpoints, index);
   }
 
   private async resolveTranscriptEntry(
@@ -554,15 +574,9 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
       let branch = await getMainBranchEntries(lease.session);
       let assistantIndex = branch.findIndex((entry) => entry.id === assistantEntryRef.entryId);
       if (assistantIndex < 0) {
-        await this.restorePendingAssistantBranch(lease.session, assistantEntryRef, recoveryEntryRef);
-        branch = await getMainBranchEntries(lease.session);
-        assistantIndex = branch.findIndex((entry) => entry.id === assistantEntryRef.entryId);
-        if (assistantIndex < 0) {
-          throw new AgentSessionRepositoryError(
-            "agent_session_ref_invalid",
-            "Agent session assistant entry is not on the active branch.",
-          );
-        }
+        await this.validatePendingAssistantBranch(lease.session, assistantEntryRef, recoveryEntryRef);
+        branch = await getMainBranchPathTo(lease.session, assistantEntryRef.entryId);
+        assistantIndex = branch.length - 1;
       }
       const assistantEntry = branch[assistantIndex];
       if (assistantEntry?.type !== "message" || assistantEntry.message.role !== "assistant") {
@@ -572,8 +586,9 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
         );
       }
       const expectedCalls = assistantEntry.message.content
-        .filter((block) => block.type === "toolCall")
-        .map((call) => ({ callId: call.id, toolName: call.name }));
+        .flatMap((block, sourceIndex) => block.type === "toolCall"
+          ? [{ callId: block.id, toolName: block.name, sourceIndex }]
+          : []);
       if (expectedCalls.length !== input.orderedResults.length || expectedCalls.some((call, index) => {
         const result = input.orderedResults[index];
         return result === undefined || result.providerCallId !== call.callId || result.toolName !== call.toolName;
@@ -592,59 +607,40 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
       }
       let matchingSuffixLength = suffix.length;
       for (let index = 0; index < suffix.length; index += 1) {
-        const entry = suffix[index];
         const expected = input.orderedResults[index];
-        const expectedMessage = expected === undefined ? undefined : canonicalToolResultMessage(expected);
-        const content = entry?.type === "message" && entry.message.role === "toolResult"
-          ? entry.message.content
-          : [];
-        const textBlocks = content.filter((block) => block.type === "text");
-        const text = textBlocks.length === 1 ? textBlocks[0]?.text : undefined;
-        const actualImages = content.filter((block): block is ImageContent => block.type === "image");
-        const expectedImages = expectedMessage === undefined
-          ? []
-          : toolResultImageContentFromAttachments(expectedMessage.attachments);
-        const expectedImageRefs = expected?.modelAttachmentRefs ?? [];
-        if (expectedImages.length === 0 && expectedImageRefs.length === 0 && actualImages.length > 0) {
-          throw new AgentSessionRepositoryError(
-            "agent_session_attachment_mismatch",
-            `Agent session tool result ${expected.providerCallId} contains a durable image that the run fact cannot prove.`,
-          );
-        }
-        const imagesMatch = expectedImages.length > 0
-          ? JSON.stringify(actualImages) === JSON.stringify(expectedImages)
-          : expectedImageRefs.length === 0
-            ? actualImages.length === 0
-            : imageRefsMatch(actualImages, expectedImageRefs);
-        if (!imagesMatch && expectedImageRefs.length > 0) {
-          throw new AgentSessionRepositoryError(
-            "agent_session_attachment_mismatch",
-            `Agent session tool result ${expected.providerCallId} image manifest does not match the durable Session entry.`,
-          );
-        }
-        if (entry?.type !== "message" || entry.message.role !== "toolResult" || expected === undefined ||
-            entry.message.toolCallId !== expected.providerCallId || entry.message.toolName !== expected.toolName ||
-            entry.message.isError !== (expected.status !== "completed") || text !== expectedMessage?.content ||
-            !imagesMatch) {
-          await moveMainTip(lease.session, assistantEntryRef.entryId);
+        const entry = suffix[index];
+        if (expected === undefined) throw invalidToolRecovery("Session has extra tool-result entries.");
+        if (entry?.type !== "message" || entry.message.role !== "toolResult" ||
+            !toolResultMessageMatches(entry.message, expected)) {
           matchingSuffixLength = 0;
-          break;
         }
       }
-      for (const result of input.orderedResults.slice(matchingSuffixLength)) {
-        const expectedRefs = result.modelAttachmentRefs ?? [];
-        if (expectedRefs.length === 0) continue;
-        const availableImages = toolResultImageContentFromAttachments(canonicalToolResultMessage(result).attachments);
-        if (availableImages.length !== expectedRefs.length) {
-          throw new AgentSessionRepositoryError(
-            "agent_session_attachment_mismatch",
-            `Agent session tool result ${result.providerCallId} has image references but no recoverable image payload.`,
-          );
-        }
+      const operation = await readRecoveryToolBatch(lease.session, assistantEntryRef.entryId);
+      if (operation !== undefined &&
+          (operation.state.batch.calls.length !== expectedCalls.length ||
+           new Set(operation.state.batch.calls.map((call) => call.resultEntryId)).size !== expectedCalls.length)) {
+        throw invalidToolRecovery("Pi tool batch does not match the assistant result group.");
       }
-      for (const result of input.orderedResults.slice(matchingSuffixLength)) {
+      const writes: Write[] = [];
+      let leafId = matchingSuffixLength === 0
+        ? assistantEntryRef.entryId
+        : suffix[matchingSuffixLength - 1]!.id;
+      // Build and validate the whole group before any branch or pending write.
+      for (const [index, result] of input.orderedResults.entries()) {
+        const call = operation?.state.batch.calls[index];
+        if (operation !== undefined && call?.sourceIndex !== expectedCalls[index]?.sourceIndex) {
+          throw invalidToolRecovery("Pi tool batch does not match the assistant source indices.");
+        }
+        if (index < matchingSuffixLength) {
+          const entry = suffix[index];
+          if (call !== undefined && (call.status !== "completed" || call.resultEntryId !== entry?.id ||
+              entry?.type !== "message" || (entry.terminate === true) !== call.terminate)) {
+            throw invalidToolRecovery("Pi completed result does not match the active transcript.");
+          }
+          continue;
+        }
         const modelMessage = canonicalToolResultMessage(result);
-        await appendMainMessage(lease.session, {
+        let message: ToolResultMessage = {
           role: "toolResult",
           toolCallId: result.providerCallId,
           toolName: result.toolName,
@@ -654,26 +650,70 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
           ],
           isError: result.status !== "completed",
           timestamp: Date.now(),
-        });
+        };
+        const entryId = call?.resultEntryId ?? lease.session.idGenerator.next();
+        let alreadyPlaced = false;
+        if (call?.status === "completed") {
+          const entry = await lease.session.getEntry(entryId, TODO_CONTEXT);
+          if (entry?.type !== "message" || entry.message.role !== "toolResult" || entry.parentId !== leafId ||
+              (entry.terminate === true) !== call.terminate) {
+            throw invalidToolRecovery("Pi completed result is not on the proven assistant path.");
+          }
+          message = entry.message;
+          alreadyPlaced = true;
+        } else if (call?.status === "outcome_ready") {
+          const pending = await lease.session.getValue(pendingEntry(entryId), TODO_CONTEXT);
+          if (pending?.value.type !== "message" || pending.value.payload.role !== "toolResult") {
+            throw invalidToolRecovery("Pi tool batch is missing its pending result.");
+          }
+          message = pending.value.payload;
+          writes.push(deleteValue(pendingEntry(entryId)));
+        }
+        if (!toolResultMessageMatches(message, result)) {
+          throw invalidToolRecovery("Pi tool result does not match the accepted call, text or status.");
+        }
+        if (!alreadyPlaced) {
+          writes.push(insertEntry({ id: entryId, parentId: leafId, type: "message", message,
+            ...((call?.status === "outcome_ready" && call.terminate) ? { terminate: true } : {}),
+          }));
+          if (message.usage !== undefined) {
+            writes.push(insertUsage({ id: lease.session.idGenerator.next(), usage: message.usage,
+              entryId, adjustment: false }));
+          }
+        }
+        leafId = entryId;
       }
-    const leafId = await getMainLeafId(lease.session);
-    if (leafId === null) {
-      throw new AgentSessionRepositoryError(
-        "agent_session_ref_invalid",
-        "Agent session reconciliation did not produce a durable leaf.",
-      );
-    }
-    // A retried reconciliation of the same durable round must reuse the identity
-    // it already minted instead of stacking a second checkpoint on one leaf.
-    const existing = (await readEntireCheckpointIndex(lease.session))
-      .find((item) => item.kind === "tool_results_committed" && item.entryId === leafId);
-    if (existing !== undefined) {
-      return { sessionId: input.sessionRef.sessionId, checkpointId: existing.checkpointId, kind: existing.kind };
-    }
-    return await lease.recordCheckpoint("tool_results_committed", {
-      sessionId: input.sessionRef.sessionId,
-      entryId: leafId,
-    });
+      if (operation !== undefined) {
+        // Pi's placement boundary, expressed only through its public Session
+        // writes. Keep the operation open for the existing startup abort path;
+        // it must not place the recovered outcomes a second time.
+        const allTerminate = operation.state.batch.calls.every((call) =>
+          (call.status === "completed" || call.status === "outcome_ready") && call.terminate);
+        writes.push(setValue(operationState(operation.id), {
+          ...operationScopeOf(operation.state), at: "checkpoint", triggerEntryId: leafId,
+          continuation: allTerminate
+            ? { kind: "may_finish", includeFinalAssistant: false }
+            : { kind: "need_assistant", overflowRecoveryUsed: false },
+        }));
+        const args = await lease.session.scanValues(
+          operationToolArgsPrefix(operation.id, operation.state.batch.turnId), TODO_CONTEXT);
+        writes.push(...args.map(({ address }) => deleteValue(address)));
+      }
+      if (writes.length > 0 || leafId !== await getMainLeafId(lease.session)) {
+        writes.push(setValue(branchTip("main"), leafId));
+        await lease.session.mutate((mutator) => mutator.commit(writes, TODO_CONTEXT), TODO_CONTEXT);
+      }
+      // A retried reconciliation of the same durable round must reuse the identity
+      // it already minted instead of stacking a second checkpoint on one leaf.
+      const existing = (await readEntireCheckpointIndex(lease.session))
+        .find((item) => item.kind === "tool_results_committed" && item.entryId === leafId);
+      if (existing !== undefined) {
+        return { sessionId: input.sessionRef.sessionId, checkpointId: existing.checkpointId, kind: existing.kind };
+      }
+      return await lease.recordCheckpoint("tool_results_committed", {
+        sessionId: input.sessionRef.sessionId,
+        entryId: leafId,
+      });
     } finally {
       await lease.release();
     }
@@ -682,10 +722,11 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
   /**
    * A terminal Ordinary outcome may have revoked the active leaf to its last
    * accepted prefix while Pi still retains the pending assistant branch. Only
-   * restore that branch when the caller proves the active leaf is the same
-   * rollback target and Pi confirms the target is its ancestor.
+   * accept that path when the caller proves the active leaf is the same
+   * rollback target and Pi confirms the target is its ancestor. Validation
+   * leaves the branch untouched until every tool result has been proven.
    */
-  private async restorePendingAssistantBranch(
+  private async validatePendingAssistantBranch(
     session: Session<JsonlSessionMetadata>,
     assistantEntryRef: TranscriptEntryRef,
     recoveryEntryRef: TranscriptEntryRef | null | undefined,
@@ -727,7 +768,6 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
         "Agent session recovery leaf is not an ancestor of the pending assistant entry.",
       );
     }
-    await moveMainTip(session, assistantEntryRef.entryId);
   }
 
   async delete(ref: AgentSessionRef): Promise<void> {
@@ -741,7 +781,14 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
       }
       try {
         await this.writeFence(ref.sessionId).runWhenIdle(async () => {
-          const persistedMetadata = await this.readSessionMetadata(ref);
+          let persistedMetadata: JsonlSessionMetadata;
+          try {
+            persistedMetadata = await this.readSessionMetadata(ref);
+          } catch (error) {
+            if (error instanceof AgentSessionRepositoryError && error.code === "agent_session_not_found") return;
+            throw error;
+          }
+          await this.closeIdleSession(ref.sessionId);
           const session = await this.openValidatedSession(ref, persistedMetadata);
           const metadata = session.metadata;
           await session.close(TODO_CONTEXT);
@@ -821,16 +868,73 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
    * or a real missing session already proven by the listing check; it must not
    * be guessed from an error message.
    */
+  private async sessionFileRevision(ref: AgentSessionRef): Promise<string> {
+    const info = await stat(this.requirePathInsideRoot(path.join(this.sessionsRoot, ref.storageKey)), { bigint: true });
+    return `${info.dev}:${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`;
+  }
+
+  private async openForAccess(ref: AgentSessionRef): Promise<Session<JsonlSessionMetadata>> {
+    const idle = this.idleSessions.get(ref.sessionId);
+    if (idle !== undefined) {
+      this.assertMetadataMatches(ref, idle.session.metadata);
+      const revision = await this.sessionFileRevision(ref).catch(async (error) => {
+        await this.closeIdleSession(ref.sessionId);
+        throw error;
+      });
+      if (revision === idle.revision) {
+        clearTimeout(idle.timer);
+        this.idleSessions.delete(ref.sessionId);
+        return idle.session;
+      }
+      await this.closeIdleSession(ref.sessionId);
+    }
+    const metadata = await this.readSessionMetadata(ref);
+    return this.openValidatedSession(ref, metadata);
+  }
+
+  private async releaseToIdle(ref: AgentSessionRef, session: Session<JsonlSessionMetadata>): Promise<void> {
+    if (this.released || this.idleSessionCacheSize === 0) {
+      await session.close(TODO_CONTEXT);
+      return;
+    }
+    let revision: string;
+    try { revision = await this.sessionFileRevision(ref); }
+    catch (error) { await session.close(TODO_CONTEXT); throw error; }
+    const timer = setTimeout(() => {
+      void this.runInSessionAccess(ref.sessionId, async () => {
+        if (this.idleSessions.get(ref.sessionId)?.session === session) await this.closeIdleSession(ref.sessionId);
+      }).catch((error) => console.error("Failed to release an idle Agent Session", error));
+    }, 60_000);
+    timer.unref();
+    this.idleSessions.set(ref.sessionId, { session, revision, timer });
+    while (this.idleSessions.size > this.idleSessionCacheSize) {
+      await this.closeIdleSession(this.idleSessions.keys().next().value!);
+    }
+  }
+
+  private async closeIdleSession(sessionId: string): Promise<void> {
+    const idle = this.idleSessions.get(sessionId);
+    if (idle === undefined) return;
+    // Remove before awaiting close so another session cannot evict this handle twice.
+    this.idleSessions.delete(sessionId);
+    clearTimeout(idle.timer);
+    try { await idle.session.close(TODO_CONTEXT); }
+    catch (error) { this.idleSessions.set(sessionId, idle); throw error; }
+  }
+
+  async release(): Promise<void> {
+    this.released = true;
+    for (const sessionId of [...this.idleSessions.keys()]) {
+      await this.runInSessionAccess(sessionId, () => this.closeIdleSession(sessionId));
+    }
+  }
+
   private async openForRead(ref: AgentSessionRef): Promise<Session<JsonlSessionMetadata>> {
     this.validateRef(ref);
-    const metadata = await this.readSessionMetadata(ref);
     if (this.writerSessions.has(ref.sessionId)) {
-      throw new AgentSessionRepositoryError(
-        "agent_session_writer_active",
-        `Agent session ${ref.sessionId} cannot be read while its writer is active.`,
-      );
+      throw new AgentSessionRepositoryError("agent_session_writer_active", `Agent session ${ref.sessionId} has an active writer.`);
     }
-    return this.openValidatedSession(ref, metadata);
+    return this.openForAccess(ref);
   }
 
   private assertEntryBelongsToSession(ref: AgentSessionRef, entryRef: TranscriptEntryRef): void {
@@ -907,6 +1011,47 @@ export class FileSystemAgentSessionRepository implements AgentSessionRepository 
     }
     return resolved;
   }
+}
+
+/** Resolve reserved result IDs from the current main operation, never call-ID history. */
+async function readRecoveryToolBatch(
+  session: Session,
+  assistantEntryId: string,
+): Promise<{ readonly id: string; readonly state: ToolsOperation } | undefined> {
+  const lane = await session.getValue(laneState("main"), TODO_CONTEXT);
+  const id = lane?.value.currentOperationId;
+  if (id === undefined || id === null) return undefined;
+  const meta = await session.getValue(operationMeta(id), TODO_CONTEXT);
+  const state = await session.getValue(operationState(id), TODO_CONTEXT);
+  if (meta?.value.operationId !== id || meta.value.lane !== "main" ||
+      meta.value.intent.kind !== "run" || state === undefined) {
+    throw invalidToolRecovery("Pi main operation has inconsistent metadata.");
+  }
+  if (state.value.at !== "tools" || state.value.batch.assistantEntryId !== assistantEntryId) return undefined;
+  return { id, state: state.value };
+}
+
+function invalidToolRecovery(message: string): AgentSessionRepositoryError {
+  return new AgentSessionRepositoryError("agent_session_ref_invalid", message);
+}
+
+function toolResultMessageMatches(message: ToolResultMessage, result: ToolCallResult): boolean {
+  const canonical = canonicalToolResultMessage(result);
+  const images = message.content.filter((block): block is ImageContent => block.type === "image");
+  const inlineImages = toolResultImageContentFromAttachments(canonical.attachments);
+  const refs = result.modelAttachmentRefs ?? [];
+  // Inline payloads and durable manifests must agree as well. A count check
+  // alone cannot prove that the recovered bytes are the accepted images.
+  if ((inlineImages.length > 0 && JSON.stringify(images) !== JSON.stringify(inlineImages)) ||
+      (refs.length > 0 && !imageRefsMatch(images, refs)) ||
+      (refs.length === 0 && inlineImages.length === 0 && images.length > 0)) {
+    throw new AgentSessionRepositoryError("agent_session_attachment_mismatch",
+      `Agent session tool result ${result.providerCallId} image manifest does not match its Session payload.`);
+  }
+  const texts = message.content.filter((block) => block.type === "text");
+  return message.toolCallId === result.providerCallId && message.toolName === result.toolName &&
+    message.isError === (result.status !== "completed") && texts.length === 1 &&
+    texts[0]?.text === canonical.content;
 }
 
 function toolResultImageContentFromAttachments(
@@ -1042,4 +1187,18 @@ class SessionAccessGate {
     this.tail = result.then(() => undefined, () => undefined);
     return result;
   }
+}
+
+function resolveRecordedCheckpoints(
+  ref: AgentSessionRef,
+  checkpoints: readonly AgentSessionCheckpointRef[],
+  index: readonly StoredCheckpoint[],
+): readonly RecordedCheckpoint[] {
+  return checkpoints.map((checkpoint) => {
+    const entryId = recordedCheckpointEntryId(index, checkpoint);
+    if (entryId === undefined) throw new AgentSessionRepositoryError(
+      "agent_session_checkpoint_unknown", `Agent session ${ref.sessionId} has no recorded checkpoint ${checkpoint.checkpointId}.`,
+    );
+    return { checkpoint, entryRef: { sessionId: ref.sessionId, entryId } };
+  });
 }

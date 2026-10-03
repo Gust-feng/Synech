@@ -45,16 +45,6 @@ function projectToolDisplayCore(request: ToolCallRequest, output: ToolFactValue 
   if (spaceDisplay !== undefined) {
     return spaceDisplay;
   }
-  if (request.toolName === "NoteWrite") {
-    const scope = record.scope ?? input.scope;
-    return {
-      kind: "note_operation",
-      operation: "write",
-      status: stringOrUndefined(record.status),
-      scope: scope === "workspace" || scope === "global" ? scope : undefined,
-      characters: numberOrUndefined(record.characters),
-    };
-  }
   if (isContentReadTool(request.toolName)) {
     const uri = stringOrUndefined(record.uri) ?? stringOrUndefined(input.uri) ?? stringOrUndefined(input.ref);
     const url = stringOrUndefined(record.url) ?? stringOrUndefined(input.url) ?? httpUrl(uri);

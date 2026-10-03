@@ -1,7 +1,6 @@
 import type { ModelMessage } from "../../domain/intelligence/index.js";
 import type { ToolFactValue } from "../../domain/tools/index.js";
 import type { ModelToolCall } from "../../domain/intelligence/contracts.js";
-import { copyToolModelAttachments } from "../../domain/tools/index.js";
 
 export function cloneModelMessage(message: ModelMessage): ModelMessage {
   return {
@@ -22,6 +21,5 @@ function cloneToolFact<T extends ToolFactValue | undefined>(value: T): T {
   if (value === undefined || value === null || typeof value !== "object") {
     return value;
   }
-  const cloned = globalThis.structuredClone(value) as T;
-  return copyToolModelAttachments(value, cloned as object) as T;
+  return globalThis.structuredClone(value);
 }

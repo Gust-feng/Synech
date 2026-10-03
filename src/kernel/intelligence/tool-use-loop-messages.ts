@@ -2,13 +2,10 @@ import { asRecord } from "../values/index.js";
 import type { ModelMessage, ModelResponse } from "../../domain/intelligence/index.js";
 import type {
   ToolCallRequest,
-  ToolCallResult,
+  ToolExecutionResult,
   ToolContinuation,
   ToolFactValue,
   ToolResult,
-} from "../../domain/tools/index.js";
-import {
-  toolModelAttachmentsFromOutput,
 } from "../../domain/tools/index.js";
 import { cloneModelMessage } from "./model-message-cloning.js";
 import {
@@ -39,8 +36,8 @@ export function assistantToolCallMessage(
   };
 }
 
-export function toolResultMessage(result: ToolCallResult): ModelMessage {
-  const attachments = toolModelAttachmentsFromOutput(result.output);
+export function toolResultMessage(result: ToolExecutionResult): ModelMessage {
+  const attachments = result.modelAttachments;
   const modelResult = toolCallResultToModelToolResult(result);
   const payload: ToolMessagePayload = {
     status: result.status,
@@ -58,15 +55,15 @@ export function toolResultMessage(result: ToolCallResult): ModelMessage {
   };
 }
 
-export function toolResultMessages(results: readonly ToolCallResult[]): ModelMessage[] {
+export function toolResultMessages(results: readonly ToolExecutionResult[]): ModelMessage[] {
   return results.map(toolResultMessage);
 }
 
 export function toolResultMessagesWithResolvedApprovals(
-  results: readonly ToolCallResult[],
-  preApprovalResults: readonly ToolCallResult[] = [],
+  results: readonly ToolExecutionResult[],
+  preApprovalResults: readonly ToolExecutionResult[] = [],
 ): ModelMessage[] {
-  const preApprovalByCallId = new Map<string, ToolCallResult[]>();
+  const preApprovalByCallId = new Map<string, ToolExecutionResult[]>();
   for (const result of preApprovalResults) {
     const existing = preApprovalByCallId.get(result.providerCallId) ?? [];
     existing.push(result);
@@ -93,19 +90,19 @@ const MAX_TRANSPORT_STAGE_PREVIEW_CHARS = 32_000;
 const MAX_TRANSPORT_STAGE_CONFIRMATION_ID_CHARS = 512;
 
 type ToolMessagePayload = {
-  readonly status: ToolCallResult["status"];
+  readonly status: ToolExecutionResult["status"];
   readonly preApprovals?: readonly {
     readonly status: "approval_required";
     readonly body: ToolResult["body"];
     readonly error?: ToolResult["error"];
-    readonly confirmation?: ToolCallResult["confirmationRequest"];
+    readonly confirmation?: ToolExecutionResult["confirmationRequest"];
   }[];
 } & ToolResult;
 
 type ToolMessageTransportStage = {
   readonly phase: "pre_approval" | "resolved";
   readonly index: number;
-  readonly status: ToolCallResult["status"];
+  readonly status: ToolExecutionResult["status"];
   readonly confirmationId?: string;
   readonly body: unknown;
   readonly error?: ToolResult["error"];
@@ -124,8 +121,8 @@ type ToolMessageContinuationDelivery = {
 };
 
 function resolvedApprovalToolResultMessage(
-  preApprovalResults: readonly ToolCallResult[],
-  resolvedResult: ToolCallResult,
+  preApprovalResults: readonly ToolExecutionResult[],
+  resolvedResult: ToolExecutionResult,
 ): ModelMessage {
   const resolvedModelResult = toolCallResultToModelToolResult(resolvedResult);
   const payload: ToolMessagePayload = {
@@ -143,8 +140,8 @@ function resolvedApprovalToolResultMessage(
     }),
   };
   const attachments = uniqueModelAttachments([
-    ...(toolModelAttachmentsFromOutput(resolvedResult.output) ?? []),
-    ...preApprovalResults.flatMap((result) => toolModelAttachmentsFromOutput(result.output) ?? []),
+    ...(resolvedResult.modelAttachments ?? []),
+    ...preApprovalResults.flatMap((result) => result.modelAttachments ?? []),
   ]);
   return {
     role: "tool",

@@ -1,12 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { TODO_CONTEXT } from "@earendil-works/pi-agent-core/harness/context";
-import { appendList, branchTip, insertEntry, list, setValue } from "@earendil-works/pi-agent-core/harness/session";
+import { createHash } from "node:crypto";
+import {
+  appendList, branchTip, insertEntry, laneState, list, operationState,
+  operationToolArgsPrefix, pendingEntry, setValue,
+} from "@earendil-works/pi-agent-core/harness/session";
 
 const outputRoot = path.resolve(process.env.SYNECH_TEST_DIST ?? "dist");
 const { FileSystemAgentSessionRepository } = await import(pathToFileURL(path.join(outputRoot, "adapters/intelligence/file-system-agent-session-repository.js")));
@@ -14,12 +19,13 @@ const { AgentSessionRepositoryError } = await import(pathToFileURL(path.join(out
 const { createAgentRuntimeEnvironment } = await import(pathToFileURL(path.join(outputRoot, "adapters/intelligence/pi-agent/runtime-environment.js")));
 const { SessionGenerationError } = await import(pathToFileURL(path.join(outputRoot, "adapters/intelligence/session-write-fence.js")));
 
-function createRepository() {
+function createRepository(options = {}) {
   const root = mkdtempSync(path.join(tmpdir(), "synech-agent-session-"));
   const sessionsRoot = path.join(root, "sessions");
   const repo = new FileSystemAgentSessionRepository({
     executionEnvironment: createAgentRuntimeEnvironment(root),
     sessionsRoot,
+    ...options,
   });
   return { repo, root, sessionsRoot, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
@@ -525,10 +531,225 @@ test("Agent session repository rejects reconciliation whose results do not match
   }
 });
 
+test("Agent session image reconciliation after reopen uses durable refs without a second payload store", async () => {
+  const { repo, cleanup } = createRepository();
+  const data = "aW1hZ2U=";
+  const result = {
+    ...toolResult("image-call", "image-invocation", "ImageTool", "image metadata"),
+    modelAttachmentRefs: [{ kind: "image", mimeType: "image/png",
+      sha256: createHash("sha256").update(Buffer.from(data, "base64")).digest("hex") }],
+  };
+  try {
+    const ref = await repo.create({ sessionId: "reconcile-image", sessionCwd: process.cwd() });
+    const lease = await repo.acquire(ref);
+    const { canonicalToolResultMessage } = await import(pathToFileURL(path.join(outputRoot, "app/model-runtime/tool-result-message.js")));
+    await seedBranch(lease.session, [
+      userMessage("inspect"),
+      assistantMessage("", [{ type: "toolCall", id: "image-call", name: "ImageTool", arguments: {} }]),
+      { role: "toolResult", toolCallId: "image-call", toolName: "ImageTool", isError: false,
+        content: [{ type: "text", text: canonicalToolResultMessage(result).content },
+          { type: "image", mimeType: "image/png", data }], timestamp: Date.now() },
+    ]);
+    await lease.release();
+    const positions = await repo.activeTranscriptPositions(ref);
+    const checkpoint = await repo.recordSessionCheckpoint({ sessionRef: ref,
+      kind: "assistant_tool_calls_committed", entryRef: positions[1] });
+    await repo.reconcileToolResultEntries({ sessionRef: ref, assistantCheckpoint: checkpoint, orderedResults: [result] });
+    assert.equal((await repo.activeTranscriptPositions(ref)).length, 3);
+    assert.ok(!JSON.stringify(result).includes(data));
+    await assert.rejects(repo.reconcileToolResultEntries({ sessionRef: ref, assistantCheckpoint: checkpoint,
+      orderedResults: [{ ...result, modelAttachmentRefs: [{ ...result.modelAttachmentRefs[0], sha256: "0".repeat(64) }] }] }),
+    (error) => error.code === "agent_session_attachment_mismatch");
+  } finally { await cleanup(); }
+});
+
+/** Runs in a child so process exit cannot give Pi a chance to clean up pending outcomes. */
+async function crashAtPendingImage({ root, sessionsRoot, outputRoot }) {
+  const { AgentHarness } = await import("@earendil-works/pi-agent-core");
+  const { createAssistantMessageEventStream } = await import("@earendil-works/pi-ai/utils/event-stream");
+  const { TODO_CONTEXT } = await import("@earendil-works/pi-agent-core/harness/context");
+  const { laneState, operationState, pendingEntry } = await import("@earendil-works/pi-agent-core/harness/session");
+  const { pathToFileURL } = await import("node:url");
+  const path = await import("node:path");
+  const { writeSync } = await import("node:fs");
+  const { createHash } = await import("node:crypto");
+  const { FileSystemAgentSessionRepository } = await import(pathToFileURL(path.join(outputRoot,
+    "adapters/intelligence/file-system-agent-session-repository.js")));
+  const { createAgentRuntimeEnvironment } = await import(pathToFileURL(path.join(outputRoot,
+    "adapters/intelligence/pi-agent/runtime-environment.js")));
+  const { canonicalToolResultMessage } = await import(pathToFileURL(path.join(outputRoot,
+    "app/model-runtime/tool-result-message.js")));
+  const repo = new FileSystemAgentSessionRepository({
+    executionEnvironment: createAgentRuntimeEnvironment(root), sessionsRoot,
+  });
+  const ref = await repo.create({ sessionId: "pending-image-crash", sessionCwd: process.cwd() });
+  const lease = await repo.acquire(ref);
+  const data = "aW1hZ2U=";
+  const results = [
+    toolResult("text-call", "text-invocation", "TextTool", "text metadata"),
+    { ...toolResult("image-call", "image-invocation", "ImageTool", "image metadata"),
+      modelAttachmentRefs: [{ kind: "image", mimeType: "image/png", byteLength: Buffer.from(data, "base64").length,
+        sha256: createHash("sha256").update(Buffer.from(data, "base64")).digest("hex") }] },
+  ];
+  const model = {
+    id: "m", name: "m", provider: "openai", api: "openai-completions", baseUrl: "https://example.invalid/v1",
+    reasoning: false, input: ["text", "image"], cost: { input: 0, output: 0 },
+    contextWindow: 32_000, maxTokens: 1_024,
+  };
+  let requests = 0;
+  let executions = 0;
+  const models = {
+    getProviders: () => [], getProvider: () => undefined,
+    getModels: () => [model], getModel: () => model, getAuth: async () => undefined,
+    streamSimple() {
+      if (++requests !== 1) throw new Error("Unexpected provider replay.");
+      const stream = createAssistantMessageEventStream();
+      const message = assistantMessage("", [
+        { type: "text", text: "Inspect both outputs." },
+        ...results.map((result) => ({ type: "toolCall", id: result.providerCallId,
+          name: result.toolName, arguments: {} })),
+      ]);
+      message.usage.cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+      stream.push({ type: "start", partial: { ...message, content: [] } });
+      stream.push({ type: "done", reason: "toolUse", message });
+      return stream;
+    },
+  };
+  const created = await AgentHarness.create({ session: lease.session, models, model, toolExecution: "sequential",
+    tools: results.map((result, index) => ({
+      name: result.toolName, label: result.toolName, description: result.toolName,
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+      async execute() {
+        executions += 1;
+        return { content: [{ type: "text", text: canonicalToolResultMessage(result).content },
+          ...(index === 1 ? [{ type: "image", mimeType: "image/png", data }] : [])],
+          ...(index === 1 ? { terminate: true, usage: { input: 0, output: 3,
+            cacheRead: 0, cacheWrite: 0, totalTokens: 3,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } } : {}) };
+      },
+    })), compaction: { enabled: false, reserveTokens: 4096, keepRecentTokens: 4096 },
+  }, TODO_CONTEXT);
+  let recoveryCheckpoint;
+  let assistantCheckpoint;
+  created.harness.events.on("entry_added", async (event) => {
+    if (event.entry.type === "message" && event.entry.message.role === "user") {
+      recoveryCheckpoint = await lease.recordCheckpoint("input_committed", {
+        sessionId: ref.sessionId, entryId: event.entry.id,
+      });
+    }
+  });
+  created.harness.events.on("message_end", async (event) => {
+    if (event.message.role === "assistant") {
+      assistantCheckpoint = await lease.recordCheckpoint("assistant_tool_calls_committed", {
+        sessionId: ref.sessionId, entryId: event.entryId,
+      });
+    }
+    if (event.message.role !== "toolResult" || event.message.toolName !== "ImageTool") return;
+    const lane = await lease.session.getValue(laneState("main"), TODO_CONTEXT);
+    const operationId = lane.value.currentOperationId;
+    const operation = (await lease.session.getValue(operationState(operationId), TODO_CONTEXT)).value;
+    const pending = await lease.session.getValue(pendingEntry(event.entryId), TODO_CONTEXT);
+    assert.equal(operation.at, "tools");
+    assert.deepEqual(operation.batch.calls.map((call) => call.status), ["completed", "outcome_ready"]);
+    assert.deepEqual(operation.batch.calls.map((call) => call.sourceIndex), [1, 2]);
+    assert.deepEqual(pending.value.payload, event.message);
+    assert.equal(await lease.session.getEntry(event.entryId, TODO_CONTEXT), undefined);
+    assert.ok(recoveryCheckpoint && assistantCheckpoint);
+    // Product acceptance has only refs. Rollback hides the assistant and already placed text result.
+    await lease.revokeTo(recoveryCheckpoint);
+    writeSync(1, JSON.stringify({ ref, results, model, recoveryCheckpoint, assistantCheckpoint,
+      operationId, batch: operation.batch, requests, executions }));
+    process.exit(73);
+  });
+  const lane = await created.harness.lane("main", TODO_CONTEXT);
+  await lane.prompt("inspect", [], TODO_CONTEXT);
+  throw new Error("The pending image crash boundary was not reached.");
+}
+
+test("Agent session restores Pi pending images after process exit and rejects mismatches before writes", { timeout: 20_000 }, async () => {
+  const { root, sessionsRoot, cleanup } = createRepository();
+  try {
+    const child = spawnSync(process.execPath, ["--input-type=module", "-e", `
+      import assert from "node:assert/strict";
+      const assistantMessage = ${assistantMessage.toString()};
+      const toolResult = ${toolResult.toString()};
+      await (${crashAtPendingImage.toString()})(${JSON.stringify({ root, sessionsRoot, outputRoot })});
+    `], { encoding: "utf8", timeout: 15_000 });
+    assert.equal(child.status, 73, child.stderr || child.error?.message || child.stdout);
+    const saved = JSON.parse(child.stdout);
+    assert.equal(saved.requests, 1);
+    assert.equal(saved.executions, 2);
+    assert.ok(!child.stdout.includes("aW1hZ2U="), "accepted product facts must contain refs, not image bytes");
+    const repo = new FileSystemAgentSessionRepository({
+      executionEnvironment: createAgentRuntimeEnvironment(root), sessionsRoot,
+    });
+    const file = path.join(sessionsRoot, saved.ref.storageKey);
+    const before = readFileSync(file);
+    const positions = await repo.activeTranscriptPositions(saved.ref);
+    assert.equal(positions.length, 1, "crash left the branch at the product rollback checkpoint");
+    const imageResult = saved.results[1];
+    for (const [change, code] of [
+      [{ modelAttachmentRefs: [{ ...imageResult.modelAttachmentRefs[0], sha256: "0".repeat(64) }] }, "agent_session_attachment_mismatch"],
+      [{ modelAttachmentRefs: [{ ...imageResult.modelAttachmentRefs[0], byteLength: 99 }] }, "agent_session_attachment_mismatch"],
+      [{ output: { kind: "text", text: "different accepted text" } }, "agent_session_ref_invalid"],
+      [{ status: "failed" }, "agent_session_ref_invalid"],
+      [{ providerCallId: "another-call" }, "agent_session_ref_invalid"],
+    ]) {
+      await assert.rejects(() => repo.reconcileToolResultEntries({
+        sessionRef: saved.ref, assistantCheckpoint: saved.assistantCheckpoint,
+        recoveryCheckpoint: saved.recoveryCheckpoint, orderedResults: [saved.results[0], { ...imageResult, ...change }],
+      }), (error) => error instanceof AgentSessionRepositoryError && error.code === code);
+      assert.deepEqual(readFileSync(file), before, "mismatch must not write branch, pending or operation state");
+      assert.deepEqual(await repo.activeTranscriptPositions(saved.ref), positions);
+    }
+    const input = { sessionRef: saved.ref, assistantCheckpoint: saved.assistantCheckpoint,
+      recoveryCheckpoint: saved.recoveryCheckpoint, orderedResults: saved.results };
+    const checkpoint = await repo.reconcileToolResultEntries(input);
+    assert.deepEqual(await repo.reconcileToolResultEntries(input), checkpoint, "retry must reuse the checkpoint");
+    const recovered = await repo.acquire(saved.ref);
+    let harness;
+    try {
+      const after = await repo.activeTranscriptPositions(saved.ref);
+      assert.equal(after.length, 4);
+      assert.deepEqual(after.slice(2).map((entry) => entry.entryId), saved.batch.calls.map((call) => call.resultEntryId));
+      const imageEntry = await recovered.session.getEntry(saved.batch.calls[1].resultEntryId, TODO_CONTEXT);
+      assert.equal(imageEntry.terminate, true);
+      assert.equal(imageEntry.message.content[1].data, "aW1hZ2U=");
+      assert.equal(await recovered.session.getValue(pendingEntry(imageEntry.id), TODO_CONTEXT), undefined);
+      const state = (await recovered.session.getValue(operationState(saved.operationId), TODO_CONTEXT)).value;
+      assert.equal(state.at, "checkpoint");
+      assert.equal(state.triggerEntryId, imageEntry.id);
+      assert.deepEqual(state.continuation, { kind: "need_assistant", overflowRecoveryUsed: false });
+      assert.deepEqual(await recovered.session.scanValues(operationToolArgsPrefix(saved.operationId), TODO_CONTEXT), []);
+      const usage = await recovered.session.getStats(TODO_CONTEXT);
+      assert.equal(usage.usage.output, 4, "pending tool usage is inserted exactly once alongside assistant usage");
+      const { AgentHarness } = await import("@earendil-works/pi-agent-core");
+      const created = await AgentHarness.create({ session: recovered.session, model: saved.model,
+        models: { getProviders: () => [], getProvider: () => undefined, getModels: () => [saved.model],
+          getModel: () => saved.model, getAuth: async () => undefined,
+          streamSimple() { assert.fail("Recovery must not request the provider."); } }, tools: [],
+      }, TODO_CONTEXT);
+      harness = created.harness;
+      assert.equal(created.open.length, 1, "reconciliation leaves lifecycle closure to the existing startup abort");
+      const lane = await harness.lane("main", TODO_CONTEXT);
+      const aborted = await lane.abort(TODO_CONTEXT);
+      assert.equal(aborted.ok, true);
+      assert.equal((await recovered.session.getValue(laneState("main"), TODO_CONTEXT)).value.currentOperationId, null);
+      assert.deepEqual(await repo.activeTranscriptPositions(saved.ref), after, "abort must not place another result");
+    } finally {
+      await harness?.close(TODO_CONTEXT);
+      await recovered.release();
+    }
+  } finally {
+    cleanup();
+  }
+});
+
 test("Agent session repository deletes a session and forgets it", async () => {
   const { repo, cleanup } = createRepository();
   try {
     const ref = await repo.create({ sessionId: "delete-me", sessionCwd: process.cwd() });
+    await repo.delete(ref);
     await repo.delete(ref);
     await assert.rejects(
       () => repo.activeTranscriptPositions(ref),
@@ -953,4 +1174,84 @@ test("Agent session repository checks header-derived metadata before opening or 
   } finally {
     cleanup();
   }
+});
+
+
+test("explicit branch root selection retains Pi entries and old checkpoints remain selectable", async () => {
+  const { repo, cleanup } = createRepository();
+  try {
+    const ref = await repo.create({ sessionId: "editable-root", sessionCwd: process.cwd() });
+    const lease = await repo.acquire(ref);
+    const branch = await seedBranch(lease.session, [userMessage("Original"), assistantMessage("Original answer")]);
+    const positions = await repo.activeTranscriptPositions(ref);
+    const original = await lease.recordCheckpoint("assistant_response_committed", positions.at(-1));
+    await lease.release();
+    assert.equal(await repo.moveActiveCheckpoint(ref, null), null);
+    assert.deepEqual(await repo.activeTranscriptPositions(ref), []);
+    const replacementLease = await repo.acquire(ref);
+    const replacementBranch = await replacementLease.session.branch("main", TODO_CONTEXT);
+    await replacementBranch.appendMessage(userMessage("Edited"), TODO_CONTEXT);
+    await replacementBranch.appendMessage(assistantMessage("Edited answer"), TODO_CONTEXT);
+    const replacementPositions = await repo.activeTranscriptPositions(ref);
+    const replacement = await replacementLease.recordCheckpoint("assistant_response_committed", replacementPositions.at(-1));
+    await replacementLease.release();
+    await repo.moveActiveCheckpoint(ref, original);
+    assert.equal((await repo.readAssistantEntriesByCheckpoint({ sessionRef: ref, checkpoints: [original] }))[0].text, "Original answer");
+    await repo.moveActiveCheckpoint(ref, replacement);
+    assert.equal((await repo.readAssistantEntriesByCheckpoint({ sessionRef: ref, checkpoints: [replacement] }))[0].text, "Edited answer");
+  } finally { cleanup(); }
+});
+
+
+test("bounded idle Session reuse preserves generation fencing, external edits, eviction and release", async () => {
+  const { repo, cleanup } = createRepository({ idleSessionCacheSize: 1 });
+  let opens = 0;
+  const open = repo.jsonlRepository.open.bind(repo.jsonlRepository);
+  repo.jsonlRepository.open = async (...args) => { opens += 1; return open(...args); };
+  try {
+    const ref = await repo.create({ sessionId: "pooled", sessionCwd: process.cwd() });
+    const first = await repo.acquire(ref);
+    const branch = await seedBranch(first.session, [userMessage("Original"), assistantMessage("Answer")]);
+    const position = (await repo.activeTranscriptPositions(ref)).at(-1);
+    const checkpoint = await first.recordCheckpoint("assistant_response_committed", position);
+    await first.release();
+    const baseline = opens;
+    assert.equal(repo.idleSessions.size, 1);
+    await repo.moveActiveCheckpoint(ref, checkpoint);
+    await repo.readAssistantEntriesByCheckpoint({ sessionRef: ref, checkpoints: [checkpoint] });
+    assert.equal(opens, baseline);
+    await assert.rejects(first.session.setValue(laneState("main"), null, TODO_CONTEXT), SessionGenerationError);
+    const next = await repo.acquire(ref);
+    await assert.rejects(repo.acquire(ref), (error) => error.code === "agent_session_writer_active");
+    await next.revokeTo(checkpoint);
+    await next.release();
+    await assert.rejects(next.session.setValue(laneState("main"), null, TODO_CONTEXT), SessionGenerationError);
+    const other = await repo.create({ sessionId: "pooled-other", sessionCwd: process.cwd() });
+    const otherLease = await repo.acquire(other);
+    await seedBranch(otherLease.session, [userMessage("Other")]);
+    await otherLease.release();
+    assert.equal(repo.idleSessions.size, 1);
+    await repo.readAssistantEntriesByCheckpoint({ sessionRef: ref, checkpoints: [checkpoint] });
+    assert.equal(opens, baseline + 2);
+    const { appendFileSync } = await import("node:fs");
+    appendFileSync(repo.idleSessions.get(ref.sessionId).session.metadata.path, "not-valid-json\n");
+    await assert.rejects(repo.readAssistantEntriesByCheckpoint({ sessionRef: ref, checkpoints: [checkpoint] }), /Invalid JSONL/);
+    assert.equal(repo.idleSessions.has(ref.sessionId), false);
+    await repo.release();
+    assert.equal(repo.idleSessions.size, 0);
+  } finally { await repo.release(); cleanup(); }
+});
+
+test("deleting an idle pooled Session closes its provider handle before removing storage", async () => {
+  const { repo, cleanup } = createRepository({ idleSessionCacheSize: 2 });
+  try {
+    const ref = await repo.create({ sessionId: "delete-pooled", sessionCwd: process.cwd() });
+    const lease = await repo.acquire(ref);
+    await seedBranch(lease.session, [userMessage("Delete")]);
+    await lease.release();
+    assert.equal(repo.idleSessions.size, 1);
+    await repo.delete(ref);
+    assert.equal(repo.idleSessions.size, 0);
+    await assert.rejects(repo.acquire(ref), (error) => error.code === "agent_session_not_found");
+  } finally { await repo.release(); cleanup(); }
 });

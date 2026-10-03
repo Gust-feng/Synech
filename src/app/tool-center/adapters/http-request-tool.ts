@@ -7,6 +7,7 @@ import type {
 } from "../../../domain/tools/index.js";
 import { DEFAULT_MAX_INLINE_TOOL_CONTENT_JSON_CHARS } from "../tool-output-limits.js";
 import { ToolOutputStoreError, type ToolOutputStore } from "../tool-output-store.js";
+import { throwIfAborted } from "./local-workspace-common.js";
 
 export type HttpRequestMethod = "GET" | "HEAD" | "POST" | "PUT" | "DELETE";
 
@@ -138,6 +139,7 @@ export function createHttpRequestTool(options: HttpRequestToolOptions = {}): Too
         riskLevel: "medium",
         operationType: "external-submit",
         requiresConfirmation: false,
+        runtimeHints: [{ kind: "http_request" }],
       },
       inputSchema: {
         type: "object",
@@ -329,7 +331,7 @@ async function executeHttpRequest(
       });
     }
     if (context.abortSignal?.aborted === true) {
-      throw new Error("http_request was cancelled.");
+      throwIfAborted(context.abortSignal);
     }
     throw normalizeHttpRequestFailure({
       error,
@@ -741,12 +743,6 @@ function compactFacts(facts: HttpRequestErrorFacts): HttpRequestErrorFacts {
     timedOut: facts.timedOut === true ? true : undefined,
     timeoutMs: numberOrUndefined(facts.timeoutMs),
   };
-}
-
-function throwIfAborted(signal: AbortSignal | undefined): void {
-  if (signal?.aborted === true) {
-    throw new Error("http_request was cancelled.");
-  }
 }
 
 function asRecord(value: unknown): Readonly<Record<string, unknown>> {

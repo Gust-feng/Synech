@@ -4,11 +4,12 @@ import type {
   ToolExecutionContext,
   ToolExecutor,
   ToolExecutorResult,
+  ToolExecutorOutput,
   ToolFactValue,
 } from "../../domain/tools/index.js";
 import {
   normalizeToolFactValue,
-  withToolModelAttachments,
+  toolOutputWithAttachments,
 } from "../../domain/tools/index.js";
 import type { ModelInputAttachment } from "../../domain/intelligence/index.js";
 import {
@@ -116,7 +117,7 @@ async function executeMcpToolForExecutor(
   canonicalName: string,
   input: unknown,
   context: ToolExecutionContext
-): Promise<McpToolOutput | ToolExecutorResult> {
+): Promise<ToolExecutorOutput | ToolExecutorResult> {
   const startedAt = Date.now();
   let mcpResult: McpToolResult;
   try {
@@ -159,7 +160,7 @@ async function executeMcpToolForExecutor(
       },
     };
   }
-  let output: McpToolOutput;
+  let output: ToolExecutorOutput;
   try {
     output = buildToolOutput(mcpResult);
   } catch (error) {
@@ -184,7 +185,8 @@ async function executeMcpToolForExecutor(
       invocationId: context.invocationId ?? throwMissingInvocation(context, canonicalName),
       toolName: canonicalName,
       input: input as ToolFactValue | undefined,
-      output: output as ToolFactValue,
+      output: normalizeToolFactValue(output.output),
+      modelAttachments: output.modelAttachments,
       status: "failed",
       error: `MCP tool ${canonicalName} reported an error.`,
       errorDomain: "tool_error",
@@ -242,7 +244,6 @@ export type McpToolOutputContentPart =
       readonly type: "image";
       readonly mimeType: string;
       readonly byteLength: number;
-      readonly modelInput: "attached";
       readonly modelAttachmentIndex: number;
     }
   | {
@@ -250,7 +251,6 @@ export type McpToolOutputContentPart =
       readonly mimeType: string;
       readonly filename: string;
       readonly byteLength: number;
-      readonly modelInput: "audio_attachment";
       readonly modelAttachmentIndex: number;
     }
   | {
@@ -274,7 +274,6 @@ export type McpToolOutputContentPart =
             readonly uri: string;
             readonly mimeType?: string;
             readonly byteLength: number;
-            readonly modelInput: "attached";
             readonly modelAttachmentIndex: number;
           }
         | {
@@ -282,7 +281,6 @@ export type McpToolOutputContentPart =
             readonly mimeType?: string;
             readonly filename: string;
             readonly byteLength: number;
-            readonly modelInput: "file_attachment";
             readonly modelAttachmentIndex: number;
           };
     };
@@ -290,7 +288,7 @@ export type McpToolOutputContentPart =
 function buildToolOutput(result: {
   readonly content: readonly McpContentPart[];
   readonly structuredContent?: unknown;
-}): McpToolOutput {
+}): ToolExecutorOutput {
   const structuredContent = result.structuredContent === undefined
     ? undefined
     : normalizeMcpStructuredContent(result.structuredContent);
@@ -382,7 +380,6 @@ function buildToolOutput(result: {
           type: "image",
           mimeType: part.mimeType,
           ...attachment,
-          modelInput: "attached",
         });
         break;
       }
@@ -399,7 +396,6 @@ function buildToolOutput(result: {
           mimeType: part.mimeType,
           filename,
           ...attachment,
-          modelInput: "audio_attachment",
         });
         break;
       }
@@ -434,7 +430,6 @@ function buildToolOutput(result: {
               uri: part.resource.uri,
               mimeType: part.resource.mimeType,
               ...attachment,
-              modelInput: "attached",
             },
           });
           break;
@@ -458,7 +453,6 @@ function buildToolOutput(result: {
             ...(part.resource.mimeType === undefined ? {} : { mimeType: part.resource.mimeType }),
             filename,
             ...attachment,
-            modelInput: "file_attachment",
           },
         });
         break;
@@ -472,7 +466,7 @@ function buildToolOutput(result: {
       ? {}
       : { structuredContent }),
   };
-  return withToolModelAttachments(output, modelAttachments);
+  return toolOutputWithAttachments(output, modelAttachments);
 }
 
 function normalizeMcpStructuredContent(value: unknown): McpStructuredContent {

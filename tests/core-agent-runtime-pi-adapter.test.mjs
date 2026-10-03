@@ -6,7 +6,8 @@ import { AgentHarness, MemorySessionRepo } from "@earendil-works/pi-agent-core";
 import { TODO_CONTEXT } from "@earendil-works/pi-agent-core/harness/context";
 
 import { createAgentSessionLoop } from "../dist/adapters/intelligence/agent-session-loop.js";
-import { withToolModelAttachments } from "../dist/domain/tools/model-attachments.js";
+import { UNSUPPORTED_IMAGE_PLACEHOLDER } from "../dist/adapters/intelligence/session-image-placeholder.js";
+import { createModelProviderBinding } from "../dist/adapters/intelligence/model-provider-binding.js";
 
 const MODEL = Object.freeze({
   id: "adapter-model",
@@ -106,17 +107,19 @@ function deferredStream() {
 }
 
 /** Queue-based fake provider registry. Each entry is the stream for one request. */
-function createModels(streams) {
+function createModels(streams, model = MODEL) {
   const queue = [...streams];
   return {
     requested: 0,
+    contexts: [],
     getProviders: () => [],
     getProvider: () => undefined,
-    getModels: () => [MODEL],
-    getModel: () => MODEL,
+    getModels: () => [model],
+    getModel: () => model,
     getAuth: async () => undefined,
-    streamSimple() {
+    streamSimple(_model, context) {
       this.requested += 1;
+      this.contexts.push(structuredClone(context));
       const next = queue.shift();
       if (next === undefined) throw new Error("The scripted provider ran out of responses.");
       return next;
@@ -124,6 +127,97 @@ function createModels(streams) {
     completeSimple: async () => assistantMessage([{ type: "text", text: "summary" }]),
   };
 }
+
+test("a custom gateway's associated vision model keeps user and tool images through the real Harness", async () => {
+  const model = createModelProviderBinding({
+    profileId: "image-gateway", protocol: "openai_compatible_chat_completions",
+    baseUrl: "https://example.invalid/v1", apiKey: "unused-key", model: "vendor/deepseek-flash",
+  }).selectedModel;
+  const image = {
+    kind: "image", source: { kind: "data", mimeType: "image/png", data: "aW1hZ2U=" },
+  };
+  const session = await createSession("associated-vision-images");
+  const models = createModels([
+    toolCallStream({ type: "toolCall", id: "call-read-image", name: DEFINITION.name, arguments: { value: "image" } }),
+    textStream("Both images received."),
+  ], model);
+  const recorded = [];
+  const boundary = toolBoundary(recorded);
+  const imageTools = {
+    ...boundary,
+    gateway: { ...boundary.gateway, async execute(request) {
+      return { ...request, output: { format: "image" }, modelAttachments: [image], status: "completed", durationMs: 0 };
+    } },
+  };
+  const loop = createAgentSessionLoop({
+    agentSession: session, modelRegistry: models, selectedModel: model,
+    supportsVisionInput: true, compactionSettings: COMPACTION,
+  });
+  try {
+    const outcome = await loop.execute(createInput(imageTools, recorded, {
+      messages: [{ role: "user", content: "Inspect both images.", attachments: [image] }],
+    }));
+    assert.equal(outcome.status, "completed");
+    assert.equal(outcome.toolResults[0].modelAttachments, undefined);
+    assert.equal(outcome.toolResults[0].modelAttachmentRefs.length, 1);
+    assert.ok(!JSON.stringify(outcome.toolResults).includes(image.source.data));
+    const firstUser = models.contexts[0].messages.find((message) => message.role === "user");
+    assert.ok(firstUser.content.some((block) => block.type === "image" && block.data === image.source.data));
+    const imageResult = models.contexts[1].messages.find((message) => message.role === "toolResult");
+    assert.ok(imageResult.content.some((block) => block.type === "image" && block.data === image.source.data));
+    const durableImages = (await session.findEntries(undefined, TODO_CONTEXT))
+      .filter((entry) => entry.type === "message")
+      .flatMap((entry) => Array.isArray(entry.message.content) ? entry.message.content : [])
+      .filter((block) => block.type === "image");
+    assert.equal(durableImages.length, 2, "the current turn and tool image remain available to future turns");
+    const resultEntries = (await session.findEntries(undefined, TODO_CONTEXT))
+      .filter((entry) => entry.type === "message" && entry.message.role === "toolResult");
+    assert.ok(resultEntries.every((entry) => !JSON.stringify(entry.message.details).includes(image.source.data)),
+      "Session stores image bytes in content once, not again in tool result details");
+  } finally {
+    await loop.release();
+  }
+});
+
+test("a text-only run reports undelivered images while preserving them for a later vision run", async () => {
+  const image = {
+    kind: "image", source: { kind: "data", mimeType: "image/png", data: "aW1hZ2U=" },
+  };
+  const session = await createSession("text-only-image-notice");
+  const models = createModels([textStream("The image was not delivered.")]);
+  const loop = createAgentSessionLoop({
+    agentSession: session, modelRegistry: models, selectedModel: MODEL,
+    supportsVisionInput: false, compactionSettings: COMPACTION,
+  });
+  try {
+    const outcome = await loop.execute(createInput(toolBoundary([]), [], {
+      messages: [{ role: "user", content: "Inspect this image.", attachments: [image] }],
+    }));
+    assert.equal(outcome.status, "completed");
+    const user = models.contexts[0].messages.find((message) => message.role === "user");
+    assert.ok(user.content.some((block) => block.type === "text" && block.text === UNSUPPORTED_IMAGE_PLACEHOLDER));
+    assert.ok(user.content.every((block) => block.type !== "image"));
+
+    const visionModel = { ...MODEL, input: ["text", "image"] };
+    const visionModels = createModels([textStream("The image is available now.")], visionModel);
+    const visionLoop = createAgentSessionLoop({
+      agentSession: session, modelRegistry: visionModels, selectedModel: visionModel,
+      supportsVisionInput: true, compactionSettings: COMPACTION,
+    });
+    try {
+      const resumed = await visionLoop.execute(createInput(toolBoundary([]), [], {
+        messages: [{ role: "user", content: "Inspect the earlier image now." }],
+      }));
+      assert.equal(resumed.status, "completed");
+      assert.ok(visionModels.contexts[0].messages.some((message) => Array.isArray(message.content) &&
+        message.content.some((block) => block.type === "image" && block.data === image.source.data)));
+    } finally {
+      await visionLoop.release();
+    }
+  } finally {
+    await loop.release();
+  }
+});
 
 async function createSession(sessionId) {
   const repo = new MemorySessionRepo();
@@ -402,48 +496,56 @@ test("Pi Adapter settles unsupported deferred runs without resuming them", async
   await loop.release();
 });
 
-test("Pi Adapter does not mint a response checkpoint for completed tool use", async () => {
-  const session = await createSession("adapter-tool-use-terminal");
-  const recorded = [];
-  const models = createModels([
-    toolCallStream({ type: "toolCall", id: "call-attachment", name: DEFINITION.name, arguments: { value: "image" } }),
-  ]);
-  const loop = createAgentSessionLoop({
-    agentSession: session,
-    modelRegistry: models,
-    selectedModel: MODEL,
-    compactionSettings: COMPACTION,
-  });
-  const checkpoints = [];
-  const boundary = toolBoundary(recorded);
-  const attachmentBoundary = {
-    ...boundary,
-    gateway: {
-      ...boundary.gateway,
-      async execute(request) {
-        const output = withToolModelAttachments(
-          { kind: "text", text: "image result" },
-          [{ kind: "image", source: { kind: "data", mimeType: "image/png", data: "aW1hZ2U=" } }],
+test("Pi Adapter stops undeliverable tool images without a final response checkpoint", async (t) => {
+  for (const supportsVisionInput of [false, true]) await t.test(
+    supportsVisionInput ? "capability projection mismatch" : "vision input unsupported",
+    async () => {
+      const session = await createSession("adapter-tool-use-terminal");
+      const recorded = [];
+      const models = createModels([
+        toolCallStream({ type: "toolCall", id: "call-attachment", name: DEFINITION.name, arguments: { value: "image" } }),
+      ]);
+      const loop = createAgentSessionLoop({
+        agentSession: session,
+        modelRegistry: models,
+        selectedModel: MODEL,
+        supportsVisionInput,
+        compactionSettings: COMPACTION,
+      });
+      const checkpoints = [];
+      const boundary = toolBoundary(recorded);
+      const attachmentBoundary = {
+        ...boundary,
+        gateway: {
+          ...boundary.gateway,
+          async execute(request) {
+            return { ...request, output: { kind: "text", text: "image result" },
+              modelAttachments: [{ kind: "image", source: { kind: "data", mimeType: "image/png", data: "aW1hZ2U=" } }],
+              status: "completed", durationMs: 0 };
+          },
+        },
+      };
+
+      try {
+        const outcome = await loop.execute(createInput(attachmentBoundary, recorded, {
+          onSessionWriteCheckpoint: (checkpoint) => checkpoints.push(checkpoint),
+        }));
+        assert.equal(outcome.status, "failed");
+        assert.equal(outcome.errorCode, "tool_result_delivery_failed");
+        assert.equal(outcome.toolResults.length, 1);
+        assert.equal(outcome.toolResults[0].errorFacts.code, supportsVisionInput
+          ? "tool_result_image_input_projection_mismatch" : "tool_result_image_input_unsupported");
+        assert.equal(models.requested, 1, "an undeliverable image must stop before another model request");
+        assert.equal(
+          checkpoints.some((checkpoint) => checkpoint.kind === "assistant_response_entry_committed"),
+          false,
+          "tool-use termination must not be promoted to a final response checkpoint",
         );
-        return { ...request, output, status: "completed", durationMs: 0 };
-      },
+      } finally {
+        await loop.release();
+      }
     },
-  };
-
-  const outcome = await loop.execute(createInput(attachmentBoundary, recorded, {
-    onSessionWriteCheckpoint: (checkpoint) => checkpoints.push(checkpoint),
-  }));
-
-  assert.equal(outcome.status, "failed");
-  assert.equal(outcome.errorCode, "tool_result_delivery_failed");
-  assert.equal(outcome.toolResults.length, 1);
-  assert.equal(outcome.toolResults[0].errorFacts.code, "tool_result_image_input_unsupported");
-  assert.equal(
-    checkpoints.some((checkpoint) => checkpoint.kind === "assistant_response_entry_committed"),
-    false,
-    "tool-use termination must not be promoted to a final response checkpoint",
   );
-  await loop.release();
 });
 
 test("Pi Adapter rejects an empty completed assistant", async () => {
@@ -722,4 +824,98 @@ test("Pi Adapter lets the owner finish accepting a tool round before the tool ex
   assert.equal(recorded[0].invocationId, "invocation:call-slow");
 
   await loop.release();
+});
+
+
+test("restored conversations apply current model, capabilities, instructions and tools without losing history", async () => {
+  const session = await createSession("adapter-model-switch");
+  const recorded = [];
+  const image = { kind: "image", source: { kind: "data", mimeType: "image/png", data: "aW1hZ2U=" } };
+  const selections = [
+    { model: { ...MODEL, reasoning: true, input: ["text", "image"] }, thinkingLevel: "high", tools: true },
+    { model: { ...MODEL, id: "switched-model", reasoning: true }, thinkingLevel: "low", tools: false },
+    { model: { ...MODEL, id: "switched-model", reasoning: true, input: ["text", "image"], maxTokens: 2048 }, thinkingLevel: "high", tools: true },
+    { model: { ...MODEL, provider: "other-provider" }, tools: false },
+    { model: { ...MODEL, provider: "other-provider" }, tools: false },
+  ];
+  for (const [index, selection] of selections.entries()) {
+    const models = createModels([textStream(`Reply ${index}.`)], selection.model);
+    models.getModel = (provider, modelId) =>
+      provider === selection.model.provider && modelId === selection.model.id ? selection.model : undefined;
+    const requests = [];
+    const streamSimple = models.streamSimple.bind(models);
+    models.streamSimple = (model, context, options) => {
+      requests.push({ model, options });
+      return streamSimple(model, context);
+    };
+    const loop = createAgentSessionLoop({
+      agentSession: session, modelRegistry: models, selectedModel: selection.model,
+      thinkingLevel: selection.thinkingLevel, compactionSettings: COMPACTION,
+    });
+    const boundary = toolBoundary(recorded);
+    const tools = selection.tools ? boundary : {
+      ...boundary, definitions: [], permission: { ...boundary.permission, allowedTools: [] },
+    };
+    try {
+      const outcome = await loop.execute(createInput(tools, recorded, {
+        instructions: `Instructions for turn ${index}.`,
+        messages: [{ role: "user", content: `Turn ${index}.`, ...(index === 0 ? { attachments: [image] } : {}) }],
+      }));
+      assert.equal(outcome.status, "completed", JSON.stringify(outcome));
+      assert.equal(outcome.finalText, `Reply ${index}.`);
+      assert.equal(requests.length, 1);
+      assert.equal(requests[0].model.id, selection.model.id);
+      assert.equal(requests[0].model.provider, selection.model.provider);
+      assert.equal(requests[0].model.maxTokens, selection.model.maxTokens);
+      assert.equal(requests[0].options.reasoning, selection.thinkingLevel);
+      const context = models.contexts[0];
+      assert.equal(context.systemPrompt, `Instructions for turn ${index}.`);
+      assert.deepEqual((context.tools ?? []).map((tool) => tool.name), selection.tools ? [DEFINITION.name] : []);
+      const users = context.messages.filter((message) => message.role === "user");
+      assert.equal(users.length, index + 1, "switching models must retain prior turns");
+      const earlierImage = users[0].content;
+      assert.equal(earlierImage.some((block) => block.type === "image"), selection.model.input.includes("image"));
+      if (!selection.model.input.includes("image")) {
+        assert.ok(earlierImage.some((block) => block.type === "text" && block.text === UNSUPPORTED_IMAGE_PLACEHOLDER));
+      }
+    } finally {
+      await loop.release();
+    }
+  }
+});
+
+test("a new model settles an interrupted old-model operation before starting without replaying it", async () => {
+  const session = await createSession("adapter-interrupted-model-switch");
+  const oldModels = createModels([textStream("Must not replay the interrupted run.")]);
+  const interrupted = await AgentHarness.create({
+    session, models: oldModels, model: MODEL, thinkingLevel: "high", compaction: COMPACTION,
+    activeToolNames: ["RemovedTool"],
+  }, TODO_CONTEXT);
+  const oldLane = await interrupted.harness.lane("main", TODO_CONTEXT);
+  const admission = await oldLane.accept({ kind: "prompt", prompt: "Interrupted prompt." }, TODO_CONTEXT);
+  assert.equal(admission.ok, true);
+  // Acceptance is durable, but drive never started: this is a process-stop boundary.
+  const model = { ...MODEL, id: "replacement-model", provider: "replacement-provider" };
+  const models = createModels([textStream("New turn completed.")], model);
+  models.getModel = (provider, modelId) => provider === model.provider && modelId === model.id ? model : undefined;
+  const loop = createAgentSessionLoop({
+    agentSession: session, modelRegistry: models, selectedModel: model, compactionSettings: COMPACTION,
+  });
+  try {
+    const outcome = await loop.execute(createInput(toolBoundary([]), [], {
+      messages: [{ role: "user", content: "Continue with the replacement model." }],
+    }));
+    assert.equal(outcome.status, "completed", JSON.stringify(outcome));
+    assert.equal(outcome.finalText, "New turn completed.");
+    assert.equal(oldModels.requested, 0);
+    assert.equal(models.requested, 1, "startup recovery must not issue an extra model request");
+    const restored = await AgentHarness.create({ session, models, model, compaction: COMPACTION }, TODO_CONTEXT);
+    assert.equal(restored.open.length, 0);
+    const lane = await restored.harness.lane("main", TODO_CONTEXT);
+    const previousResult = await lane.getResult(admission.value.operationId, TODO_CONTEXT);
+    assert.equal(previousResult.status, "aborted");
+    await restored.harness.close(TODO_CONTEXT);
+  } finally {
+    await loop.release();
+  }
 });

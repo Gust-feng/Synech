@@ -47,6 +47,10 @@ const BUILTIN_TOOL_PRESENTATION: Readonly<Record<string, ToolPresentationSeed>> 
     displayName: "读取工具结果",
     displayDescription: "按引用继续读取已保存的大工具结果，不会重新执行原工具。",
   },
+  ViewImage: {
+    displayName: "查看工作区图片",
+    displayDescription: "读取授权工作区内的图片，供当前模型查看。",
+  },
   Glob: {
     displayName: "浏览目录",
     displayDescription: "查看工作区目录结构，帮助定位相关文件。",

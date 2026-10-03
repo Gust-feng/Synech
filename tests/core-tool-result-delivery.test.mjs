@@ -6,7 +6,8 @@ import { ToolCenter } from "../dist/app/tool-center/tool-center.js";
 import { InMemoryToolOutputStore } from "../dist/app/tool-center/tool-output-store.js";
 import { createReadToolOutputTool } from "../dist/app/tool-center/adapters/tool-output-read-tool.js";
 import { harnessToolResult } from "../dist/adapters/intelligence/tool-result-transport.js";
-import { withToolModelAttachments } from "../dist/domain/tools/model-attachments.js";
+import { toolOutputWithAttachments } from "../dist/domain/tools/model-attachments.js";
+import { createMcpToolExecutor } from "../dist/adapters/mcp/mcp-tool-adapter.js";
 
 const tokenCounter = createOpenAITokenCounter();
 const image = {
@@ -30,7 +31,7 @@ function registerImageTool(center, body) {
       metadata: { category: "filesystem", operationType: "read-only", riskLevel: "low", requiresConfirmation: false },
     },
     async execute() {
-      return withToolModelAttachments(body, [image]);
+      return toolOutputWithAttachments(body, [image]);
     },
   });
 }
@@ -48,11 +49,15 @@ test("a normal image reaches the model without requiring text result retention",
   });
   assert.equal(result.status, "completed");
   assert.equal(result.output.contentRef, undefined);
-  const delivered = modelResult(result);
+  const copied = structuredClone({ ...result, output: { ...result.output } });
+  const delivered = modelResult(copied);
   assert.equal(JSON.parse(delivered.content[0].text).status, "completed");
   assert.deepEqual(delivered.content[1], {
     type: "image", mimeType: image.source.mimeType, data: image.source.data,
   });
+  assert.equal(delivered.details.result.modelAttachments, undefined);
+  assert.equal(delivered.details.result.modelAttachmentRefs.length, 1);
+  assert.ok(!JSON.stringify(delivered.details).includes(image.source.data));
 });
 
 test("retaining oversized text preserves its image and readable continuation", async () => {
@@ -76,4 +81,29 @@ test("retaining oversized text preserves its image and readable continuation", a
   assert.equal(next.status, "completed");
   assert.ok(JSON.stringify(body).startsWith(next.output.content));
   assert.ok(next.output.content.length > 0);
+  const retained = await store.read(result.output.contentRef, { startChar: 0, maxChars: 100 });
+  assert.ok(!retained.content.includes(image.source.data));
+});
+
+test("MCP failed results retain their explicit image through text retention without duplicating binary facts", async () => {
+  const store = new InMemoryToolOutputStore();
+  const center = new ToolCenter({ outputStore: store, outputTokenCounter: tokenCounter });
+  const executor = createMcpToolExecutor({ async callTool() {
+    return { isError: true, content: [
+      { type: "text", text: "The operation failed; inspect the screenshot evidence. ".repeat(10_000) },
+      { type: "image", mimeType: "image/png", data: image.source.data },
+    ] };
+  } }, { name: "inspect", inputSchema: { type: "object", properties: {} }, annotations: { readOnlyHint: true } }, "local-test");
+  center.register(executor);
+  center.register(createReadToolOutputTool(store, { outputTokenCounter: tokenCounter }));
+  const result = await center.execute({ ...request, toolName: executor.definition.name }, context, {
+    callerAgentId: context.callerAgentId, allowedTools: [executor.definition.name, "ReadOutput"],
+  });
+  assert.equal(result.status, "failed");
+  assert.equal(result.errorFacts.code, "mcp_tool_error");
+  assert.ok(result.output.contentRef);
+  assert.equal(result.modelAttachments[0].source.data, image.source.data);
+  const delivered = modelResult(structuredClone(result));
+  assert.equal(delivered.content[1].data, image.source.data);
+  assert.ok(!JSON.stringify(delivered.details).includes(image.source.data));
 });

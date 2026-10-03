@@ -40,6 +40,7 @@ import {
   type LocalCommandProcessRegistry,
 } from "./adapters/local-workspace-command-tools.js";
 import { createLocalManagedProcessTools } from "./adapters/local-workspace-managed-process-tools.js";
+import { createWorkspaceImageTool } from "./adapters/workspace-image-tool.js";
 import {
   createLocalWorkspaceSandboxPolicy,
 } from "./adapters/local-workspace-sandbox.js";
@@ -127,6 +128,10 @@ export function createAgentToolRegistry(
   const baseToolScopes = options.baseToolScopes ?? ["agent-basic"];
   const executors: readonly ToolExecutor[] = [
     createLocalReadFileTool(workspaceRoot, { sandboxPolicy, mutationCoordinator, outputTokenCounter: options.outputTokenCounter, pathAuthorization: options.workspacePathAuthorization }),
+    createWorkspaceImageTool(workspaceRoot, {
+      sandboxPolicy, mutationCoordinator, pathAuthorization: options.workspacePathAuthorization,
+      supportsVisionInput: options.modelCapabilities === undefined ? undefined : resolvedSupportsVisionInput(options.modelCapabilities) === true,
+    }),
     createLocalGlobTool(workspaceRoot, { sandboxPolicy, mutationCoordinator, outputTokenCounter: options.outputTokenCounter, pathAuthorization: options.workspacePathAuthorization }),
     createLocalGrepFilesTool(workspaceRoot, { sandboxPolicy, mutationCoordinator, outputTokenCounter: options.outputTokenCounter, pathAuthorization: options.workspacePathAuthorization }),
     createLocalWriteFileTool(workspaceRoot, { sandboxPolicy, mutationCoordinator, pathAuthorization: options.workspacePathAuthorization }),
@@ -167,9 +172,11 @@ export function createAgentToolRegistry(
     const currentAvailability =
       executor.definition.name === "WebFetch" && !webFetchAvailability.available
         ? { status: "unavailable" as const, disabledReason: webFetchAvailability.reason }
-        : executor.definition.name === "AttachmentReadImage" && options.modelCapabilities !== undefined &&
+        : (executor.definition.name === "AttachmentReadImage" || executor.definition.name === "ViewImage") && options.modelCapabilities !== undefined &&
             resolvedSupportsVisionInput(options.modelCapabilities) !== true
-          ? { status: "unavailable" as const, disabledReason: "Current model does not support vision input." }
+          ? { status: "unavailable" as const, disabledReason: resolvedSupportsVisionInput(options.modelCapabilities) === false
+              ? "Current model does not support vision input."
+              : "Vision input is not configured for this model." }
           : { status: "available" as const };
     targetRegistry.register({
       executor,

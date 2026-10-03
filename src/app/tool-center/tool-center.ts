@@ -11,6 +11,8 @@ import type {
   ToolExecutionPreflight,
   ToolExecutor,
   ToolExecutorResult,
+  ToolExecutorOutput,
+  ToolExecutionResult,
   ToolPermissionCheck,
   ToolSecurityDecision,
   ToolExecutionMetricsSink,
@@ -25,6 +27,7 @@ import {
   normalizeToolErrorFacts,
   normalizeToolErrorFactValue,
   normalizeToolFactValue,
+  normalizeToolModelAttachments,
   toolInvocationId,
   toolDisplayName,
 } from "../../domain/tools/index.js";
@@ -114,7 +117,7 @@ export class ToolCenter implements ToolExecutionGateway {
     request: ToolCallRequest,
     context: ToolExecutionContext,
     permission: ToolPermissionCheck
-  ): Promise<ToolCallResult> {
+  ): Promise<ToolExecutionResult> {
     const startedAt = Date.now();
     const preflight = this.preflightInternal(request, context, permission, startedAt);
     if (preflight.status !== "ready") {
@@ -183,12 +186,14 @@ export class ToolCenter implements ToolExecutionGateway {
         this.recordExecutionMetric(rawResult, delivered, Date.now() - deliveryStartedAt);
         return delivered;
       }
-      const rawResult: ToolCallResult = {
+      const mediaOutput = isToolExecutorOutput(output) ? output : undefined;
+      const rawResult: ToolExecutionResult = {
         providerCallId: factRequest.providerCallId,
         ...toolFactIdentity(factRequest),
         toolName: factRequest.toolName,
         input: factRequest.input,
-        output: normalizeToolFactValue(output),
+        output: normalizeToolFactValue(mediaOutput === undefined ? output : mediaOutput.output),
+        modelAttachments: normalizeToolModelAttachments(mediaOutput?.modelAttachments),
         status: "completed",
         durationMs: Date.now() - startedAt,
       };
@@ -224,10 +229,10 @@ export class ToolCenter implements ToolExecutionGateway {
   }
 
   async deliverResult(
-    result: ToolCallResult,
+    result: ToolExecutionResult,
     permission: ToolPermissionCheck,
     ownerId: string,
-  ): Promise<ToolCallResult> {
+  ): Promise<ToolExecutionResult> {
     const deliveryStartedAt = Date.now();
     const delivered = await this.resultRetention.prepareResult(
       result,
@@ -423,6 +428,11 @@ function isToolExecutorResult(value: unknown): value is ToolExecutorResult {
   );
 }
 
+function isToolExecutorOutput(value: unknown): value is ToolExecutorOutput {
+  return typeof value === "object" && value !== null &&
+    "kind" in value && value.kind === "tool_output";
+}
+
 function recordFromUnknown(value: unknown): Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? value as Readonly<Record<string, unknown>>
@@ -499,9 +509,18 @@ function nativeProducerContinuation(
 }
 
 function normalizeExecutorResult(
-  result: ToolCallResult,
+  result: ToolExecutionResult,
   request: ToolCallRequest,
   startedAt: number
+): ToolExecutionResult {
+  const normalized = normalizeExecutorResultFact(result, request, startedAt);
+  return { ...normalized, modelAttachments: normalizeToolModelAttachments(result.modelAttachments) };
+}
+
+function normalizeExecutorResultFact(
+  result: ToolCallResult,
+  request: ToolCallRequest,
+  startedAt: number,
 ): ToolCallResult {
   const raw = result as ToolCallResult & Readonly<Record<string, unknown>>;
   const output = normalizeToolFactValue(raw.output);

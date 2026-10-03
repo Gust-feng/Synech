@@ -16,21 +16,15 @@ export function evaluateToolCallSecurity(input: {
   readonly metadata: ToolDefinitionMetadata;
   readonly context: ToolSecurityEvaluationContext;
 }): ToolSecurityDecision {
-  const urlDecision = evaluateUrlSupport(input.request);
-  if (urlDecision?.decision === "blocked") {
-    return urlDecision;
-  }
-
   const confirmationId = confirmationIdForToolCall(toolInvocationId(input.request));
   if (input.context.approvedConfirmationIds?.includes(confirmationId) === true) {
     return { decision: "allow", reason: "Matching confirmation id was approved for this tool call." };
   }
 
-  // A request that names both a URL and a side-effect HTTP method submits an
-  // external write. Prompt-injected content must not drive such submissions
-  // without the user seeing them, even when the tool's static metadata allows
-  // confirmation-free reads (e.g. HttpRequest GET).
-  if (input.metadata.requiresConfirmation === true || isSideEffectHttpSubmission(input.request)) {
+  // Only an explicit HTTP executor contract gives method fields network meaning.
+  const httpWrite = input.metadata.runtimeHints?.some((hint) => hint.kind === "http_request") === true &&
+    isSideEffectHttpSubmission(input.request);
+  if (input.metadata.requiresConfirmation === true || httpWrite) {
     if (input.context.accessPolicy?.approvalMode === "bypass") {
       return { decision: "allow", reason: "Full access mode allows confirmation-gated tool calls." };
     }
@@ -111,37 +105,6 @@ function isSideEffectHttpSubmission(request: ToolCallRequest): boolean {
   return stringOrUndefined(record.url) !== undefined &&
     method !== undefined &&
     SIDE_EFFECT_HTTP_METHODS.has(method);
-}
-
-function evaluateUrlSupport(request: ToolCallRequest): ToolSecurityDecision | undefined {
-  const url = urlFromInput(request.input);
-  if (url === undefined) {
-    return undefined;
-  }
-  const parsed = parseUrl(url);
-  if (parsed === undefined || (parsed.protocol !== "http:" && parsed.protocol !== "https:")) {
-    return {
-      decision: "blocked",
-      code: "url_protocol_blocked",
-      reason: "Only HTTP and HTTPS URLs are allowed.",
-      affectedResources: [compactPolicyText(url, 220)],
-      sourceRefs: [`tool:${toolInvocationId(request)}`],
-    };
-  }
-  return undefined;
-}
-
-function urlFromInput(input: unknown): string | undefined {
-  const record = asRecord(input);
-  return stringOrUndefined(record.url);
-}
-
-function parseUrl(value: string): URL | undefined {
-  try {
-    return new URL(value);
-  } catch {
-    return undefined;
-  }
 }
 
 function affectedResourcesFromInput(input: unknown): readonly string[] {
