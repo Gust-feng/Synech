@@ -32,7 +32,6 @@ export function toolActivityVerb(node: ProjectableTranscriptNode): string {
     if (display.operation === "list") return "查看";
     return "空间";
   }
-  if (display?.kind === "note_operation") return "记录";
   if (display?.kind === "agent_task") return "委派";
   if (display?.kind === "command_summary") return "命令";
   if (display?.kind === "search_results") return "搜索";
@@ -92,9 +91,6 @@ export function toolActivityTargetCopy(
   if (display?.kind === "space_operation") {
     const target = display.title ?? display.spaceId ?? display.targetId;
     return { detail: cleanToolTargetText(target) ?? "空间" };
-  }
-  if (display?.kind === "note_operation") {
-    return { detail: display.scope === "global" ? "全局笔记" : display.scope === "workspace" ? "工作区笔记" : "Agent 笔记" };
   }
   if (display?.kind === "generic_tool_summary") {
     const items = (display.items ?? [])
@@ -176,13 +172,6 @@ export function toolActivityLead(
     return makeActivityLead({
       action,
       subject: cleanToolTargetText(display.title ?? display.spaceId ?? display.targetId) ?? "空间",
-      context: display.status,
-    });
-  }
-  if (display?.kind === "note_operation") {
-    return makeActivityLead({
-      action: "记录",
-      subject: display.scope === "global" ? "全局笔记" : display.scope === "workspace" ? "工作区笔记" : "Agent 笔记",
       context: display.status,
     });
   }

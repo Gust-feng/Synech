@@ -11,6 +11,7 @@
   "scripts": {
     "clean:dist": "node scripts/clean-dist.mjs",
     "clean:workspace": "node scripts/clean-workspace.mjs",
+    "compact:run-storage": "node scripts/compact-run-storage.mjs",
     "reset:product-home": "node scripts/reset-product-home.mjs",
     "build": "pnpm clean:dist && pnpm build:node && pnpm check:baseline && pnpm copy:sub-agents && pnpm typecheck:panel && pnpm build:panel",
     "build:node": "pnpm generate:icons && tsc -p tsconfig.json && pnpm copy:initial-workbench-assets",

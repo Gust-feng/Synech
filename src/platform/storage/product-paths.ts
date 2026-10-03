@@ -8,7 +8,6 @@ export type AgentDataPaths = {
   readonly sessions: string;
   readonly attachments: string;
   readonly evidence: string;
-  readonly memoryFacts: string;
 };
 
 export type SpaceDataPaths = {
@@ -24,9 +23,7 @@ export type KnowledgeDataPaths = {
 
 export type MemoryDataPaths = {
   readonly root: string;
-  readonly agentNotes: string;
   readonly collaborationRules: string;
-  readonly methods: string;
 };
 
 export type ProductDataPaths = {
@@ -98,7 +95,6 @@ export function resolveProductPaths(options: ResolveProductHomeOptions = {}): Pr
         sessions: path.join(agentRoot, "sessions"),
         attachments: path.join(agentRoot, "attachments"),
         evidence: path.join(agentRoot, "evidence"),
-        memoryFacts: path.join(agentRoot, "memory-facts"),
       },
       spaces: {
         root: spacesRoot,
@@ -111,9 +107,7 @@ export function resolveProductPaths(options: ResolveProductHomeOptions = {}): Pr
       },
       memory: {
         root: memoryRoot,
-        agentNotes: path.join(memoryRoot, "agent-notes"),
         collaborationRules: path.join(memoryRoot, "collaboration-rules"),
-        methods: path.join(memoryRoot, "methods"),
       },
     },
     state: {
@@ -153,16 +147,13 @@ export function productStorageDirectories(paths: ProductPaths): readonly string[
     paths.data.agent.sessions,
     paths.data.agent.attachments,
     paths.data.agent.evidence,
-    paths.data.agent.memoryFacts,
     paths.data.spaces.root,
     paths.data.spaces.files,
     paths.data.spaces.webMetadata,
     paths.data.knowledge.root,
     paths.data.knowledge.assets,
     paths.data.memory.root,
-    paths.data.memory.agentNotes,
     paths.data.memory.collaborationRules,
-    paths.data.memory.methods,
     paths.state.root,
     paths.state.journals,
     paths.state.locks,
