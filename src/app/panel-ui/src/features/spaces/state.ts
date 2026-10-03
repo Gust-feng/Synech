@@ -37,7 +37,7 @@ export function useSpaceProjection(enabled = true): {
   readonly addWebReference: (spaceId: string, title: string, url: string) => Promise<void>;
   readonly rename: (target: { readonly kind: "space" | "reference"; readonly id: string }, title: string) => Promise<void>;
   readonly unlinkReference: (itemId: string) => Promise<void>;
-  readonly reconnectWorkspace: (workspaceId: string) => Promise<void>;
+  readonly reconnectWorkspace: (referenceId: string) => Promise<void>;
   readonly removeReference: (itemId: string) => Promise<void>;
   readonly openReference: (spaceId: string, itemId: string) => Promise<void>;
   readonly refresh: () => Promise<void>;
@@ -260,10 +260,10 @@ export function useSpaceProjection(enabled = true): {
     await runMutation(`unlink-reference:${itemId}`, () => postJson(`/api/spaces/references/${encodeURIComponent(itemId)}/unlink`, {}));
   }, [runMutation]);
 
-  const reconnectWorkspace = useCallback(async (workspaceId: string): Promise<void> => {
+  const reconnectWorkspace = useCallback(async (referenceId: string): Promise<void> => {
     const directory = await selectTaskWorkspaceDirectory();
     if (directory === undefined) return;
-    await runMutation(`reconnect-workspace:${workspaceId}`, () => postJson(`/api/workspaces/${encodeURIComponent(workspaceId)}/reconnect`, { rootPath: directory }));
+    await runMutation(`reconnect-reference:${referenceId}`, () => postJson(`/api/spaces/references/${encodeURIComponent(referenceId)}/reconnect`, { rootPath: directory }));
   }, [runMutation]);
 
   const openReference = useCallback(async (_spaceId: string, itemId: string): Promise<void> => {
