@@ -24,12 +24,23 @@ type DemoModelConfigState = {
   modelCapabilityProfiles: Record<string, unknown>[];
 };
 
+type DemoMemoryEntry = { entry: Record<string, unknown>; revisions: Record<string, unknown>[] };
+
+type DemoMemoryState = {
+  enabled: boolean;
+  revisionSeq: number;
+  overviewRevision: number;
+  entries: DemoMemoryEntry[];
+  requests: Map<string, string>;
+};
+
 type DemoState = {
   knowledge: DemoKnowledgeSnapshot;
   conversations: Map<string, Conversation>;
   runViews: Map<string, NonNullable<Conversation["currentRun"]>>;
   previewOverrides: Map<string, DocumentPreview>;
   config: DemoModelConfigState;
+  memory: DemoMemoryState;
 };
 
 const jsonHeaders = { "content-type": "application/json; charset=utf-8" };
@@ -51,6 +62,7 @@ export function installPanelDemoTransport(): void {
       }),
       modelCapabilityProfiles: (demoConfig.modelCapabilityProfiles ?? []).map((c) => ({ ...(c as unknown as Record<string, unknown>) })),
     },
+    memory: { enabled: true, revisionSeq: 0, overviewRevision: 0, entries: [], requests: new Map() },
   };
 
   window.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -164,14 +176,78 @@ async function routeDemoRequest(
     return json({ ok: true, conversation });
   }
 
-  // Memory管理页在 Demo 中保持可用但停用：浏览器 Demo 不提供本地记忆存储。
-  if (method === "GET" && path === "/api/memory/status") {
-    return json({ ok: true, status: { hasContent: false, enabled: false, rollout: "active", health: "ready", effective: "off" } });
+  // 记忆管理：浏览器 Demo 用内存充当临时后端，条目改动刷新后丢失。
+  if (path === "/api/memory/status" && method === "GET") {
+    return json({ ok: true, status: {
+      hasContent: state.memory.entries.length > 0, enabled: state.memory.enabled,
+      rollout: "active", health: "ready", effective: state.memory.enabled ? "active" : "off",
+    } });
   }
-  if (method === "GET" && path === "/api/memory/document") {
-    return json({ ok: true, view: { document: undefined, entries: [], topics: [], nextCursor: null, summaryCount: 0, lastMaintenanceAt: null } });
+  if (path === "/api/memory/document" && method === "GET") {
+    const entryId = url.searchParams.get("entryId");
+    const limit = Number(url.searchParams.get("limit") ?? 0);
+    let views = state.memory.entries.map(memoryEntryView);
+    if (entryId !== null && entryId.length > 0) views = views.filter((v) => (v.entry as { entryId?: string }).entryId === entryId);
+    views.reverse();
+    return json({ ok: true, view: {
+      document: memoryOverview(state), entries: limit > 0 ? views.slice(0, limit) : views,
+      topics: [], nextCursor: null, summaryCount: 0, lastMaintenanceAt: null,
+    } });
   }
-  if (method === "POST" && path === "/api/memory") return desktopOnly();
+  if (path === "/api/memory" && method === "POST") {
+    const op = bodyString(body, "op");
+    if (op === "setEnabled") {
+      state.memory.enabled = body.enabled === true;
+      return json({ ok: true, policyRevision: `demo-policy-${state.memory.revisionSeq}` });
+    }
+    if (op === "setRollout") return json({ ok: true, policyRevision: "demo-policy-rollout" });
+    if (op === "clearMemory") {
+      state.memory.entries = [];
+      state.memory.overviewRevision += 1;
+      return json({ ok: true, generation: 1 });
+    }
+    if (op === "updateMemory") {
+      const edit = (body.edit ?? {}) as Record<string, unknown>;
+      const requestId = bodyString(body, "requestId");
+      const cached = state.memory.requests.get(requestId);
+      if (cached !== undefined) return json(JSON.parse(cached) as unknown);
+      const entryId = bodyString(edit, "entryId");
+      const expectedRevisionId = bodyString(edit, "expectedRevisionId");
+      const revisionId = `memrev-${++state.memory.revisionSeq}`;
+      const kind = bodyString(edit, "kind") || "initial";
+      if (edit.operation === "create") {
+        if (state.memory.entries.some((e) => (e.entry as { entryId?: string }).entryId === entryId)) {
+          return json({ error: { code: "memory_request_conflict", message: "该条目 id 已存在。" } }, 409);
+        }
+        const entry: Record<string, unknown> = {
+          entryId, owner: body.owner, generation: 0, headRevisionId: revisionId, createdAt: Date.now(),
+        };
+        state.memory.entries.push({ entry, revisions: [memoryRevision(entryId, edit, {
+          revisionId, revision: 1, previousRevisionId: null, kind,
+        })] });
+        state.memory.overviewRevision += 1;
+        const result = { ok: true, entryId, revisionId, revision: 1, overviewRevisionId: revisionId };
+        state.memory.requests.set(requestId, JSON.stringify(result));
+        return json(result);
+      }
+      const entry = state.memory.entries.find((e) => (e.entry as { entryId?: string }).entryId === entryId);
+      if (entry === undefined) return missing("memory_entry_not_found", "未找到该记忆条目。");
+      const head = entry.revisions[entry.revisions.length - 1]!;
+      if ((head as { revisionId?: string }).revisionId !== expectedRevisionId) {
+        return json({ error: { code: "memory_revision_stale", message: "记忆条目已有更新的修订，请刷新后基于最新版本编辑。" } }, 409);
+      }
+      const kindValue = kind === "initial" ? "supplement" : kind;
+      entry.revisions.push(memoryRevision(entryId, edit, {
+        revisionId, revision: entry.revisions.length + 1, previousRevisionId: expectedRevisionId, kind: kindValue,
+      }));
+      (entry.entry as { headRevisionId?: unknown }).headRevisionId = revisionId;
+      state.memory.overviewRevision += 1;
+      const result = { ok: true, entryId, revisionId, revision: entry.revisions.length, overviewRevisionId: revisionId };
+      state.memory.requests.set(requestId, JSON.stringify(result));
+      return json(result);
+    }
+    return desktopOnly();
+  }
 
   // 协作规则在 Demo 中是内存草稿：读取返回空规则，保存回显写入内容。
   if (method === "GET" && path === "/api/collaboration-rules") {
@@ -523,6 +599,76 @@ function upsertProfileCatalog(
   if (bodyString(body, "label")) catalog.label = bodyString(body, "label");
   if (bodyString(body, "baseUrl")) catalog.baseUrl = bodyString(body, "baseUrl");
   return catalog;
+}
+
+// ---------------------------------------------------------------------------
+// 记忆条目的内存后端（浏览器临时存储，刷新后丢失）
+// ---------------------------------------------------------------------------
+
+function memoryRevision(
+  entryId: string,
+  edit: Record<string, unknown>,
+  base: { readonly revisionId: string; readonly revision: number; readonly previousRevisionId: string | null; readonly kind: string },
+): Record<string, unknown> {
+  const reason = typeof edit.reason === "string" && edit.reason.length > 0
+    ? { text: edit.reason, sourceIds: ["demo-user"] }
+    : null;
+  return {
+    revisionId: base.revisionId,
+    entryId,
+    revision: base.revision,
+    previousRevisionId: base.previousRevisionId,
+    kind: base.kind,
+    origin: "user_edit",
+    markdown: bodyString(edit, "markdown"),
+    applicability: typeof edit.applicability === "string" && edit.applicability.length > 0 ? edit.applicability : null,
+    occurredAt: typeof edit.occurredAt === "string" && edit.occurredAt.length > 0 ? edit.occurredAt : null,
+    reportedAt: new Date().toISOString(),
+    reason,
+    topicIds: Array.isArray(edit.topicIds) ? edit.topicIds : [],
+    related: Array.isArray(edit.related) ? edit.related : [],
+    sourceIds: ["demo-user"],
+    retractsRevisionIds: Array.isArray(edit.retractsRevisionIds) ? edit.retractsRevisionIds : [],
+    publishedAt: Date.now(),
+  };
+}
+
+function memoryEntryView(entry: DemoMemoryEntry): Record<string, unknown> {
+  const head = entry.revisions[entry.revisions.length - 1]!;
+  return {
+    entry: entry.entry,
+    revision: head,
+    supplyState: "eligible",
+    role: head.kind === "withdrawal" ? "withdrawn" : "current",
+    currentRevisionId: head.revisionId,
+    sources: [{
+      sourceId: "demo-user",
+      owner: entry.entry.owner,
+      locator: { kind: "user_edit", requestId: head.revisionId },
+      lifecycle: "present",
+      branch: "selected",
+      createdAt: entry.entry.createdAt,
+      readback: "not_applicable",
+    }],
+  };
+}
+
+function memoryOverview(state: DemoState): Record<string, unknown> | undefined {
+  const markdown = state.memory.entries
+    .map(memoryEntryView)
+    .filter((v) => v.role === "current")
+    .map((v) => bodyString(v.revision as Record<string, unknown>, "markdown"))
+    .filter((text) => text.length > 0)
+    .join("\n\n");
+  if (markdown.length === 0) return undefined;
+  return {
+    revisionId: `memdoc-demo-${state.memory.overviewRevision}`,
+    revision: state.memory.overviewRevision,
+    origin: "user_edit",
+    markdown,
+    generation: 0,
+    updatedAt: Date.now(),
+  };
 }
 
 async function readRequestBody(input: RequestInfo | URL, init: RequestInit | undefined): Promise<string> {
