@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import { Plus, RefreshCw, Save, Trash2 } from "lucide-react";
+import { Brain, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
 import { MemoryFeedback } from "./memory-feedback";
 import { MemoryDocumentReader } from "./memory-document-reader";
 import { clearMemory, fetchMemoryStatus, fetchMemoryView, setMemoryEnabled, updateMemory,
@@ -31,7 +31,6 @@ export function MemorySettingsPanel(props: MemorySettingsPanelProps): React.Reac
   const [draft, setDraft] = useState<Draft | null>(null);
   const [editAuthority, setEditAuthority] = useState<MemoryEntryRevisionView | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [clearScope, setClearScope] = useState<MemoryScope | null>(null);
@@ -63,7 +62,7 @@ export function MemorySettingsPanel(props: MemorySettingsPanelProps): React.Reac
   }, [kind, id]);
   useEffect(() => {
     const generation = ++epoch.current;
-    setStatus(null); setView(null); setDraft(null); setEditAuthority(null); setError(null); setNotice(null);
+    setStatus(null); setView(null); setDraft(null); setEditAuthority(null); setError(null);
     setClearScope(null); setHistoryId(null); setBusy(false);
     void refresh(generation);
     return () => { controller.current?.abort(); ++readEpoch.current; ++epoch.current; };
@@ -71,13 +70,12 @@ export function MemorySettingsPanel(props: MemorySettingsPanelProps): React.Reac
 
   async function mutate(operation: () => Promise<unknown>, savedDraft?: Draft) {
     const generation = epoch.current;
-    setBusy(true); setError(null); setNotice(null);
+    setBusy(true); setError(null);
     try {
       await operation();
       if (generation !== epoch.current) return;
       if (savedDraft !== undefined) setDraft(current => current === savedDraft ? null : current);
       setClearScope(null);
-      setNotice(savedDraft === undefined ? "已更新" : savedDraft.edit.kind === "withdrawal" ? "已撤回；后续新证据仍可能形成新的认识。" : "已保存条目");
       await refresh(generation);
       if (generation === epoch.current) props.onAfterChange?.();
     } catch (cause) {
@@ -102,7 +100,7 @@ export function MemorySettingsPanel(props: MemorySettingsPanelProps): React.Reac
     } finally { if (generation === epoch.current) setBusy(false); }
   }
   function begin(item?: MemoryEntryRevisionView, withdrawal = false) {
-    setError(null); setNotice(null); setEditAuthority(item ?? null);
+    setError(null); setEditAuthority(item ?? null);
     const content = item?.revision;
     const base = { markdown: withdrawal ? "" : content?.markdown ?? "", applicability: content?.applicability ?? null,
       occurredAt: content?.occurredAt ?? null, reason: null, topicIds: content?.topicIds ?? [], related: [] };
@@ -124,14 +122,12 @@ export function MemorySettingsPanel(props: MemorySettingsPanelProps): React.Reac
   </section>;
   return <section className="memory-settings" aria-busy={disabled}>
     <div className="memory-control-row">
-      <label className="memory-control-copy" htmlFor="memory-enabled">启用记忆</label>
-      <label className="memory-switch"><input id="memory-enabled" type="checkbox" role="switch" checked={status.enabled}
-        disabled={disabled || draft !== null || clearScope !== null} onChange={event => void mutate(() => setMemoryEnabled({ enabled: event.target.checked }))} /><span aria-hidden="true" /></label>
-      {status.hasContent && <button className="memory-button memory-button-quiet" disabled={disabled || draft !== null}
-        onClick={() => setClearScope(owner ?? { kind: "global" })}><Trash2 size={14} />清空记忆</button>}
+      <MemoryStateVisual enabled={status.enabled} health={status.health} busy={disabled} />
+      <label className="memory-switch" aria-label="启用记忆">
+        <input id="memory-enabled" type="checkbox" role="switch" checked={status.enabled}
+          disabled={disabled || draft !== null || clearScope !== null} onChange={event => void mutate(() => setMemoryEnabled({ enabled: event.target.checked }))} /><span aria-hidden="true" />
+      </label>
     </div>
-    {!status.enabled && <p className="memory-hint">记忆已关闭：自动整理、查询和背景供给暂停；已保存内容仍可管理。</p>}
-    {status.health !== "ready" && <MemoryFeedback kind="warning">记忆服务{status.health === "degraded" ? "降级" : "暂时不可用"}。</MemoryFeedback>}
     {owner && view && <>
       <section className="memory-document">
         <header className="memory-document-header"><h3>{owner.kind === "space" ? "当前空间" : "当前工作区"}记忆概览 <small className="memory-inline-meta">只读</small></h3>
@@ -186,9 +182,23 @@ export function MemorySettingsPanel(props: MemorySettingsPanelProps): React.Reac
       </section>}
     </>}
     {error && <MemoryFeedback kind="error" dismissAfterMs={8_000}>{error}</MemoryFeedback>}
-    {notice && <span className="memory-editor-caption" role="status">{notice}</span>}
     {clearScope && <MemoryClearDialog busy={disabled} error={error} onCancel={() => setClearScope(null)} onConfirm={() => void mutate(() => clearMemory({ scope: clearScope }))} />}
   </section>;
+}
+
+function MemoryStateVisual(props: {
+  readonly enabled: boolean;
+  readonly health: MemoryCapabilityStatus["health"];
+  readonly busy: boolean;
+}): React.ReactElement {
+  const state = props.health !== "ready" ? "degraded" : props.enabled ? "enabled" : "disabled";
+  const label = state === "enabled" ? "记忆已启用" : state === "disabled" ? "记忆已关闭" : "记忆服务状态异常";
+  return <div className="memory-state-visual" data-state={state} data-busy={props.busy} role="img" aria-label={label}>
+    <span className="memory-state-visual__orbit" aria-hidden="true" />
+    <span className="memory-state-visual__node memory-state-visual__node--start" aria-hidden="true" />
+    <span className="memory-state-visual__node memory-state-visual__node--end" aria-hidden="true" />
+    <span className="memory-state-visual__core" aria-hidden="true"><Brain size={18} strokeWidth={1.65} /></span>
+  </div>;
 }
 
 function EntryRevision({ item, onOpenConversation }: { readonly item: MemoryEntryRevisionView; readonly onOpenConversation?: (id: string) => void }) {
