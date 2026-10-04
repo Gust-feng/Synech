@@ -400,7 +400,7 @@ function desktopOnly(): Response {
   return json({
     error: {
       code: "demo_read_only",
-      message: "此操作需要桌面版的本地运行时；浏览器 Demo 不会改动你的电脑。",
+      message: "浏览器 Demo 不发起网络请求、不改动本地文件；此操作仅桌面版可用。",
     },
   }, 409);
 }
@@ -535,7 +535,14 @@ function handleModelConfigRequest(
       if (profile.secretConfigured !== true) return missing("model_provider_key_not_found", "未找到该厂商的 API Key。");
       return json({ ok: true, status: "completed", profileId, apiKey: "demo-stored-key" });
     }
-    if (action === "models" && method === "GET") return desktopOnly();
+    if (action === "models" && method === "GET") {
+      return json({
+        error: {
+          code: "demo_no_network",
+          message: "浏览器 Demo 不发起网络请求；“获取模型”需要连接真实服务，仅桌面版可用。",
+        },
+      }, 409);
+    }
     return undefined;
   }
 
