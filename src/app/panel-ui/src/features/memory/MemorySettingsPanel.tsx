@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import { Brain, Check, Pause, Plus, RefreshCw, Save, Trash2, TriangleAlert } from "lucide-react";
+import { Brain, Pause, Plus, RefreshCw, Save, Trash2, TriangleAlert } from "lucide-react";
 import { MemoryFeedback } from "./memory-feedback";
 import { MemoryDocumentReader } from "./memory-document-reader";
 import { clearMemory, fetchMemoryStatus, fetchMemoryView, setMemoryEnabled, updateMemory,
@@ -200,18 +200,19 @@ function MemoryStateVisual(props: {
 }): React.ReactElement {
   const state = props.busy ? "updating" : !props.enabled ? "disabled" : props.health !== "ready" ? "attention" : "enabled";
   const label = state === "updating" ? "正在更新记忆" : state === "enabled" ? "记忆已启用" : state === "disabled" ? "记忆已关闭" : "记忆服务状态异常";
-  const StatusIcon = state === "updating" ? RefreshCw : state === "disabled" ? Pause : state === "attention" ? TriangleAlert : Check;
+  const StatusIcon = state === "updating" ? RefreshCw : state === "disabled" ? Pause : state === "attention" ? TriangleAlert : undefined;
   return <div className="memory-state-scene" data-state={state} role="img" aria-label={label}>
-    <div className="memory-state-art" aria-hidden="true">
-      <span className="memory-state-art__sheet memory-state-art__sheet--back" />
-      <span className="memory-state-art__sheet memory-state-art__sheet--middle" />
-      <div className="memory-state-art__sheet memory-state-art__sheet--front">
-        <span className="memory-state-art__tab" />
-        <Brain className="memory-state-art__brain" size={30} strokeWidth={1.35} />
-        <span className="memory-state-art__rule memory-state-art__rule--long" />
-        <span className="memory-state-art__rule memory-state-art__rule--short" />
+    <div className="memory-folio" aria-hidden="true">
+      <div className="memory-folio__leaf memory-folio__leaf--first"><span /><span /></div>
+      <div className="memory-folio__leaf memory-folio__leaf--second"><span /><span /></div>
+      <div className="memory-folio__cover">
+        <span className="memory-folio__binding" />
+        <span className="memory-folio__bookmark" />
+        <div className="memory-folio__imprint"><Brain size={28} strokeWidth={1.3} /></div>
+        <span className="memory-folio__signature">
+          {StatusIcon ? <StatusIcon size={12} strokeWidth={1.65} /> : <><span /><span /></>}
+        </span>
       </div>
-      <span className="memory-state-art__status"><StatusIcon size={13} strokeWidth={1.8} /></span>
     </div>
   </div>;
 }
