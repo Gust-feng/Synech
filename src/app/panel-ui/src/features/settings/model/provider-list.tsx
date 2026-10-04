@@ -3,6 +3,7 @@ import { ArrowLeft, ChevronRight, GripVertical, Plus, RotateCcw, Search, Trash2,
 import type { ModelProviderListItem } from "./settings-projection";
 import { ProviderLogo } from "./settings-icons";
 import { sameStringList } from "./settings-list-equality";
+import { useAutoHidden } from "../../../components/use-auto-hidden";
 
 const SETTLE_DURATION_MS = 320;
 
@@ -25,6 +26,7 @@ export function ModelProviderList(props: {
   const [insertIndex, setInsertIndex] = useState<number | undefined>(undefined);
   const [dragOffsetY, setDragOffsetY] = useState(0);
   const [dragRowStep, setDragRowStep] = useState(0);
+  const failureAutoHidden = useAutoHidden(props.failure?.message);
   const [settlingDrag, setSettlingDrag] = useState<{ readonly key: string; readonly offsetY: number } | undefined>(undefined);
   const [dropHandoffActive, setDropHandoffActive] = useState(false);
   const [deleteZoneActive, setDeleteZoneActiveState] = useState(false);
@@ -358,7 +360,7 @@ export function ModelProviderList(props: {
         })}
         {props.items.length === 0 && <p className="provider-directory-empty">没有匹配的服务</p>}
       </div>
-      {props.failure !== undefined && <div className="provider-mutation-error" role="alert">
+      {props.failure !== undefined && !failureAutoHidden && <div className="provider-mutation-error" role="alert">
         <span>{props.failure.message}</span>
         <div>
           {props.failure.retry !== undefined && <button
@@ -406,6 +408,7 @@ export function ProviderDirectory(props: {
   const [addingKey, setAddingKey] = useState<string | undefined>(undefined);
   const [selectedBrandId, setSelectedBrandId] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
+  const directoryErrorAutoHidden = useAutoHidden(error);
   const normalizedQuery = query.trim().toLowerCase();
   const brands = new Map<string, { readonly label: string; readonly items: ModelProviderListItem[] }>();
   for (const item of props.items) {
@@ -470,7 +473,7 @@ export function ProviderDirectory(props: {
         </label>
       </div>
       {props.warnings?.map((warning) => <p key={warning.presetId} className="provider-directory-empty" role="status">{warning.message}</p>)}
-      {error !== undefined && <p className="provider-directory-empty" role="alert">{error}</p>}
+      {error !== undefined && !directoryErrorAutoHidden && <p className="provider-directory-empty" role="alert">{error}</p>}
       {(selectedBrand === undefined ? visibleBrands.length : services.length) === 0 ? <p className="provider-directory-empty">没有匹配的服务</p> : <div className="provider-directory-groups">
         <div className="provider-directory-grid">
           {selectedBrand === undefined ? visibleBrands.map(([brandId, brand]) => (

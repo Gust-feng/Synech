@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Copy, ExternalLink, LogIn, LogOut, X } from "lucide-react";
 import type { ModelProviderAuthResponse } from "@panel-api/config";
 import { SettingsSelectControl } from "../components/select-control";
+import { useAutoHidden } from "../../../components/use-auto-hidden";
 
 export function ModelProviderAuthPanel(props: {
   readonly auth?: ModelProviderAuthResponse;
@@ -17,6 +18,8 @@ export function ModelProviderAuthPanel(props: {
   const pending = session?.status === "pending";
   const [answer, setAnswer] = useState("");
   const [copyError, setCopyError] = useState<string | undefined>(undefined);
+  const authError = props.error ?? session?.error?.message ?? copyError;
+  const authErrorAutoHidden = useAutoHidden(authError);
   useEffect(() => {
     setAnswer(prompt?.type === "select" ? prompt.options?.[0]?.id ?? "" : "");
     setCopyError(undefined);
@@ -105,8 +108,8 @@ export function ModelProviderAuthPanel(props: {
           <button type="submit" disabled={props.busy || (prompt.type !== "text" && answer.trim().length === 0)}>继续</button>
         </form>}
       </>}
-      {(props.error ?? session?.error?.message ?? copyError) !== undefined && <p className="provider-auth-error" role="alert">
-        {props.error ?? session?.error?.message ?? copyError}
+      {authError !== undefined && !authErrorAutoHidden && <p className="provider-auth-error" role="alert">
+        {authError}
       </p>}
     </div>
   );

@@ -3,6 +3,7 @@ import { AlertCircle, Plus, RefreshCw, Search, Settings2, Trash2, X } from "luci
 import type { ModelProviderModelItem } from "./settings-projection";
 import { formatModelCount } from "./settings-projection";
 import { ModelIcon } from "./settings-icons";
+import { useAutoHidden } from "../../../components/use-auto-hidden";
 
 export function ModelCatalogPanel(props: {
   readonly catalogModels: readonly ModelProviderModelItem[];
@@ -44,6 +45,8 @@ export function ModelCatalogPanel(props: {
   const [displayName, setDisplayName] = useState("");
   const [addingModel, setAddingModel] = useState(false);
   const [addError, setAddError] = useState<string | undefined>(undefined);
+  const addErrorAutoHidden = useAutoHidden(addError);
+  const fetchErrorAutoHidden = useAutoHidden(props.fetchFeedback?.type === "error" ? props.fetchFeedback.message : undefined);
 
   async function addManualModel(): Promise<void> {
     const id = modelId.trim();
@@ -131,10 +134,10 @@ export function ModelCatalogPanel(props: {
         <button type="submit" disabled={props.saving || addingModel || modelId.trim().length === 0}>
           <Plus size={14} /> {addingModel ? "添加中" : "添加"}
         </button>
-        {addError !== undefined && <p role="alert">{addError}</p>}
+        {addError !== undefined && !addErrorAutoHidden && <p role="alert">{addError}</p>}
       </form>}
 
-      {props.fetchFeedback && props.fetchFeedback.type === "error" && (
+      {props.fetchFeedback && props.fetchFeedback.type === "error" && !fetchErrorAutoHidden && (
         <div className="model-fetch-feedback error" role="status">
           <span className="model-fetch-feedback-text">
             <AlertCircle size={14} />

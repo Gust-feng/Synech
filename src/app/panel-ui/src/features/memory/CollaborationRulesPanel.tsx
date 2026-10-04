@@ -125,7 +125,7 @@ function RuleEditor(props: { readonly title: string; readonly scope: Collaborati
             {...(maximumLength === undefined ? {} : { maxLength: maximumLength })}
             placeholder="添加规则…" />
         </div>}
-    {error !== null && <div className="memory-document-feedback"><MemoryFeedback kind="error">{error}</MemoryFeedback></div>}
+    {error !== null && <div className="memory-document-feedback"><MemoryFeedback kind="error" dismissAfterMs={8_000}>{error}</MemoryFeedback></div>}
     <footer className="memory-document-footer memory-rule-footer">
       <div className="memory-editor-actions">
         <button className="memory-button memory-button-danger-quiet" type="button" onClick={() => setConfirmClear(true)} disabled={busy || confirmClear || document === null || document.content.length === 0 || dirty}><Trash2 size={14} aria-hidden="true" />清空</button>

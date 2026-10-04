@@ -1,6 +1,7 @@
 import React, { useRef, useState } from "react";
 import { ArrowLeft, RotateCcw, Save } from "lucide-react";
 import type { ModelCapabilities, ModelConfiguration } from "@panel-api/config";
+import { useAutoHidden } from "../../../components/use-auto-hidden";
 import { SettingsSelectControl } from "../components/select-control";
 import {
   isConfirmedModelFacts,
@@ -27,6 +28,7 @@ export function ModelCapabilityEditor(props: {
   const [draft, setDraft] = useState(() => modelConfigurationDraft(props.configuration, inheritedCapabilities));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const errorAutoHidden = useAutoHidden(error);
   const submissionRef = useRef(false);
   const reasoningDisabled = modelSupportsReasoningOutput({
     ...inheritedCapabilities,
@@ -156,7 +158,7 @@ export function ModelCapabilityEditor(props: {
             ))}
           </div>
         </fieldset>
-        {error !== undefined && <p className="model-capability-error" role="alert">{error}</p>}
+        {error !== undefined && !errorAutoHidden && <p className="model-capability-error" role="alert">{error}</p>}
         <footer className="model-picker-footer">
           <button type="button" className="model-picker-cancel-btn" disabled={busy} onClick={() => void persist(true)}>
             <RotateCcw size={14} /> 恢复默认

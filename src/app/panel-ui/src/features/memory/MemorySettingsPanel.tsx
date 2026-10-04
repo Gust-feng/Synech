@@ -185,7 +185,7 @@ export function MemorySettingsPanel(props: MemorySettingsPanelProps): React.Reac
           <button className="memory-button memory-button-primary" disabled={disabled || stale || (draft.edit.kind !== "withdrawal" && !draft.edit.markdown.trim()) || ((draft.edit.kind === "correction" || draft.edit.kind === "withdrawal") && draft.edit.retractsRevisionIds.length === 0)} onClick={() => void mutate(() => updateMemory({ owner, ...draft }), draft)}><Save size={14} />{draft.edit.kind === "withdrawal" ? "确认撤回" : "保存"}</button></div>
       </section>}
     </>}
-    {error && <MemoryFeedback kind="error">{error}</MemoryFeedback>}
+    {error && <MemoryFeedback kind="error" dismissAfterMs={8_000}>{error}</MemoryFeedback>}
     {notice && <span className="memory-editor-caption" role="status">{notice}</span>}
     {clearScope && <MemoryClearDialog busy={disabled} error={error} onCancel={() => setClearScope(null)} onConfirm={() => void mutate(() => clearMemory({ scope: clearScope }))} />}
   </section>;
@@ -236,7 +236,7 @@ function EntryHistory(props: { readonly owner: MemorySettingsOwner; readonly ent
         onChange={() => props.onSelect?.(item.revision.revisionId)} />撤销修订 {item.revision.revision} 的供给{item.supplyState === "revoked" ? "（已撤销）" : ""}</label>}
       <details><summary>修订 {item.revision.revision} · {KIND_LABEL[item.revision.kind]} · {ROLE_LABEL[item.role]}</summary><EntryRevision item={item} onOpenConversation={props.onOpenConversation} /></details>
     </div>)}
-    {error && <MemoryFeedback kind="error">{error}</MemoryFeedback>}
+    {error && <MemoryFeedback kind="error" dismissAfterMs={8_000}>{error}</MemoryFeedback>}
     {error && <button className="memory-button" disabled={busy} onClick={() => void load()}>重新读取历史</button>}
     {cursor && <button className="memory-button" disabled={busy} onClick={() => void load(cursor)}>加载更多修订</button>}
   </section>;
@@ -247,7 +247,7 @@ function MemoryClearDialog(props: { readonly busy: boolean; readonly error: stri
   useLayoutEffect(() => { const dialog = ref.current!; dialog.showModal(); return () => dialog.close(); }, []);
   return <dialog ref={ref} className="memory-clear-dialog" aria-labelledby={title} onCancel={event => { event.preventDefault(); event.stopPropagation(); if (!props.busy) props.onCancel(); }}>
     <h3 id={title}>确定清空记忆？</h3><p className="memory-hint">删除此范围内条目、修订、来源和概览；清除前的对话不会重新回填。记忆开关保持不变。</p>
-    {props.error && <MemoryFeedback kind="error">{props.error}</MemoryFeedback>}
+    {props.error && <MemoryFeedback kind="error" dismissAfterMs={8_000}>{props.error}</MemoryFeedback>}
     <div className="memory-editor-actions"><button className="memory-button" autoFocus disabled={props.busy} onClick={props.onCancel}>取消</button><button className="memory-button memory-button-danger" disabled={props.busy} onClick={props.onConfirm}>清空</button></div>
   </dialog>;
 }
