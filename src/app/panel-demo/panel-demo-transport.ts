@@ -16,11 +16,20 @@ import {
   type DemoKnowledgeSnapshot,
 } from "./panel-demo-fixture";
 
+type DemoModelConfigState = {
+  config: Record<string, unknown>;
+  profiles: Record<string, unknown>[];
+  modelProviderOrder: string[];
+  modelCatalogs: Record<string, unknown>[];
+  modelCapabilityProfiles: Record<string, unknown>[];
+};
+
 type DemoState = {
   knowledge: DemoKnowledgeSnapshot;
   conversations: Map<string, Conversation>;
   runViews: Map<string, NonNullable<Conversation["currentRun"]>>;
   previewOverrides: Map<string, DocumentPreview>;
+  config: DemoModelConfigState;
 };
 
 const jsonHeaders = { "content-type": "application/json; charset=utf-8" };
@@ -32,6 +41,16 @@ export function installPanelDemoTransport(): void {
     conversations: new Map(),
     runViews: new Map(),
     previewOverrides: new Map(),
+    config: {
+      config: { ...(demoConfig.config as unknown as Record<string, unknown>) },
+      profiles: (demoConfig.profiles ?? []).map((p) => ({ ...(p as unknown as Record<string, unknown>) })),
+      modelProviderOrder: [...(demoConfig.modelProviderOrder ?? [])],
+      modelCatalogs: (demoConfig.modelCatalogs ?? []).map((c) => {
+        const entry = c as unknown as Record<string, unknown>;
+        return { ...entry, models: [...((entry.models as unknown[] | undefined) ?? [])] };
+      }),
+      modelCapabilityProfiles: (demoConfig.modelCapabilityProfiles ?? []).map((c) => ({ ...(c as unknown as Record<string, unknown>) })),
+    },
   };
 
   window.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -57,7 +76,12 @@ async function routeDemoRequest(
   const path = url.pathname;
   const body = parseBody(bodyText);
 
-  if (method === "GET" && path === "/api/config") return json(demoConfig);
+  if (method === "GET" && path === "/api/config") return json(currentConfigResponse(state));
+
+  // 模型服务配置：浏览器 Demo 用内存充当临时后端，改动刷新后丢失。
+  const modelConfig = handleModelConfigRequest(state, url, method, body);
+  if (modelConfig !== undefined) return modelConfig;
+
   if (method === "GET" && path === "/api/config/tools") return json(demoTools);
   if (method === "GET" && path === "/api/config/mcp") return json({ ok: true, status: "completed", catalog: [] });
   if (method === "GET" && path === "/api/skills") return json({ ok: true, skills: demoSkills });
@@ -326,6 +350,179 @@ function parseBody(value: string): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+// ---------------------------------------------------------------------------
+// 模型服务配置的内存后端（浏览器临时存储，刷新后丢失）
+// ---------------------------------------------------------------------------
+
+function currentConfigResponse(state: DemoState): Record<string, unknown> {
+  return {
+    ...demoConfig,
+    config: state.config.config,
+    profiles: state.config.profiles,
+    modelProviderOrder: state.config.modelProviderOrder,
+    modelCatalogs: state.config.modelCatalogs,
+    modelCapabilityProfiles: state.config.modelCapabilityProfiles,
+  };
+}
+
+function modelConfigResponse(state: DemoState, extra: Record<string, unknown> = {}): Response {
+  return json({
+    ok: true,
+    status: "completed",
+    config: state.config.config,
+    profiles: state.config.profiles,
+    modelProviderOrder: state.config.modelProviderOrder,
+    modelCatalogs: state.config.modelCatalogs,
+    modelCapabilityProfiles: state.config.modelCapabilityProfiles,
+    modelProviderMarket: demoConfig.modelProviderMarket,
+    capabilities: demoConfig.capabilities,
+    ...extra,
+  });
+}
+
+function handleModelConfigRequest(
+  state: DemoState,
+  url: URL,
+  method: string,
+  body: Record<string, unknown>,
+): Response | undefined {
+  const path = url.pathname;
+  const profileMatch = /^\/api\/config\/model-profiles\/([^/]+)$/u.exec(path);
+  const profileSubMatch = /^\/api\/config\/model-profiles\/([^/]+)\/([a-z-]+)$/u.exec(path);
+
+  if (path === "/api/config/model-profiles" && method === "POST") {
+    const profileId = bodyString(body, "profileId");
+    if (profileId.length === 0) return invalid("missing_model_profile_id", "模型 profile id 不能为空。");
+    if (state.config.profiles.some((p) => p.profileId === profileId)) {
+      return invalid("model_profile_conflict", "该模型服务 id 已存在。");
+    }
+    const profile: Record<string, unknown> = {
+      profileId, enabled: true, secretConfigured: false, updatedAt: new Date().toISOString(),
+    };
+    applyModelProfileFields(profile, body);
+    state.config.profiles.push(profile);
+    state.config.modelProviderOrder.push(`profile:${profileId}`);
+    state.config.modelCatalogs.push({
+      profileId, label: profile.label ?? profileId, baseUrl: profile.baseUrl ?? "", modelsPath: "/models", models: [],
+    });
+    return modelConfigResponse(state, { profile });
+  }
+
+  if (profileMatch !== null) {
+    const profileId = decodeURIComponent(profileMatch[1] ?? "");
+    const profile = state.config.profiles.find((p) => p.profileId === profileId);
+    if (profile === undefined) return missing("model_profile_not_found", "未找到模型配置。");
+    if (method === "POST") {
+      applyModelProfileFields(profile, body);
+      applyProfileCatalogModels(state, profile, body);
+      profile.updatedAt = new Date().toISOString();
+      return modelConfigResponse(state, { profile });
+    }
+    if (method === "DELETE") {
+      if (state.config.profiles.length <= 1) return invalid("model_profile_last", "至少保留一个模型服务。");
+      state.config.profiles = state.config.profiles.filter((p) => p.profileId !== profileId);
+      state.config.modelProviderOrder = state.config.modelProviderOrder.filter((key) => key !== `profile:${profileId}`);
+      state.config.modelCatalogs = state.config.modelCatalogs.filter((c) => c.profileId !== profileId);
+      state.config.modelCapabilityProfiles = state.config.modelCapabilityProfiles.filter((c) => c.profileId !== profileId);
+      if ((state.config.config as { profileId?: unknown }).profileId === profileId) {
+        state.config.config = { ...state.config.profiles[0]! };
+      }
+      return modelConfigResponse(state);
+    }
+    return undefined;
+  }
+
+  if (profileSubMatch !== null) {
+    const profileId = decodeURIComponent(profileSubMatch[1] ?? "");
+    const action = profileSubMatch[2] ?? "";
+    const profile = state.config.profiles.find((p) => p.profileId === profileId);
+    if (profile === undefined) return missing("model_profile_not_found", "未找到模型配置。");
+    if (action === "activate" && method === "POST") {
+      state.config.config = { ...profile };
+      return modelConfigResponse(state, { profile });
+    }
+    if (action === "model-settings" && method === "POST") {
+      const modelId = bodyString(body, "modelId");
+      if (modelId.length === 0) return invalid("invalid_model_configuration", "模型 id 不能为空。");
+      const settings = (profile.modelSettings as Record<string, unknown> | undefined) ?? {};
+      if (body.settings === undefined || body.settings === null) delete settings[modelId];
+      else settings[modelId] = body.settings;
+      profile.modelSettings = settings;
+      return modelConfigResponse(state);
+    }
+    if (action === "model-catalog" && method === "POST") {
+      return modelConfigResponse(state, { catalog: upsertProfileCatalog(state, profileId, profile, body) });
+    }
+    if (action === "api-key" && method === "GET") {
+      if (profile.secretConfigured !== true) return missing("model_provider_key_not_found", "未找到该厂商的 API Key。");
+      return json({ ok: true, status: "completed", profileId, apiKey: "demo-stored-key" });
+    }
+    if (action === "models" && method === "GET") return desktopOnly();
+    return undefined;
+  }
+
+  if (path === "/api/config/model-provider-order" && method === "POST") {
+    if (Array.isArray(body.order)) state.config.modelProviderOrder = body.order.map(String);
+    return modelConfigResponse(state);
+  }
+
+  if (path === "/api/config/model-provider" && method === "POST") {
+    const activeId = (state.config.config as { profileId?: unknown }).profileId;
+    const active = state.config.profiles.find((p) => p.profileId === activeId);
+    if (active !== undefined) applyModelProfileFields(active, body);
+    if (body.defaultAiMode !== undefined) state.config.config.defaultAiMode = body.defaultAiMode;
+    return modelConfigResponse(state, { informationAccess: (demoConfig as Record<string, unknown>).informationAccess });
+  }
+
+  return undefined;
+}
+
+function applyModelProfileFields(profile: Record<string, unknown>, body: Record<string, unknown>): void {
+  const assign = (key: string, value: unknown): void => { if (value !== undefined) profile[key] = value; };
+  assign("label", bodyString(body, "label") || undefined);
+  assign("baseUrl", bodyString(body, "baseUrl") || undefined);
+  assign("model", bodyString(body, "model") || undefined);
+  assign("protocolKind", body.protocolKind);
+  assign("providerKind", body.providerKind);
+  assign("defaultAiMode", body.defaultAiMode);
+  assign("piProviderId", bodyString(body, "piProviderId") || undefined);
+  assign("logoDataUrl", body.logoDataUrl);
+  if (body.connection !== undefined && body.connection !== null) profile.connection = body.connection;
+  if (typeof body.enabled === "boolean") profile.enabled = body.enabled;
+  if (bodyString(body, "apiKey").length > 0) profile.secretConfigured = true;
+  if (body.clearApiKey === true) profile.secretConfigured = false;
+  if (body.clearModel === true) delete profile.model;
+  if (body.clearPiProviderId === true) delete profile.piProviderId;
+  if (body.clearLogoDataUrl === true) delete profile.logoDataUrl;
+}
+
+function applyProfileCatalogModels(
+  state: DemoState,
+  profile: Record<string, unknown>,
+  body: Record<string, unknown>,
+): void {
+  if (!Array.isArray(body.models)) return;
+  const profileId = String(profile.profileId);
+  const catalog = upsertProfileCatalog(state, profileId, profile, body);
+  catalog.models = body.models;
+}
+
+function upsertProfileCatalog(
+  state: DemoState,
+  profileId: string,
+  profile: Record<string, unknown>,
+  body: Record<string, unknown>,
+): Record<string, unknown> {
+  let catalog = state.config.modelCatalogs.find((c) => c.profileId === profileId);
+  if (catalog === undefined) {
+    catalog = { profileId, label: profile.label ?? profileId, baseUrl: profile.baseUrl ?? "", modelsPath: "/models", models: [] };
+    state.config.modelCatalogs.push(catalog);
+  }
+  if (bodyString(body, "label")) catalog.label = bodyString(body, "label");
+  if (bodyString(body, "baseUrl")) catalog.baseUrl = bodyString(body, "baseUrl");
+  return catalog;
 }
 
 async function readRequestBody(input: RequestInfo | URL, init: RequestInit | undefined): Promise<string> {

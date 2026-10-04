@@ -1,7 +1,10 @@
-import { useState, type ReactElement } from "react";
+import { useEffect, useState, type ReactElement } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { AlertCircle, ChevronDown, RotateCcw, X } from "lucide-react";
 import { MOTION_EASING, MOTION_TIMING, useMotionEnabled } from "../../../../shell/motion-system";
+
+/** Transient notices with a dismiss action hide themselves after this long. */
+const NOTICE_AUTO_DISMISS_MS = 8_000;
 
 export type WorkbenchStatusNotice = {
   readonly id: string;
@@ -17,6 +20,12 @@ export function WorkbenchStatusCenter(props: {
   const [expanded, setExpanded] = useState(false);
   const motionEnabled = useMotionEnabled();
   const primary = props.notices[0];
+  useEffect(() => {
+    if (primary?.onDismiss === undefined) return;
+    const onDismiss = primary.onDismiss;
+    const timer = window.setTimeout(() => onDismiss(), NOTICE_AUTO_DISMISS_MS);
+    return () => window.clearTimeout(timer);
+  }, [primary?.id, primary?.message]);
   if (primary === undefined) return null;
 
   return (
