@@ -5,6 +5,7 @@ import networkDiagramUrl from "../panel-server/storage/initial-workbench-assets/
 import lossCurveUrl from "../panel-server/storage/initial-workbench-assets/训练损失曲线.png?url";
 import pytorchPdfUrl from "../panel-server/storage/initial-workbench-assets/PyTorch 入门笔记.pdf?url";
 import transformerMarkdown from "../panel-server/storage/initial-workbench-assets/Transformer 精读.md?raw";
+import { listBuiltinModelProviderPresets } from "../../domain/config";
 import {
   DEFAULT_SPACE_ID,
   INITIAL_KNOWLEDGE_ASSIGNMENTS,
@@ -92,7 +93,7 @@ export const demoConfig: ConfigResponse = {
     model: "synech-demo",
     capabilities: demoModelCapabilities(),
   }],
-  modelProviderMarket: { presets: [] },
+  modelProviderMarket: { presets: listBuiltinModelProviderPresets() },
   commandShell: {
     configuredKind: "auto",
     kind: "powershell",
