@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import { Brain, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
+import { Brain, Check, Pause, Plus, RefreshCw, Save, Trash2, TriangleAlert } from "lucide-react";
 import { MemoryFeedback } from "./memory-feedback";
 import { MemoryDocumentReader } from "./memory-document-reader";
 import { clearMemory, fetchMemoryStatus, fetchMemoryView, setMemoryEnabled, updateMemory,
@@ -122,17 +122,24 @@ export function MemorySettingsPanel(props: MemorySettingsPanelProps): React.Reac
   </section>;
   return <section className="memory-settings" aria-busy={disabled}>
     <div className="memory-control-row">
-      <MemoryStateVisual enabled={status.enabled} health={status.health} busy={disabled} />
-      <label className="memory-switch" aria-label="启用记忆">
-        <input id="memory-enabled" type="checkbox" role="switch" checked={status.enabled}
-          disabled={disabled || draft !== null || clearScope !== null} onChange={event => void mutate(() => setMemoryEnabled({ enabled: event.target.checked }))} /><span aria-hidden="true" />
-      </label>
+      <div className="memory-control-title"><Brain size={16} strokeWidth={1.8} aria-hidden="true" /><span>记忆</span></div>
+      <div className="memory-control-actions">
+        {status.hasContent && <button type="button" className="memory-icon-button" aria-label="清空记忆" title="清空记忆"
+          disabled={disabled || draft !== null || clearScope !== null} onClick={() => setClearScope(owner ?? { kind: "global" })}><Trash2 size={15} aria-hidden="true" /></button>}
+        <label className="memory-switch">
+          <input id="memory-enabled" type="checkbox" role="switch" aria-label="启用记忆" checked={status.enabled}
+            disabled={disabled || draft !== null || clearScope !== null} onChange={event => void mutate(() => setMemoryEnabled({ enabled: event.target.checked }))} /><span aria-hidden="true" />
+        </label>
+      </div>
     </div>
+    {owner === undefined && <MemoryStateVisual enabled={status.enabled} health={status.health} busy={disabled} />}
     {owner && view && <>
       <section className="memory-document">
         <header className="memory-document-header"><h3>{owner.kind === "space" ? "当前空间" : "当前工作区"}记忆概览 <small className="memory-inline-meta">只读</small></h3>
           <button className="memory-icon-button" aria-label="刷新记忆" disabled={disabled} onClick={() => void refresh(epoch.current)}><RefreshCw size={15} /></button></header>
-        <MemoryDocumentReader content={view.document?.markdown ?? ""} emptyTitle="暂无记忆概览" />
+        {view.document?.markdown.trim()
+          ? <MemoryDocumentReader content={view.document.markdown} emptyTitle="暂无记忆概览" />
+          : <MemoryStateVisual enabled={status.enabled} health={status.health} busy={disabled} />}
         {view.document && <p className="memory-editor-caption">概览版本 {view.document.revision} · {new Date(view.document.updatedAt).toLocaleString()}；条目修订可晚于此快照。</p>}
       </section>
       <section className="memory-entry-list">
@@ -191,13 +198,21 @@ function MemoryStateVisual(props: {
   readonly health: MemoryCapabilityStatus["health"];
   readonly busy: boolean;
 }): React.ReactElement {
-  const state = props.health !== "ready" ? "degraded" : props.enabled ? "enabled" : "disabled";
-  const label = state === "enabled" ? "记忆已启用" : state === "disabled" ? "记忆已关闭" : "记忆服务状态异常";
-  return <div className="memory-state-visual" data-state={state} data-busy={props.busy} role="img" aria-label={label}>
-    <span className="memory-state-visual__orbit" aria-hidden="true" />
-    <span className="memory-state-visual__node memory-state-visual__node--start" aria-hidden="true" />
-    <span className="memory-state-visual__node memory-state-visual__node--end" aria-hidden="true" />
-    <span className="memory-state-visual__core" aria-hidden="true"><Brain size={18} strokeWidth={1.65} /></span>
+  const state = props.busy ? "updating" : !props.enabled ? "disabled" : props.health !== "ready" ? "attention" : "enabled";
+  const label = state === "updating" ? "正在更新记忆" : state === "enabled" ? "记忆已启用" : state === "disabled" ? "记忆已关闭" : "记忆服务状态异常";
+  const StatusIcon = state === "updating" ? RefreshCw : state === "disabled" ? Pause : state === "attention" ? TriangleAlert : Check;
+  return <div className="memory-state-scene" data-state={state} role="img" aria-label={label}>
+    <div className="memory-state-art" aria-hidden="true">
+      <span className="memory-state-art__sheet memory-state-art__sheet--back" />
+      <span className="memory-state-art__sheet memory-state-art__sheet--middle" />
+      <div className="memory-state-art__sheet memory-state-art__sheet--front">
+        <span className="memory-state-art__tab" />
+        <Brain className="memory-state-art__brain" size={30} strokeWidth={1.35} />
+        <span className="memory-state-art__rule memory-state-art__rule--long" />
+        <span className="memory-state-art__rule memory-state-art__rule--short" />
+      </div>
+      <span className="memory-state-art__status"><StatusIcon size={13} strokeWidth={1.8} /></span>
+    </div>
   </div>;
 }
 
