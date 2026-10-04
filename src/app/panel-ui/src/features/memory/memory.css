@@ -57,12 +57,10 @@
 .memory-document-reader .rich-heading-1 { font-size: 17px; }
 .memory-document-reader .rich-heading-2 { font-size: 16px; }
 .memory-document-reader .rich-code-frame { font-size: 12px; }
-.memory-document-empty { display: grid; justify-items: center; align-content: center; gap: 24px; min-height: 300px; text-align: center; }
-.memory-document-empty p { margin: 0; font-size: 13px; color: var(--memory-muted); }
-.memory-empty-mark { position: relative; isolation: isolate; display: grid; place-items: center; width: 76px; height: 76px; color: var(--memory-faint); }
-.memory-empty-mark::before, .memory-empty-mark::after { position: absolute; content: ""; inset: 0; border: 1px solid var(--memory-line); border-radius: 18px; z-index: -1; }
-.memory-empty-mark::before { transform: translate(-5px, -3px) rotate(-10deg); }
-.memory-empty-mark::after { background: var(--ui-surface-raised); }
+.memory-document-empty { display: grid; justify-items: center; align-content: center; gap: 10px; min-height: 300px; text-align: center; }
+.memory-document-empty p { margin: 0; font-size: 10px; color: var(--memory-muted); }
+.memory-empty-mark { display: grid; place-items: center; width: 32px; height: 32px; border: 1px solid color-mix(in srgb, var(--memory-line) 82%, transparent); border-radius: 8px; color: var(--memory-faint); background: var(--ui-surface-raised); box-shadow: 0 2px 7px color-mix(in srgb, var(--ui-shadow, #000) 8%, transparent); }
+.memory-empty-mark svg { width: 18px; height: 18px; }
 .memory-document-editing { display: grid; min-width: 0; }
 .memory-center .memory-document-input { width: 100%; display: block; min-height: 280px; box-sizing: border-box; margin: 0; padding: 16px; resize: vertical; border: 1px solid var(--memory-line); border-radius: 6px; background: var(--ui-surface-raised); color: var(--memory-ink); font: 13px/1.9 var(--reading-sans, system-ui, sans-serif); box-shadow: none; tab-size: 2; }
 .memory-center .memory-document-input::placeholder { color: var(--memory-faint); opacity: 1; }
