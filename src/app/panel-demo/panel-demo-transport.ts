@@ -147,9 +147,7 @@ async function routeDemoRequest(
   if (method === "GET" && path === "/api/memory/document") {
     return json({ ok: true, view: { document: undefined, entries: [], topics: [], nextCursor: null, summaryCount: 0, lastMaintenanceAt: null } });
   }
-  if (method === "POST" && path === "/api/memory") {
-    return json({ ok: true, policyRevision: "demo-policy-1", generation: 0, revisionId: "demo-memory-revision", revision: 1 });
-  }
+  if (method === "POST" && path === "/api/memory") return desktopOnly();
 
   // 协作规则在 Demo 中是内存草稿：读取返回空规则，保存回显写入内容。
   if (method === "GET" && path === "/api/collaboration-rules") {
@@ -295,6 +293,10 @@ async function routeDemoRequest(
 
   if (method === "POST" && /^\/api\/spaces\/references\/[^/]+\/open$/u.test(path)) return json({ ok: true });
 
+  return desktopOnly();
+}
+
+function desktopOnly(): Response {
   return json({
     error: {
       code: "demo_read_only",
