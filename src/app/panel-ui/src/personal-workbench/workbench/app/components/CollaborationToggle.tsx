@@ -1,4 +1,5 @@
 import { useContext } from "react";
+import { Sparkles } from "lucide-react";
 import { PreviewLayoutContext } from "../../../../workbench/preview-layout";
 
 /** Only an opened preview can offer split mode; empty lists and directory roots have no control. */
@@ -16,7 +17,7 @@ export function CollaborationToggle({ available }: { readonly available: boolean
       disabled={!layout.canSplit && !layout.splitEnabled}
       onClick={layout.onToggleSplit}
     >
-      <span>{layout.splitEnabled ? "结束协作" : "协作"}</span>
+      <Sparkles size={15} strokeWidth={1.75} aria-hidden="true" />
     </button>
   );
 }

@@ -451,16 +451,14 @@
   display: inline-flex;
   height: 28px;
   flex: 0 0 auto;
+  width: 28px;
   align-items: center;
-  gap: 5px;
   justify-content: center;
-  min-width: 84px;
-  padding: 0 8px;
+  padding: 0;
   border: 1px solid transparent;
   border-radius: 5px;
   color: var(--ui-text-3);
   background: transparent;
-  font-size: 11px;
   transition: color 120ms ease, background-color 120ms ease, border-color 120ms ease;
   app-region: no-drag;
   -webkit-app-region: no-drag;
@@ -522,10 +520,11 @@
   color: var(--ui-text-1);
 }
 
-.ui-workbench-split-toggle[aria-pressed='true'] {
+.ui-workbench-split-toggle[aria-pressed='true'],
+.ui-workbench-split-toggle[aria-pressed='true']:hover:not(:disabled) {
   background: var(--ui-surface-hover);
   border-color: var(--ui-border);
-  color: var(--ui-text-1);
+  color: var(--ui-accent);
 }
 
 .ui-workbench-split-toggle:focus-visible {
