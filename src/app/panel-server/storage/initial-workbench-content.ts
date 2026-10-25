@@ -143,7 +143,10 @@ export const INITIAL_WORKBENCH_NOTES: readonly InitialWorkbenchNoteDefinition[] 
     id: "builtin-note-notebook-start",
     spaceId: LEARNING_SPACE_ID,
     title: "从记事本开始",
-    bodyMarkdown: `> 起步于微末之处，不惧其浅陋； \
+    // The two trailing spaces are the markdown hard break that keeps the quote
+    // on two lines; literal trailing spaces fail whitespace checks, and a
+    // line-ending backslash is swallowed by the template literal itself.
+    bodyMarkdown: `> 起步于微末之处，不惧其浅陋；${"  "}
 > 迭代于寸进之中，自有其峥嵘。
 
 任何系统性的理解，都不是直接生成的终态，而是在大量局部判断的反复修正中逐步拼合而成。这些判断往往是临时的、不完整的，甚至会在之后被推翻，但正是由它们所构成的中间过程，使认知得以从不确定中逐渐走向稳定。对这些过程的记录，其意义并不在于确认当下的结论，而在于保留理解如何形成与变化的轨迹。
