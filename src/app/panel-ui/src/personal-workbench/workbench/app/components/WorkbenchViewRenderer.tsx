@@ -27,6 +27,7 @@ export type WorkbenchViewRendererProps = {
   readonly onHomeOwnerChange: (owner: ConversationOwnerSelection | null) => void;
   readonly brainSelectedId: string | null;
   readonly spaceTargetId: string | null;
+  readonly spaceEntryRevision: number;
   readonly activeSpaceId: string | null;
   readonly onBrainSelect: (id: string | null) => void;
   readonly navigate: (view: WorkbenchView) => void;
@@ -47,6 +48,7 @@ export function WorkbenchViewRenderer(input: WorkbenchViewRendererProps): React.
   if (input.view === "space") {
     const activeSpace = input.spaces.find((space) => space.spaceId === input.activeSpaceId);
     return <SpacePage
+      key={`${input.activeSpaceId}:${input.spaceEntryRevision}`}
       onNavigate={input.navigate}
       targetId={input.spaceTargetId}
       space={activeSpace}

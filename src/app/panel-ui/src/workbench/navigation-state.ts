@@ -19,6 +19,7 @@ export type WorkbenchNavigationState = {
   readonly previousView: WorkbenchView;
   readonly brainSelectedId: string | null;
   readonly spaceTargetId: string | null;
+  readonly spaceEntryRevision: number;
   readonly activeSpaceId: string | null;
   readonly homeOwnerSelection: ConversationOwnerSelection | null;
   readonly homeFocusRequest: number;
@@ -42,6 +43,7 @@ export function createInitialWorkbenchNavigationState(): WorkbenchNavigationStat
     previousView: "home",
     brainSelectedId: null,
     spaceTargetId: null,
+    spaceEntryRevision: 0,
     activeSpaceId: null,
     homeOwnerSelection: null,
     homeFocusRequest: 0,
@@ -59,6 +61,7 @@ export function reduceWorkbenchNavigation(
         view: action.target,
         previousView: action.target === "search" ? state.view : state.previousView,
         spaceTargetId: null,
+        spaceEntryRevision: action.target === "space" ? state.spaceEntryRevision + 1 : state.spaceEntryRevision,
       };
     case "set-brain-selection":
       return { ...state, brainSelectedId: action.id };

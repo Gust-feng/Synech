@@ -37,10 +37,6 @@ export function countSpaceItems(tree: readonly SpaceItem[]): number {
   return tree.reduce((count, item) => count + 1 + (item.children ? countSpaceItems(item.children) : 0), 0)
 }
 
-export function firstSelectableSpaceTreeItemId(items: readonly SpaceItem[]): string | null {
-  return items.find((item) => item.type !== 'folder')?.id ?? null
-}
-
 export function SpaceExplorer({
   space,
   itemCount,

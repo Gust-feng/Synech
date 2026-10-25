@@ -97,6 +97,7 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
     previousView,
     brainSelectedId,
     spaceTargetId,
+    spaceEntryRevision,
     activeSpaceId,
     homeOwnerSelection,
     homeFocusRequest,
@@ -428,6 +429,7 @@ export function PersonalWorkbench(props: PersonalWorkbenchProps) {
                     onHomeOwnerChange={setHomeOwner}
                     brainSelectedId={brainSelectedId}
                     spaceTargetId={spaceTargetId}
+                    spaceEntryRevision={spaceEntryRevision}
                     activeSpaceId={activeSpaceId}
                     onBrainSelect={selectKnowledge}
                     navigate={navigate}

@@ -31,7 +31,6 @@ import {
 import { prefetchReferencePreview, SpaceContent } from './space/space-content'
 import {
   countSpaceItems,
-  firstSelectableSpaceTreeItemId,
   SpaceExplorer,
 } from './space/space-tree'
 
@@ -50,7 +49,6 @@ interface SpacePageProps {
 }
 
 interface SpaceViewMemory {
-  selectedId: string | null
   expandedIds: ReadonlySet<string>
   scrollTop: number
 }
@@ -122,35 +120,10 @@ export function SpacePage({
     onError: setActionError,
   })
   const { tree, projectedTree, expandedIds } = mountedTree
-  const rememberedSelectionId = rememberedView?.selectedId
-  const rememberedItem = rememberedSelectionId === undefined || rememberedSelectionId === null
-    ? undefined
-    : getItem(projectedTree, rememberedSelectionId)
-  const rememberedSelectedId = rememberedSelectionId !== undefined
-    && (notes.some((note) => note.id === rememberedSelectionId)
-      || rememberedItem !== undefined && rememberedItem.type !== 'folder')
-    ? rememberedSelectionId
-    : undefined
-  const [selectedId, setSelectedId] = useState<string | null>(() => (
-    targetId ?? rememberedSelectedId ?? null
-  ))
+  // Space entry shows the landing scene unless navigation names a specific item.
+  const [selectedId, setSelectedId] = useState<string | null>(targetId ?? null)
   const selectedStillExists = selectedId !== null
     && (notes.some((note) => note.id === selectedId) || getItem(tree, selectedId) !== undefined)
-  const previousMemoryKeyRef = useRef(memoryKey)
-
-  useLayoutEffect(() => {
-    if (previousMemoryKeyRef.current === memoryKey) return
-    previousMemoryKeyRef.current = memoryKey
-    dragOrderRef.current = null
-    referenceCreationRequestRef.current += 1
-    setDragOrder(null)
-    setCreatingNoteId(null)
-    setActionError(null)
-    setCreatingFolder(false)
-    setCreatingReferenceFile(null)
-    setPendingSpaceConfirmation(null)
-    setSelectedId(targetId ?? rememberedSelectedId ?? null)
-  }, [memoryKey, rememberedSelectedId, targetId])
 
   function selectItem(id: string) {
     onOpenPreview()
@@ -192,18 +165,16 @@ export function SpacePage({
   useEffect(() => {
     const current = spaceViewMemory.get(memoryKey)
     spaceViewMemory.set(memoryKey, {
-      selectedId,
       expandedIds,
       scrollTop: current?.scrollTop ?? 0,
     })
-  }, [expandedIds, memoryKey, selectedId])
+  }, [expandedIds, memoryKey])
   useEffect(() => {
     if (targetId !== null && targetId !== undefined) return
     if (selectedId === null) return
     if (selectedStillExists) return
-    const nextId = notes[0]?.id ?? firstSelectableSpaceTreeItemId(tree)
-    setSelectedId(nextId)
-  }, [selectedId, selectedStillExists, targetId, notes, tree])
+    setSelectedId(null)
+  }, [selectedId, selectedStillExists, targetId])
   useLayoutEffect(() => {
     const explorer = explorerRef.current
     if (explorer !== null) explorer.scrollTop = spaceViewMemory.get(memoryKey)?.scrollTop ?? 0
@@ -440,7 +411,6 @@ export function SpacePage({
           onScroll={(scrollTop) => {
             const current = spaceViewMemory.get(memoryKey)
             spaceViewMemory.set(memoryKey, {
-              selectedId: current?.selectedId ?? selectedId,
               expandedIds: current?.expandedIds ?? expandedIds,
               scrollTop,
             })
