@@ -2,15 +2,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { isSettledPanelRunStatus } from "@panel-api/ui-read-model";
 import type { TaskStatus } from "../../contracts/common.js";
 
-/** Node-testable queue fact; the Panel composer projects it into its own props contract. */
-export type QueuedChatMessage = {
-  readonly id: string;
-  readonly content: string;
-};
+import type { ContextAttachment } from "../../contracts/context";
+import type { QueuedChatMessage } from "../../contracts/composer";
+import { discardManagedUploadAttachment, isManagedUploadAttachment } from "../../workbench/attachments";
+
+export type { QueuedChatMessage } from "../../contracts/composer";
 
 export type AppQueuedMessageState = {
   readonly queuedMessages: readonly QueuedChatMessage[];
-  readonly enqueueMessage: (content: string) => void;
+  readonly enqueueMessage: (content: string, attachments?: readonly ContextAttachment[]) => void;
   readonly removeQueuedMessage: (id: string) => void;
   readonly updateQueuedMessage: (id: string, content: string) => void;
   readonly clearQueuedMessages: () => void;
@@ -21,7 +21,8 @@ export type AppQueuedMessageStateOptions = {
   readonly busy: boolean;
   readonly queueScopeId: string | undefined;
   readonly currentRun: QueuedMessageDispatchRun | undefined;
-  readonly startTask: (explicitGoal?: string) => Promise<boolean>;
+  readonly startTask: (explicitGoal?: string, attachments?: readonly ContextAttachment[]) => Promise<boolean>;
+  readonly onAttachmentError: (message: string) => void;
 };
 
 export type QueuedMessageDispatchRun = {
@@ -68,24 +69,36 @@ export function useAppQueuedMessages(
   options: AppQueuedMessageStateOptions,
 ): AppQueuedMessageState {
   const [queuedMessages, setQueuedMessages] = useState<readonly QueuedChatMessage[]>([]);
+  const queuedMessagesRef = useRef(queuedMessages);
+  queuedMessagesRef.current = queuedMessages;
   const dispatchedQueueAfterRunRef = useRef<string | undefined>(undefined);
   const guidedAfterRunRef = useRef<string | undefined>(undefined);
   const queueScopeRef = useRef(options.queueScopeId);
   const queueResetVersionRef = useRef(0);
   const skipDispatchAfterScopeChangeRef = useRef(false);
 
-  const enqueueMessage = useCallback((content: string) => {
+  const discardMessageAttachments = useCallback((messages: readonly QueuedChatMessage[]): void => {
+    const attachments = messages.flatMap((message) => message.attachments ?? []).filter(isManagedUploadAttachment);
+    void Promise.all(attachments.map((attachment) => discardManagedUploadAttachment(attachment.attachmentId)))
+      .catch((error: unknown) => options.onAttachmentError(error instanceof Error ? error.message : "清理待发送附件失败。"));
+  }, [options.onAttachmentError]);
+
+  useEffect(() => () => discardMessageAttachments(queuedMessagesRef.current), [discardMessageAttachments]);
+
+  const enqueueMessage = useCallback((content: string, attachments: readonly ContextAttachment[] = []) => {
     const trimmed = content.trim();
     if (trimmed.length === 0) return;
     setQueuedMessages((previous) => [
       ...previous,
-      { id: crypto.randomUUID(), content: trimmed },
+      { id: crypto.randomUUID(), content: trimmed, attachments: [...attachments] },
     ]);
   }, []);
 
   const removeQueuedMessage = useCallback((id: string) => {
+    discardMessageAttachments(queuedMessagesRef.current.filter((message) => message.id === id));
+    queuedMessagesRef.current = queuedMessagesRef.current.filter((message) => message.id !== id);
     setQueuedMessages((previous) => previous.filter((message) => message.id !== id));
-  }, []);
+  }, [discardMessageAttachments]);
 
   const updateQueuedMessage = useCallback((id: string, content: string) => {
     setQueuedMessages((previous) =>
@@ -94,11 +107,13 @@ export function useAppQueuedMessages(
   }, []);
 
   const clearQueuedMessages = useCallback(() => {
+    discardMessageAttachments(queuedMessagesRef.current);
+    queuedMessagesRef.current = [];
     queueResetVersionRef.current += 1;
     dispatchedQueueAfterRunRef.current = undefined;
     guidedAfterRunRef.current = undefined;
     setQueuedMessages([]);
-  }, []);
+  }, [discardMessageAttachments]);
 
   const restoreQueuedMessage = useCallback((input: {
     readonly message: QueuedChatMessage;
@@ -129,7 +144,7 @@ export function useAppQueuedMessages(
     setQueuedMessages((previous) => previous.filter((candidate) => candidate.id !== id));
     let accepted = false;
     try {
-      accepted = await options.startTask(message.content);
+      accepted = await options.startTask(message.content, message.attachments ?? []);
     } catch {
       accepted = false;
     }
@@ -145,12 +160,14 @@ export function useAppQueuedMessages(
   useEffect(() => {
     if (queueScopeRef.current === options.queueScopeId) return;
     queueScopeRef.current = options.queueScopeId;
+    discardMessageAttachments(queuedMessagesRef.current);
+    queuedMessagesRef.current = [];
     queueResetVersionRef.current += 1;
     dispatchedQueueAfterRunRef.current = undefined;
     guidedAfterRunRef.current = undefined;
     skipDispatchAfterScopeChangeRef.current = true;
     setQueuedMessages([]);
-  }, [options.queueScopeId]);
+  }, [options.queueScopeId, discardMessageAttachments]);
 
   useEffect(() => {
     if (skipDispatchAfterScopeChangeRef.current) {
@@ -172,7 +189,7 @@ export function useAppQueuedMessages(
     const scopeId = options.queueScopeId;
     const resetVersion = queueResetVersionRef.current;
     setQueuedMessages((previous) => previous.filter((message) => message.id !== decision.message.id));
-    void options.startTask(decision.message.content).then((accepted) => {
+    void options.startTask(decision.message.content, decision.message.attachments ?? []).then((accepted) => {
       if (!accepted) {
         restoreQueuedMessage({
           message: decision.message,

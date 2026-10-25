@@ -458,6 +458,22 @@
   transition: border-color 160ms ease, box-shadow 160ms ease;
 }
 .ui-conversation-composer[data-focused="true"] { border-color: var(--conversation-focus-border); box-shadow: var(--ui-composer-shadow-focus); }
+.ui-conversation-composer[data-dragging="true"] { border-color: var(--ui-accent); }
+.ui-composer-drop-hint {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: inherit;
+  background: color-mix(in oklch, var(--ui-composer) 94%, var(--ui-accent));
+  color: var(--ui-text-1);
+  font-size: 13px;
+  pointer-events: none;
+}
+.ui-composer-file-status { padding: 10px 16px 0; color: var(--ui-text-3); font-size: 12px; }
+.ui-composer-attachment-thumbnail { width: 32px; height: 32px; flex-shrink: 0; border-radius: 4px; object-fit: cover; }
 .ui-conversation-composer__input {
   display: block;
   box-sizing: border-box;

@@ -12,6 +12,7 @@ export type WorkbenchInputPropsOptions = {
   readonly goal: string;
   readonly setGoal: (value: string) => void;
   readonly attachments: readonly ContextAttachment[];
+  readonly setAttachments: (attachments: readonly ContextAttachment[]) => void;
   readonly selectAttachment: () => void | Promise<void>;
   readonly uploadAttachments: (files: readonly File[]) => void | Promise<void>;
   readonly removeAttachment: (attachmentId: string) => void;
@@ -28,7 +29,7 @@ export type WorkbenchInputPropsOptions = {
   readonly closeSignal: number;
   readonly onModelSelect: (modelId: string) => void | Promise<void>;
   readonly onOpenSettings: () => void;
-  readonly enqueueMessage: (content: string) => void;
+  readonly enqueueMessage: (content: string, attachments: readonly ContextAttachment[]) => void;
   readonly startTask: (explicitGoal?: string) => void | Promise<boolean>;
   readonly clearQueuedMessages: () => void;
   readonly cancelRun: () => void | Promise<void>;
@@ -48,7 +49,7 @@ export function workbenchInputPropsFrom(
     onChange: options.setGoal,
     attachments: options.attachments,
     onSelectAttachment: () => void options.selectAttachment(),
-    onUploadAttachmentFiles: (files: readonly File[]) => void options.uploadAttachments(files),
+    onUploadAttachmentFiles: options.uploadAttachments,
     onRemoveAttachment: options.removeAttachment,
     contextBusy: options.contextBusy,
     busy: options.busy,
@@ -65,14 +66,19 @@ export function workbenchInputPropsFrom(
     onModelSelect: options.onModelSelect,
     onOpenSettings: options.onOpenSettings,
     onSubmit: () => {
+      if (options.contextBusy) return;
+      const content = options.goal.trim() || (options.attachments.some((attachment) => attachment.status === "ready")
+        ? "请查看这些附件。" : "");
+      if (content.length === 0) return;
       if (options.modelResponding && options.followUpMode === "guide") {
         options.setGoal("");
-        void options.startTask();
+        void options.startTask(content);
       } else if (options.busy || options.modelResponding) {
-        options.enqueueMessage(options.goal);
+        options.enqueueMessage(content, options.attachments);
+        options.setAttachments([]);
         options.setGoal("");
       } else {
-        void options.startTask();
+        void options.startTask(content);
       }
     },
     allowInputWhileBusy: true,

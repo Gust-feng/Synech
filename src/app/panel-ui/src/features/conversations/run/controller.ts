@@ -22,7 +22,7 @@ export type AppRunController = {
   readonly viewEpochRef: React.MutableRefObject<number>;
   readonly submissionAttemptRef: React.MutableRefObject<{ readonly key: string; readonly id: string } | undefined>;
   readonly loadConversation: (conversationId: string) => Promise<boolean>;
-  readonly startTask: (explicitGoal?: string) => Promise<boolean>;
+  readonly startTask: (explicitGoal?: string, attachments?: readonly ContextAttachment[]) => Promise<boolean>;
   readonly selectBranch: (runId: string) => Promise<void>;
   readonly editTurn: (runId: string, content: string) => Promise<boolean>;
   readonly startNewConversation: (owner?: ConversationOwnerView) => Promise<boolean>;
@@ -94,8 +94,12 @@ export function createAppRunController(options: AppRunControllerOptions): AppRun
     }
   }
 
-  async function startTask(explicitGoal?: string): Promise<boolean> {
-    return await submitTask("continue", explicitGoal);
+  async function startTask(explicitGoal?: string, attachments?: readonly ContextAttachment[]): Promise<boolean> {
+    return await submitPanelTask({
+      ...options,
+      refreshConversations,
+      startLiveUpdates: liveUpdates.startLiveUpdates,
+    }, explicitGoal, "continue", undefined, undefined, undefined, attachments);
   }
 
   async function selectBranch(targetRunId: string): Promise<void> {

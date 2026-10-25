@@ -7,6 +7,8 @@ let server;
 let confirmations;
 let controllers;
 let observations;
+let composerInput;
+let composers;
 
 before(async () => {
   server = await createServer({
@@ -21,6 +23,8 @@ before(async () => {
   confirmations = await server.ssrLoadModule(`${root}/confirmation-decisions.ts`);
   controllers = await server.ssrLoadModule(`${root}/controller.ts`);
   observations = await server.ssrLoadModule(`${root}/live-run-updates.ts`);
+  composerInput = await server.ssrLoadModule("/src/app/panel-ui/src/features/conversations/composer-input-props.ts");
+  composers = await server.ssrLoadModule("/src/app/panel-ui/src/features/conversations/composer-controller.ts");
 });
 
 after(async () => {
@@ -365,6 +369,102 @@ test("current approvals, cancellation and terminal snapshots still settle normal
     assert.notEqual(state.options.pollTimer.current, undefined);
     assert.equal(requests.length, 2);
   });
+});
+
+test("attachment uploads completed after navigation cannot enter the newer conversation", async (t) => {
+  for (const outcome of ["success", "failure"]) {
+    await t.test(outcome, async (t) => {
+      const post = deferred();
+      const discarded = [];
+      let attachments = [];
+      let error;
+      let busy;
+      const epoch = { current: 1 };
+      t.mock.method(globalThis, "fetch", async (url, init) => {
+        if (init?.method === "POST") return post.promise;
+        assert.equal(init?.method, "DELETE");
+        discarded.push(url);
+        return Response.json({ ok: true });
+      });
+      const pending = composers.createAppComposerController({
+        contextBusy: false, mountedRef: { current: true }, viewEpochRef: epoch,
+        attachmentUploadAttemptRef: { current: undefined },
+        setContextBusy: (value) => { busy = value; },
+        setAttachments: (update) => { attachments = update(attachments); },
+        setApp: (update) => { error = update({}).error; },
+      }).uploadAttachments([new File(["image"], "screenshot.png", { type: "image/png" })]);
+      epoch.current += 1;
+      attachments = [{ attachmentId: "new-conversation-file" }];
+      if (outcome === "failure") post.reject(new Error("old upload failed"));
+      else post.resolve(Response.json({ attachments: [{ attachmentId: "old-upload", sourceKind: "managed_upload" }] }));
+      await pending;
+      assert.deepEqual(attachments, [{ attachmentId: "new-conversation-file" }]);
+      assert.equal(error, undefined);
+      assert.equal(busy, false);
+      assert.deepEqual(discarded, outcome === "success" ? ["/api/context/attachments/old-upload"] : []);
+    });
+  }
+});
+
+test("queued submissions keep their own attachments and preserve the newer composer draft", async (t) => {
+  for (const scenario of ["success", "failure", "text_only"]) {
+    await t.test(scenario, async (t) => {
+      installBrowserPrimitives(t);
+      const attachment = {
+        attachmentId: "queued-image", kind: "file", sourceKind: "managed_upload",
+        ref: "managed-attachment:queued-image", title: "screenshot.png", summary: "screenshot",
+        permissionRefs: ["read:queued-image"], status: "ready",
+        readonlyPreviewMeta: { available: true, mimeType: "image/png" },
+      };
+      let draftGoal = "queued question";
+      let draftAttachments = scenario === "text_only" ? [] : [attachment];
+      let queued;
+      const { inputProps } = composerInput.workbenchInputPropsFrom({
+        goal: draftGoal, setGoal: (value) => { draftGoal = value; },
+        attachments: draftAttachments, setAttachments: (value) => { draftAttachments = value; },
+        busy: true, modelResponding: true, followUpMode: "queue", contextBusy: false,
+        enqueueMessage: (content, attachments) => { queued = { content, attachments }; },
+      });
+      inputProps.onSubmit();
+      assert.equal(draftGoal, "");
+      assert.deepEqual(draftAttachments, []);
+      assert.equal(queued.content, "queued question");
+      assert.deepEqual(queued.attachments, scenario === "text_only" ? [] : [attachment]);
+
+      // A different attachment is added while the earlier message waits for its run.
+      draftGoal = "new unsent question";
+      draftAttachments = [{ ...attachment, attachmentId: "new-file", ref: "managed-attachment:new-file" }];
+      const state = observationState("A", "completed");
+      const requests = [];
+      t.mock.method(globalThis, "fetch", async (url, init) => {
+        if (init?.method === "POST") {
+          requests.push(JSON.parse(init.body));
+          if (scenario === "failure") return Response.json({ error: { message: "send failed" } }, { status: 500 });
+          return Response.json({ conversation: conversation("A", "completed"), run: run("A", "completed") });
+        }
+        if (url === "/api/conversations") return Response.json({ conversations: [] });
+        if (url === "/api/conversations/A") return Response.json({ conversation: conversation("A", "completed") });
+        return Response.json({ view: view("A", "completed") });
+      });
+      const accepted = await controllers.createAppRunController({
+        ...state.options,
+        goal: draftGoal, attachments: draftAttachments,
+        setGoal: (value) => { draftGoal = value; },
+        setAttachments: (value) => { draftAttachments = typeof value === "function" ? value(draftAttachments) : value; },
+        selectedModelId: "", aiMode: "ordinary", toolConfirmationPolicy: "prompt", composerReasoningEffort: "",
+        selectedModelSupportsReasoningEffort: false,
+        submissionAttemptRef: { current: undefined },
+        conversationLoadAbortRef: { current: undefined }, conversationLoadTargetRef: { current: undefined },
+      }).startTask(queued.content, queued.attachments);
+      assert.equal(accepted, scenario !== "failure");
+      assert.equal(requests.length, 1);
+      assert.equal(requests[0].goal, "queued question");
+      assert.deepEqual(requests[0].contextInput?.contextRefs.map((entry) => entry.attachmentId),
+        scenario === "text_only" ? undefined : ["queued-image"]);
+      assert.equal(draftGoal, "new unsent question");
+      assert.equal(draftAttachments[0].attachmentId, "new-file");
+    });
+  }
 });
 
 function observationState(id, status = "running") {

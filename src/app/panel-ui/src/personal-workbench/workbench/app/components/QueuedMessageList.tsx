@@ -62,7 +62,17 @@ export function QueuedMessageList({ messages, onRemove, onUpdate, onGuide }: Que
                 <MessageEditor compact allowEmpty value={editingContent} onChange={setEditingContent} onCancel={cancelEditing}
                   onSubmit={() => commitEditing(message.id)} submitLabel="保存" ariaLabel="编辑待发送消息" />
               ) : (
-                <span className="min-w-0 flex-1 whitespace-pre-wrap break-words leading-5">{message.content}</span>
+                <div className="min-w-0 flex-1">
+                  <span className="whitespace-pre-wrap break-words leading-5">{message.content}</span>
+                  {message.attachments !== undefined && message.attachments.length > 0 && (
+                    <div className="mt-1 flex flex-wrap gap-1 text-[10px]" style={{ color: "var(--ui-text-3)" }}>
+                      {message.attachments.map((attachment) => (
+                        <span key={attachment.attachmentId} className="max-w-full truncate rounded px-1.5 py-0.5"
+                          style={{ background: "var(--ui-surface-hover)" }}>{attachment.title}</span>
+                      ))}
+                    </div>
+                  )}
+                </div>
               )}
               {!editing && <div className="ui-queued-message__actions">
                     <button

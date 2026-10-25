@@ -20,6 +20,7 @@ export type ChatModelOption = {
 export type QueuedChatMessage = {
   readonly id: string;
   readonly content: string;
+  readonly attachments?: readonly ContextAttachment[];
 };
 
 export type ConversationFollowUpMode = "guide" | "queue";

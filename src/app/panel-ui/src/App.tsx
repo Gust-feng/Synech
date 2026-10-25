@@ -122,6 +122,9 @@ export function App(): React.ReactElement {
     removeAttachment,
     changeToolConfirmationPolicy,
   } = composerActions;
+  const reportQueuedAttachmentError = useCallback((message: string) => {
+    setApp((previous) => ({ ...previous, error: message }));
+  }, []);
   useAppShellEffects({
     sidebarCollapsed,
     persistSidebarCollapsed: persistSidebarCollapsedPreference,
@@ -134,7 +137,8 @@ export function App(): React.ReactElement {
     clearQueuedMessages,
     guideQueuedMessage,
   } = useAppQueuedMessages({
-    busy: app.busy,
+    busy: app.busy || contextBusy,
+    onAttachmentError: reportQueuedAttachmentError,
     queueScopeId: app.conversation?.conversationId ?? currentRun.run?.conversationId,
     currentRun: currentRun.run,
     startTask,
@@ -143,6 +147,7 @@ export function App(): React.ReactElement {
     goal,
     setGoal,
     attachments,
+    setAttachments,
     selectAttachment,
     uploadAttachments,
     removeAttachment,

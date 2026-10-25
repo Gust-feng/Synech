@@ -3,6 +3,8 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { Readable } from "node:stream";
+import { handlePanelContextRoute } from "../dist/app/panel-server/workbench/context-routes.js";
 
 import {
   createSearchFacts,
@@ -110,5 +112,36 @@ test("attachment search rejects an aborted file read without accepting partial r
   } finally {
     t.mock.restoreAll();
     await fs.rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  }
+});
+
+
+test("attachment upload preserves Unicode filenames, filename punctuation and binary payloads", async () => {
+  const data = new FormData();
+  const payload = Uint8Array.from([0, 255, 13, 10, 128, 34, 59, 254]);
+  const names = ["截图.png", "报告;最终版.pdf", "notes.md"];
+  for (const name of names) data.append("files", new File([payload], name, { type: "application/octet-stream" }));
+  data.append("caption", "not a file");
+  const encoded = new Response(data);
+  const request = Readable.from([Buffer.from(await encoded.arrayBuffer())]);
+  request.method = "POST";
+  request.headers = { "content-type": encoded.headers.get("content-type"), "idempotency-key": "upload-roundtrip" };
+  let received;
+  let status;
+  const handled = await handlePanelContextRoute({
+    contextAttachmentUploadApplication: {
+      async upload(input) { received = input; return []; },
+    },
+  }, request, {
+    writeHead(code) { status = code; },
+    end() {},
+  }, new URL("http://localhost/api/context/attachments/upload"));
+  assert.equal(handled, true);
+  assert.equal(status, 200);
+  assert.equal(received.uploadRequestId, "upload-roundtrip");
+  assert.deepEqual(received.files.map((file) => file.filename), names);
+  for (const file of received.files) {
+    assert.equal(file.contentType, "application/octet-stream");
+    assert.deepEqual(file.body, payload);
   }
 });

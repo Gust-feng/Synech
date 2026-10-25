@@ -22,6 +22,7 @@ export type AppComposerController = {
 export type AppComposerControllerOptions = {
   readonly setApp: React.Dispatch<React.SetStateAction<AppState>>;
   readonly mountedRef: React.MutableRefObject<boolean>;
+  readonly viewEpochRef: React.MutableRefObject<number>;
   readonly contextBusy: boolean;
   readonly setContextBusy: React.Dispatch<React.SetStateAction<boolean>>;
   readonly attachmentUploadAttemptRef: React.MutableRefObject<{ readonly key: string; readonly id: string } | undefined>;
@@ -49,15 +50,16 @@ export function createAppComposerController(
 
   async function selectAttachment(): Promise<void> {
     if (options.contextBusy) return;
+    const epoch = options.viewEpochRef.current;
     options.setContextBusy(true);
     try {
       const attachment = await selectLocalContextAttachment();
-      if (options.mountedRef.current && attachment !== undefined) {
+      if (options.mountedRef.current && options.viewEpochRef.current === epoch && attachment !== undefined) {
         options.setAttachments((previous) => uniqueAttachments([...previous, attachment]));
         options.setApp((previous) => ({ ...previous, error: undefined }));
       }
     } catch (error) {
-      if (options.mountedRef.current) {
+      if (options.mountedRef.current && options.viewEpochRef.current === epoch) {
         options.setApp((previous) => ({ ...previous, error: errorText(error, "添加附件失败。") }));
       }
     } finally {
@@ -67,6 +69,7 @@ export function createAppComposerController(
 
   async function uploadAttachments(files: readonly File[]): Promise<void> {
     if (options.contextBusy || files.length === 0) return;
+    const epoch = options.viewEpochRef.current;
     const requestKey = JSON.stringify(files.map((file) => ({
       name: file.name,
       type: file.type,
@@ -84,7 +87,7 @@ export function createAppComposerController(
       if (options.attachmentUploadAttemptRef.current?.id === uploadRequestId) {
         options.attachmentUploadAttemptRef.current = undefined;
       }
-      if (!options.mountedRef.current) {
+      if (!options.mountedRef.current || options.viewEpochRef.current !== epoch) {
         await Promise.allSettled(uploaded.filter(isManagedUploadAttachment).map((attachment) =>
           discardManagedUploadAttachment(attachment.attachmentId)));
       } else if (uploaded.length > 0) {
@@ -96,7 +99,7 @@ export function createAppComposerController(
         options.attachmentUploadAttemptRef.current?.id === uploadRequestId) {
         options.attachmentUploadAttemptRef.current = undefined;
       }
-      if (options.mountedRef.current) {
+      if (options.mountedRef.current && options.viewEpochRef.current === epoch) {
         options.setApp((previous) => ({ ...previous, error: errorText(error, "上传附件失败。") }));
       }
     } finally {

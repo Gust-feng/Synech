@@ -323,6 +323,7 @@ export function useAppWorkbenchRuntime(options: AppWorkbenchRuntimeOptions): App
   const composerController = useMemo(() => createAppComposerController({
     setApp: options.setApp,
     mountedRef,
+    viewEpochRef,
     contextBusy,
     setContextBusy,
     attachmentUploadAttemptRef,

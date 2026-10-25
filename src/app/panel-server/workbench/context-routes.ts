@@ -77,9 +77,6 @@ export async function handlePanelContextRoute(
     if (files.length === 0) {
       throw new PanelHttpError(400, "missing_attachment_files", "上传请求没有包含文件。");
     }
-    if (files.length > MAX_ATTACHMENT_UPLOAD_FILES) {
-      throw new PanelHttpError(413, "too_many_attachment_files", `一次最多上传 ${MAX_ATTACHMENT_UPLOAD_FILES} 个附件。`);
-    }
     const attachments = await runtime.contextAttachmentUploadApplication.upload({
       uploadRequestId,
       files,
@@ -169,25 +166,33 @@ function requireAttachmentUploadIdempotencyKey(request: IncomingMessage): string
 }
 
 type UploadedMultipartFile = {
-  readonly fieldName: string;
   readonly filename: string;
   readonly contentType?: string;
-  readonly body: Buffer;
+  readonly body: Uint8Array;
 };
 
 async function readMultipartAttachmentUpload(request: IncomingMessage): Promise<readonly UploadedMultipartFile[]> {
-  const boundary = multipartBoundary(request.headers["content-type"]);
-  if (boundary === undefined) {
+  const contentType = request.headers["content-type"];
+  if (contentType === undefined || !/^multipart\/form-data(?:;|$)/iu.test(contentType)) {
     throw new PanelHttpError(400, "invalid_attachment_upload", "附件上传请求必须使用 multipart/form-data。");
   }
   const body = await readRequestBuffer(request, MAX_ATTACHMENT_UPLOAD_BYTES);
-  return parseMultipartFiles(body, boundary).filter((file) => file.fieldName === "files");
-}
-
-function multipartBoundary(contentType: string | readonly string[] | undefined): string | undefined {
-  const value = Array.isArray(contentType) ? contentType[0] : contentType;
-  const match = /(?:^|;)\s*boundary=(?:"([^"]+)"|([^;]+))/iu.exec(value ?? "");
-  return match?.[1] ?? match?.[2]?.trim();
+  let form: FormData;
+  try {
+    form = await new Response(new Uint8Array(body), { headers: { "content-type": contentType } }).formData();
+  } catch (error) {
+    if (!(error instanceof TypeError)) throw error;
+    throw new PanelHttpError(400, "invalid_attachment_upload", "附件上传请求格式无效。");
+  }
+  const files = form.getAll("files").filter((value): value is File => typeof value !== "string");
+  if (files.length > MAX_ATTACHMENT_UPLOAD_FILES) {
+    throw new PanelHttpError(413, "too_many_attachment_files", `一次最多上传 ${MAX_ATTACHMENT_UPLOAD_FILES} 个附件。`);
+  }
+  return await Promise.all(files.map(async (file) => ({
+    filename: file.name,
+    contentType: file.type,
+    body: new Uint8Array(await file.arrayBuffer()),
+  })));
 }
 
 async function readRequestBuffer(request: IncomingMessage, maxBytes: number): Promise<Buffer> {
@@ -202,108 +207,6 @@ async function readRequestBuffer(request: IncomingMessage, maxBytes: number): Pr
     chunks.push(buffer);
   }
   return Buffer.concat(chunks);
-}
-
-function parseMultipartFiles(body: Buffer, boundary: string): readonly UploadedMultipartFile[] {
-  const marker = Buffer.from(`--${boundary}`, "utf8");
-  const files: UploadedMultipartFile[] = [];
-  let cursor = body.indexOf(marker);
-  while (cursor >= 0) {
-    cursor += marker.length;
-    if (body.subarray(cursor, cursor + 2).toString("latin1") === "--") {
-      break;
-    }
-    if (body.subarray(cursor, cursor + 2).toString("latin1") === "\r\n") {
-      cursor += 2;
-    } else if (body.subarray(cursor, cursor + 1).toString("latin1") === "\n") {
-      cursor += 1;
-    }
-    const next = body.indexOf(marker, cursor);
-    if (next < 0) {
-      break;
-    }
-    const part = trimPartBody(body.subarray(cursor, next));
-    const parsed = parseMultipartFilePart(part);
-    if (parsed !== undefined) {
-      files.push(parsed);
-    }
-    cursor = next;
-  }
-  return files;
-}
-
-function trimPartBody(part: Buffer): Buffer {
-  if (part.length >= 2 && part.subarray(part.length - 2).toString("latin1") === "\r\n") {
-    return part.subarray(0, part.length - 2);
-  }
-  if (part.length >= 1 && part.subarray(part.length - 1).toString("latin1") === "\n") {
-    return part.subarray(0, part.length - 1);
-  }
-  return part;
-}
-
-function parseMultipartFilePart(part: Buffer): UploadedMultipartFile | undefined {
-  const headerEnd = part.indexOf(Buffer.from("\r\n\r\n", "latin1"));
-  const delimiterLength = headerEnd >= 0 ? 4 : 2;
-  const effectiveHeaderEnd = headerEnd >= 0 ? headerEnd : part.indexOf(Buffer.from("\n\n", "latin1"));
-  if (effectiveHeaderEnd < 0) {
-    return undefined;
-  }
-  const headers = parseMultipartHeaders(part.subarray(0, effectiveHeaderEnd).toString("latin1"));
-  const disposition = headers.get("content-disposition");
-  const dispositionParams = parseHeaderParameters(disposition);
-  const fieldName = dispositionParams.name;
-  const filename = dispositionParams.filename ?? dispositionParams["filename*"];
-  if (fieldName === undefined || filename === undefined || filename.length === 0) {
-    return undefined;
-  }
-  return {
-    fieldName,
-    filename,
-    contentType: headers.get("content-type"),
-    body: part.subarray(effectiveHeaderEnd + delimiterLength),
-  };
-}
-
-function parseMultipartHeaders(value: string): ReadonlyMap<string, string> {
-  const headers = new Map<string, string>();
-  for (const line of value.split(/\r?\n/u)) {
-    const separator = line.indexOf(":");
-    if (separator <= 0) {
-      continue;
-    }
-    headers.set(line.slice(0, separator).trim().toLowerCase(), line.slice(separator + 1).trim());
-  }
-  return headers;
-}
-
-function parseHeaderParameters(value: string | undefined): Readonly<Record<string, string>> {
-  const result: Record<string, string> = {};
-  for (const part of value?.split(";") ?? []) {
-    const separator = part.indexOf("=");
-    if (separator <= 0) {
-      continue;
-    }
-    const key = part.slice(0, separator).trim().toLowerCase();
-    const raw = part.slice(separator + 1).trim();
-    result[key] = decodeHeaderParameter(raw, key.endsWith("*"));
-  }
-  return result;
-}
-
-function decodeHeaderParameter(value: string, encoded: boolean): string {
-  const unquoted = value.startsWith("\"") && value.endsWith("\"")
-    ? value.slice(1, -1).replace(/\\"/g, "\"").replace(/\\\\/g, "\\")
-    : value;
-  if (!encoded) {
-    return unquoted;
-  }
-  const encodedMatch = /^[^']*'[^']*'(.+)$/u.exec(unquoted);
-  try {
-    return decodeURIComponent(encodedMatch?.[1] ?? unquoted);
-  } catch {
-    return unquoted;
-  }
 }
 
 async function attachMediaPreview(

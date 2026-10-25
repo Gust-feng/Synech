@@ -73,10 +73,12 @@ export async function submitPanelTask(
   _unusedSpaceId?: string,
   newConversationOwner?: ConversationOwnerView,
   replacesRunId?: string,
+  explicitAttachments?: readonly ContextAttachment[],
 ): Promise<boolean> {
   const trimmed = (explicitGoal ?? options.goal).trim();
   const startsNewConversation = conversationBehavior === "new";
   const editing = replacesRunId !== undefined;
+  const usesComposerDraft = !editing && explicitAttachments === undefined;
   if (editing && (options.app.busy || options.app.conversation === undefined)) return false;
   // An active conversation can accept a successor run; a new conversation
   // still remains blocked while another run is busy.
@@ -96,7 +98,7 @@ export async function submitPanelTask(
     ? undefined
     : options.activeRunIdRef.current ?? options.app.run?.runId;
   const appBeforeSubmit = options.app;
-  const attachmentsBeforeSubmit = editing ? [] : options.attachments;
+  const attachmentsBeforeSubmit = editing ? [] : explicitAttachments ?? options.attachments;
   const path = conversationForSubmit?.conversationId === undefined
     ? "/api/conversations"
     : `/api/conversations/${encodeURIComponent(conversationForSubmit.conversationId)}/messages`;
@@ -129,7 +131,7 @@ export async function submitPanelTask(
     stopLiveUpdates(options.pollTimer, options.streamRef, options.fallbackPollRef);
   }
   options.activeRunIdRef.current = previousObservedRunId;
-  if (!editing) {
+  if (usesComposerDraft) {
     options.setGoal("");
     options.setAttachments([]);
   }
@@ -168,7 +170,7 @@ export async function submitPanelTask(
     }>(path, { ...requestBody, submissionId });
   } catch (error) {
     if (!options.mountedRef.current || options.viewEpochRef.current !== epoch) return false;
-    if (!editing) {
+    if (usesComposerDraft) {
       options.setGoal(trimmed);
       options.setAttachments(attachmentsBeforeSubmit);
     }

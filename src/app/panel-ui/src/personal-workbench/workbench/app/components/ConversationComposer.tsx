@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
-import { ArrowUp, Check, ChevronDown, FileText, Plus, ShieldCheck, Square, X } from 'lucide-react'
+import { ArrowUp, Check, ChevronDown, FileText, LoaderCircle, Plus, ShieldCheck, Square, X } from 'lucide-react'
 import type { ChatInputProps } from '@ui/contracts/composer'
+import { FloatingMenu } from '@ui/components/floating-menu'
+import { useComposerFileInput } from '@ui/features/conversations/use-composer-file-input'
 import type { ComposerToolConfirmationPolicy } from '@ui/features/settings/config-projection'
 import { formatCompactTokenCount, formatContextUsagePercent } from '@ui/features/conversations/context-window-usage'
 import { ModelOptionPicker } from '@ui/features/settings/model/option-picker'
@@ -21,7 +23,9 @@ export function ConversationComposer({ input, onCompositionChange }: Conversatio
   const ref = useAutoSizeTextarea(input.value)
   const canEdit = !input.busy || input.allowInputWhileBusy === true
   const motionEnabled = useMotionEnabled()
-  const canSend = input.value.trim().length > 0 && canEdit
+  const files = useComposerFileInput(input, canEdit)
+  const hasContent = input.value.trim().length > 0 || input.attachments.some((attachment) => attachment.status === 'ready')
+  const canSend = hasContent && canEdit && !files.busy
 
   useEffect(() => {
     if (input.autoFocus === true) ref.current?.focus()
@@ -32,7 +36,18 @@ export function ConversationComposer({ input, onCompositionChange }: Conversatio
   }
 
   return (
-    <div className="ui-conversation-composer" data-focused={focused} style={composerSurface(focused)}>
+    <div
+      className="ui-conversation-composer"
+      data-focused={focused}
+      data-dragging={files.dragging}
+      aria-busy={files.busy}
+      style={composerSurface(focused)}
+      onDragEnter={files.onDragEnter}
+      onDragOver={files.onDragOver}
+      onDragLeave={files.onDragLeave}
+      onDrop={files.onDrop}
+    >
+      {files.dragging && <div className="ui-composer-drop-hint">松开以上传附件</div>}
       {input.queuedMessages !== undefined && input.queuedMessages.length > 0 && (
         <QueuedMessageList
           messages={input.queuedMessages}
@@ -54,7 +69,9 @@ export function ConversationComposer({ input, onCompositionChange }: Conversatio
                 exit={motionEnabled ? { opacity: 0, y: -3, scale: 0.96 } : undefined}
                 transition={{ duration: MOTION_TIMING.interaction, ease: MOTION_EASING.premium }}
               >
-                <FileText size={11} className="shrink-0" />
+                {attachment.mediaPreview?.kind === 'image'
+                  ? <img src={attachment.mediaPreview.url} alt="" className="ui-composer-attachment-thumbnail" />
+                  : <FileText size={11} className="shrink-0" />}
                 <span className="truncate">{attachment.title}</span>
                 <button
                   type="button"
@@ -69,10 +86,16 @@ export function ConversationComposer({ input, onCompositionChange }: Conversatio
           </AnimatePresence>
         </div>
       )}
+      {(files.busy || files.notice !== undefined) && (
+        <div className="ui-composer-file-status" role="status">
+          {files.busy ? '正在添加附件…' : files.notice}
+        </div>
+      )}
       <textarea
         ref={ref}
         value={input.value}
         onChange={(event) => input.onChange(event.target.value)}
+        onPaste={files.onPaste}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
         onCompositionStart={() => onCompositionChange?.(true)}
@@ -93,16 +116,27 @@ export function ConversationComposer({ input, onCompositionChange }: Conversatio
       />
       <div className="ui-conversation-composer__toolbar">
         <div className="ui-conversation-composer__toolbar-left">
-          <button
-            type="button"
-            onClick={input.onSelectAttachment}
-            className="ui-conversation-composer__icon-button"
-            style={{ color: 'var(--ui-text-3)' }}
-            aria-label="添加引用"
-            title="添加引用"
-          >
-            <Plus size={17} strokeWidth={1.8} aria-hidden="true" />
-          </button>
+          {canEdit && !files.busy ? (
+            <FloatingMenu
+              label="添加附件"
+              visible
+              align="left"
+              trigger={<Plus size={17} strokeWidth={1.8} aria-hidden="true" />}
+              actions={[
+                ...(input.onUploadAttachmentFiles === undefined ? [] : [{
+                  label: '上传文件',
+                  onClick: () => files.fileInputRef.current?.click(),
+                }]),
+                { label: '引用本地文件或文件夹', onClick: input.onSelectAttachment },
+              ]}
+            />
+          ) : (
+            <button type="button" disabled className="ui-conversation-composer__icon-button" aria-label="添加附件">
+              {files.busy ? <LoaderCircle size={16} className="animate-spin" aria-hidden="true" /> : <Plus size={17} aria-hidden="true" />}
+            </button>
+          )}
+          <input ref={files.fileInputRef} type="file" multiple hidden onChange={files.onFileChange}
+            disabled={!files.canAdd} aria-label="上传附件" />
         </div>
         <div className="ui-conversation-composer__toolbar-right">
           {input.contextUsage !== undefined && <ComposerContextUsage usage={input.contextUsage} />}
